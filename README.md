@@ -5,25 +5,36 @@ and a computer. Pi runs the loop. Any OpenAI-compatible model endpoint works.
 
 Repo: [github.com/GEKI-AI/apipi](https://github.com/GEKI-AI/apipi)
 
+Python 3.13+, [uv](https://docs.astral.sh/uv/) only.
+
 ```
-pip install -r requirements-docs.txt
-mkdocs serve
+uv sync
 ```
+
+Docs site (not the apipi package):
+
+```
+uv run --no-project --with-requirements requirements-docs.txt mkdocs serve
+```
+
+The useful contribution is a detailed
+[issue](https://github.com/GEKI-AI/apipi/issues). See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Path | What |
 | --- | --- |
 | [CONSTITUTION.md](CONSTITUTION.md) | Project rules |
+| [AGENTS.md](AGENTS.md) | Standing orders for agents |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Issues, git, pull requests |
 | [docs/](docs/) | Specs |
 | [docs/decisions/](docs/decisions/) | Architecture decisions |
 | [mkdocs.yml](mkdocs.yml) | Docs site |
+| [requirements-docs.txt](requirements-docs.txt) | Docs site deps (not apipi) |
 | [examples/](examples/) | Tavily and Playwright MCP |
-
-Copy [docs/agents.md](docs/agents.md) to `AGENTS.md` at the repo root so Pi
-picks it up.
 
 ## Stack
 
-- Gateway: Python, FastAPI
+- Gateway: Python 3.13, FastAPI
 - Store: Postgres
 - Harness: Pi (one process per session)
 - Run mode: `host` \| `jail` \| `microvm` (default `jail`)

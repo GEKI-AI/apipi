@@ -1,7 +1,5 @@
 # Standing orders
 
-Copy this file to `/AGENTS.md` at the repo root.
-
 Before code:
 
 1. `CONSTITUTION.md`
@@ -15,10 +13,10 @@ items from `docs/roadmap.md` unless the spec has moved.
 
 ## Stack
 
-Python, FastAPI, Postgres. Pi via RPC, one process per session.
-Run mode `APIPI_RUN_MODE` (`host` \| `jail` \| `microvm`), default
-`jail`. Example UI off unless `APIPI_EXAMPLE_UI=1`. OpenAI-compatible
-`base_url`. No Node in the gateway.
+Python 3.13, FastAPI, Postgres. uv only. Pi via RPC, one process per
+session. Run mode `APIPI_RUN_MODE` (`host` \| `jail` \| `microvm`),
+default `jail`. Example UI off unless `APIPI_EXAMPLE_UI=1`.
+OpenAI-compatible `base_url`. No Node in the gateway.
 
 ## Do not
 
@@ -33,6 +31,8 @@ Run mode `APIPI_RUN_MODE` (`host` \| `jail` \| `microvm`), default
 - Rewrite the event log
 - A custom docs frontend
 - A superseded ADR file
+- pip, `python -m venv`, or pre-commit hooks
+- MkDocs or docs deps in the apipi package
 
 ## Do
 
@@ -42,3 +42,10 @@ Run mode `APIPI_RUN_MODE` (`host` \| `jail` \| `microvm`), default
 - Pin Pi when touching the adapter
 - Warn at startup when run mode is `host`
 - Idle Pi TTL default 15 minutes (`APIPI_IDLE_TTL`)
+- uv for all Python (`uv sync`, `uv run`, `uv lock`)
+- Before commit: format, lint, typecheck, tests (see `CONTRIBUTING.md`)
+
+## Git
+
+`CONTRIBUTING.md`. Issue first. Branch `issue-N-slug` from `main`. One
+issue per PR. Human review, squash merge. Do not commit red.

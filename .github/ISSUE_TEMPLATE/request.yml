@@ -1,0 +1,36 @@
+name: Request
+description: Something you want built. This is the usual contribution.
+labels: [request]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write this so an agent can implement it without asking you
+        questions. We implement almost all code with coding agents.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should exist when this is done.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: Checkable outcomes, not a design essay.
+    validations:
+      required: true
+  - type: textarea
+    id: specs
+    attributes:
+      label: Specs
+      description: Paths under docs/ that already cover this, or that must change.
+      placeholder: docs/api.md
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: What this issue must not do. Roadmap items stay on the roadmap.
