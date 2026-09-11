@@ -1,0 +1,82 @@
+site_name: ApiPi
+site_description: HTTP API for hosted agents
+site_author: ApiPi
+copyright: Copyright &copy; 2026 ApiPi contributors
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  logo: assets/pi.svg
+  favicon: assets/pi.svg
+  font:
+    text: Source Sans 3
+    code: IBM Plex Mono
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - toc.follow
+    - search.highlight
+    - content.code.copy
+
+watch:
+  - docs
+  - CONSTITUTION.md
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search:
+      lang: en
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.snippets:
+      base_path:
+        - .
+      check_paths: true
+      restrict_base_path: false
+
+nav:
+  - Home: index.md
+  - Constitution: constitution.md
+  - Architecture: architecture.md
+  - API: api.md
+  - Environments: environments.md
+  - Tools and skills: tools.md
+  - Roadmap: roadmap.md
+  - How we work: process.md
+  - Standing orders: agents.md
+  - Decisions:
+      - Index: decisions/index.md
+      - "0001 Python": decisions/0001-python-fastapi.md
+      - "0002 Pi harness": decisions/0002-pi-harness.md
+      - "0003 Postgres": decisions/0003-postgres.md
+      - "0004 One Pi per session": decisions/0004-one-pi-per-session.md
+      - "0005 API is the focus": decisions/0005-api-is-the-focus.md
+      - "0006 Tools, MCP, skills": decisions/0006-tools-mcp-skills.md
+      - "0007 Run modes": decisions/0007-run-modes.md
