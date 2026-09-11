@@ -14,12 +14,14 @@ Follow this repo's process, not a generic GitHub flow. Read before acting:
 
 Do not invent process. If those files disagree with this skill, those files win.
 
+Default process: start from an issue, do the work, end with a PR. That is the usual path, **not law**. If the user explicitly asks for a PR without an issue, open it.
+
 ## Preconditions
 
-Stop and say what is missing if any of these fail:
+Stop and say what is missing if any of these fail (except the issue, when the user explicitly skipped it):
 
-1. An issue exists. A PR without an issue is the exception.
-2. Current branch is `issue-<n>-<slug>`. One issue per branch and per PR.
+1. Usually an issue exists and this PR is for that one issue. If the user explicitly asked to skip the issue, continue without `Fixes #<n>`.
+2. Current branch is `issue-<n>-<slug>` when there is an issue. One issue per branch and per PR.
 3. You are not on `main`. Never force-push `main`.
 4. The branch is on latest `origin/main` (see Trunk). Do not open a PR that will conflict.
 5. Spec and code agree, or both change in this PR.
@@ -91,7 +93,7 @@ EOF
 )"
 ```
 
-Title: short, imperative, scoped to the issue. Body **starts with** `Fixes #<n>`.
+Title: short, imperative, scoped to the issue. When there is an issue, the body **starts with** `Fixes #<n>`. When the user skipped the issue, omit that line.
 
 4. Return the PR URL. Do not squash-merge, approve, or delete the branch. A human reviews, then squash-merges.
 
