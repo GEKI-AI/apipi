@@ -36,7 +36,7 @@ Not in this version: [roadmap](roadmap.md).
 
 ## Stack
 
-- Python, FastAPI, Postgres
+- Python 3.13, FastAPI, Postgres
 - Pi over RPC, one process per session
 - Run mode default: `jail`
 - Default computer: session directory next to Pi

@@ -1,7 +1,9 @@
 site_name: ApiPi
 site_description: HTTP API for hosted agents
-site_author: ApiPi
-copyright: Copyright &copy; 2026 ApiPi contributors
+site_author: GEKI FlexCo
+copyright: Copyright &copy; 2026 GEKI FlexCo
+repo_url: https://github.com/GEKI-AI/apipi
+repo_name: GEKI-AI/apipi
 
 docs_dir: docs
 site_dir: site
@@ -39,6 +41,7 @@ theme:
 watch:
   - docs
   - CONSTITUTION.md
+  - AGENTS.md
 
 extra_css:
   - stylesheets/extra.css

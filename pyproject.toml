@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "apipi"
+dynamic = ["version"]
+description = "HTTP API for hosted agents"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [
+    { name = "GEKI FlexCo" },
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/GEKI-AI/apipi"
+Repository = "https://github.com/GEKI-AI/apipi"
+Issues = "https://github.com/GEKI-AI/apipi/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=9,<10",
+    "ruff>=0.16,<1",
+    "ty>=0.0.80",
+]
+
+[tool.hatch.version]
+path = "src/apipi/__init__.py"
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "B",
+    "E",
+    "F",
+    "I",
+    "RUF",
+    "SIM",
+    "UP",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["apipi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-q"]

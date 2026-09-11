@@ -1,0 +1,42 @@
+name: Bug
+description: Something is wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write this so an agent can fix it without asking you questions.
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed
+      description: What happens.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What the spec says should happen.
+    validations:
+      required: true
+  - type: textarea
+    id: specs
+    attributes:
+      label: Specs
+      description: Paths under docs/ that this violates.
+      placeholder: docs/api.md
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduce
+      description: Steps, request bodies, or commands.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Logs, version, run mode, anything else.
