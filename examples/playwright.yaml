@@ -1,0 +1,16 @@
+# Browser via Playwright MCP. Runs Chromium where this process runs.
+# https://playwright.dev/mcp/introduction
+#
+# --headless: no window (needed on a server)
+# --isolated: fresh profile, no leftover cookies
+# In jail run mode Chromium needs --no-sandbox (already jailed).
+
+tools:
+  - type: mcp
+    server_label: playwright
+    command: npx
+    args:
+      - -y
+      - "@playwright/mcp@latest"
+      - --headless
+      - --isolated

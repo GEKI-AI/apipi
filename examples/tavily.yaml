@@ -1,0 +1,11 @@
+# Web search via Tavily. Requires TAVILY_API_KEY.
+# https://docs.tavily.com/documentation/mcp
+#
+# Attach on the agent as tools, or merge into server config.
+
+tools:
+  - type: mcp
+    server_label: tavily
+    server_url: https://mcp.tavily.com/mcp
+    headers:
+      Authorization: Bearer ${TAVILY_API_KEY}

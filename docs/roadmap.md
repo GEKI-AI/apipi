@@ -1,0 +1,35 @@
+# Roadmap
+
+Not in the first version. Specs describe what we build now. This file is
+the rest.
+
+Do not put "later" sections on the other spec pages.
+
+## Docker sandbox
+
+A container as the session computer. Same session API as the local
+directory. Can run on the API host or on another machine.
+
+## Workers
+
+Workers register with the API and advertise `pi`, `sandbox`, or both.
+
+- Split Pi and computers onto different pools
+- Run workers on other machines
+- Assign a session to a worker
+
+Until then the API process runs Pi (`host` / `jail` / `microvm`) plus
+the local directory or a `self_hosted` runner.
+
+## Remote browser
+
+Point Playwright MCP at a remote browser (`--cdp-endpoint`), or run it
+in a Docker sandbox.
+
+## Another harness
+
+Pi is what we ship. A second adapter behind the same API, if needed.
+
+## Docs
+
+mkdocstrings for the FastAPI surface, on the same MkDocs site.
