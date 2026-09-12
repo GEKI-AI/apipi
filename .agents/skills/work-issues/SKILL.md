@@ -23,6 +23,15 @@ two issues on the same branch or in parallel on overlapping files.
 Filing an issue: `.agents/skills/create-issue/SKILL.md`.
 Opening a PR: `.agents/skills/create-pull-request/SKILL.md`.
 
+Sub-agents (launch by name):
+
+| Step | Agent | Path |
+| --- | --- | --- |
+| Implement | `implement` | `.opencode/agent/implement.md` |
+| Review | `review` | `.opencode/agent/review.md` |
+
+The parent does trunk, PR, CI wait, merge, and next.
+
 ## Queue
 
 1. If the user named issues or an order, use that.
@@ -58,11 +67,14 @@ goal is out of scope.
 
 ### 3. Implement
 
-Only this issue. Spec and code change together when they disagree.
-Tenant-scope every query. Do not store tenant keys. No Pi types on
-HTTP. Unknown OpenAI fields fail clearly.
+Launch the **implement** sub-agent (`.opencode/agent/implement.md`).
+Give it the issue number, branch name, and spec paths.
 
-uv only. No comments unless the issue or the user asked.
+It implements only this issue, runs local checks, and commits on the
+issue branch. It does not open or merge the PR.
+
+If that agent is not available in this session, do the same work
+yourself following `.opencode/agent/implement.md`.
 
 ### 4. Local checks
 
@@ -93,8 +105,10 @@ Wait until GitHub `Check`, `Tests`, and `Docs` are green
 
 ### 6. Review
 
-Launch a review sub-agent with: the PR diff vs `main`, the issue body,
-the spec paths, `CONSTITUTION.md`, `AGENTS.md`. It must answer:
+Launch the **review** sub-agent (`.opencode/agent/review.md`). Give it
+the PR number. It is read-only.
+
+It must answer:
 
 - Only this issue's goal?
 - Spec and code agree?
@@ -102,8 +116,13 @@ the spec paths, `CONSTITUTION.md`, `AGENTS.md`. It must answer:
 - Tests cover the acceptance checks?
 - Any constitution or `AGENTS.md` ban?
 
-Apply must-fixes, re-run local checks, push, wait for CI. Skip nits
-that are not spec violations.
+Verdict: `APPROVE` or `MUST-FIX`.
+
+If that agent is not available in this session, do the same review
+yourself following `.opencode/agent/review.md`.
+
+Apply must-fixes (parent or implement agent), re-run local checks,
+push, wait for CI. Skip nits that are not spec violations.
 
 ### 7. Merge
 
