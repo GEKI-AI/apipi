@@ -43,6 +43,12 @@ Pytest. Specs are the oracle. Tests assert the public API and the
 constitution, not Pi internals. Mock Pi RPC. Same change as the code.
 Checks before commit are policy, not git hooks. See `CONTRIBUTING.md`.
 
+Compatibility: HTTP fixtures in `tests/api/test_compat.py` against
+[api.md](api.md). Each yes row has a named test. Fast e2e runs in CI
+(`pytest -m "not slow"`). A slow smoke against the official OpenAI
+Python client (`beta.agents`) is local-only and skips if the SDK is not
+installed.
+
 ## Contribute
 
 Issues are the work queue. See `CONTRIBUTING.md` at the repo root.

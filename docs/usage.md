@@ -136,5 +136,7 @@ completion bodies.
 
 `/v1/chat/completions` is not a product surface. We do not serve it.
 
-Compatibility tests are HTTP fixtures against [api.md](api.md). A slow
-SDK smoke against the official OpenAI Agents SDK is local-only.
+Compatibility tests are HTTP fixtures against [api.md](api.md). Each yes
+row has a named test. Fast tests do not require the OpenAI SDK. A slow
+SDK smoke against the official OpenAI Python client is local-only and
+skips if the SDK is not installed.
