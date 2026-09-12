@@ -1,18 +1,20 @@
 import asyncio
 import json
+import secrets
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Annotated, Any, Self
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.api.agents import AgentWrite
 from apipi.auth import get_db, not_found, require_tenant
+from apipi.env.hub import EnvDisconnected, EnvironmentHub
 from apipi.errors import ApiError, gone, not_implemented
 from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
@@ -32,6 +34,7 @@ from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import Artifact, Item, SessionRow, Tenant, Turn
 from apipi.store.repo import (
+    create_environment,
     create_session,
     delete_session,
     delete_session_artifact,
@@ -45,6 +48,7 @@ from apipi.store.repo import (
     list_turns,
     update_session,
 )
+from apipi.tokens import hash_token
 
 router = APIRouter()
 
@@ -176,7 +180,7 @@ def _input_text(value: str | dict[str, Any] | None) -> str:
 
 def _environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
     env_type = spec.type if spec is not None else "openai_hosted"
-    if env_type not in {"none", "openai_hosted"}:
+    if env_type not in {"none", "openai_hosted", "self_hosted"}:
         not_implemented(env_type)
     payload: dict[str, Any] = {"type": env_type}
     if spec is not None and spec.capability_directories is not None:
@@ -236,6 +240,8 @@ async def create_agent_session(
     harness: Harness = request.app.state.harness
     environment = _environment_payload(body.environment)
     raw_tools: list[Any] = []
+    env_key: str | None = None
+    env_id: uuid.UUID | None = None
     async with store.session() as db:
         if agent_id is not None:
             agent = await get_agent(db, tenant.id, agent_id)
@@ -263,6 +269,25 @@ async def create_agent_session(
             environment = {**environment, "directory": str(directory)}
             row.environment = environment
             await db.flush()
+        elif environment.get("type") == "self_hosted":
+            env_id = uuid.uuid4()
+            env_key = secrets.token_urlsafe(32)
+            environment = {**environment, "id": str(env_id)}
+            row.environment = environment
+            row.required_actions = [
+                {
+                    "type": "environment_connection",
+                    "environment_id": str(env_id),
+                }
+            ]
+            await create_environment(
+                db,
+                tenant.id,
+                row.id,
+                environment_id=env_id,
+                key_hash=hash_token(env_key),
+            )
+            await db.flush()
         await persist_event(
             db,
             hub,
@@ -271,6 +296,15 @@ async def create_agent_session(
             type="agent.session.created",
             data={"id": str(row.id)},
         )
+        if env_id is not None:
+            await persist_event(
+                db,
+                hub,
+                tenant.id,
+                row.id,
+                type="agent.session.environment.pending",
+                data={"environment_id": str(env_id)},
+            )
         session_id = row.id
     try:
         connected = await connect_mcp_http_tools(raw_tools)
@@ -306,6 +340,9 @@ async def create_agent_session(
         if row is None:
             not_found()
         payload = session_body(row)
+        if env_id is not None and env_key is not None:
+            payload["environment_id"] = str(env_id)
+            payload["key"] = env_key
     if body.stream:
         return StreamingResponse(
             _event_stream(store, hub, tenant.id, session_id, None),
@@ -359,9 +396,16 @@ async def delete_agent_session(
     tenant: Annotated[Tenant, Depends(require_tenant)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
+    row = await get_session(db, tenant.id, session_id)
+    if row is None:
+        not_found()
+    env_id_raw = row.environment.get("id")
     deleted = await delete_session(db, tenant.id, session_id)
     if not deleted:
         not_found()
+    if isinstance(env_id_raw, str):
+        env_hub: EnvironmentHub = request.app.state.env_hub
+        await env_hub.close(uuid.UUID(env_id_raw))
     request.app.state.mcp_http.pop(session_id, None)
     stdio = request.app.state.mcp_stdio.pop(session_id, None)
     if stdio:
@@ -509,6 +553,7 @@ async def list_session_artifacts(
 async def read_session_artifact_content(
     session_id: uuid.UUID,
     artifact_id: uuid.UUID,
+    request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Any:
@@ -518,6 +563,23 @@ async def read_session_artifact_content(
     artifact = await get_session_artifact(db, tenant.id, session_id, artifact_id)
     if artifact is None:
         not_found()
+    if row.environment.get("type") == "self_hosted":
+        env_id_raw = row.environment.get("id")
+        if not isinstance(env_id_raw, str):
+            gone()
+        env_hub: EnvironmentHub = request.app.state.env_hub
+        try:
+            result = await env_hub.call(
+                uuid.UUID(env_id_raw), "read", path=artifact.path
+            )
+        except (EnvDisconnected, TimeoutError):
+            gone()
+        if not result.get("ok"):
+            gone()
+        content = result.get("content")
+        if not isinstance(content, str):
+            gone()
+        return Response(content=content.encode(), media_type=artifact.content_type)
     path = _sandbox_file(row, artifact.path)
     if path is None or not path.is_file():
         gone()

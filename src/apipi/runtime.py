@@ -99,6 +99,7 @@ class FakeHarness:
         self.mcp_http: list[Any] | None = None
         self.mcp_stdio: list[Any] | None = None
         self.skill_dirs: list[str] | None = None
+        self.tools: bool | None = None
 
     def complete(self, text: str) -> str:
         return text if text else "ok"
@@ -117,7 +118,8 @@ class FakeHarness:
         skill_dirs: list[str] | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        del session_id, cwd, tools
+        del session_id, cwd
+        self.tools = tools
         self.function_tools = (
             list(function_tools) if function_tools is not None else None
         )
@@ -170,10 +172,26 @@ def _function_tools(tools: list[Any] | None) -> list[dict[str, Any]]:
 
 
 def _cwd_and_tools(environment: dict[str, Any]) -> tuple[str | None, bool]:
+    env_type = environment.get("type")
+    if env_type in {"none", "self_hosted"}:
+        return None, False
     cwd = environment.get("directory")
     cwd_path = cwd if isinstance(cwd, str) else None
-    tools = environment.get("type") != "none"
-    return cwd_path, tools
+    return cwd_path, True
+
+
+def with_env_actions(current: list[Any], actions: list[Any]) -> list[Any]:
+    env = [
+        item
+        for item in current
+        if isinstance(item, dict) and item.get("type") == "environment_connection"
+    ]
+    rest = [
+        item
+        for item in actions
+        if isinstance(item, dict) and item.get("type") != "environment_connection"
+    ]
+    return rest + env
 
 
 def _skill_dirs(environment: dict[str, Any]) -> list[str]:
@@ -303,11 +321,13 @@ async def _complete_turn(
         type="agent.session.turn.completed",
         data={"turn_id": str(turn_id)},
     )
+    row = await get_session(db, tenant_id, session_id)
+    current = row.required_actions if row is not None else []
     await update_session(
         db,
         tenant_id,
         session_id,
-        changes={"status": "idle", "required_actions": []},
+        changes={"status": "idle", "required_actions": with_env_actions(current, [])},
     )
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
@@ -357,7 +377,10 @@ async def run_turn(
         db,
         tenant_id,
         session_id,
-        changes={"status": "in_progress", "required_actions": []},
+        changes={
+            "status": "in_progress",
+            "required_actions": with_env_actions(row.required_actions, []),
+        },
     )
     await persist_event(
         db, hub, tenant_id, session_id, type="agent.session.in_progress"
@@ -407,11 +430,14 @@ async def run_turn(
         ),
     )
     if pending:
+        latest = await get_session(db, tenant_id, session_id)
+        current = latest.required_actions if latest is not None else []
+        actions = with_env_actions(current, pending)
         await update_session(
             db,
             tenant_id,
             session_id,
-            changes={"status": "requires_action", "required_actions": pending},
+            changes={"status": "requires_action", "required_actions": actions},
         )
         await persist_event(
             db,
@@ -419,7 +445,7 @@ async def run_turn(
             tenant_id,
             session_id,
             type="agent.session.requires_action",
-            data={"turn_id": turn_id, "required_actions": pending},
+            data={"turn_id": turn_id, "required_actions": actions},
         )
         return
     await _complete_turn(db, hub, tenant_id, session_id, turn.id, reply)
@@ -472,13 +498,19 @@ async def continue_turn(
             "Unknown call_id",
             code="invalid_request",
         )
-    remaining = [action for action in actions if action.get("call_id") != call_id]
+    remaining = [
+        action
+        for action in actions
+        if action.get("type") == "function_call" and action.get("call_id") != call_id
+    ]
     if remaining:
         await update_session(
             db,
             tenant_id,
             session_id,
-            changes={"required_actions": remaining},
+            changes={
+                "required_actions": with_env_actions(row.required_actions, remaining)
+            },
         )
         return
     cwd_path, tools = _cwd_and_tools(row.environment)
@@ -509,11 +541,14 @@ async def continue_turn(
         ),
     )
     if pending:
+        latest = await get_session(db, tenant_id, session_id)
+        current = latest.required_actions if latest is not None else []
+        actions = with_env_actions(current, pending)
         await update_session(
             db,
             tenant_id,
             session_id,
-            changes={"status": "requires_action", "required_actions": pending},
+            changes={"status": "requires_action", "required_actions": actions},
         )
         await persist_event(
             db,
@@ -521,7 +556,7 @@ async def continue_turn(
             tenant_id,
             session_id,
             type="agent.session.requires_action",
-            data={"turn_id": str(turn.id), "required_actions": pending},
+            data={"turn_id": str(turn.id), "required_actions": actions},
         )
         return
     await _complete_turn(db, hub, tenant_id, session_id, turn.id, reply)

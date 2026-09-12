@@ -5,9 +5,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from apipi.api.agents import router as agents_router
+from apipi.api.environments import router as environments_router
 from apipi.api.sessions import router as sessions_router
 from apipi.auth import AuthCache, load_authenticate
 from apipi.config import Settings, load_settings, postgres_url
+from apipi.env.hub import EnvironmentHub
 from apipi.errors import register_exception_handlers
 from apipi.pi.harness import PiHarness
 from apipi.pi.pool import PiPool
@@ -47,11 +49,13 @@ def create_app(
     app.state.authenticate = load_authenticate(resolved.auth)
     app.state.auth_cache = AuthCache(resolved.auth_cache_ttl)
     app.state.event_hub = EventHub()
+    app.state.env_hub = EnvironmentHub()
     app.state.pi_pool = resolved_pool
     app.state.harness = harness if harness is not None else PiHarness(resolved_pool)
     register_exception_handlers(app)
     app.include_router(sessions_router)
     app.include_router(agents_router)
+    app.include_router(environments_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

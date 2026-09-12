@@ -132,7 +132,7 @@ when present (ASCII, ≤512).
 | --- | --- |
 | `openai_hosted` | **Default.** Session directory next to Pi. Not OpenAI's cloud. |
 | `none` | No computer. MCP and chat only. |
-| `self_hosted` | Wait for an external runner. |
+| `self_hosted` | Wait for an external runner. Create returns `environment_id` and a one-time `key`. Runner WebSocket: `/v1/environments/{environment_id}`. |
 
 `environment.capability_directories`: paths on the computer that contain
 `SKILL.md` trees. See [tools](tools.md).

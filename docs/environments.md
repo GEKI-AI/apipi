@@ -30,23 +30,52 @@ Pi stays in the run mode (`host` / `jail` / `microvm`). The computer is
 elsewhere.
 
 1. Session created with `self_hosted`
-2. Response has `environment_id` and a short-lived key
+2. Response has `environment_id` and a one-time `key`
 3. `environment.pending` -> runner connects -> `environment.connected`
 4. `read` / `write` / `edit` / `bash` go over the socket, not through
    the jail or guest
 
-| Verb | Job |
+Create JSON includes `environment.id`, top-level `environment_id`, and
+`key` (this response only). `required_actions` may include
+`environment_connection` until the runner is connected. Status stays
+`idle` so turns can run. If nothing connects, file tools stay off.
+
+The runner opens `/v1/environments/{environment_id}` as a WebSocket and
+sends `hello` with the key. Wrong id or key is not found. No
+`/v1/runners` resource. One key = one workspace.
+
+Messages are JSON objects. `hello` is first:
+
+```json
+{"type": "hello", "key": "..."}
+```
+
+Gateway replies `{"type": "hello", "ok": true}`. Later requests have
+`id`. Replies: `{"id": "...", "ok": true, ...}` or
+`{"id": "...", "ok": false, "error": "..."}`.
+
+| Verb | Direction | Job |
 | --- | --- |
-| `hello` | Auth, capabilities |
-| `exec` | Command in workspace cwd |
-| `read` / `write` / `edit` / `list` | Files |
-| `artifact` | Publish an output |
-| `ping` | Keepalive |
-| `close` | Shutdown |
+| `hello` | runner → gateway | Auth, capabilities |
+| `exec` | gateway → runner | Command in workspace cwd |
+| `read` / `write` / `edit` / `list` | gateway → runner | Files |
+| `artifact` | gateway → runner | Publish an output |
+| `ping` | either | Keepalive |
+| `close` | either | Shutdown |
 
-No `/v1/runners` resource. One key = one workspace.
+```json
+{"id": "...", "type": "exec", "command": "ls"}
+{"id": "...", "type": "read", "path": "a.txt"}
+{"id": "...", "type": "write", "path": "a.txt", "content": "..."}
+{"id": "...", "type": "edit", "path": "a.txt", "old_text": "...", "new_text": "..."}
+{"id": "...", "type": "list", "path": "."}
+{"id": "...", "type": "artifact", "path": "out.bin"}
+{"id": "...", "type": "ping"}
+{"id": "...", "type": "close"}
+```
 
-If nothing connects, the session still runs without file tools.
+Artifact bytes are `read` while the socket is up. `410` if it is gone
+or disconnected.
 
 ## Skills
 

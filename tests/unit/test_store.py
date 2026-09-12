@@ -8,6 +8,7 @@ from apipi.store.events import append_event, list_events
 from apipi.store.repo import (
     create_agent,
     create_artifact,
+    create_environment,
     create_item,
     create_session,
     create_tenant,
@@ -19,6 +20,7 @@ from apipi.store.repo import (
     get_item,
     get_session,
     get_tenant,
+    get_tenant_environment,
     get_turn,
     list_agents,
     update_agent,
@@ -94,6 +96,21 @@ async def test_sessions_turns_items_are_tenant_scoped(db: AsyncSession) -> None:
     assert await get_turn(db, b.id, turn.id) is None
     assert await get_item(db, b.id, item.id) is None
     assert await get_artifact(db, b.id, artifact.id) is None
+
+
+async def test_environments_are_tenant_scoped(db: AsyncSession) -> None:
+    a = await create_tenant(db, name="a")
+    b = await create_tenant(db, name="b")
+    session_row = await create_session(db, a.id)
+    env = await create_environment(
+        db,
+        a.id,
+        session_row.id,
+        environment_id=uuid.uuid4(),
+        key_hash="a" * 64,
+    )
+    assert await get_tenant_environment(db, a.id, env.id) is not None
+    assert await get_tenant_environment(db, b.id, env.id) is None
 
 
 async def test_ensure_tenant_is_stable(db: AsyncSession) -> None:

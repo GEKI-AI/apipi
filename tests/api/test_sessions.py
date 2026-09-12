@@ -127,17 +127,17 @@ async def test_inline_agent_is_not_saved(client: AsyncClient) -> None:
     assert agents.json() == {"data": []}
 
 
-async def test_unimplemented_environment(client: AsyncClient) -> None:
+async def test_unknown_environment_type(client: AsyncClient) -> None:
     token = _token()
     agent_id = await _create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
         headers=_auth(token),
-        json={"agent_id": agent_id, "environment": {"type": "self_hosted"}},
+        json={"agent_id": agent_id, "environment": {"type": "foo"}},
     )
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "not_implemented"
-    assert response.json()["error"]["code"] == "self_hosted"
+    assert response.json()["error"]["code"] == "foo"
 
 
 async def test_default_environment_is_openai_hosted(client: AsyncClient) -> None:
