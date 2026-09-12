@@ -32,6 +32,45 @@ def test_internal_pi_events_are_dropped() -> None:
     assert map_pi_event({"type": "agent_start"}) == []
     assert map_pi_event({"type": "turn_start"}) == []
     assert map_pi_event({"type": "extension_error", "error": "x"}) == []
+    assert map_pi_event({"type": "agent_end", "messages": []}) == []
+
+
+def test_agent_end_maps_usage_without_cost_or_text() -> None:
+    mapped = map_pi_event(
+        {
+            "type": "agent_end",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "usage": {
+                        "input": 5,
+                        "output": 8,
+                        "cacheRead": 1,
+                        "cacheWrite": 2,
+                        "totalTokens": 16,
+                        "cost": {"total": 0.3},
+                        "prompt": "secret-prompt",
+                    },
+                }
+            ],
+        }
+    )
+    assert mapped == [
+        (
+            "usage",
+            {
+                "prompt_tokens": 5,
+                "completion_tokens": 8,
+                "cache_read_tokens": 1,
+                "cache_write_tokens": 2,
+                "total_tokens": 16,
+            },
+        )
+    ]
+    payload = mapped[0][1]
+    assert "cost" not in payload
+    assert "prompt" not in payload
+    assert mapped[0][0] not in PUBLIC_EVENT_TYPES
 
 
 def test_mcp_tool_is_mcp_call() -> None:
@@ -50,9 +89,12 @@ def test_mapped_payload_has_no_pi_keys() -> None:
     mapped = map_pi_event(
         {
             "type": "message_update",
+            "usage": {"input": 5, "prompt": "secret-prompt"},
             "assistantMessageEvent": {"type": "text_delta", "delta": "x"},
         }
     )
     payload = mapped[0][1]
     assert "assistantMessageEvent" not in payload
     assert "type" not in payload
+    assert "usage" not in payload
+    assert "prompt" not in payload

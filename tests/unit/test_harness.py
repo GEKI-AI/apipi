@@ -1,4 +1,4 @@
-from apipi.runtime import PUBLIC_EVENT_TYPES, FakeHarness
+from apipi.runtime import FAKE_USAGE, PUBLIC_EVENT_TYPES, FakeHarness
 
 
 def test_fake_harness_is_determined() -> None:
@@ -6,6 +6,13 @@ def test_fake_harness_is_determined() -> None:
     assert harness.complete("hello") == "hello"
     assert harness.complete("") == "ok"
     assert harness.complete("hello") == "hello"
+
+
+async def test_fake_harness_emits_usage() -> None:
+    harness = FakeHarness()
+    events = [event async for event in harness.generate("hello")]
+    assert events[-1] == ("usage", FAKE_USAGE)
+    assert "prompt" not in events[-1][1]
 
 
 def test_public_event_types_match_spec() -> None:
