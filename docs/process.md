@@ -67,10 +67,10 @@ source. Do not add a custom docs app.
 uv run --no-project --with-requirements requirements-docs.txt mkdocs serve
 ```
 
-The home page, the quickstart, and the use pages (API, auth,
-environments, tools, usage, architecture) are for people who want to
-run the product. Contributing, the constitution, agent rules, the
-roadmap, and ADRs live under Contribute.
+The home page, install, configuration, the quickstart, and the use
+pages (API, auth, environments, tools, usage, architecture) are for
+people who want to run the product. Contributing, the constitution,
+agent rules, the roadmap, and ADRs live under Contribute.
 
 ## Tests
 

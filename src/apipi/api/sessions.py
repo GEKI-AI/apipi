@@ -20,6 +20,7 @@ from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.otel import set_span, start_span
 from apipi.pi.dirs import session_workspace
+from apipi.pi.pool import PiPool
 from apipi.request_id import request_id_of
 from apipi.runtime import (
     EventHub,
@@ -55,6 +56,17 @@ from apipi.tokens import hash_token
 from apipi.usage import usage_from
 
 router = APIRouter()
+
+
+def _require_capacity(request: Request, session_id: uuid.UUID) -> None:
+    pool = request.app.state.pi_pool
+    if isinstance(pool, PiPool) and not pool.has_capacity(session_id):
+        raise ApiError(
+            "invalid_request",
+            "Too many live sessions",
+            code="capacity",
+            status_code=429,
+        )
 
 
 class EnvironmentSpec(StrictModel):
@@ -344,6 +356,7 @@ async def create_agent_session(
         request.app.state.pi_pool.put_stdio(session_id, stdio)
         text = _input_text(body.input)
         if text:
+            _require_capacity(request, session_id)
             await run_turn(
                 store,
                 hub,
@@ -356,6 +369,7 @@ async def create_agent_session(
                 request_id=request_id,
                 metrics=request.app.state.metrics,
                 tracing=tracing,
+                turn_timeout=request.app.state.settings.turn_timeout,
             )
         else:
             async with store.session() as db:
@@ -513,6 +527,7 @@ async def post_session_event(
                 request_id=request_id,
                 metrics=request.app.state.metrics,
                 tracing=tracing,
+                turn_timeout=request.app.state.settings.turn_timeout,
             )
     else:
         with start_span(
@@ -521,6 +536,7 @@ async def post_session_event(
             request_id=request_id,
             session_id=session_id,
         ):
+            _require_capacity(request, session_id)
             await run_turn(
                 store,
                 hub,
@@ -533,6 +549,7 @@ async def post_session_event(
                 request_id=request_id,
                 metrics=request.app.state.metrics,
                 tracing=tracing,
+                turn_timeout=request.app.state.settings.turn_timeout,
             )
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)

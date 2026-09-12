@@ -3,6 +3,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from apipi.api.agents import router as agents_router
 from apipi.api.environments import router as environments_router
@@ -11,7 +13,7 @@ from apipi.api.usage import router as usage_router
 from apipi.auth import AuthCache, load_authenticate
 from apipi.config import Settings, load_settings, postgres_url
 from apipi.env.hub import EnvironmentHub
-from apipi.errors import register_exception_handlers
+from apipi.errors import error_body, register_exception_handlers
 from apipi.metrics import Metrics, mount_metrics
 from apipi.otel import Tracing
 from apipi.pi.harness import PiHarness
@@ -19,6 +21,34 @@ from apipi.pi.pool import PiPool
 from apipi.request_id import RequestIdMiddleware
 from apipi.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store, create_engine
+
+
+class MaxBodyMiddleware:
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            for key, value in scope.get("headers", []):
+                if key == b"content-length":
+                    try:
+                        length = int(value)
+                    except ValueError:
+                        length = 0
+                    if length > self.max_bytes:
+                        response = JSONResponse(
+                            status_code=413,
+                            content=error_body(
+                                "invalid_request",
+                                "Request body too large",
+                                "payload_too_large",
+                            ),
+                        )
+                        await response(scope, receive, send)
+                        return
+                    break
+        await self.app(scope, receive, send)
 
 
 def create_app(
@@ -35,7 +65,12 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         owned = False
         if getattr(app.state, "store", None) is None:
-            app.state.store = Store(create_engine(postgres_url(resolved.database_url)))
+            app.state.store = Store(
+                create_engine(
+                    postgres_url(resolved.database_url),
+                    pool_size=resolved.db_pool_size,
+                )
+            )
             owned = True
         reap = asyncio.create_task(resolved_pool.reap_loop())
         try:
@@ -51,6 +86,7 @@ def create_app(
 
     app = FastAPI(title="ApiPi", version="0.0.0", lifespan=lifespan)
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(MaxBodyMiddleware, max_bytes=resolved.max_request_bytes)
     app.state.settings = resolved
     app.state.metrics = Metrics() if resolved.metrics else None
     if tracing is not None:

@@ -1,0 +1,14 @@
+database_url = "postgresql+asyncpg://apipi:apipi@localhost:5432/apipi"
+run_mode = "host"
+host = "0.0.0.0"
+port = 8000
+log_level = "info"
+idle_ttl = "15m"
+max_sessions = 32
+turn_timeout = "10m"
+auth_cache_ttl = "30s"
+pi_command = "pi"
+jail_memory = "512M"
+max_request_bytes = "1MiB"
+db_pool_size = 5
+metrics = false

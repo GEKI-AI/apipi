@@ -1,11 +1,14 @@
 # Examples
 
-MCP configs and a small OpenAI Python SDK script. Keys come from the
-environment, not from these files.
+MCP configs, gateway config samples, and a small OpenAI Python SDK
+script. Keys come from the environment, not from these files.
 
 | File | What |
 | --- | --- |
 | [openai_sdk.py](openai_sdk.py) | Official OpenAI Python client against this API |
+| [apipi.toml](apipi.toml) | Gateway settings file |
+| [env.example](env.example) | Dotenv template; copy to `.env` |
+| [auth_callback.py](auth_callback.py) | Auth callback (`APIPI_AUTH`) |
 | [tavily.yaml](tavily.yaml) | Web search (Tavily hosted MCP) |
 | [playwright.yaml](playwright.yaml) | Browser (Playwright MCP, headless) |
 

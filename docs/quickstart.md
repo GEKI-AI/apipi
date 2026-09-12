@@ -13,7 +13,7 @@ session directory** next to Pi. It is not OpenAI's cloud VM. See
 
 ## Prerequisites
 
-Install and serve the gateway as on the [home page](index.md). You need
+Install and serve the gateway as in [Install](install.md). You need
 Postgres, `apipi migrate`, and `apipi serve`. Live turns also need Pi
 on `PATH` and a model URL. The gateway process reads `OPENAI_BASE_URL`
 and `OPENAI_API_KEY` as the **model** host. Those values are passed into

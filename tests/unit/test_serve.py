@@ -126,7 +126,7 @@ def test_serve_microvm_starts_when_tools_present(
     caplog.set_level(logging.WARNING)
     called: dict[str, object] = {}
 
-    def fake_run(app: object, *, host: str, port: int) -> None:
+    def fake_run(app: object, *, host: str, port: int, **_kwargs: object) -> None:
         called["host"] = host
         called["port"] = port
         called["app"] = app
@@ -160,7 +160,7 @@ def test_serve_jail_starts_when_tools_present(
     caplog.set_level(logging.WARNING)
     called: dict[str, object] = {}
 
-    def fake_run(app: object, *, host: str, port: int) -> None:
+    def fake_run(app: object, *, host: str, port: int, **_kwargs: object) -> None:
         called["host"] = host
         called["port"] = port
         called["app"] = app
@@ -180,7 +180,7 @@ def test_serve_host_starts(
     caplog.set_level(logging.WARNING)
     called: dict[str, object] = {}
 
-    def fake_run(app: object, *, host: str, port: int) -> None:
+    def fake_run(app: object, *, host: str, port: int, **_kwargs: object) -> None:
         called["host"] = host
         called["port"] = port
         called["app"] = app
