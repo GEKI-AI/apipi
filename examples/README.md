@@ -14,12 +14,18 @@ Skills are `SKILL.md` directories on the computer. Point at them with
 
 ## OpenAI Python SDK
 
-[openai_sdk.py](openai_sdk.py) uses `AsyncOpenAI` with `base_url` pointed
-at this gateway. It creates an agent, opens a session with
-`environment={"type": "none"}` (no computer), and reads the turn that
-ran from that input. It only sends fields this API implements, so the
-SDK does not add `multi_agent`, `vault_ids`, or other unknown keys that
-would return `400`.
+[openai_sdk.py](openai_sdk.py) uses the official `OpenAI` client with
+`base_url` pointed at this gateway. It creates a session with an inline
+agent, `environment={"type": "openai_hosted"}` (a local session
+directory, not OpenAI's cloud), and streams the first turn. The input
+asks the agent to write `tree.py`, run it, and show the output. The
+script prints SSE `data:` lines and stops after the first turn outcome.
+The stream stays open across idle, so a loop without that stop would
+wait on keepalives.
+
+It only sends fields this API implements, so the SDK does not add
+`multi_agent`, `vault_ids`, or other unknown keys that would return
+`400`.
 
 The `openai` package is not an ApiPi dependency. Install it for this
 script only:
@@ -49,5 +55,5 @@ export OPENAI_BASE_URL=http://localhost:8000/v1
 uv run --with openai python examples/openai_sdk.py
 ```
 
-The product [README](../README.md) has a shorter sketch of the same
-client.
+The product [quickstart](../docs/quickstart.md) walks through the same
+client: run a task, follow progress, continue, and delete.

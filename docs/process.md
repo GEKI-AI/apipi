@@ -39,7 +39,9 @@ enough explanation that a new reader can set up and use the API without
 guessing. Short choppy fragments are wrong for docs. Tables are still
 good for endpoints, env vars, and fields.
 
-Issues, pull request bodies, and commit messages stay short.
+Issues can be as long as they need to be. Include known
+implementation details. Do not squeeze the goal. Pull request bodies
+and commit messages stay short.
 
 Code comments stay omitted unless asked.
 
@@ -65,10 +67,10 @@ source. Do not add a custom docs app.
 uv run --no-project --with-requirements requirements-docs.txt mkdocs serve
 ```
 
-The home page and the use pages (API, auth, environments, tools, usage,
-architecture) are for people who want to run the product. Contributing,
-the constitution, agent rules, the roadmap, and ADRs live under
-Contribute.
+The home page, the quickstart, and the use pages (API, auth,
+environments, tools, usage, architecture) are for people who want to
+run the product. Contributing, the constitution, agent rules, the
+roadmap, and ADRs live under Contribute.
 
 ## Tests
 
@@ -80,7 +82,10 @@ Compatibility: HTTP tests in `tests/api/test_compat.py` against
 [api.md](api.md). Each yes row has a named test. Fast e2e runs in CI
 (`pytest -m "not slow"`). A slow check against the official OpenAI
 Python client (`beta.agents`) is local only and skips if the SDK is not
-installed. That check runs the example in `examples/openai_sdk.py`.
+installed. That check creates a session with an inline agent and
+`openai_hosted`, the same fields as `examples/openai_sdk.py`. The
+runnable script streams against a live gateway; see
+[quickstart](quickstart.md).
 
 ## Contribute
 
@@ -96,6 +101,6 @@ Steps: `.agents/skills/` (`plan`, `create-issue`, `work-issue`,
 Do not add features that are not in a spec. Do not implement the roadmap
 unless the spec has moved.
 
-An issue is common, not required. One checkout is one branch. Two
-changes at the same time must not edit the same files. Use another
+An issue is common, not required. One checkout is one branch.
+Parallel work is best effort when files do not overlap. Use another
 folder (`git worktree`) or another session.

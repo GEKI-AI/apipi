@@ -140,4 +140,6 @@ completion bodies.
 Compatibility tests are HTTP fixtures against [api.md](api.md). Each
 yes row has a named test. Fast tests do not require the OpenAI SDK. A
 slow SDK smoke against the official OpenAI Python client is local-only
-and skips if the SDK is not installed.
+and skips if the SDK is not installed. That check creates a session
+with an inline agent and `openai_hosted`, the same fields as
+`examples/openai_sdk.py`.

@@ -19,7 +19,10 @@ enough explanation that a new reader can set up and use the API without
 guessing. Short choppy fragments are wrong for docs. Tables are still
 good for endpoints, env vars, and fields.
 
-Issues, pull request bodies, and commit messages stay short.
+Issues can be as long as they need to be. Include the goal, what to
+check when done, spec paths, and any implementation details already
+known. Do not squeeze the goal. Pull request bodies and commit
+messages stay short.
 
 Code comments stay omitted unless asked.
 
@@ -29,14 +32,16 @@ Code comments stay omitted unless asked.
 list of planned work.
 
 Write it so a human and an agent can do the work without a meeting.
+Use as much text as that takes.
 
 | Kind | Include |
 | --- | --- |
-| Request | Goal, what to check when done, spec paths |
+| Request | Goal, what to check when done, spec paths. Known implementation details when you have them. |
 | Bug | What happens, what should happen, spec path, how to reproduce |
 
-Optional: **Files** (what this change will edit), **Blocked by** (issue
-that must land first). Use them when splitting work so two people or
+Optional: **Details** (how to implement, if already known), **Files**
+(what this change will edit), **Blocked by** (issue that must land
+first). Use Files and Blocked by when splitting work so two people or
 agents can work at the same time.
 
 Do not list what this is not. Anything not in the goal is out of scope.
