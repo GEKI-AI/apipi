@@ -68,3 +68,6 @@ testpaths = ["tests"]
 addopts = ["-q"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "slow: long tests; run locally, not in GitHub CI",
+]
