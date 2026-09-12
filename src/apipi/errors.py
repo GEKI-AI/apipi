@@ -35,6 +35,10 @@ def not_implemented(code: str, message: str | None = None) -> NoReturn:
     )
 
 
+def gone(message: str = "Gone") -> NoReturn:
+    raise ApiError("invalid_request", message, code="gone", status_code=410)
+
+
 def _unknown_field(exc: RequestValidationError | ValidationError) -> str | None:
     for error in exc.errors():
         if error.get("type") == "extra_forbidden":

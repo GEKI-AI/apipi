@@ -7,6 +7,7 @@ from apipi.store.errors import NotFoundError
 from apipi.store.events import append_event, list_events
 from apipi.store.repo import (
     create_agent,
+    create_artifact,
     create_item,
     create_session,
     create_tenant,
@@ -14,6 +15,7 @@ from apipi.store.repo import (
     delete_agent,
     ensure_tenant,
     get_agent,
+    get_artifact,
     get_item,
     get_session,
     get_tenant,
@@ -87,9 +89,11 @@ async def test_sessions_turns_items_are_tenant_scoped(db: AsyncSession) -> None:
     item = await create_item(
         db, a.id, session_row.id, type="message", turn_id=turn.id, data={"role": "user"}
     )
+    artifact = await create_artifact(db, a.id, session_row.id, path="out.txt")
     assert await get_session(db, b.id, session_row.id) is None
     assert await get_turn(db, b.id, turn.id) is None
     assert await get_item(db, b.id, item.id) is None
+    assert await get_artifact(db, b.id, artifact.id) is None
 
 
 async def test_ensure_tenant_is_stable(db: AsyncSession) -> None:
