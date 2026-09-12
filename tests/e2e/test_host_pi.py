@@ -11,7 +11,6 @@ from httpx import ASGITransport, AsyncClient
 from apipi.app import create_app
 from apipi.config import Settings
 from apipi.store.engine import Store
-from apipi.tenants import provision_tenant
 
 pytestmark = pytest.mark.e2e
 
@@ -48,10 +47,9 @@ async def host_client(host_app: FastAPI) -> AsyncIterator[AsyncClient]:
 
 
 async def test_host_openai_hosted_streams_fake_pi_text(
-    store: Store, host_client: AsyncClient, host_settings: Settings
+    host_client: AsyncClient, host_settings: Settings
 ) -> None:
-    async with store.session() as db:
-        _tenant, token = await provision_tenant(db, name="e2e")
+    token = "e2e"
     created_agent = await host_client.post(
         "/v1/agents",
         headers=_auth(token),
@@ -84,10 +82,9 @@ async def test_host_openai_hosted_streams_fake_pi_text(
 
 
 async def test_idle_ttl_kills_pi_session_stays(
-    store: Store, host_client: AsyncClient, host_app: FastAPI
+    host_client: AsyncClient, host_app: FastAPI
 ) -> None:
-    async with store.session() as db:
-        _tenant, token = await provision_tenant(db, name="ttl")
+    token = "ttl"
     created_agent = await host_client.post(
         "/v1/agents",
         headers=_auth(token),

@@ -2,29 +2,24 @@ import uuid
 
 from httpx import AsyncClient
 
-from apipi.store.engine import Store
-from apipi.tenants import provision_tenant
 
-
-async def _token(store: Store, name: str = "t") -> str:
-    async with store.session() as db:
-        _tenant, token = await provision_tenant(db, name=name)
-    return token
+def _token(name: str = "t") -> str:
+    return name
 
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def test_fresh_tenant_has_no_agents(store: Store, client: AsyncClient) -> None:
-    token = await _token(store)
+async def test_fresh_tenant_has_no_agents(client: AsyncClient) -> None:
+    token = _token()
     response = await client.get("/v1/agents", headers=_auth(token))
     assert response.status_code == 200
     assert response.json() == {"data": []}
 
 
-async def test_agent_crud(store: Store, client: AsyncClient) -> None:
-    token = await _token(store)
+async def test_agent_crud(client: AsyncClient) -> None:
+    token = _token()
     created = await client.post(
         "/v1/agents",
         headers=_auth(token),
@@ -104,8 +99,8 @@ async def test_agent_crud(store: Store, client: AsyncClient) -> None:
     assert gone.status_code == 404
 
 
-async def test_unknown_field_is_rejected(store: Store, client: AsyncClient) -> None:
-    token = await _token(store)
+async def test_unknown_field_is_rejected(client: AsyncClient) -> None:
+    token = _token()
     response = await client.post(
         "/v1/agents",
         headers=_auth(token),
@@ -117,8 +112,8 @@ async def test_unknown_field_is_rejected(store: Store, client: AsyncClient) -> N
     assert listed.json() == {"data": []}
 
 
-async def test_unimplemented_agent_fields(store: Store, client: AsyncClient) -> None:
-    token = await _token(store)
+async def test_unimplemented_agent_fields(client: AsyncClient) -> None:
+    token = _token()
     for field in ("multi_agent", "tool_search", "programmatic_tool_calling"):
         response = await client.post(
             "/v1/agents",
@@ -131,9 +126,9 @@ async def test_unimplemented_agent_fields(store: Store, client: AsyncClient) -> 
         assert error["code"] == field
 
 
-async def test_cross_tenant_agent_is_404(store: Store, client: AsyncClient) -> None:
-    token_a = await _token(store, "a")
-    token_b = await _token(store, "b")
+async def test_cross_tenant_agent_is_404(client: AsyncClient) -> None:
+    token_a = _token("a")
+    token_b = _token("b")
     created = await client.post(
         "/v1/agents", headers=_auth(token_a), json={"name": "secret"}
     )
