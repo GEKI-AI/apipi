@@ -127,8 +127,9 @@ print(session.id)
 
 Official clients work for the subset we implement. Unknown fields and
 unimplemented features return an error (`invalid_request` or
-`not_implemented`). They are not stored and they are not ignored. The
-HTTP surface is in [API](api.md).
+`not_implemented`). They are not stored and they are not ignored. A
+runnable script that uses the official OpenAI Python SDK is
+`examples/openai_sdk.py`. The HTTP surface is in [API](api.md).
 
 ## Config
 

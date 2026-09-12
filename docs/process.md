@@ -80,7 +80,7 @@ Compatibility: HTTP tests in `tests/api/test_compat.py` against
 [api.md](api.md). Each yes row has a named test. Fast e2e runs in CI
 (`pytest -m "not slow"`). A slow check against the official OpenAI
 Python client (`beta.agents`) is local only and skips if the SDK is not
-installed.
+installed. That check runs the example in `examples/openai_sdk.py`.
 
 ## Contribute
 
