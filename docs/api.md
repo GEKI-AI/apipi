@@ -79,7 +79,7 @@ log line.
 | `agent.session.error` | Error |
 | `agent.session.turn.created` | Turn id |
 | `agent.session.turn.in_progress` | Work started |
-| `agent.session.turn.completed` | Done; may include `usage` |
+| `agent.session.turn.completed` | Done; may include `usage` (tokens only) |
 | `agent.session.turn.failed` | Failed |
 | `agent.session.turn.cancelled` | Cancelled |
 | `agent.session.turn.output_text.delta` | Assistant text |
@@ -106,6 +106,23 @@ Item types: `message`, `function_call`, `mcp_call`, `command_execution`.
 
 Artifact bytes live on the sandbox. Content is proxied while it is
 connected. `410` if it is gone.
+
+`GET` turn may include `usage` (prompt, completion, cache read/write,
+total). Tokens only. See [usage](usage.md).
+
+## Usage
+
+| Method | Path |
+| --- | --- |
+| `GET` | `/v1/usage` |
+
+Tenant-scoped totals from the turn log. Filter by `session_id`,
+`turn_id`, or `day`. Not USD. See [usage](usage.md).
+
+## Request ids
+
+Echo `x-request-id`. Generate if missing. Honor `X-Client-Request-Id`
+when present (ASCII, ≤512).
 
 ## Environments
 
@@ -135,6 +152,8 @@ See [environments](environments.md).
 | MCP | yes |
 | Skills (`capability_directories`, `SKILL.md`) | yes |
 | Artifacts | yes |
+| Usage tokens on turns | yes |
+| `/v1/chat/completions` | no |
 | `web_search` first-party | no (MCP; example: Tavily) |
 | Browser | no first-party (MCP; example: Playwright) |
 | `/v1/skills` hosted store | no (files on the computer) |
