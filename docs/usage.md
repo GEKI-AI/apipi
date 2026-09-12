@@ -103,7 +103,7 @@ No USD. No message text.
 Prometheus text format. `/health` and `/metrics` are not counted.
 
 | Series | Type | Labels |
-| --- | --- |
+| --- | --- | --- |
 | `apipi_requests_total` | counter | `tenant`, `method`, `path`, `status` |
 | `apipi_turns_total` | counter | `tenant`, `status` |
 | `apipi_tokens_total` | counter | `tenant`, `kind` |

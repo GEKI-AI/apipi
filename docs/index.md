@@ -126,8 +126,9 @@ print(session.id)
 ```
 
 Official clients work for the subset we implement. Unknown fields and
-unimplemented features return an error. They are not stored and ignored.
-The HTTP surface is in [API](api.md).
+unimplemented features return an error (`invalid_request` or
+`not_implemented`). They are not stored and they are not ignored. The
+HTTP surface is in [API](api.md).
 
 ## Config
 
