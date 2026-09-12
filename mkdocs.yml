@@ -1,5 +1,5 @@
 site_name: ApiPi
-site_description: HTTP API for hosted agents
+site_description: ApiPi is a drop-in OpenAI Agents API. Point official clients at this gateway and bring your own model URL.
 site_author: GEKI FlexCo
 copyright: Copyright &copy; 2026 GEKI FlexCo
 repo_url: https://github.com/GEKI-AI/apipi

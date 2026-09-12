@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "apipi"
 dynamic = ["version"]
-description = "HTTP API for hosted agents"
+description = "ApiPi is a drop-in OpenAI Agents API. Point official clients at this gateway and bring your own model URL."
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }

@@ -1,7 +1,8 @@
 # API
 
-OpenAI Agents API subset. Prefix `/v1`. Beta header `OpenAI-Beta: agents=v1`
-is accepted and ignored.
+Drop-in OpenAI Agents API. Prefix `/v1`. Official clients work for the
+subset we implement. Beta header `OpenAI-Beta: agents=v1` is accepted
+and ignored.
 
 Unknown fields and unimplemented features return an error
 (`invalid_request` or `not_implemented`). They are not stored and ignored.
