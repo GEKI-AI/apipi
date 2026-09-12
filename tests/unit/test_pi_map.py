@@ -34,6 +34,18 @@ def test_internal_pi_events_are_dropped() -> None:
     assert map_pi_event({"type": "extension_error", "error": "x"}) == []
 
 
+def test_mcp_tool_is_mcp_call() -> None:
+    mapped = map_pi_event(
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "c1",
+            "toolName": "mcp_tavily_search",
+        }
+    )
+    assert mapped[0][1]["item_type"] == "mcp_call"
+    assert mapped[0][0] in PUBLIC_EVENT_TYPES
+
+
 def test_mapped_payload_has_no_pi_keys() -> None:
     mapped = map_pi_event(
         {

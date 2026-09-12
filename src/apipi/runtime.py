@@ -94,6 +94,7 @@ class FakeHarness:
     def __init__(self) -> None:
         self.function_calls: list[dict[str, Any]] = []
         self.function_tools: list[dict[str, Any]] | None = None
+        self.mcp_http: list[Any] | None = None
 
     def complete(self, text: str) -> str:
         return text if text else "ok"
@@ -107,12 +108,14 @@ class FakeHarness:
         tools: bool = True,
         function_tools: list[dict[str, Any]] | None = None,
         tool_result: dict[str, Any] | None = None,
+        mcp_http: list[Any] | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         del session_id, cwd, tools
         self.function_tools = (
             list(function_tools) if function_tools is not None else None
         )
+        self.mcp_http = list(mcp_http) if mcp_http is not None else None
         if tool_result is not None:
             if tool_result.get("success"):
                 output = tool_result.get("output")
@@ -291,6 +294,30 @@ async def _complete_turn(
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
 
+async def fail_session(
+    db: AsyncSession,
+    hub: EventHub,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    message: str,
+) -> None:
+    await update_session(
+        db,
+        tenant_id,
+        session_id,
+        changes={"status": "failed", "required_actions": []},
+    )
+    await persist_event(
+        db,
+        hub,
+        tenant_id,
+        session_id,
+        type="agent.session.error",
+        data={"message": message},
+    )
+    await persist_event(db, hub, tenant_id, session_id, type="agent.session.failed")
+
+
 async def run_turn(
     db: AsyncSession,
     hub: EventHub,
@@ -298,6 +325,8 @@ async def run_turn(
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     text: str,
+    *,
+    mcp_http: list[Any] | None = None,
 ) -> None:
     row = await get_session(db, tenant_id, session_id)
     if row is None:
@@ -352,6 +381,7 @@ async def run_turn(
             cwd=cwd_path,
             tools=tools,
             function_tools=function_tools,
+            mcp_http=mcp_http,
         ),
     )
     if pending:
@@ -385,6 +415,7 @@ async def continue_turn(
     success: bool,
     output: str | None,
     error: str | None,
+    mcp_http: list[Any] | None = None,
 ) -> None:
     row = await get_session(db, tenant_id, session_id)
     if row is None:
@@ -448,6 +479,7 @@ async def continue_turn(
             tools=tools,
             function_tools=function_tools,
             tool_result=result,
+            mcp_http=mcp_http,
         ),
     )
     if pending:

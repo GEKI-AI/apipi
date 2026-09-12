@@ -42,6 +42,7 @@ def create_app(
     app = FastAPI(title="ApiPi", version="0.0.0", lifespan=lifespan)
     app.state.settings = resolved
     app.state.store = store
+    app.state.mcp_http = {}
     app.state.authenticate = load_authenticate(resolved.auth)
     app.state.auth_cache = AuthCache(resolved.auth_cache_ttl)
     app.state.event_hub = EventHub()
