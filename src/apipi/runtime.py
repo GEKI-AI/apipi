@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.errors import ApiError
 from apipi.skills import discover_skill_dirs
+from apipi.store.engine import Store
 from apipi.store.events import append_event
 from apipi.store.models import Event, utc_now
 from apipi.store.repo import (
@@ -58,6 +59,18 @@ def event_body(event: Event) -> dict[str, Any]:
 class EventHub:
     def __init__(self) -> None:
         self._subs: dict[uuid.UUID, list[asyncio.Queue[dict[str, Any]]]] = {}
+        self._abort: dict[uuid.UUID, asyncio.Event] = {}
+
+    def watch_turn(self, session_id: uuid.UUID) -> asyncio.Event:
+        ev = asyncio.Event()
+        self._abort[session_id] = ev
+        return ev
+
+    def turn_abort(self, session_id: uuid.UUID) -> asyncio.Event | None:
+        return self._abort.get(session_id)
+
+    def unwatch_turn(self, session_id: uuid.UUID) -> None:
+        self._abort.pop(session_id, None)
 
     def subscribe(self, session_id: uuid.UUID) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -91,6 +104,8 @@ class Harness(Protocol):
         **kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]: ...
 
+    async def abort(self, session_id: uuid.UUID) -> None: ...
+
 
 class FakeHarness:
     def __init__(self) -> None:
@@ -100,9 +115,13 @@ class FakeHarness:
         self.mcp_stdio: list[Any] | None = None
         self.skill_dirs: list[str] | None = None
         self.tools: bool | None = None
+        self.hold = False
 
     def complete(self, text: str) -> str:
         return text if text else "ok"
+
+    async def abort(self, session_id: uuid.UUID) -> None:
+        del session_id
 
     async def generate(
         self,
@@ -116,10 +135,15 @@ class FakeHarness:
         mcp_http: list[Any] | None = None,
         mcp_stdio: list[Any] | None = None,
         skill_dirs: list[str] | None = None,
+        abort: asyncio.Event | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         del session_id, cwd
         self.tools = tools
+        if self.hold:
+            if abort is not None:
+                await abort.wait()
+            return
         self.function_tools = (
             list(function_tools) if function_tools is not None else None
         )
@@ -247,7 +271,7 @@ async def _emit_item(
 
 
 async def _consume_generate(
-    db: AsyncSession,
+    store: Store,
     hub: EventHub,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -259,36 +283,39 @@ async def _consume_generate(
     async for etype, data in events:
         payload = dict(data)
         payload.setdefault("turn_id", str(turn_id))
-        if etype == "function_call":
-            call_id = payload.get("call_id")
-            name = payload.get("name")
-            arguments = payload.get("arguments")
-            if not isinstance(call_id, str) or not isinstance(name, str):
+        async with store.session() as db:
+            if etype == "function_call":
+                call_id = payload.get("call_id")
+                name = payload.get("name")
+                arguments = payload.get("arguments")
+                if not isinstance(call_id, str) or not isinstance(name, str):
+                    continue
+                if not isinstance(arguments, dict):
+                    arguments = {}
+                call = {
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": arguments,
+                }
+                pending.append(call)
+                await _emit_item(
+                    db,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    turn_id=turn_id,
+                    type="function_call",
+                    data=call,
+                )
                 continue
-            if not isinstance(arguments, dict):
-                arguments = {}
-            call = {
-                "type": "function_call",
-                "call_id": call_id,
-                "name": name,
-                "arguments": arguments,
-            }
-            pending.append(call)
-            await _emit_item(
-                db,
-                hub,
-                tenant_id,
-                session_id,
-                turn_id=turn_id,
-                type="function_call",
-                data=call,
+            if etype == "agent.session.turn.output_text.done":
+                text_out = payload.get("text")
+                if isinstance(text_out, str):
+                    reply = text_out
+            await persist_event(
+                db, hub, tenant_id, session_id, type=etype, data=payload
             )
-            continue
-        if etype == "agent.session.turn.output_text.done":
-            text_out = payload.get("text")
-            if isinstance(text_out, str):
-                reply = text_out
-        await persist_event(db, hub, tenant_id, session_id, type=etype, data=payload)
     return reply, pending
 
 
@@ -332,6 +359,49 @@ async def _complete_turn(
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
 
+async def _cancel_turn(
+    db: AsyncSession,
+    hub: EventHub,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+) -> None:
+    turn = await get_session_turn(db, tenant_id, session_id, turn_id)
+    if turn is not None:
+        turn.status = "cancelled"
+        turn.updated_at = utc_now()
+    await persist_event(
+        db,
+        hub,
+        tenant_id,
+        session_id,
+        type="agent.session.turn.cancelled",
+        data={"turn_id": str(turn_id)},
+    )
+    row = await get_session(db, tenant_id, session_id)
+    current = row.required_actions if row is not None else []
+    await update_session(
+        db,
+        tenant_id,
+        session_id,
+        changes={"status": "idle", "required_actions": with_env_actions(current, [])},
+    )
+    await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
+
+
+def request_cancel(
+    hub: EventHub, session_id: uuid.UUID, *, status: str
+) -> asyncio.Event | None:
+    abort = hub.turn_abort(session_id)
+    if status != "in_progress" and abort is None:
+        raise ApiError(
+            "invalid_request",
+            "Session is not in_progress",
+            code="invalid_request",
+        )
+    return abort
+
+
 async def fail_session(
     db: AsyncSession,
     hub: EventHub,
@@ -357,7 +427,7 @@ async def fail_session(
 
 
 async def run_turn(
-    db: AsyncSession,
+    store: Store,
     hub: EventHub,
     harness: Harness,
     tenant_id: uuid.UUID,
@@ -367,92 +437,107 @@ async def run_turn(
     mcp_http: list[Any] | None = None,
     mcp_stdio: list[Any] | None = None,
 ) -> None:
-    row = await get_session(db, tenant_id, session_id)
-    if row is None:
-        return
-    cwd_path, tools = _cwd_and_tools(row.environment)
-    function_tools = await _agent_function_tools(db, tenant_id, row.agent_id)
-    skill_dirs = _skill_dirs(row.environment)
-    await update_session(
-        db,
-        tenant_id,
-        session_id,
-        changes={
-            "status": "in_progress",
-            "required_actions": with_env_actions(row.required_actions, []),
-        },
-    )
-    await persist_event(
-        db, hub, tenant_id, session_id, type="agent.session.in_progress"
-    )
-    turn = await create_turn(db, tenant_id, session_id, status="in_progress")
-    turn_id = str(turn.id)
-    await persist_event(
-        db,
-        hub,
-        tenant_id,
-        session_id,
-        type="agent.session.turn.created",
-        data={"turn_id": turn_id},
-    )
-    await persist_event(
-        db,
-        hub,
-        tenant_id,
-        session_id,
-        type="agent.session.turn.in_progress",
-        data={"turn_id": turn_id},
-    )
-    await _emit_item(
-        db,
-        hub,
-        tenant_id,
-        session_id,
-        turn_id=turn.id,
-        type="message",
-        data={"role": "user", "content": text},
-    )
-    reply, pending = await _consume_generate(
-        db,
-        hub,
-        tenant_id,
-        session_id,
-        turn.id,
-        harness.generate(
-            text,
-            session_id=session_id,
-            cwd=cwd_path,
-            tools=tools,
-            function_tools=function_tools,
-            mcp_http=mcp_http,
-            mcp_stdio=mcp_stdio,
-            skill_dirs=skill_dirs,
-        ),
-    )
-    if pending:
-        latest = await get_session(db, tenant_id, session_id)
-        current = latest.required_actions if latest is not None else []
-        actions = with_env_actions(current, pending)
-        await update_session(
-            db,
-            tenant_id,
-            session_id,
-            changes={"status": "requires_action", "required_actions": actions},
-        )
-        await persist_event(
-            db,
+    abort = hub.watch_turn(session_id)
+    try:
+        turn_id: uuid.UUID
+        cwd_path: str | None
+        tools: bool
+        function_tools: list[dict[str, Any]]
+        skill_dirs: list[str]
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            if row is None:
+                return
+            cwd_path, tools = _cwd_and_tools(row.environment)
+            function_tools = await _agent_function_tools(db, tenant_id, row.agent_id)
+            skill_dirs = _skill_dirs(row.environment)
+            await update_session(
+                db,
+                tenant_id,
+                session_id,
+                changes={
+                    "status": "in_progress",
+                    "required_actions": with_env_actions(row.required_actions, []),
+                },
+            )
+            await persist_event(
+                db, hub, tenant_id, session_id, type="agent.session.in_progress"
+            )
+            turn = await create_turn(db, tenant_id, session_id, status="in_progress")
+            turn_id = turn.id
+            await persist_event(
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                type="agent.session.turn.created",
+                data={"turn_id": str(turn_id)},
+            )
+            await persist_event(
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                type="agent.session.turn.in_progress",
+                data={"turn_id": str(turn_id)},
+            )
+            await _emit_item(
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                turn_id=turn_id,
+                type="message",
+                data={"role": "user", "content": text},
+            )
+        reply, pending = await _consume_generate(
+            store,
             hub,
             tenant_id,
             session_id,
-            type="agent.session.requires_action",
-            data={"turn_id": turn_id, "required_actions": actions},
+            turn_id,
+            harness.generate(
+                text,
+                session_id=session_id,
+                cwd=cwd_path,
+                tools=tools,
+                function_tools=function_tools,
+                mcp_http=mcp_http,
+                mcp_stdio=mcp_stdio,
+                skill_dirs=skill_dirs,
+                abort=abort,
+            ),
         )
-        return
-    await _complete_turn(db, hub, tenant_id, session_id, turn.id, reply)
+        async with store.session() as db:
+            if abort.is_set():
+                await _cancel_turn(db, hub, tenant_id, session_id, turn_id)
+                return
+            if pending:
+                latest = await get_session(db, tenant_id, session_id)
+                current = latest.required_actions if latest is not None else []
+                actions = with_env_actions(current, pending)
+                await update_session(
+                    db,
+                    tenant_id,
+                    session_id,
+                    changes={"status": "requires_action", "required_actions": actions},
+                )
+                await persist_event(
+                    db,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    type="agent.session.requires_action",
+                    data={"turn_id": str(turn_id), "required_actions": actions},
+                )
+                return
+            await _complete_turn(db, hub, tenant_id, session_id, turn_id, reply)
+    finally:
+        hub.unwatch_turn(session_id)
 
 
 async def continue_turn(
-    db: AsyncSession,
+    store: Store,
     hub: EventHub,
     harness: Harness,
     tenant_id: uuid.UUID,
@@ -466,68 +551,79 @@ async def continue_turn(
     mcp_http: list[Any] | None = None,
     mcp_stdio: list[Any] | None = None,
 ) -> None:
-    row = await get_session(db, tenant_id, session_id)
-    if row is None:
-        raise ApiError(
-            "invalid_request", "Not found", code="not_found", status_code=404
+    cwd_path: str | None
+    tools: bool
+    function_tools: list[dict[str, Any]]
+    skill_dirs: list[str]
+    result: dict[str, Any]
+    async with store.session() as db:
+        row = await get_session(db, tenant_id, session_id)
+        if row is None:
+            raise ApiError(
+                "invalid_request", "Not found", code="not_found", status_code=404
+            )
+        if row.status != "requires_action":
+            raise ApiError(
+                "invalid_request",
+                "Session is not waiting for a tool result",
+                code="invalid_request",
+            )
+        turn = await get_session_turn(db, tenant_id, session_id, turn_id)
+        if turn is None or turn.status != "in_progress":
+            raise ApiError(
+                "invalid_request", "Not found", code="not_found", status_code=404
+            )
+        actions = [
+            action for action in row.required_actions if isinstance(action, dict)
+        ]
+        match = next(
+            (
+                action
+                for action in actions
+                if action.get("type") == "function_call"
+                and action.get("call_id") == call_id
+            ),
+            None,
         )
-    if row.status != "requires_action":
-        raise ApiError(
-            "invalid_request",
-            "Session is not waiting for a tool result",
-            code="invalid_request",
-        )
-    turn = await get_session_turn(db, tenant_id, session_id, turn_id)
-    if turn is None or turn.status != "in_progress":
-        raise ApiError(
-            "invalid_request", "Not found", code="not_found", status_code=404
-        )
-    actions = [action for action in row.required_actions if isinstance(action, dict)]
-    match = next(
-        (
+        if match is None:
+            raise ApiError(
+                "invalid_request",
+                "Unknown call_id",
+                code="invalid_request",
+            )
+        remaining = [
             action
             for action in actions
             if action.get("type") == "function_call"
-            and action.get("call_id") == call_id
-        ),
-        None,
-    )
-    if match is None:
-        raise ApiError(
-            "invalid_request",
-            "Unknown call_id",
-            code="invalid_request",
-        )
-    remaining = [
-        action
-        for action in actions
-        if action.get("type") == "function_call" and action.get("call_id") != call_id
-    ]
-    if remaining:
-        await update_session(
-            db,
-            tenant_id,
-            session_id,
-            changes={
-                "required_actions": with_env_actions(row.required_actions, remaining)
-            },
-        )
-        return
-    cwd_path, tools = _cwd_and_tools(row.environment)
-    function_tools = await _agent_function_tools(db, tenant_id, row.agent_id)
-    skill_dirs = _skill_dirs(row.environment)
-    result = {
-        "call_id": call_id,
-        "success": success,
-        "output": output,
-        "error": error,
-    }
+            and action.get("call_id") != call_id
+        ]
+        if remaining:
+            await update_session(
+                db,
+                tenant_id,
+                session_id,
+                changes={
+                    "required_actions": with_env_actions(
+                        row.required_actions, remaining
+                    )
+                },
+            )
+            return
+        cwd_path, tools = _cwd_and_tools(row.environment)
+        function_tools = await _agent_function_tools(db, tenant_id, row.agent_id)
+        skill_dirs = _skill_dirs(row.environment)
+        result = {
+            "call_id": call_id,
+            "success": success,
+            "output": output,
+            "error": error,
+        }
     reply, pending = await _consume_generate(
-        db,
+        store,
         hub,
         tenant_id,
         session_id,
-        turn.id,
+        turn_id,
         harness.generate(
             "",
             session_id=session_id,
@@ -540,23 +636,24 @@ async def continue_turn(
             skill_dirs=skill_dirs,
         ),
     )
-    if pending:
-        latest = await get_session(db, tenant_id, session_id)
-        current = latest.required_actions if latest is not None else []
-        actions = with_env_actions(current, pending)
-        await update_session(
-            db,
-            tenant_id,
-            session_id,
-            changes={"status": "requires_action", "required_actions": actions},
-        )
-        await persist_event(
-            db,
-            hub,
-            tenant_id,
-            session_id,
-            type="agent.session.requires_action",
-            data={"turn_id": str(turn.id), "required_actions": actions},
-        )
-        return
-    await _complete_turn(db, hub, tenant_id, session_id, turn.id, reply)
+    async with store.session() as db:
+        if pending:
+            latest = await get_session(db, tenant_id, session_id)
+            current = latest.required_actions if latest is not None else []
+            actions = with_env_actions(current, pending)
+            await update_session(
+                db,
+                tenant_id,
+                session_id,
+                changes={"status": "requires_action", "required_actions": actions},
+            )
+            await persist_event(
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                type="agent.session.requires_action",
+                data={"turn_id": str(turn_id), "required_actions": actions},
+            )
+            return
+        await _complete_turn(db, hub, tenant_id, session_id, turn_id, reply)

@@ -26,6 +26,7 @@ from apipi.runtime import (
     event_body,
     fail_session,
     persist_event,
+    request_cancel,
     run_turn,
 )
 from apipi.schemas import StrictModel
@@ -84,6 +85,8 @@ class SessionInput(StrictModel):
     @model_validator(mode="after")
     def known_input(self) -> Self:
         if self.type == "agent.session.input.message":
+            return self
+        if self.type == "agent.session.input.cancel":
             return self
         if self.type == "agent.session.input.tool_result":
             if self.turn_id is None or self.call_id is None or self.success is None:
@@ -319,23 +322,24 @@ async def create_agent_session(
     request.app.state.mcp_http[session_id] = connected
     request.app.state.mcp_stdio[session_id] = stdio
     request.app.state.pi_pool.put_stdio(session_id, stdio)
-    async with store.session() as db:
-        text = _input_text(body.input)
-        if text:
-            await run_turn(
-                db,
-                hub,
-                harness,
-                tenant.id,
-                session_id,
-                text,
-                mcp_http=connected,
-                mcp_stdio=stdio,
-            )
-        else:
+    text = _input_text(body.input)
+    if text:
+        await run_turn(
+            store,
+            hub,
+            harness,
+            tenant.id,
+            session_id,
+            text,
+            mcp_http=connected,
+            mcp_stdio=stdio,
+        )
+    else:
+        async with store.session() as db:
             await persist_event(
                 db, hub, tenant.id, session_id, type="agent.session.idle"
             )
+    async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)
         if row is None:
             not_found()
@@ -426,31 +430,23 @@ async def post_session_event(
     text = body.content if body.content is not None else body.text
     if text is None:
         text = ""
+    action = "message"
+    abort_ev = None
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)
         if row is None:
             not_found()
-        if body.type == "agent.session.input.tool_result":
+        if body.type == "agent.session.input.cancel":
+            abort_ev = request_cancel(hub, session_id, status=row.status)
+            action = "cancel"
+        elif body.type == "agent.session.input.tool_result":
             if body.turn_id is None or body.call_id is None or body.success is None:
                 raise ApiError(
                     "invalid_request",
                     "tool_result needs turn_id, call_id, and success",
                     code="invalid_request",
                 )
-            await continue_turn(
-                db,
-                hub,
-                harness,
-                tenant.id,
-                session_id,
-                turn_id=body.turn_id,
-                call_id=body.call_id,
-                success=body.success,
-                output=body.output,
-                error=body.error,
-                mcp_http=request.app.state.mcp_http.get(session_id),
-                mcp_stdio=request.app.state.mcp_stdio.get(session_id),
-            )
+            action = "tool"
         else:
             if row.status == "requires_action":
                 raise ApiError(
@@ -458,18 +454,44 @@ async def post_session_event(
                     "Session is waiting for a tool result",
                     code="invalid_request",
                 )
-            mcp_http = request.app.state.mcp_http.get(session_id)
-            mcp_stdio = request.app.state.mcp_stdio.get(session_id)
-            await run_turn(
-                db,
-                hub,
-                harness,
-                tenant.id,
-                session_id,
-                text,
-                mcp_http=mcp_http,
-                mcp_stdio=mcp_stdio,
+            action = "message"
+    if action == "cancel":
+        if abort_ev is not None:
+            abort_ev.set()
+        await harness.abort(session_id)
+    elif action == "tool":
+        if body.turn_id is None or body.call_id is None or body.success is None:
+            raise ApiError(
+                "invalid_request",
+                "tool_result needs turn_id, call_id, and success",
+                code="invalid_request",
             )
+        await continue_turn(
+            store,
+            hub,
+            harness,
+            tenant.id,
+            session_id,
+            turn_id=body.turn_id,
+            call_id=body.call_id,
+            success=body.success,
+            output=body.output,
+            error=body.error,
+            mcp_http=request.app.state.mcp_http.get(session_id),
+            mcp_stdio=request.app.state.mcp_stdio.get(session_id),
+        )
+    else:
+        await run_turn(
+            store,
+            hub,
+            harness,
+            tenant.id,
+            session_id,
+            text,
+            mcp_http=request.app.state.mcp_http.get(session_id),
+            mcp_stdio=request.app.state.mcp_stdio.get(session_id),
+        )
+    async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)
         if row is None:
             not_found()

@@ -38,3 +38,9 @@ class PiHarness:
             for public in map_pi_event(event):
                 yield public
         self.pool.touch(session_id)
+
+    async def abort(self, session_id: uuid.UUID) -> None:
+        proc = self.pool.peek(session_id)
+        if proc is None:
+            return
+        await proc.abort()

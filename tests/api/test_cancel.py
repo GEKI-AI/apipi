@@ -1,0 +1,142 @@
+import asyncio
+import uuid
+from collections.abc import AsyncIterator
+
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+
+from apipi.app import create_app
+from apipi.config import Settings
+from apipi.runtime import FakeHarness
+from apipi.store.engine import Store
+
+
+def _auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def cancel_harness() -> FakeHarness:
+    harness = FakeHarness()
+    harness.hold = True
+    return harness
+
+
+@pytest.fixture
+def cancel_app(
+    settings: Settings, store: Store, cancel_harness: FakeHarness
+) -> FastAPI:
+    return create_app(settings, store=store, harness=cancel_harness)
+
+
+@pytest.fixture
+async def cancel_client(cancel_app: FastAPI) -> AsyncIterator[AsyncClient]:
+    async with AsyncClient(
+        transport=ASGITransport(app=cancel_app), base_url="http://test"
+    ) as client:
+        yield client
+
+
+async def _create_idle_session(client: AsyncClient, token: str) -> str:
+    agent = await client.post(
+        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+    )
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
+    )
+    assert created.status_code == 200
+    return str(created.json()["id"])
+
+
+async def test_cancel_in_progress_turn(
+    cancel_client: AsyncClient, cancel_app: FastAPI
+) -> None:
+    token = "c"
+    session_id = await _create_idle_session(cancel_client, token)
+    sid = uuid.UUID(session_id)
+    hub = cancel_app.state.event_hub
+    queue = hub.subscribe(sid)
+    try:
+        task = asyncio.create_task(
+            cancel_client.post(
+                f"/v1/agents/sessions/{session_id}/events",
+                headers=_auth(token),
+                json={"type": "agent.session.input.message", "content": "go"},
+            )
+        )
+        while True:
+            event = await asyncio.wait_for(queue.get(), timeout=2)
+            if event["type"] == "agent.session.in_progress":
+                break
+        cancelled = await cancel_client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json={"type": "agent.session.input.cancel"},
+        )
+        assert cancelled.status_code == 200
+        posted = await task
+        assert posted.status_code == 200
+        assert posted.json()["status"] == "idle"
+    finally:
+        hub.unsubscribe(sid, queue)
+
+    got = await cancel_client.get(
+        f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+    )
+    assert got.json()["status"] == "idle"
+    turns = await cancel_client.get(
+        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+    )
+    assert turns.json()["data"][0]["status"] == "cancelled"
+    events = await cancel_client.get(
+        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+    )
+    types = [event["type"] for event in events.json()["data"]]
+    index = types.index("agent.session.turn.cancelled")
+    assert types[index + 1] == "agent.session.idle"
+    assert types[-1] == "agent.session.idle"
+
+
+async def test_cancel_wrong_tenant_is_404(cancel_client: AsyncClient) -> None:
+    session_id = await _create_idle_session(cancel_client, "a")
+    other = await cancel_client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth("b"),
+        json={"type": "agent.session.input.cancel"},
+    )
+    assert other.status_code == 404
+    assert other.json()["error"]["code"] == "not_found"
+
+
+async def test_cancel_idle_is_invalid(cancel_client: AsyncClient) -> None:
+    session_id = await _create_idle_session(cancel_client, "c")
+    response = await cancel_client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth("c"),
+        json={"type": "agent.session.input.cancel"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
+async def test_cancel_missing_session_is_404(cancel_client: AsyncClient) -> None:
+    response = await cancel_client.post(
+        f"/v1/agents/sessions/{uuid.uuid4()}/events",
+        headers=_auth("c"),
+        json={"type": "agent.session.input.cancel"},
+    )
+    assert response.status_code == 404
+
+
+async def test_cancel_unknown_field(cancel_client: AsyncClient) -> None:
+    session_id = await _create_idle_session(cancel_client, "c")
+    response = await cancel_client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth("c"),
+        json={"type": "agent.session.input.cancel", "foo": 1},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "unknown_field"

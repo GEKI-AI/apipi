@@ -32,6 +32,11 @@ class PiProc:
             if event.get("type") == "agent_settled":
                 return
 
+    async def abort(self) -> None:
+        if not self.alive:
+            return
+        await self.send({"type": "abort"})
+
     async def _events(self) -> AsyncIterator[dict[str, Any]]:
         if self.process.stdout is None:
             return
