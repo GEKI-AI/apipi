@@ -24,8 +24,9 @@ The useful contribution is a detailed
 | Path | What |
 | --- | --- |
 | [CONSTITUTION.md](CONSTITUTION.md) | Project rules |
-| [AGENTS.md](AGENTS.md) | Standing orders for agents |
+| [AGENTS.md](AGENTS.md) | Rules for agents |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Issues, git, pull requests |
+| [.agents/skills/](.agents/skills/) | How agents plan, implement, and review |
 | [docs/](docs/) | Specs |
 | [docs/decisions/](docs/decisions/) | Architecture decisions |
 | [mkdocs.yml](mkdocs.yml) | Docs site |

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+docs=0
+fast=0
+for arg in "$@"; do
+  case "$arg" in
+    --docs) docs=1 ;;
+    --fast) fast=1 ;;
+    *)
+      echo "usage: $0 [--fast] [--docs]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+uv run ruff format src tests
+uv run ruff check src tests
+uv run ty check src tests
+if [[ "$fast" -eq 1 ]]; then
+  uv run pytest -m "not slow"
+else
+  uv run pytest
+fi
+if [[ "$docs" -eq 1 ]]; then
+  uv run --no-project --with-requirements requirements-docs.txt mkdocs build --strict
+fi

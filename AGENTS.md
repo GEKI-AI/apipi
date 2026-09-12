@@ -1,15 +1,33 @@
-# Standing orders
+# Agent rules
 
-Before code:
+Laws: `CONSTITUTION.md`. Specs: `docs/`. How we work: `CONTRIBUTING.md`.
+If it is not in a spec, update the spec in this change or stop. Do not
+build `docs/roadmap.md` unless the spec has moved.
 
-1. `CONSTITUTION.md`
-2. `docs/index.md`
-3. `docs/decisions/`
-4. The spec for the surface you are changing
-5. `docs/process.md` if you are changing a decision
+When the constitution changes, update this file in the same change.
 
-If it is not in a spec, update the spec first or refuse. Do not build
-items from `docs/roadmap.md` unless the spec has moved.
+## Writing
+
+Use simple technical English. Short sentences. Common words.
+Do not invent names for things that already have names.
+Docs, issues, and pull requests follow this.
+
+## Map
+
+| Path | What |
+| --- | --- |
+| `src/apipi/api/` | HTTP routes |
+| `src/apipi/schemas.py` | Public types |
+| `src/apipi/store/` | Postgres |
+| `src/apipi/pi/` | Harness adapter |
+| `src/apipi/auth.py` | Auth callback |
+| `tests/api/` | Public HTTP |
+| `tests/unit/` | Internals, mocks |
+| `tests/e2e/` | Live Pi |
+| `tests/support/` | FakeHarness, fakes |
+
+Before code, read the spec for the part you are changing.
+Read `docs/decisions/` only if the architecture changes.
 
 ## Stack
 
@@ -30,7 +48,7 @@ OpenAI-compatible `base_url`. No Node in the gateway.
 - Tenant keys in the browser or in Postgres
 - Rewrite the event log
 - A custom docs frontend
-- A superseded ADR file
+- An old copy of a decision file
 - pip, `python -m venv`, or pre-commit hooks
 - MkDocs or docs deps in the apipi package
 
@@ -43,25 +61,29 @@ OpenAI-compatible `base_url`. No Node in the gateway.
 - Warn at startup when run mode is `host`
 - Idle Pi TTL default 15 minutes (`APIPI_IDLE_TTL`)
 - uv for all Python (`uv sync`, `uv run`, `uv lock`)
-- Before commit: format, lint, typecheck, tests (see `CONTRIBUTING.md`).
-  Run the full suite locally. Do not commit until they pass.
-- GitHub CI runs lint, types, docs, unit tests, and fast e2e
-  (`pytest -m "not slow"`). Slow/large validation stays local.
+- Before commit: `./scripts/check`. Add `--docs` if docs changed.
+  Do not commit if checks fail. GitHub CI is fast (`pytest -m "not slow"`).
 
-## Slices
+## Workflows
 
-After a slice lands, re-read `CONSTITUTION.md`, `docs/index.md`, the
-spec for the next surface, and the current code. Do not rely on
-memory from the previous slice.
+How to plan, file issues, implement, and review lives in
+`.agents/skills/`. Read those files. Do not copy them here.
 
-## Issues
+| Skill | When |
+| --- | --- |
+| `plan` | Split new work into issues |
+| `create-issue` | File one GitHub issue |
+| `work-issue` | Do one change and open a PR |
+| `review` | Review a PR |
 
-Write issues so a human can read them in one pass. Goal, acceptance,
-spec paths. Do not list non-goals. Anything not in the goal is out of
-scope. Mention a non-goal only when someone would reasonably think it
-was included.
+An issue is common, not required. One checkout is one branch.
+Two changes at the same time must not edit the same files. Use another
+folder (`git worktree`) or another session.
 
 ## Git
 
-`CONTRIBUTING.md`. Issue first. Branch `issue-N-slug` from `main`. One
-issue per PR. Human review, squash merge. Do not commit red.
+`CONTRIBUTING.md`. Short-lived branch from `main` (`issue-<n>-<slug>`,
+or a short name if there is no issue). One change per PR. Rebase,
+squash, delete the branch. Commit when asked to implement, commit, or
+open a PR. Merge only when the user asks to merge. Default: return the
+PR URL. Never force-push `main`.
