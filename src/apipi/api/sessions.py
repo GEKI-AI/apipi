@@ -245,6 +245,7 @@ async def create_agent_session(
             return session_body(row)
     request.app.state.mcp_http[session_id] = connected
     request.app.state.mcp_stdio[session_id] = stdio
+    request.app.state.pi_pool.put_stdio(session_id, stdio)
     async with store.session() as db:
         text = _input_text(body.input)
         if text:

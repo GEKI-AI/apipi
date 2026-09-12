@@ -1,4 +1,5 @@
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,12 +33,15 @@ def mcp_stdio_tools(tools: list[Any] | None) -> list[tuple[str, str, list[str]]]
 
 async def start_mcp_stdio(label: str, command: str, args: list[str]) -> McpStdioServer:
     try:
+        env = os.environ.copy()
+        env.pop("DATABASE_URL", None)
         process = await asyncio.create_subprocess_exec(
             command,
             *args,
             stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=env,
         )
     except OSError as exc:
         raise McpConnectError(f"mcp {label} failed") from exc

@@ -59,11 +59,13 @@ async def test_mcp_stdio_starts_with_session(settings: Settings, store: Store) -
         assert created.json()["status"] == "idle"
         assert harness.mcp_stdio is not None
         assert harness.mcp_stdio[0].server_label == "local"
+        assert harness.mcp_stdio[0].process.returncode is None
         session_id = created.json()["id"]
         deleted = await client.delete(
             f"/v1/agents/sessions/{session_id}", headers=_auth("stdio")
         )
         assert deleted.status_code == 200
+        assert harness.mcp_stdio[0].process.returncode is not None
 
 
 async def test_mcp_stdio_failure_is_explicit(settings: Settings, store: Store) -> None:
