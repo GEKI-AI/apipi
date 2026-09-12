@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from apipi.api.agents import router as agents_router
 from apipi.api.environments import router as environments_router
 from apipi.api.sessions import router as sessions_router
+from apipi.api.usage import router as usage_router
 from apipi.auth import AuthCache, load_authenticate
 from apipi.config import Settings, load_settings, postgres_url
 from apipi.env.hub import EnvironmentHub
@@ -71,6 +72,7 @@ def create_app(
     app.include_router(sessions_router)
     app.include_router(agents_router)
     app.include_router(environments_router)
+    app.include_router(usage_router)
     if isinstance(app.state.metrics, Metrics):
         mount_metrics(app, app.state.metrics)
 

@@ -1,6 +1,7 @@
 import inspect
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,7 +11,12 @@ from apipi.store.repo import (
     create_tenant,
     create_turn,
 )
-from apipi.store.turn_logs import append_turn_log, get_turn_log, list_turn_logs
+from apipi.store.turn_logs import (
+    append_turn_log,
+    get_turn_log,
+    list_turn_logs,
+    usage_totals,
+)
 
 
 def test_turn_log_module_is_append_only() -> None:
@@ -19,7 +25,12 @@ def test_turn_log_module_is_append_only() -> None:
         for name, value in inspect.getmembers(turn_logs)
         if inspect.iscoroutinefunction(value)
     }
-    assert public == {"append_turn_log", "get_turn_log", "list_turn_logs"}
+    assert public == {
+        "append_turn_log",
+        "get_turn_log",
+        "list_turn_logs",
+        "usage_totals",
+    }
     assert not hasattr(turn_logs, "update_turn_log")
     assert not hasattr(turn_logs, "delete_turn_log")
     assert not hasattr(turn_logs, "rewrite")
@@ -54,6 +65,22 @@ async def test_turn_logs_are_tenant_scoped(db: AsyncSession) -> None:
     assert listed[0].id == row.id
     assert listed[0].prompt_tokens == 4
     assert listed[0].tool_names == ["echo"]
+    assert await usage_totals(db, a.id, session_id=session_row.id) == {
+        "prompt_tokens": 4,
+        "completion_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 0,
+        "turns": 1,
+    }
+    assert await usage_totals(db, b.id, session_id=session_row.id) == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 0,
+        "turns": 0,
+    }
 
 
 async def test_append_turn_log_has_no_message_fields(db: AsyncSession) -> None:
@@ -78,3 +105,49 @@ async def test_append_turn_log_has_no_message_fields(db: AsyncSession) -> None:
     assert not hasattr(row, "completion")
     assert "content" not in {column.key for column in row.__table__.columns}
     assert uuid.UUID(str(row.turn_id)) == turn.id
+
+
+async def test_usage_totals_by_day(db: AsyncSession) -> None:
+    tenant = await create_tenant(db, name="a")
+    session_row = await create_session(db, tenant.id)
+    first = await create_turn(db, tenant.id, session_row.id, status="completed")
+    second = await create_turn(db, tenant.id, session_row.id, status="completed")
+    old = await append_turn_log(
+        db,
+        tenant.id,
+        session_row.id,
+        first.id,
+        status="completed",
+        prompt_tokens=4,
+        total_tokens=4,
+    )
+    old.created_at = datetime(2020, 1, 2, 12, 0, tzinfo=UTC)
+    await append_turn_log(
+        db,
+        tenant.id,
+        session_row.id,
+        second.id,
+        status="completed",
+        prompt_tokens=3,
+        total_tokens=3,
+    )
+    await db.flush()
+    start = datetime(2020, 1, 2, tzinfo=UTC)
+    assert await usage_totals(
+        db, tenant.id, since=start, until=start + timedelta(days=1)
+    ) == {
+        "prompt_tokens": 4,
+        "completion_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 4,
+        "turns": 1,
+    }
+    assert await usage_totals(db, tenant.id, session_id=session_row.id) == {
+        "prompt_tokens": 7,
+        "completion_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 7,
+        "turns": 2,
+    }

@@ -71,13 +71,30 @@ Tenant-scoped. Wrong tenant is `404`. Tokens and turn counts, not USD.
 | --- | --- |
 | `GET` | `/v1/usage` |
 
-Query params (one of):
+Query params (exactly one of):
 
 | Param | What |
 | --- | --- |
 | `session_id` | Totals for that session |
 | `turn_id` | Totals for that turn |
 | `day` | Totals for that UTC day (`YYYY-MM-DD`) |
+
+Missing or more than one param is `400`. Unknown `session_id` or
+`turn_id` is `404`. A day with no rows is zeros.
+
+```json
+{
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "cache_read_tokens": 0,
+  "cache_write_tokens": 0,
+  "total_tokens": 0,
+  "turns": 0
+}
+```
+
+`turns` is the number of turn log rows. Missing token counts are `0`.
+No USD. No message text.
 
 ## Prometheus
 
