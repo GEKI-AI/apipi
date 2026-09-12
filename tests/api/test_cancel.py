@@ -10,6 +10,8 @@ from apipi.app import create_app
 from apipi.config import Settings
 from apipi.runtime import FakeHarness
 from apipi.store.engine import Store
+from apipi.store.turn_logs import get_turn_log
+from apipi.tokens import hash_token
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -52,7 +54,7 @@ async def _create_idle_session(client: AsyncClient, token: str) -> str:
 
 
 async def test_cancel_in_progress_turn(
-    cancel_client: AsyncClient, cancel_app: FastAPI
+    cancel_client: AsyncClient, cancel_app: FastAPI, store: Store
 ) -> None:
     token = "c"
     session_id = await _create_idle_session(cancel_client, token)
@@ -98,6 +100,15 @@ async def test_cancel_in_progress_turn(
     index = types.index("agent.session.turn.cancelled")
     assert types[index + 1] == "agent.session.idle"
     assert types[-1] == "agent.session.idle"
+    turn_id = uuid.UUID(turns.json()["data"][0]["id"])
+    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    async with store.session() as db:
+        row = await get_turn_log(db, tenant_id, turn_id)
+    assert row is not None
+    assert row.status == "cancelled"
+    assert row.prompt_tokens == 0
+    assert row.total_tokens == 0
+    assert "go" not in str(row.tool_names) + str(row.mcp_names) + str(row.model)
 
 
 async def test_cancel_wrong_tenant_is_404(cancel_client: AsyncClient) -> None:

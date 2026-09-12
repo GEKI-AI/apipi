@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import AsyncIterator
 
 import pytest
@@ -7,6 +8,8 @@ from apipi.app import create_app
 from apipi.config import Settings
 from apipi.runtime import FakeHarness
 from apipi.store.engine import Store
+from apipi.store.turn_logs import get_turn_log
+from apipi.tokens import hash_token
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -126,6 +129,54 @@ async def test_function_tool_requires_action(
     assert texts == ["pong"]
     types = [event["type"] for event in events.json()["data"]]
     assert types[-1] == "agent.session.idle"
+
+
+async def test_completed_turn_log_counts_function_tools(
+    tool_client: AsyncClient, store: Store
+) -> None:
+    token = "tools"
+    agent_id = await _agent_with_echo(tool_client, token)
+    created = await tool_client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {"type": "none"},
+            "input": "use echo",
+        },
+    )
+    session_id = created.json()["id"]
+    events = await tool_client.get(
+        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+    )
+    require = [
+        event
+        for event in events.json()["data"]
+        if event["type"] == "agent.session.requires_action"
+    ]
+    turn_id = require[0]["data"]["turn_id"]
+    resumed = await tool_client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(token),
+        json={
+            "type": "agent.session.input.tool_result",
+            "turn_id": turn_id,
+            "call_id": "call_1",
+            "success": True,
+            "output": "pong",
+        },
+    )
+    assert resumed.status_code == 200
+    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    async with store.session() as db:
+        row = await get_turn_log(db, tenant_id, uuid.UUID(turn_id))
+    assert row is not None
+    assert row.status == "completed"
+    assert row.tool_names == ["echo"]
+    assert row.tool_counts == {"echo": 1}
+    blob = str(row.tool_names) + str(row.tool_counts) + str(row.mcp_names)
+    assert "use echo" not in blob
+    assert "pong" not in blob
 
 
 async def test_tool_result_wrong_tenant_is_404(tool_client: AsyncClient) -> None:

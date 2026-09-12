@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.errors import ApiError
 from apipi.skills import discover_skill_dirs
 from apipi.store.engine import Store
-from apipi.store.events import append_event
+from apipi.store.events import append_event, list_events
 from apipi.store.models import Event, utc_now
 from apipi.store.repo import (
     create_item,
@@ -17,8 +18,10 @@ from apipi.store.repo import (
     get_agent,
     get_session,
     get_session_turn,
+    list_items,
     update_session,
 )
+from apipi.store.turn_logs import append_turn_log
 from apipi.usage import add_usage, empty_usage, usage_from
 
 PUBLIC_EVENT_TYPES = frozenset(
@@ -120,6 +123,7 @@ FAKE_USAGE = {
 class FakeHarness:
     def __init__(self) -> None:
         self.function_calls: list[dict[str, Any]] = []
+        self.mcp_calls: list[dict[str, Any]] = []
         self.function_tools: list[dict[str, Any]] | None = None
         self.mcp_http: list[Any] | None = None
         self.mcp_stdio: list[Any] | None = None
@@ -176,6 +180,16 @@ class FakeHarness:
             call = self.function_calls.pop(0)
             yield ("function_call", dict(call))
             return
+        for call in self.mcp_calls:
+            yield (
+                "agent.session.turn.item.added",
+                {
+                    "item_type": "mcp_call",
+                    "call_id": call.get("call_id"),
+                    "name": call.get("name"),
+                },
+            )
+        self.mcp_calls = []
         reply = self.complete(text)
         yield ("agent.session.turn.output_text.delta", {"delta": reply})
         yield ("agent.session.turn.output_text.done", {"text": reply})
@@ -336,6 +350,122 @@ async def _consume_generate(
     return reply, pending, usage
 
 
+def _tally(names: list[str]) -> tuple[list[str], dict[str, int]]:
+    counts: dict[str, int] = {}
+    for name in names:
+        counts[name] = counts.get(name, 0) + 1
+    return list(counts), counts
+
+
+def _latency_ms(started: datetime) -> int:
+    begin = started if started.tzinfo is not None else started.replace(tzinfo=UTC)
+    ms = int((utc_now() - begin).total_seconds() * 1000)
+    return max(ms, 0)
+
+
+def _mcp_labels(tools: list[Any] | None) -> list[str]:
+    labels: list[str] = []
+    if not tools:
+        return labels
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "mcp":
+            continue
+        label = tool.get("server_label")
+        if isinstance(label, str) and label:
+            labels.append(label)
+    return labels
+
+
+def _mcp_name(raw: object, labels: list[str]) -> str | None:
+    if not isinstance(raw, str) or raw == "":
+        return None
+    for label in labels:
+        if label in raw:
+            return label
+    return raw
+
+
+async def _tool_mcp_for_turn(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    labels: list[str],
+) -> tuple[list[str], dict[str, int], list[str], dict[str, int]]:
+    tool_names: list[str] = []
+    mcp_names: list[str] = []
+    items = await list_items(db, tenant_id, session_id)
+    if items is not None:
+        for item in items:
+            if item.turn_id != turn_id or item.type != "function_call":
+                continue
+            name = item.data.get("name")
+            if isinstance(name, str) and name:
+                tool_names.append(name)
+    events = await list_events(db, tenant_id, session_id)
+    for event in events:
+        if event.type != "agent.session.turn.item.added":
+            continue
+        if event.data.get("turn_id") != str(turn_id):
+            continue
+        if event.data.get("item_type") != "mcp_call":
+            continue
+        name = _mcp_name(event.data.get("name"), labels)
+        if name is not None:
+            mcp_names.append(name)
+    tools, tool_counts = _tally(tool_names)
+    mcps, mcp_counts = _tally(mcp_names)
+    return tools, tool_counts, mcps, mcp_counts
+
+
+async def _write_turn_log(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    *,
+    status: str,
+    usage: dict[str, int] | None = None,
+    error_code: str | None = None,
+) -> None:
+    turn = await get_session_turn(db, tenant_id, session_id, turn_id)
+    if turn is None:
+        return
+    row = await get_session(db, tenant_id, session_id)
+    agent_id = row.agent_id if row is not None else None
+    model: str | None = None
+    labels: list[str] = []
+    if agent_id is not None:
+        agent = await get_agent(db, tenant_id, agent_id)
+        if agent is not None:
+            model = agent.model
+            labels = _mcp_labels(agent.tools)
+    stored = usage_from(usage)
+    tool_names, tool_counts, mcp_names, mcp_counts = await _tool_mcp_for_turn(
+        db, tenant_id, session_id, turn_id, labels
+    )
+    await append_turn_log(
+        db,
+        tenant_id,
+        session_id,
+        turn_id,
+        status=status,
+        agent_id=agent_id,
+        model=model,
+        latency_ms=_latency_ms(turn.created_at),
+        prompt_tokens=stored["prompt_tokens"],
+        completion_tokens=stored["completion_tokens"],
+        cache_read_tokens=stored["cache_read_tokens"],
+        cache_write_tokens=stored["cache_write_tokens"],
+        total_tokens=stored["total_tokens"],
+        error_code=error_code,
+        tool_names=tool_names,
+        tool_counts=tool_counts,
+        mcp_names=mcp_names,
+        mcp_counts=mcp_counts,
+    )
+
+
 async def _complete_turn(
     db: AsyncSession,
     hub: EventHub,
@@ -360,6 +490,14 @@ async def _complete_turn(
         turn.status = "completed"
         turn.usage = stored
         turn.updated_at = utc_now()
+    await _write_turn_log(
+        db,
+        tenant_id,
+        session_id,
+        turn_id,
+        status="completed",
+        usage=stored,
+    )
     await persist_event(
         db,
         hub,
@@ -390,6 +528,7 @@ async def _cancel_turn(
     if turn is not None:
         turn.status = "cancelled"
         turn.updated_at = utc_now()
+    await _write_turn_log(db, tenant_id, session_id, turn_id, status="cancelled")
     await persist_event(
         db,
         hub,

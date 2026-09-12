@@ -14,6 +14,7 @@ from apipi.store.models import (
     SessionRow,
     Tenant,
     Turn,
+    TurnLog,
     utc_now,
 )
 
@@ -457,4 +458,74 @@ async def list_events(
         stmt = stmt.where(Event.seq > after_seq)
     stmt = stmt.order_by(Event.seq)
     result = await db.scalars(stmt)
+    return list(result)
+
+
+async def append_turn_log(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    *,
+    status: str,
+    agent_id: uuid.UUID | None = None,
+    model: str | None = None,
+    latency_ms: int = 0,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    total_tokens: int = 0,
+    error_code: str | None = None,
+    request_id: str | None = None,
+    tool_names: list[str] | None = None,
+    tool_counts: dict[str, int] | None = None,
+    mcp_names: list[str] | None = None,
+    mcp_counts: dict[str, int] | None = None,
+) -> TurnLog:
+    row = TurnLog(
+        tenant_id=tenant_id,
+        session_id=session_id,
+        turn_id=turn_id,
+        agent_id=agent_id,
+        model=model,
+        status=status,
+        latency_ms=latency_ms,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        total_tokens=total_tokens,
+        error_code=error_code,
+        request_id=request_id,
+        tool_names=list(tool_names) if tool_names is not None else [],
+        tool_counts=dict(tool_counts) if tool_counts is not None else {},
+        mcp_names=list(mcp_names) if mcp_names is not None else [],
+        mcp_counts=dict(mcp_counts) if mcp_counts is not None else {},
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def get_turn_log(
+    db: AsyncSession, tenant_id: uuid.UUID, turn_id: uuid.UUID
+) -> TurnLog | None:
+    return await db.scalar(
+        select(TurnLog).where(
+            TurnLog.tenant_id == tenant_id, TurnLog.turn_id == turn_id
+        )
+    )
+
+
+async def list_turn_logs(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> list[TurnLog] | None:
+    if await get_session(db, tenant_id, session_id) is None:
+        return None
+    result = await db.scalars(
+        select(TurnLog)
+        .where(TurnLog.tenant_id == tenant_id, TurnLog.session_id == session_id)
+        .order_by(TurnLog.created_at)
+    )
     return list(result)
