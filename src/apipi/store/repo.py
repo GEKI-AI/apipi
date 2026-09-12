@@ -8,6 +8,7 @@ from apipi.store.errors import NotFoundError
 from apipi.store.models import (
     Agent,
     Artifact,
+    EnvironmentRow,
     Event,
     Item,
     SessionRow,
@@ -171,6 +172,71 @@ async def update_session(
     if "required_actions" in changes:
         row.required_actions = changes["required_actions"]
     row.updated_at = utc_now()
+    await db.flush()
+    return row
+
+
+async def create_environment(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    environment_id: uuid.UUID,
+    key_hash: str,
+    status: str = "pending",
+) -> EnvironmentRow:
+    row = EnvironmentRow(
+        id=environment_id,
+        tenant_id=tenant_id,
+        session_id=session_id,
+        key_hash=key_hash,
+        status=status,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def get_environment(
+    db: AsyncSession, environment_id: uuid.UUID
+) -> EnvironmentRow | None:
+    return await db.scalar(
+        select(EnvironmentRow).where(EnvironmentRow.id == environment_id)
+    )
+
+
+async def get_tenant_environment(
+    db: AsyncSession, tenant_id: uuid.UUID, environment_id: uuid.UUID
+) -> EnvironmentRow | None:
+    return await db.scalar(
+        select(EnvironmentRow).where(
+            EnvironmentRow.tenant_id == tenant_id, EnvironmentRow.id == environment_id
+        )
+    )
+
+
+async def get_session_environment(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> EnvironmentRow | None:
+    return await db.scalar(
+        select(EnvironmentRow).where(
+            EnvironmentRow.tenant_id == tenant_id,
+            EnvironmentRow.session_id == session_id,
+        )
+    )
+
+
+async def update_environment(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    environment_id: uuid.UUID,
+    *,
+    status: str,
+) -> EnvironmentRow | None:
+    row = await get_tenant_environment(db, tenant_id, environment_id)
+    if row is None:
+        return None
+    row.status = status
     await db.flush()
     return row
 

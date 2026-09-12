@@ -106,6 +106,36 @@ class SessionRow(Base):
     )
 
 
+class EnvironmentRow(Base):
+    __tablename__ = "environments"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        UniqueConstraint("tenant_id", "session_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "session_id"],
+            ["sessions.tenant_id", "sessions.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'connected', 'disconnected', 'failed')",
+            name="environments_status_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
 class Turn(Base):
     __tablename__ = "turns"
     __table_args__ = (
