@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.store.errors import NotFoundError
 from apipi.store.models import (
     Agent,
+    Artifact,
     Event,
     Item,
     SessionRow,
@@ -272,6 +273,74 @@ async def list_items(
         .order_by(Item.created_at)
     )
     return list(result)
+
+
+async def create_artifact(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    path: str,
+    content_type: str = "application/octet-stream",
+) -> Artifact:
+    artifact = Artifact(
+        tenant_id=tenant_id,
+        session_id=session_id,
+        path=path,
+        content_type=content_type,
+    )
+    db.add(artifact)
+    await db.flush()
+    return artifact
+
+
+async def get_artifact(
+    db: AsyncSession, tenant_id: uuid.UUID, artifact_id: uuid.UUID
+) -> Artifact | None:
+    return await db.scalar(
+        select(Artifact).where(
+            Artifact.tenant_id == tenant_id, Artifact.id == artifact_id
+        )
+    )
+
+
+async def get_session_artifact(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+) -> Artifact | None:
+    artifact = await get_artifact(db, tenant_id, artifact_id)
+    if artifact is None or artifact.session_id != session_id:
+        return None
+    return artifact
+
+
+async def list_artifacts(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> list[Artifact] | None:
+    if await get_session(db, tenant_id, session_id) is None:
+        return None
+    result = await db.scalars(
+        select(Artifact)
+        .where(Artifact.tenant_id == tenant_id, Artifact.session_id == session_id)
+        .order_by(Artifact.created_at)
+    )
+    return list(result)
+
+
+async def delete_session_artifact(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+) -> Artifact | None:
+    artifact = await get_session_artifact(db, tenant_id, session_id, artifact_id)
+    if artifact is None:
+        return None
+    await db.delete(artifact)
+    await db.flush()
+    return artifact
 
 
 async def append_event(

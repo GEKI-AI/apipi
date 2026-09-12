@@ -2,17 +2,18 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Annotated, Any, Self
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.api.agents import AgentWrite
 from apipi.auth import get_db, not_found, require_tenant
-from apipi.errors import ApiError, not_implemented
+from apipi.errors import ApiError, gone, not_implemented
 from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.pi.dirs import session_workspace
@@ -29,13 +30,16 @@ from apipi.schemas import StrictModel
 from apipi.skills import copy_capability_directories
 from apipi.store.engine import Store
 from apipi.store.events import list_events
-from apipi.store.models import Item, SessionRow, Tenant, Turn
+from apipi.store.models import Artifact, Item, SessionRow, Tenant, Turn
 from apipi.store.repo import (
     create_session,
     delete_session,
+    delete_session_artifact,
     get_agent,
     get_session,
+    get_session_artifact,
     get_session_turn,
+    list_artifacts,
     list_items,
     list_sessions,
     list_turns,
@@ -112,6 +116,35 @@ def item_body(item: Item) -> dict[str, Any]:
         "data": item.data,
         "created_at": item.created_at.isoformat(),
     }
+
+
+def artifact_body(artifact: Artifact) -> dict[str, Any]:
+    return {
+        "id": str(artifact.id),
+        "session_id": str(artifact.session_id),
+        "path": artifact.path,
+        "content_type": artifact.content_type,
+        "created_at": artifact.created_at.isoformat(),
+    }
+
+
+def _sandbox_file(row: SessionRow, relative: str) -> Path | None:
+    directory = row.environment.get("directory")
+    if not isinstance(directory, str) or directory == "":
+        return None
+    root = Path(directory)
+    if not root.is_dir():
+        return None
+    if relative == "" or Path(relative).is_absolute():
+        return None
+    try:
+        resolved_root = root.resolve()
+        candidate = (resolved_root / relative).resolve()
+    except OSError:
+        return None
+    if not candidate.is_relative_to(resolved_root):
+        return None
+    return candidate
 
 
 def session_body(row: SessionRow) -> dict[str, Any]:
@@ -458,3 +491,60 @@ async def list_session_items(
     if items is None:
         not_found()
     return {"data": [item_body(item) for item in items]}
+
+
+@router.get("/v1/agents/sessions/{session_id}/artifacts")
+async def list_session_artifacts(
+    session_id: uuid.UUID,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
+    artifacts = await list_artifacts(db, tenant.id, session_id)
+    if artifacts is None:
+        not_found()
+    return {"data": [artifact_body(artifact) for artifact in artifacts]}
+
+
+@router.get("/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content")
+async def read_session_artifact_content(
+    session_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Any:
+    row = await get_session(db, tenant.id, session_id)
+    if row is None:
+        not_found()
+    artifact = await get_session_artifact(db, tenant.id, session_id, artifact_id)
+    if artifact is None:
+        not_found()
+    path = _sandbox_file(row, artifact.path)
+    if path is None or not path.is_file():
+        gone()
+    return FileResponse(
+        path,
+        media_type=artifact.content_type,
+        filename=path.name,
+    )
+
+
+@router.delete("/v1/agents/sessions/{session_id}/artifacts/{artifact_id}")
+async def delete_agent_session_artifact(
+    session_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
+    row = await get_session(db, tenant.id, session_id)
+    if row is None:
+        not_found()
+    artifact = await get_session_artifact(db, tenant.id, session_id, artifact_id)
+    if artifact is None:
+        not_found()
+    path = _sandbox_file(row, artifact.path)
+    if path is not None and path.is_file():
+        path.unlink()
+    deleted = await delete_session_artifact(db, tenant.id, session_id, artifact_id)
+    if deleted is None:
+        not_found()
+    return {"id": str(artifact_id), "deleted": True}
