@@ -24,12 +24,17 @@ Do not invent process. If those files disagree with this skill, those files win.
 
 ## What to file
 
-Write so an agent can implement without asking questions.
+Write so a human can read it in one pass and an agent can implement
+without asking questions.
 
 | Kind | Include |
 | --- | --- |
-| Request | Goal, acceptance checks, spec paths, non-goals |
+| Request | Goal, acceptance checks, spec paths |
 | Bug | Observed, expected, spec path, how to reproduce |
+
+Do not list non-goals. Anything not in the goal is out of scope.
+Mention a non-goal only when someone would reasonably think it was
+included.
 
 Do not file work that lives on `docs/roadmap.md` unless the spec has moved. If it is not in a spec, say so; do not treat the issue as a license to build it anyway.
 
@@ -64,17 +69,13 @@ gh issue create --title "<title>" --body "$(cat <<'EOF'
 - <check>
 - <check>
 
-## Spec paths
+## Specs
 
 - <path>
-
-## Non-goals
-
-- <what this is not>
 EOF
 )"
 ```
 
-For a bug, use Observed / Expected / Spec path / How to reproduce instead of Goal / Acceptance / Non-goals.
+For a bug, use Observed / Expected / Spec path / How to reproduce instead of Goal / Acceptance.
 
 Title: short, specific. Return the issue URL. Then work on that issue (branch `issue-<n>-<slug>` from latest `main`) unless the user says otherwise.

@@ -3,10 +3,13 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from apipi.app import create_app
+from apipi.config import Settings
 from apipi.store.engine import Store
 from apipi.store.models import Base
 
@@ -47,3 +50,20 @@ async def store() -> AsyncIterator[Store]:
 async def db(store: Store) -> AsyncIterator[AsyncSession]:
     async with store.session() as session:
         yield session
+
+
+@pytest.fixture
+def settings() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="host",
+    )
+
+
+@pytest.fixture
+async def client(settings: Settings, store: Store) -> AsyncIterator[AsyncClient]:
+    app = create_app(settings, store=store)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        yield client
