@@ -18,13 +18,26 @@ process exits. No fallback.
 set `APIPI_RUN_MODE=host`.
 
 `jail` uses pasta so Pi can reach the model URL and HTTP MCP with no
-host loopback to Postgres. `microvm` attaches a TAP device for the
-same egress. Neither mode falls back to the other.
+host loopback to Postgres. Other session directories under
+`APIPI_SESSIONS_DIR` are a tmpfs; only the current session directory
+is bind-mounted. `microvm` attaches a TAP device for egress. Neither
+mode falls back to the other.
 
 `host` logs a warning: not suited for production.
 
-`jail` does not protect the host from a hostile user. `microvm` does
-(hardware virt). Still not a full QEMU PC.
+`jail` is for self-host and internal multi-tenant use. Tenants must
+not write the host, hit Postgres on loopback, or read each other's
+session directories. The jail still shares the host kernel and the
+gateway UID, so it does not protect the host from a hostile user.
+`microvm` does (hardware virt). Still not a full QEMU PC.
+
+Production is systemd on the host. Docker Compose starts Postgres
+only. Nested jail or microvm inside a container is not the production
+path.
+
+The `openai_hosted` workspace is packed one-way into a microvm guest.
+Writes stay in the guest. Artifact bytes are still read from the live
+sandbox today.
 
 ## Same server (default)
 
@@ -34,3 +47,5 @@ folder, not OpenAI's cloud.
 
 `none` turns file tools off. `self_hosted` puts the computer on a
 runner you attach. Remote works with all three run modes.
+
+Operator install, systemd, and storage are in [run modes](../run-modes.md).

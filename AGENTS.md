@@ -31,6 +31,7 @@ Code comments stay omitted unless asked.
 | `src/apipi/store/` | Postgres |
 | `src/apipi/pi/` | Harness adapter |
 | `src/apipi/auth.py` | Auth callback |
+| `docs/run-modes.md` | host / jail / microvm |
 | `tests/api/` | Public HTTP |
 | `tests/unit/` | Internals, mocks |
 | `tests/e2e/` | Live Pi |

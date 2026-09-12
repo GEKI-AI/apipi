@@ -22,11 +22,14 @@ from apipi.pi.jail import (
 from apipi.pi.proc import spawn_pi
 
 
-def _settings(*, run_mode: RunMode = "jail") -> Settings:
+def _settings(
+    *, run_mode: RunMode = "jail", sessions_dir: str | None = None
+) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode=run_mode,
         pi_command="pi",
+        sessions_dir=sessions_dir,
     )
 
 
@@ -76,6 +79,7 @@ def test_jail_argv_uses_pasta_and_bwrap(tmp_path: Path) -> None:
         bwrap="/usr/bin/bwrap",
         pasta="/usr/bin/pasta",
         resolv="/tmp/resolv.conf",
+        sessions_dir=str(tmp_path.parent),
     )
     assert argv[0] == "/usr/bin/pasta"
     assert "--foreground" in argv
@@ -95,6 +99,33 @@ def test_jail_argv_uses_pasta_and_bwrap(tmp_path: Path) -> None:
     assert "DATABASE_URL" not in argv
     assert "OPENAI_API_KEY" in argv
     assert argv[-4:] == ["pi", "--mode", "rpc", "--no-session"]
+    tmpfs_dirs = [
+        argv[index + 1] for index, item in enumerate(argv) if item == "--tmpfs"
+    ]
+    assert str(tmp_path.parent) in tmpfs_dirs
+
+
+def test_jail_argv_hides_sessions_dir_before_bind(tmp_path: Path) -> None:
+    sessions = tmp_path / "sessions"
+    cwd = sessions / "tenant" / "session"
+    cwd.mkdir(parents=True)
+    argv = jail_argv(
+        ["pi", "--mode", "rpc"],
+        cwd=str(cwd),
+        env={},
+        bwrap="/usr/bin/bwrap",
+        pasta="/usr/bin/pasta",
+        resolv="/tmp/resolv.conf",
+        sessions_dir=str(sessions),
+    )
+    tmpfs_at = [index for index, item in enumerate(argv) if item == "--tmpfs"]
+    sessions_tmpfs = next(
+        index for index in tmpfs_at if argv[index + 1] == str(sessions)
+    )
+    bind_at = argv.index("--bind")
+    assert argv[bind_at + 1] == str(cwd)
+    assert argv[bind_at + 2] == str(cwd)
+    assert sessions_tmpfs < bind_at
 
 
 class _Process:
@@ -130,12 +161,17 @@ async def test_spawn_pi_jail_uses_pasta(
         return _Process()
 
     monkeypatch.setattr("apipi.pi.jail.asyncio.create_subprocess_exec", fake_exec)
-    proc = await spawn_pi(_settings(), cwd=str(cwd), tools=True)
+    sessions = tmp_path / "sessions"
+    proc = await spawn_pi(
+        _settings(sessions_dir=str(sessions)), cwd=str(cwd), tools=True
+    )
     assert proc.process.pid == 4242
     args = captured["args"]
     assert args[0] == "/usr/bin/pasta"
     assert "--share-net" not in args
     assert str(cwd.resolve()) in args
+    tmpfs_dirs = [args[i + 1] for i, item in enumerate(args) if item == "--tmpfs"]
+    assert str(sessions.resolve()) in tmpfs_dirs
     assert "DATABASE_URL" not in args
     env = captured["kwargs"]["env"]
     assert "DATABASE_URL" not in env

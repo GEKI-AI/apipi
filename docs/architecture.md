@@ -62,18 +62,17 @@ store secrets. See [auth](auth.md).
 ## Run mode
 
 Run mode is server config, not an OpenAI field. Set `APIPI_RUN_MODE`.
-If the mode cannot start, the process exits.
+If the mode cannot start, the process exits. Operator install,
+systemd, Docker, and storage are in [run modes](run-modes.md).
 
 | Mode | Isolation | Today |
 | --- | --- | --- |
-| `host` | None. Pi is a child of the gateway. | Implemented. Logs a warning. |
-| `jail` | Linux namespaces. Shared kernel. Config default. | Implemented when `bwrap`, `pasta`, and cgroup v2 can start. Otherwise the process exits. |
-| `microvm` | KVM guest. Own kernel. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, and `iptables` can start. Otherwise the process exits. |
+| `host` | None. Pi is a child of the gateway. | Implemented. Logs a warning. Not for production. |
+| `jail` | Linux namespaces. Shared kernel. Config default. Self-host and internal multi-tenant. | Implemented when `bwrap`, `pasta`, and cgroup v2 can start. Otherwise the process exits. |
+| `microvm` | KVM guest. Own kernel. Hostile tenants. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, and `iptables` can start. Otherwise the process exits. |
 
-`host` works everywhere we run tests. `jail` needs Linux with
-bubblewrap, pasta, and cgroup v2. `microvm` needs Linux with
-`/dev/kvm`, Firecracker, jailer, operator-provided kernel and rootfs
-images, `ip`, and `iptables`.
+Production is systemd on the host. The Compose file starts Postgres
+only.
 
 ### Default (one server)
 
@@ -91,7 +90,8 @@ mode.
 bubblewrap + cgroup v2 + pasta. The gateway never enters the jail. Pi,
 stdio MCP, and local file tools run inside. The session directory
 (`environment.openai_hosted`) is bind-mounted into the jail and is the
-cwd.
+cwd. The rest of `APIPI_SESSIONS_DIR` is a tmpfs, so other session
+directories are not readable.
 
 There is no host loopback, so the jail cannot reach Postgres on
 localhost. Network for the model URL and HTTP MCP goes through pasta,
@@ -110,7 +110,7 @@ boot in a KVM guest with its own kernel. The session directory
 (`environment.openai_hosted`) is packed into a workspace drive at
 boot, unpacked onto a guest tmpfs, and is the guest cwd. Writes stay
 in the guest. They are not copied back to the host folder. That
-differs from jail, which bind-mounts the same directory.
+differs from jail, which bind-mounts the current session directory.
 Skill directories from that workspace are packed with it, and
 `--skill` paths are rewritten to `/tmp/workspace` so Pi inside the
 guest can load them.
