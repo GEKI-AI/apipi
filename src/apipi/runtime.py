@@ -427,6 +427,7 @@ async def _write_turn_log(
     status: str,
     usage: dict[str, int] | None = None,
     error_code: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is None:
@@ -459,6 +460,7 @@ async def _write_turn_log(
         cache_write_tokens=stored["cache_write_tokens"],
         total_tokens=stored["total_tokens"],
         error_code=error_code,
+        request_id=request_id,
         tool_names=tool_names,
         tool_counts=tool_counts,
         mcp_names=mcp_names,
@@ -474,6 +476,8 @@ async def _complete_turn(
     turn_id: uuid.UUID,
     reply: str,
     usage: dict[str, int],
+    *,
+    request_id: str | None = None,
 ) -> None:
     await _emit_item(
         db,
@@ -497,6 +501,7 @@ async def _complete_turn(
         turn_id,
         status="completed",
         usage=stored,
+        request_id=request_id,
     )
     await persist_event(
         db,
@@ -523,12 +528,21 @@ async def _cancel_turn(
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     turn_id: uuid.UUID,
+    *,
+    request_id: str | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is not None:
         turn.status = "cancelled"
         turn.updated_at = utc_now()
-    await _write_turn_log(db, tenant_id, session_id, turn_id, status="cancelled")
+    await _write_turn_log(
+        db,
+        tenant_id,
+        session_id,
+        turn_id,
+        status="cancelled",
+        request_id=request_id,
+    )
     await persist_event(
         db,
         hub,
@@ -595,6 +609,7 @@ async def run_turn(
     *,
     mcp_http: list[Any] | None = None,
     mcp_stdio: list[Any] | None = None,
+    request_id: str | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
     try:
@@ -669,7 +684,14 @@ async def run_turn(
         )
         async with store.session() as db:
             if abort.is_set():
-                await _cancel_turn(db, hub, tenant_id, session_id, turn_id)
+                await _cancel_turn(
+                    db,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    turn_id,
+                    request_id=request_id,
+                )
                 return
             if pending:
                 latest = await get_session(db, tenant_id, session_id)
@@ -690,7 +712,16 @@ async def run_turn(
                     data={"turn_id": str(turn_id), "required_actions": actions},
                 )
                 return
-            await _complete_turn(db, hub, tenant_id, session_id, turn_id, reply, usage)
+            await _complete_turn(
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                turn_id,
+                reply,
+                usage,
+                request_id=request_id,
+            )
     finally:
         hub.unwatch_turn(session_id)
 
@@ -709,6 +740,7 @@ async def continue_turn(
     error: str | None,
     mcp_http: list[Any] | None = None,
     mcp_stdio: list[Any] | None = None,
+    request_id: str | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -815,4 +847,13 @@ async def continue_turn(
                 data={"turn_id": str(turn_id), "required_actions": actions},
             )
             return
-        await _complete_turn(db, hub, tenant_id, session_id, turn_id, reply, usage)
+        await _complete_turn(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            turn_id,
+            reply,
+            usage,
+            request_id=request_id,
+        )

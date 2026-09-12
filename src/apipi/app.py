@@ -13,6 +13,7 @@ from apipi.env.hub import EnvironmentHub
 from apipi.errors import register_exception_handlers
 from apipi.pi.harness import PiHarness
 from apipi.pi.pool import PiPool
+from apipi.request_id import RequestIdMiddleware
 from apipi.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store, create_engine
 
@@ -42,6 +43,7 @@ def create_app(
                 await app.state.store.dispose()
 
     app = FastAPI(title="ApiPi", version="0.0.0", lifespan=lifespan)
+    app.add_middleware(RequestIdMiddleware)
     app.state.settings = resolved
     app.state.store = store
     app.state.mcp_http = {}

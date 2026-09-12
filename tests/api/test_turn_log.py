@@ -80,7 +80,9 @@ async def test_completed_turn_writes_log_without_message_text(
     assert row.cache_write_tokens == FAKE_USAGE["cache_write_tokens"]
     assert row.total_tokens == FAKE_USAGE["total_tokens"]
     assert row.error_code is None
-    assert row.request_id is None
+    assert row.request_id is not None
+    assert row.request_id.isascii()
+    assert len(row.request_id) <= 512
     assert row.tool_names == []
     assert row.tool_counts == {}
     assert row.mcp_names == []
