@@ -34,9 +34,10 @@ packed into a workspace drive at boot, unpacked onto a guest tmpfs,
 and is the guest cwd. Writes stay in the guest. They are not copied
 back to the host folder.
 
-Session rows live in Postgres. Environment files are the computer.
-Artifact metadata is in Postgres; artifact bytes are still read from
-the live sandbox today. See [run modes](run-modes.md#storage).
+Session rows live in Postgres. Environment files are the computer and
+are scratch for `openai_hosted`. Artifact metadata is in Postgres;
+artifact bytes are copied to the gateway host when Pi stops. See
+[run modes](run-modes.md#storage).
 
 There is no runner socket. The directory is created when the session is
 created. File tools (read, write, edit, bash) run against that folder

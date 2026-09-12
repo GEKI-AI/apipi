@@ -3,15 +3,12 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
 from tests.support.fake_runner import AsgiWebsocket, connect_runner
 
 from apipi.app import create_app
 from apipi.config import Settings
 from apipi.runtime import FakeHarness
 from apipi.store.engine import Store
-from apipi.store.models import SessionRow
-from apipi.store.repo import create_artifact
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -199,28 +196,32 @@ async def test_self_hosted_artifact_content_via_runner(
         body = created.json()
         session_id = body["id"]
         env_id = body["environment_id"]
-        async with store.session() as db:
-            row = await db.scalar(
-                select(SessionRow).where(SessionRow.id == uuid.UUID(session_id))
-            )
-            assert row is not None
-            artifact = await create_artifact(
-                db, row.tenant_id, row.id, path="note.txt", content_type="text/plain"
-            )
-            artifact_id = str(artifact.id)
-        missing = await client.get(
+        listed = await client.get(
+            f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        )
+        assert listed.json() == {"data": []}
+        async with connect_runner(app, env_id, body["key"]) as runner:
+            runner.files["artifacts/note.txt"] = "hello"
+            from apipi.pi.artifacts import harvest_session
+
+            async with store.session() as db:
+                await harvest_session(
+                    db,
+                    settings,
+                    uuid.UUID(session_id),
+                    None,
+                    app.state.env_hub,
+                )
+        listed = await client.get(
+            f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        )
+        artifact_id = listed.json()["data"][0]["id"]
+        content = await client.get(
             f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
             headers=_auth(token),
         )
-        assert missing.status_code == 410
-        async with connect_runner(app, env_id, body["key"]) as runner:
-            runner.files["note.txt"] = "hello"
-            content = await client.get(
-                f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
-                headers=_auth(token),
-            )
-            assert content.status_code == 200
-            assert content.content == b"hello"
+        assert content.status_code == 200
+        assert content.content == b"hello"
 
 
 async def test_self_hosted_wrong_key_is_not_found(

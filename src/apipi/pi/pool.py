@@ -1,16 +1,20 @@
 import asyncio
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 
 from apipi.config import CapacityError, Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer, stop_mcp_stdio
 from apipi.pi.proc import PiProc, spawn_pi
 
+OnKill = Callable[[uuid.UUID, PiProc | None], Awaitable[None]]
+
 
 class PiPool:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, on_kill: OnKill | None = None) -> None:
         self.settings = settings
+        self.on_kill = on_kill
         self._procs: dict[uuid.UUID, PiProc] = {}
         self._stdio: dict[uuid.UUID, list[McpStdioServer]] = {}
         self._last: dict[uuid.UUID, float] = {}
@@ -68,6 +72,8 @@ class PiPool:
         proc = self._procs.pop(session_id, None)
         self._last.pop(session_id, None)
         stdio = self._stdio.pop(session_id, None)
+        if self.on_kill is not None:
+            await self.on_kill(session_id, proc)
         if proc is not None:
             await proc.terminate()
         if stdio:

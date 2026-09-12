@@ -157,14 +157,18 @@ See [environments](environments.md).
 
 Postgres holds tenants, agents, sessions, turns, items, the event
 log, the turn log (usage tokens and details, never prompt text),
-environment state, and artifact metadata. Not API keys. Prometheus and
-OpenTelemetry are exports. See [usage](usage.md).
+environment state, and artifact metadata. Artifact bytes sit on the
+gateway host after Pi stops. Not API keys. Prometheus and
+OpenTelemetry are exports. See [usage](usage.md) and
+[run modes](run-modes.md#storage).
 
-Pi JSONL is a cache. Do not read it to serve the API.
+Pi JSONL is a cache. Do not read it to serve the API. The
+`openai_hosted` workspace is scratch: it is deleted when Pi stops.
 
 One Pi process or guest per session. After the idle TTL
-(`APIPI_IDLE_TTL`, default 15 minutes), kill the process. The session
-row stays. Resume from the event log. Live processes are capped by
+(`APIPI_IDLE_TTL`, default 15 minutes), kill the process. Files under
+`artifacts/` are copied to the host store first. The session row
+stays. Resume from the event log. Live processes are capped by
 `APIPI_MAX_SESSIONS`. See [config](config.md).
 
 Cross-tenant IDs return `404`, not `403`.

@@ -19,3 +19,20 @@ def session_workspace(
     path = sessions_root(settings) / str(tenant_id) / str(session_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def artifact_blob_dir(
+    settings: Settings, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> Path:
+    path = sessions_root(settings) / ".artifacts" / str(tenant_id) / str(session_id)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def artifact_blob_path(
+    settings: Settings,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+) -> Path:
+    return artifact_blob_dir(settings, tenant_id, session_id) / str(artifact_id)

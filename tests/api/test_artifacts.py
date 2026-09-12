@@ -4,6 +4,8 @@ from pathlib import Path
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from apipi.config import Settings
+from apipi.pi.artifacts import harvest_session
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow
 from apipi.store.repo import create_artifact
@@ -31,27 +33,20 @@ async def _hosted_session(client: AsyncClient, token: str) -> tuple[str, Path]:
     return str(created.json()["id"]), directory
 
 
-async def _add_artifact(
-    store: Store, session_id: str, path: str, content_type: str = "text/plain"
-) -> str:
+async def _harvest(store: Store, settings: Settings, session_id: str) -> None:
     async with store.session() as db:
-        row = await db.scalar(
-            select(SessionRow).where(SessionRow.id == uuid.UUID(session_id))
-        )
-        assert row is not None
-        artifact = await create_artifact(
-            db, row.tenant_id, row.id, path=path, content_type=content_type
-        )
-        return str(artifact.id)
+        await harvest_session(db, settings, uuid.UUID(session_id), None)
 
 
 async def test_write_host_file_and_fetch_content(
-    client: AsyncClient, store: Store
+    client: AsyncClient, store: Store, settings: Settings
 ) -> None:
     token = _token()
     session_id, directory = await _hosted_session(client, token)
-    (directory / "note.txt").write_text("hello", encoding="utf-8")
-    artifact_id = await _add_artifact(store, session_id, "note.txt")
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    await _harvest(store, settings, session_id)
+    assert not directory.exists()
 
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
@@ -59,10 +54,10 @@ async def test_write_host_file_and_fetch_content(
     assert listed.status_code == 200
     data = listed.json()["data"]
     assert len(data) == 1
-    assert data[0]["id"] == artifact_id
     assert data[0]["session_id"] == session_id
-    assert data[0]["path"] == "note.txt"
+    assert data[0]["path"] == "artifacts/note.txt"
     assert data[0]["content_type"] == "text/plain"
+    artifact_id = data[0]["id"]
 
     content = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
@@ -73,15 +68,20 @@ async def test_write_host_file_and_fetch_content(
     assert content.headers["content-type"].startswith("text/plain")
 
 
-async def test_artifact_content_gone_if_file_missing(
+async def test_artifact_content_gone_if_never_published(
     client: AsyncClient, store: Store
 ) -> None:
     token = _token()
-    session_id, directory = await _hosted_session(client, token)
-    target = directory / "note.txt"
-    target.write_text("hello", encoding="utf-8")
-    artifact_id = await _add_artifact(store, session_id, "note.txt")
-    target.unlink()
+    session_id, _directory = await _hosted_session(client, token)
+    async with store.session() as db:
+        row = await db.scalar(
+            select(SessionRow).where(SessionRow.id == uuid.UUID(session_id))
+        )
+        assert row is not None
+        artifact = await create_artifact(
+            db, row.tenant_id, row.id, path="artifacts/note.txt"
+        )
+        artifact_id = str(artifact.id)
 
     content = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
@@ -92,13 +92,17 @@ async def test_artifact_content_gone_if_file_missing(
 
 
 async def test_delete_artifact_removes_file_and_metadata(
-    client: AsyncClient, store: Store
+    client: AsyncClient, store: Store, settings: Settings
 ) -> None:
     token = _token()
     session_id, directory = await _hosted_session(client, token)
-    target = directory / "note.txt"
-    target.write_text("hello", encoding="utf-8")
-    artifact_id = await _add_artifact(store, session_id, "note.txt")
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    await _harvest(store, settings, session_id)
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    artifact_id = listed.json()["data"][0]["id"]
 
     deleted = await client.delete(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}",
@@ -106,7 +110,6 @@ async def test_delete_artifact_removes_file_and_metadata(
     )
     assert deleted.status_code == 200
     assert deleted.json() == {"id": artifact_id, "deleted": True}
-    assert not target.exists()
 
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
@@ -139,13 +142,18 @@ async def test_artifacts_unknown_session_is_404(client: AsyncClient) -> None:
 
 
 async def test_cross_tenant_artifacts_are_404(
-    client: AsyncClient, store: Store
+    client: AsyncClient, store: Store, settings: Settings
 ) -> None:
     token_a = _token("a")
     token_b = _token("b")
     session_id, directory = await _hosted_session(client, token_a)
-    (directory / "note.txt").write_text("hello", encoding="utf-8")
-    artifact_id = await _add_artifact(store, session_id, "note.txt")
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    await _harvest(store, settings, session_id)
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token_a)
+    )
+    artifact_id = listed.json()["data"][0]["id"]
 
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token_b)
@@ -161,4 +169,9 @@ async def test_cross_tenant_artifacts_are_404(
         headers=_auth(token_b),
     )
     assert deleted.status_code == 404
-    assert (directory / "note.txt").read_text(encoding="utf-8") == "hello"
+    content_a = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
+        headers=_auth(token_a),
+    )
+    assert content_a.status_code == 200
+    assert content_a.content == b"hello"

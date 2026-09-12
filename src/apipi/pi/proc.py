@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from apipi.config import ConfigError, Settings
@@ -18,11 +18,13 @@ class PiProc:
         stdin: asyncio.StreamWriter | None = None,
         stdout: asyncio.StreamReader | None = None,
         on_stop: Callable[[], None] | None = None,
+        pull_artifacts: Callable[[], Awaitable[bytes]] | None = None,
     ) -> None:
         self.process = process
         self._stdin = process.stdin if stdin is None else stdin
         self._stdout = process.stdout if stdout is None else stdout
         self._on_stop = on_stop
+        self.pull_artifacts = pull_artifacts
         self._buf = ""
 
     @property

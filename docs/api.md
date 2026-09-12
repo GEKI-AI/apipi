@@ -130,9 +130,11 @@ Item types: `message`, `function_call`, `mcp_call`,
 | `GET` | `/v1/agents/sessions/{session_id}/artifacts/{id}/content` |
 | `DELETE` | `/v1/agents/sessions/{session_id}/artifacts/{id}` |
 
-Artifact bytes live on the sandbox. Content is proxied while that
-computer is connected. `410` if the file is gone. `DELETE` removes the
-metadata and the file when it is still on disk.
+Artifact bytes live on the gateway host after Pi stops. The agent
+writes files under `artifacts/` on the computer. On Pi stop those
+files are copied into the host store. `GET` content reads that store
+in every run mode. `410` if nothing was published. `DELETE` removes
+the metadata and the stored file. See [run modes](run-modes.md#storage).
 
 `GET` turn may include `usage` (prompt, completion, cache read/write,
 total). Tokens only. See [usage](usage.md).
