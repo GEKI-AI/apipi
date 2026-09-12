@@ -1,0 +1,209 @@
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    UniqueConstraint,
+    Uuid,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.types import JSON
+
+JSONType = JSON().with_variant(JSONB(), "postgresql")
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+    __table_args__ = (UniqueConstraint("tenant_id", "id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class Agent(Base):
+    __tablename__ = "agents"
+    __table_args__ = (UniqueConstraint("tenant_id", "id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    instructions: Mapped[str | None] = mapped_column(String, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONType, default=dict, nullable=False
+    )
+    tools: Mapped[list[Any]] = mapped_column(JSONType, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class SessionRow(Base):
+    __tablename__ = "sessions"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"],
+            ["agents.tenant_id", "agents.id"],
+            ondelete="SET NULL",
+        ),
+        CheckConstraint(
+            "status IN ('idle', 'in_progress', 'requires_action', 'failed')",
+            name="sessions_status_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="idle")
+    environment: Mapped[dict[str, Any]] = mapped_column(
+        JSONType, default=dict, nullable=False
+    )
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONType, default=dict, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class Turn(Base):
+    __tablename__ = "turns"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "session_id"],
+            ["sessions.tenant_id", "sessions.id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    usage: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class Item(Base):
+    __tablename__ = "items"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "session_id"],
+            ["sessions.tenant_id", "sessions.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "turn_id"],
+            ["turns.tenant_id", "turns.id"],
+            ondelete="SET NULL",
+        ),
+        CheckConstraint(
+            "type IN ('message', 'function_call', 'mcp_call', 'command_execution')",
+            name="items_type_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class Event(Base):
+    __tablename__ = "events"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        UniqueConstraint("tenant_id", "session_id", "seq"),
+        ForeignKeyConstraint(
+            ["tenant_id", "session_id"],
+            ["sessions.tenant_id", "sessions.id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    type: Mapped[str] = mapped_column(String(128), nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
