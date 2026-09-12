@@ -95,6 +95,7 @@ class FakeHarness:
         self.function_calls: list[dict[str, Any]] = []
         self.function_tools: list[dict[str, Any]] | None = None
         self.mcp_http: list[Any] | None = None
+        self.mcp_stdio: list[Any] | None = None
 
     def complete(self, text: str) -> str:
         return text if text else "ok"
@@ -109,6 +110,7 @@ class FakeHarness:
         function_tools: list[dict[str, Any]] | None = None,
         tool_result: dict[str, Any] | None = None,
         mcp_http: list[Any] | None = None,
+        mcp_stdio: list[Any] | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         del session_id, cwd, tools
@@ -116,6 +118,7 @@ class FakeHarness:
             list(function_tools) if function_tools is not None else None
         )
         self.mcp_http = list(mcp_http) if mcp_http is not None else None
+        self.mcp_stdio = list(mcp_stdio) if mcp_stdio is not None else None
         if tool_result is not None:
             if tool_result.get("success"):
                 output = tool_result.get("output")
@@ -327,6 +330,7 @@ async def run_turn(
     text: str,
     *,
     mcp_http: list[Any] | None = None,
+    mcp_stdio: list[Any] | None = None,
 ) -> None:
     row = await get_session(db, tenant_id, session_id)
     if row is None:
@@ -382,6 +386,7 @@ async def run_turn(
             tools=tools,
             function_tools=function_tools,
             mcp_http=mcp_http,
+            mcp_stdio=mcp_stdio,
         ),
     )
     if pending:
@@ -416,6 +421,7 @@ async def continue_turn(
     output: str | None,
     error: str | None,
     mcp_http: list[Any] | None = None,
+    mcp_stdio: list[Any] | None = None,
 ) -> None:
     row = await get_session(db, tenant_id, session_id)
     if row is None:
@@ -480,6 +486,7 @@ async def continue_turn(
             function_tools=function_tools,
             tool_result=result,
             mcp_http=mcp_http,
+            mcp_stdio=mcp_stdio,
         ),
     )
     if pending:

@@ -4,6 +4,7 @@ import uuid
 
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
+from apipi.mcp.stdio import McpStdioServer, stop_mcp_stdio
 from apipi.pi.proc import PiProc, spawn_pi
 
 
@@ -11,6 +12,7 @@ class PiPool:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._procs: dict[uuid.UUID, PiProc] = {}
+        self._stdio: dict[uuid.UUID, list[McpStdioServer]] = {}
         self._last: dict[uuid.UUID, float] = {}
         self._lock = asyncio.Lock()
 
@@ -21,12 +23,17 @@ class PiPool:
         cwd: str | None,
         tools: bool,
         mcp_http: list[McpHttpServer] | None = None,
+        mcp_stdio: list[McpStdioServer] | None = None,
     ) -> PiProc:
         async with self._lock:
             proc = self._procs.get(session_id)
             if proc is None or not proc.alive:
                 proc = await spawn_pi(
-                    self.settings, cwd=cwd, tools=tools, mcp_http=mcp_http
+                    self.settings,
+                    cwd=cwd,
+                    tools=tools,
+                    mcp_http=mcp_http,
+                    mcp_stdio=mcp_stdio,
                 )
                 self._procs[session_id] = proc
             self._last[session_id] = time.monotonic()
@@ -35,11 +42,17 @@ class PiPool:
     def touch(self, session_id: uuid.UUID) -> None:
         self._last[session_id] = time.monotonic()
 
+    def put_stdio(self, session_id: uuid.UUID, servers: list[McpStdioServer]) -> None:
+        self._stdio[session_id] = servers
+
     async def kill(self, session_id: uuid.UUID) -> None:
         proc = self._procs.pop(session_id, None)
         self._last.pop(session_id, None)
+        stdio = self._stdio.pop(session_id, None)
         if proc is not None:
             await proc.terminate()
+        if stdio:
+            await stop_mcp_stdio(stdio)
 
     def alive(self, session_id: uuid.UUID) -> bool:
         proc = self._procs.get(session_id)

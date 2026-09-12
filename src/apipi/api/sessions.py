@@ -14,6 +14,7 @@ from apipi.api.agents import AgentWrite
 from apipi.auth import get_db, not_found, require_tenant
 from apipi.errors import ApiError, not_implemented
 from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
+from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.pi.dirs import session_workspace
 from apipi.runtime import (
     EventHub,
@@ -234,6 +235,7 @@ async def create_agent_session(
         session_id = row.id
     try:
         connected = await connect_mcp_http_tools(raw_tools)
+        stdio = await start_mcp_stdio_tools(raw_tools)
     except McpConnectError as exc:
         async with store.session() as db:
             await fail_session(db, hub, tenant.id, session_id, str(exc))
@@ -242,11 +244,20 @@ async def create_agent_session(
                 not_found()
             return session_body(row)
     request.app.state.mcp_http[session_id] = connected
+    request.app.state.mcp_stdio[session_id] = stdio
+    request.app.state.pi_pool.put_stdio(session_id, stdio)
     async with store.session() as db:
         text = _input_text(body.input)
         if text:
             await run_turn(
-                db, hub, harness, tenant.id, session_id, text, mcp_http=connected
+                db,
+                hub,
+                harness,
+                tenant.id,
+                session_id,
+                text,
+                mcp_http=connected,
+                mcp_stdio=stdio,
             )
         else:
             await persist_event(
@@ -313,6 +324,9 @@ async def delete_agent_session(
     if not deleted:
         not_found()
     request.app.state.mcp_http.pop(session_id, None)
+    stdio = request.app.state.mcp_stdio.pop(session_id, None)
+    if stdio:
+        await stop_mcp_stdio(stdio)
     return {"id": str(session_id), "deleted": True}
 
 
@@ -352,6 +366,7 @@ async def post_session_event(
                 output=body.output,
                 error=body.error,
                 mcp_http=request.app.state.mcp_http.get(session_id),
+                mcp_stdio=request.app.state.mcp_stdio.get(session_id),
             )
         else:
             if row.status == "requires_action":
@@ -361,8 +376,16 @@ async def post_session_event(
                     code="invalid_request",
                 )
             mcp_http = request.app.state.mcp_http.get(session_id)
+            mcp_stdio = request.app.state.mcp_stdio.get(session_id)
             await run_turn(
-                db, hub, harness, tenant.id, session_id, text, mcp_http=mcp_http
+                db,
+                hub,
+                harness,
+                tenant.id,
+                session_id,
+                text,
+                mcp_http=mcp_http,
+                mcp_stdio=mcp_stdio,
             )
         row = await get_session(db, tenant.id, session_id)
         if row is None:
