@@ -44,7 +44,7 @@ No `develop` branch. No merge commits on `main`. No force-push to
 
 1. An issue exists. The PR body starts with `Fixes #N`.
 2. Spec and code change together when they disagree.
-3. CI is green (`Check` and `Docs`).
+3. CI is green (`Check`, `Tests`, and `Docs`).
 4. A human reviews, then squash-merges.
 
 If you already have a patch, file the issue first and link the patch.
@@ -80,11 +80,15 @@ change as the code.
 | Unknown fields fail clearly | Roadmap features |
 | Event log is the transcript | |
 
-Gateway tests mock Pi RPC. Local pytest uses SQLite. That is the full
-suite. Optional Postgres: `APIPI_TEST_DATABASE_URL`.
+Gateway tests mock Pi RPC. Local pytest uses SQLite.
 
-GitHub CI is fast: format, lint, types, docs, and `pytest -m "not slow"`.
-Do not put the full suite or slow jobs on GitHub. Run those locally.
+GitHub CI runs everything that finishes in a couple of seconds:
+format, lint, types, docs, unit tests, and fast e2e
+(`pytest -m "not slow"`).
+
+The large validation suite is local: `uv run pytest` including
+`@pytest.mark.slow`. Optional Postgres: `APIPI_TEST_DATABASE_URL`.
+Do not add slow jobs to GitHub.
 
 ## Before you commit
 
@@ -97,7 +101,8 @@ uv run ty check src tests
 uv run pytest
 ```
 
-GitHub Check runs format (check), lint, types, and `pytest -m "not slow"`.
+GitHub: `Check` (format, lint, types), `Tests` (`pytest -m "not slow"`),
+`Docs`.
 
 ## Docs site
 

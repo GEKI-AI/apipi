@@ -34,8 +34,9 @@ uv run ty check src tests
 uv run pytest
 ```
 
-GitHub CI is `Check` (lint, types, `pytest -m "not slow"`) and `Docs`.
-Run the full suite locally. Do not add slow jobs to GitHub.
+GitHub CI is `Check` (lint, types), `Tests` (unit + fast e2e,
+`pytest -m "not slow"`), and `Docs`. Run the full suite locally,
+including `@pytest.mark.slow`. Do not add slow jobs to GitHub.
 
 If docs changed:
 

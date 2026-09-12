@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.api.agents import AgentWrite
 from apipi.auth import get_db, not_found, require_tenant
 from apipi.errors import ApiError, not_implemented
-from apipi.runtime import EventHub, FakeHarness, event_body, persist_event, run_turn
+from apipi.pi.dirs import session_workspace
+from apipi.runtime import EventHub, Harness, event_body, persist_event, run_turn
 from apipi.schemas import StrictModel
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -93,9 +94,9 @@ def _input_text(value: str | dict[str, Any] | None) -> str:
 
 def _environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
     env_type = spec.type if spec is not None else "openai_hosted"
-    if env_type != "none":
+    if env_type not in {"none", "openai_hosted"}:
         not_implemented(env_type)
-    payload: dict[str, Any] = {"type": "none"}
+    payload: dict[str, Any] = {"type": env_type}
     if spec is not None and spec.capability_directories is not None:
         payload["capability_directories"] = spec.capability_directories
     return payload
@@ -150,7 +151,7 @@ async def create_agent_session(
     agent_id = body.agent_id
     store: Store = request.app.state.store
     hub: EventHub = request.app.state.event_hub
-    harness: FakeHarness = request.app.state.harness
+    harness: Harness = request.app.state.harness
     environment = _environment_payload(body.environment)
     async with store.session() as db:
         if agent_id is not None:
@@ -164,6 +165,11 @@ async def create_agent_session(
             environment=environment,
             metadata=body.metadata,
         )
+        if environment.get("type") == "openai_hosted":
+            directory = session_workspace(request.app.state.settings, tenant.id, row.id)
+            environment = {**environment, "directory": str(directory)}
+            row.environment = environment
+            await db.flush()
         await persist_event(
             db,
             hub,
@@ -249,7 +255,7 @@ async def post_session_event(
 ) -> dict[str, Any]:
     store: Store = request.app.state.store
     hub: EventHub = request.app.state.event_hub
-    harness: FakeHarness = request.app.state.harness
+    harness: Harness = request.app.state.harness
     text = body.content if body.content is not None else body.text
     if text is None:
         text = ""

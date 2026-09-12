@@ -1,5 +1,6 @@
 import json
 import uuid
+from pathlib import Path
 
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -132,22 +133,30 @@ async def test_inline_agent_is_not_saved(store: Store, client: AsyncClient) -> N
 async def test_unimplemented_environment(store: Store, client: AsyncClient) -> None:
     token = await _token(store)
     agent_id = await _create_agent(client, token)
-    for env in ("openai_hosted", "self_hosted"):
-        response = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={"agent_id": agent_id, "environment": {"type": env}},
-        )
-        assert response.status_code == 400
-        assert response.json()["error"]["type"] == "not_implemented"
-        assert response.json()["error"]["code"] == env
-    missing = await client.post(
+    response = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent_id, "environment": {"type": "self_hosted"}},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "not_implemented"
+    assert response.json()["error"]["code"] == "self_hosted"
+
+
+async def test_default_environment_is_openai_hosted(
+    store: Store, client: AsyncClient
+) -> None:
+    token = await _token(store)
+    agent_id = await _create_agent(client, token)
+    created = await client.post(
         "/v1/agents/sessions",
         headers=_auth(token),
         json={"agent_id": agent_id},
     )
-    assert missing.status_code == 400
-    assert missing.json()["error"]["code"] == "openai_hosted"
+    assert created.status_code == 200
+    env = created.json()["environment"]
+    assert env["type"] == "openai_hosted"
+    assert Path(env["directory"]).is_dir()
 
 
 async def test_fake_harness_determined_events(
