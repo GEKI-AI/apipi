@@ -185,7 +185,8 @@ See [environments](environments.md).
 Each **yes** row has a named test in `tests/api/test_compat.py`. Fast
 tests do not use the OpenAI SDK. Event types, the error envelope, and
 tenant `404` are `test_compat_event_types`,
-`test_compat_error_envelope`, and `test_compat_tenant_404`.
+`test_compat_error_envelope`, and `test_compat_tenant_404`. The official
+OpenAI Python client example is `examples/openai_sdk.py`.
 
 | Surface | Status | Test |
 | --- | --- | --- |

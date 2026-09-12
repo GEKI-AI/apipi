@@ -85,7 +85,9 @@ print(session.id)
 ```
 
 Official clients work for the subset we implement. Unknown fields and
-missing features fail clearly. The full HTTP surface is in the docs.
+missing features fail clearly. A runnable script that uses the official
+OpenAI Python SDK is [examples/openai_sdk.py](examples/openai_sdk.py).
+The full HTTP surface is in the docs.
 
 ## Docs and contributing
 
