@@ -162,9 +162,10 @@ OpenTelemetry are exports. See [usage](usage.md).
 
 Pi JSONL is a cache. Do not read it to serve the API.
 
-One Pi process or guest per session. After 15 minutes idle
-(`APIPI_IDLE_TTL`), kill the process. The session row stays. Resume
-from the event log.
+One Pi process or guest per session. After the idle TTL
+(`APIPI_IDLE_TTL`, default 15 minutes), kill the process. The session
+row stays. Resume from the event log. Live processes are capped by
+`APIPI_MAX_SESSIONS`. See [config](config.md).
 
 Cross-tenant IDs return `404`, not `403`.
 

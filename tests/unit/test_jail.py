@@ -121,7 +121,7 @@ async def test_spawn_pi_jail_uses_pasta(
     cwd.mkdir()
     monkeypatch.setattr("apipi.pi.jail.shutil.which", _which_ok)
     monkeypatch.setattr("apipi.pi.jail.cgroup_v2_available", lambda: True)
-    monkeypatch.setattr("apipi.pi.jail.attach_cgroup", lambda _pid: None)
+    monkeypatch.setattr("apipi.pi.jail.attach_cgroup", lambda *_args, **_kwargs: None)
     captured: dict[str, Any] = {}
 
     async def fake_exec(*args: str, **kwargs: Any) -> _Process:
@@ -166,7 +166,7 @@ async def test_spawn_jail_stdio_runs_inside(
     cwd.mkdir()
     monkeypatch.setattr("apipi.pi.jail.shutil.which", _which_ok)
     monkeypatch.setattr("apipi.pi.jail.cgroup_v2_available", lambda: True)
-    monkeypatch.setattr("apipi.pi.jail.attach_cgroup", lambda _pid: None)
+    monkeypatch.setattr("apipi.pi.jail.attach_cgroup", lambda *_args, **_kwargs: None)
     captured: dict[str, Any] = {}
 
     async def fake_exec(*args: str, **kwargs: Any) -> _Process:

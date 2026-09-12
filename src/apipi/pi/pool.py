@@ -2,7 +2,7 @@ import asyncio
 import time
 import uuid
 
-from apipi.config import Settings
+from apipi.config import CapacityError, Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer, stop_mcp_stdio
 from apipi.pi.proc import PiProc, spawn_pi
@@ -29,6 +29,8 @@ class PiPool:
         async with self._lock:
             proc = self._procs.get(session_id)
             if proc is None or not proc.alive:
+                if not self.has_capacity(session_id):
+                    raise CapacityError("Too many live sessions")
                 proc = await spawn_pi(
                     self.settings,
                     cwd=cwd,
@@ -40,6 +42,15 @@ class PiPool:
                 self._procs[session_id] = proc
             self._last[session_id] = time.monotonic()
             return proc
+
+    def live(self) -> int:
+        return sum(1 for proc in self._procs.values() if proc.alive)
+
+    def has_capacity(self, session_id: uuid.UUID) -> bool:
+        proc = self._procs.get(session_id)
+        if proc is not None and proc.alive:
+            return True
+        return self.live() < self.settings.max_sessions
 
     def peek(self, session_id: uuid.UUID) -> PiProc | None:
         proc = self._procs.get(session_id)

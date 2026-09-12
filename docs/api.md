@@ -214,3 +214,7 @@ create-and-stream steps are in [quickstart](quickstart.md).
 ```json
 { "error": { "type": "not_implemented", "code": "...", "message": "..." } }
 ```
+
+A new turn that would pass `APIPI_MAX_SESSIONS` live Pi processes
+returns `429` with code `capacity`. A request body larger than
+`APIPI_MAX_REQUEST_BYTES` returns `413` with code `payload_too_large`.

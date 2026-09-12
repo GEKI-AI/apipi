@@ -67,6 +67,8 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Install: install.md
+  - Configuration: config.md
   - Quickstart: quickstart.md
   - API: api.md
   - Auth: auth.md

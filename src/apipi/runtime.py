@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -675,6 +675,7 @@ async def run_turn(
     request_id: str | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
+    turn_timeout: timedelta | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
     try:
@@ -748,24 +749,31 @@ async def run_turn(
                 turn_id=turn_id,
                 model=model,
             ) as model_span:
-                reply, pending, usage = await _consume_generate(
-                    store,
-                    hub,
-                    tenant_id,
-                    session_id,
-                    turn_id,
-                    harness.generate(
-                        text,
-                        session_id=session_id,
-                        cwd=cwd_path,
-                        tools=tools,
-                        function_tools=function_tools,
-                        mcp_http=mcp_http,
-                        mcp_stdio=mcp_stdio,
-                        skill_dirs=skill_dirs,
-                        abort=abort,
-                    ),
+                generate = harness.generate(
+                    text,
+                    session_id=session_id,
+                    cwd=cwd_path,
+                    tools=tools,
+                    function_tools=function_tools,
+                    mcp_http=mcp_http,
+                    mcp_stdio=mcp_stdio,
+                    skill_dirs=skill_dirs,
+                    abort=abort,
                 )
+                try:
+                    if turn_timeout is None:
+                        reply, pending, usage = await _consume_generate(
+                            store, hub, tenant_id, session_id, turn_id, generate
+                        )
+                    else:
+                        async with asyncio.timeout(turn_timeout.total_seconds()):
+                            reply, pending, usage = await _consume_generate(
+                                store, hub, tenant_id, session_id, turn_id, generate
+                            )
+                except TimeoutError:
+                    abort.set()
+                    await harness.abort(session_id)
+                    reply, pending, usage = "", [], empty_usage()
                 set_span(
                     tracing,
                     model_span,
@@ -846,6 +854,7 @@ async def continue_turn(
     request_id: str | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
+    turn_timeout: timedelta | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -933,24 +942,41 @@ async def continue_turn(
             turn_id=turn_id,
             model=model,
         ) as model_span:
-            reply, pending, usage = await _consume_generate(
-                store,
-                hub,
-                tenant_id,
-                session_id,
-                turn_id,
-                harness.generate(
-                    "",
-                    session_id=session_id,
-                    cwd=cwd_path,
-                    tools=tools,
-                    function_tools=function_tools,
-                    tool_result=result,
-                    mcp_http=mcp_http,
-                    mcp_stdio=mcp_stdio,
-                    skill_dirs=skill_dirs,
-                ),
+            generate = harness.generate(
+                "",
+                session_id=session_id,
+                cwd=cwd_path,
+                tools=tools,
+                function_tools=function_tools,
+                tool_result=result,
+                mcp_http=mcp_http,
+                mcp_stdio=mcp_stdio,
+                skill_dirs=skill_dirs,
             )
+            try:
+                if turn_timeout is None:
+                    reply, pending, usage = await _consume_generate(
+                        store, hub, tenant_id, session_id, turn_id, generate
+                    )
+                else:
+                    async with asyncio.timeout(turn_timeout.total_seconds()):
+                        reply, pending, usage = await _consume_generate(
+                            store, hub, tenant_id, session_id, turn_id, generate
+                        )
+            except TimeoutError:
+                await harness.abort(session_id)
+                async with store.session() as db:
+                    await _cancel_turn(
+                        db,
+                        hub,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                    )
+                return
             set_span(
                 tracing,
                 model_span,

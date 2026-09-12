@@ -24,11 +24,16 @@ from apipi.store.migrate import migrate
 log = logging.getLogger("apipi")
 
 
-def prepare_serve(settings: Settings | None = None) -> Settings:
-    resolved = settings if settings is not None else load_settings()
+def prepare_serve(
+    settings: Settings | None = None, *, config_path: str | None = None
+) -> Settings:
+    resolved = (
+        settings if settings is not None else load_settings(config_path=config_path)
+    )
     postgres_url(resolved.database_url)
     require_run_mode(resolved.run_mode, resolved)
     reject_prompt_body_logging()
+    logging.getLogger().setLevel(resolved.log_level.upper())
     if resolved.run_mode == "host":
         log.warning(HOST_MODE_WARNING)
     log.info(TURN_LOG_ON)
@@ -37,9 +42,16 @@ def prepare_serve(settings: Settings | None = None) -> Settings:
     return resolved
 
 
-def serve(*, host: str, port: int) -> None:
-    settings = prepare_serve()
-    uvicorn.run(create_app(settings), host=host, port=port)
+def serve(
+    *, host: str | None, port: int | None, config_path: str | None = None
+) -> None:
+    settings = prepare_serve(config_path=config_path)
+    uvicorn.run(
+        create_app(settings),
+        host=host if host is not None else settings.host,
+        port=port if port is not None else settings.port,
+        log_level=settings.log_level,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,17 +60,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser = argparse.ArgumentParser(prog="apipi")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("migrate", help="Apply store migrations")
+    migrate_parser = sub.add_parser("migrate", help="Apply store migrations")
+    migrate_parser.add_argument("--config", default=None, help="TOML config file")
     serve_parser = sub.add_parser("serve", help="Start the API")
-    serve_parser.add_argument("--host", default="0.0.0.0", help="Bind address")
-    serve_parser.add_argument("--port", default=8000, type=int, help="Bind port")
+    serve_parser.add_argument("--host", default=None, help="Bind address")
+    serve_parser.add_argument("--port", default=None, type=int, help="Bind port")
+    serve_parser.add_argument("--config", default=None, help="TOML config file")
     args = parser.parse_args(argv)
     try:
         if args.command == "migrate":
-            migrate()
+            migrate(config_path=args.config)
             return 0
         if args.command == "serve":
-            serve(host=args.host, port=args.port)
+            serve(host=args.host, port=args.port, config_path=args.config)
             return 0
     except ConfigError as exc:
         print(exc, file=sys.stderr)

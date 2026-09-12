@@ -241,6 +241,8 @@ def microvm_config(
     vsock: str,
     cid: int,
     net: TapNet,
+    mem_mib: int = MEM_MIB,
+    vcpus: int = VCPU_COUNT,
 ) -> dict[str, object]:
     return {
         "boot-source": {
@@ -262,8 +264,8 @@ def microvm_config(
             },
         ],
         "machine-config": {
-            "vcpu_count": VCPU_COUNT,
-            "mem_size_mib": MEM_MIB,
+            "vcpu_count": vcpus,
+            "mem_size_mib": mem_mib,
         },
         "vsock": {
             "guest_cid": cid,
@@ -584,6 +586,8 @@ async def spawn_microvm_pi(
             vsock=VSOCK_UDS,
             cid=guest_cid(vm_id),
             net=net,
+            mem_mib=settings.microvm_mem_mib,
+            vcpus=settings.microvm_vcpus,
         )
         (chroot_dir / "config.json").write_text(json.dumps(config))
         argv = jailer_argv(

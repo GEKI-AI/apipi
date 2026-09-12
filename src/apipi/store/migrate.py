@@ -18,6 +18,6 @@ def upgrade_head(url: str) -> None:
     command.upgrade(alembic_config(postgres_url(url)), "head")
 
 
-def migrate() -> None:
-    settings = load_settings()
+def migrate(*, config_path: str | None = None) -> None:
+    settings = load_settings(config_path=config_path)
     upgrade_head(settings.database_url)

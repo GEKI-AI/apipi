@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
-def create_engine(url: str) -> AsyncEngine:
-    return create_async_engine(url, pool_pre_ping=True)
+def create_engine(url: str, *, pool_size: int = 5) -> AsyncEngine:
+    return create_async_engine(url, pool_pre_ping=True, pool_size=pool_size)
 
 
 class Store:

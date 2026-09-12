@@ -1,9 +1,16 @@
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
 from apipi.cli import main
-from apipi.config import ConfigError, Settings, load_settings, postgres_url
+from apipi.config import (
+    ConfigError,
+    Settings,
+    load_settings,
+    parse_bytes,
+    postgres_url,
+)
 
 
 def test_postgres_url_accepts_postgresql() -> None:
@@ -83,7 +90,10 @@ def test_otel_endpoint_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().otel_endpoint is None
 
 
-def test_prompt_body_logging_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prompt_body_logging_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "host")
     monkeypatch.setenv("APIPI_LOG_PROMPTS", "1")
@@ -91,10 +101,101 @@ def test_prompt_body_logging_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         load_settings()
 
 
-def test_prompt_body_logging_off_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prompt_body_logging_off_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "host")
     monkeypatch.setenv("APIPI_LOG_PROMPTS", "off")
     settings = load_settings()
     assert settings.metrics is False
     assert settings.otel_endpoint is None
+
+
+def test_parse_bytes() -> None:
+    assert parse_bytes("512M") == 512 * 1024 * 1024
+    assert parse_bytes("1MiB") == 1024 * 1024
+    assert parse_bytes("1024") == 1024
+
+
+def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.delenv("APIPI_MAX_SESSIONS", raising=False)
+    monkeypatch.delenv("APIPI_TURN_TIMEOUT", raising=False)
+    settings = Settings()
+    assert settings.max_sessions == 32
+    assert settings.turn_timeout == timedelta(minutes=10)
+    assert settings.host == "0.0.0.0"
+    assert settings.port == 8000
+    assert settings.log_level == "info"
+    assert settings.jail_memory == 512 * 1024 * 1024
+    assert settings.max_request_bytes == 1024 * 1024
+    assert settings.db_pool_size == 5
+    assert settings.microvm_mem_mib == 512
+    assert settings.microvm_vcpus == 1
+    assert "example_ui" not in type(settings).model_fields
+
+
+def test_load_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        'run_mode = "host"\n'
+        "max_sessions = 4\n"
+        'idle_ttl = "5m"\n'
+    )
+    settings = load_settings()
+    assert settings.run_mode == "host"
+    assert settings.max_sessions == 4
+    assert settings.idle_ttl == timedelta(minutes=5)
+
+
+def test_env_overrides_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        'run_mode = "jail"\n'
+    )
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    assert load_settings().run_mode == "host"
+
+
+def test_dotenv_overrides_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        'run_mode = "jail"\n'
+    )
+    (tmp_path / ".env").write_text("APIPI_RUN_MODE=host\n")
+    assert load_settings().run_mode == "host"
+
+
+def test_unknown_toml_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\nworkers = 4\n'
+    )
+    with pytest.raises(ConfigError, match="unknown setting: workers"):
+        load_settings()
+
+
+def test_config_path_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ConfigError, match="config file not found"):
+        load_settings(config_path=str(tmp_path / "missing.toml"))
+
+
+def test_explicit_config_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    path = tmp_path / "custom.toml"
+    path.write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        'log_level = "debug"\n'
+    )
+    settings = load_settings(config_path=str(path))
+    assert settings.log_level == "debug"

@@ -63,7 +63,9 @@ APIPI_RUN_MODE=host apipi serve
 
 That binds `0.0.0.0:8000` by default. `host` runs Pi as a child of the
 gateway. The process logs a warning: it is not suited for production.
-There is no silent fallback to another mode.
+There is no silent fallback to another mode. Settings load from
+environment variables, optional `.env`, and optional `apipi.toml`.
+See the install and configuration pages in the docs.
 
 ## Use
 

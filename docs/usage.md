@@ -130,6 +130,8 @@ status, token counts, tool names. Not message text.
 | `APIPI_METRICS` | off | Prometheus at `/metrics` |
 | `APIPI_OTEL_ENDPOINT` | unset | OTLP export when set |
 
+The full setting list is in [configuration](config.md).
+
 The turn log is always on. There is no flag that writes prompt or
 completion bodies.
 

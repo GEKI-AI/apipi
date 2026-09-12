@@ -17,8 +17,11 @@ Each request:
 authenticate(bearer) -> {key_id, tenant_id} | reject
 ```
 
-The callback is in-process Python. `APIPI_AUTH` is an import path
-(`package.mod:func`). Unset means the default function in this package.
+The callback is in-process Python. `APIPI_AUTH` (TOML `auth`) is an
+import path (`package.mod:func`). Unset means the default function in
+this package. You can set it in the environment, `.env`, or
+`apipi.toml`. See [config](config.md). A small example is
+`examples/auth_callback.py`.
 
 Default: any non-empty bearer is accepted. `key_id` is the SHA-256 hex
 of the bearer. `tenant_id` is UUID5 of that hex (URL namespace). The

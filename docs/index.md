@@ -10,11 +10,12 @@ or a runner you attach. Pi runs the agent loop behind the HTTP API. You
 bring any OpenAI-compatible model endpoint. The package and CLI are
 `apipi`. A hosted deploy lives at [geki.ai](https://geki.ai).
 
-This page is the product home: what the gateway is, how to install it,
-how to run it, and how to point a client at `/v1`. The
-[quickstart](quickstart.md) is the client tutorial. The pages after it
-are the HTTP specs. Contributing, the constitution, and architecture
-decisions live under Contribute.
+This page is the product home: what the gateway is, how to start it,
+and how to point a client at `/v1`. [Install](install.md) and
+[configuration](config.md) are the operator pages. The
+[quickstart](quickstart.md) is the client tutorial. The pages after
+those are the HTTP specs. Contributing, the constitution, and
+architecture decisions live under Contribute.
 
 ## Status
 
@@ -34,81 +35,23 @@ warning at startup and is not suited for production.
 Postgres is required. Live turns need Pi on `PATH` and a model URL.
 Tests use a FakeHarness and do not need a live model.
 
-## Install
+## Install and run
 
-Python 3.13+ and [uv](https://docs.astral.sh/uv/) only. Do not use pip
-or a bare `python -m venv`.
+Python 3.13+ and [uv](https://docs.astral.sh/uv/) only. Postgres is
+required. From a checkout:
 
 ```
 uv sync
-```
-
-That installs the `apipi` CLI into the project environment. After
-`uv sync` you can run `apipi` from that environment, or prefix commands
-with `uv run`.
-
-## Setup
-
-The gateway stores tenants, agents, sessions, turns, items, and the
-append-only event log in Postgres. It does not store API keys. A Compose
-file at the repo root starts a local Postgres 17 server with user
-`apipi`, password `apipi`, and database `apipi`, published on host port
-5432:
-
-```
 docker compose up -d postgres
-```
-
-Point the CLI at that database and apply store migrations:
-
-```
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
 apipi migrate
-```
-
-`DATABASE_URL` is required. `postgres://` and `postgresql://` URLs are
-rewritten to `postgresql+asyncpg://`. SQLite is for tests only and is
-rejected by `apipi serve` and `apipi migrate`.
-
-Pi talks to your model with the usual OpenAI environment variables.
-`OPENAI_BASE_URL` is the model host, not this gateway.
-`OPENAI_API_KEY` is the key that host expects. Those values are passed
-into the Pi process. Pi does not receive `DATABASE_URL` or gateway
-secrets.
-
-Live turns also need the Pi CLI (`pi --mode rpc`) on `PATH`. The
-gateway pins Pi 0.85.1. You can override the binary with
-`APIPI_PI_COMMAND`.
-
-## Run
-
-The configured default run mode is `jail`. That starts when `bwrap`,
-`pasta`, and cgroup v2 are present:
-
-```
-apipi serve
-```
-
-If jail tools are missing, the process exits. Operators without those
-tools must set `host`:
-
-```
 APIPI_RUN_MODE=host apipi serve
 ```
 
-That binds `0.0.0.0:8000` by default (`--host` and `--port` change the
-bind). `host` runs Pi as a child of the gateway. The process logs a
-warning: `APIPI_RUN_MODE=host is not suited for production`. `jail`
-does not log that warning. Startup also logs that the turn log is on,
-and whether Prometheus metrics and OpenTelemetry export are on.
-
-If the selected run mode cannot start, the process exits. There is no
-fallback to another mode. `microvm` needs `/dev/kvm`, Firecracker,
-jailer, `APIPI_MICROVM_KERNEL`, `APIPI_MICROVM_ROOTFS`, `ip`, and
-`iptables`. The guest reaches the model URL and HTTP MCP through a
-TAP device. There is no host loopback to Postgres.
-
-`GET /health` returns `{"status": "ok"}` and does not require a bearer.
+That binds `0.0.0.0:8000`. `jail` is the configured default when
+`bwrap`, `pasta`, and cgroup v2 can start. Operators without those
+tools must set `host`. The full install, systemd, and run-mode notes
+are in [Install](install.md). Every setting is in [Configuration](config.md).
 
 ## Use
 
@@ -146,40 +89,19 @@ runnable script is `examples/openai_sdk.py`. The same steps as OpenAI's
 Agents API quickstart are in [Quickstart](quickstart.md). The HTTP
 surface is in [API](api.md).
 
-## Config
-
-These are the settings the process reads.
-
-| Config | Default | What |
-| --- | --- | --- |
-| `DATABASE_URL` | required | Postgres URL. `postgresql+asyncpg://…` preferred. |
-| `APIPI_RUN_MODE` | `jail` | `host` \| `jail` \| `microvm`. `host` and `jail` start. Jail exits if `bwrap`, `pasta`, or cgroup v2 are missing. `microvm` starts when `/dev/kvm`, `firecracker`, `jailer`, kernel, rootfs, `ip`, and `iptables` are present. Otherwise it exits. No fallback. |
-| `APIPI_MICROVM_KERNEL` | unset | Guest kernel image. Required when `APIPI_RUN_MODE=microvm`. |
-| `APIPI_MICROVM_ROOTFS` | unset | Guest rootfs image. Required when `APIPI_RUN_MODE=microvm`. Do not vendor a distro in git. |
-| `APIPI_IDLE_TTL` | `15m` | Kill an idle Pi process. The session row stays. Resume from the event log. |
-| `APIPI_AUTH` | unset (default hash) | Import path `package.mod:func` for the auth callback. |
-| `APIPI_AUTH_CACHE_TTL` | `30s` | Cache the callback result by SHA-256 of the bearer, never the raw key. |
-| `APIPI_PI_COMMAND` | `pi` | Pi binary used as `pi --mode rpc`. |
-| `APIPI_SESSIONS_DIR` | `.apipi/sessions` under cwd | Root for local session directories (`openai_hosted`). |
-| `OPENAI_BASE_URL` | unset | Model host passed to Pi. Not the gateway URL. |
-| `OPENAI_API_KEY` | unset | Model key passed to Pi. |
-| `APIPI_METRICS` | off | Prometheus text at `/metrics` when on. No bearer. |
-| `APIPI_OTEL_ENDPOINT` | unset | OTLP/HTTP traces when set. `/v1/traces` is appended if missing. |
-
-A setting that would store prompt or completion bodies is rejected at
-startup.
-
 ## Read next
 
 Use the API:
 
-1. [Quickstart](quickstart.md)
-2. [API](api.md)
-3. [Auth](auth.md)
-4. [Environments](environments.md)
-5. [Tools and skills](tools.md)
-6. [Usage](usage.md)
-7. [Architecture](architecture.md)
+1. [Install](install.md)
+2. [Configuration](config.md)
+3. [Quickstart](quickstart.md)
+4. [API](api.md)
+5. [Auth](auth.md)
+6. [Environments](environments.md)
+7. [Tools and skills](tools.md)
+8. [Usage](usage.md)
+9. [Architecture](architecture.md)
 
 If you are changing the code, start from [How we work](process.md) and
 [Contributing](contributing.md). Project rules are in the

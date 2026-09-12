@@ -65,13 +65,20 @@ def require_jail() -> None:
         raise ConfigError("APIPI_RUN_MODE=jail requires cgroup v2")
 
 
-def attach_cgroup(pid: int) -> None:
+def attach_cgroup(pid: int, memory_bytes: int | None = None) -> None:
     parent = _self_cgroup_path()
     if parent is None:
         raise OSError("cgroup v2 parent missing")
+    if memory_bytes is not None:
+        control = parent / "cgroup.subtree_control"
+        current = control.read_text()
+        if "memory" not in current.split():
+            control.write_text("+memory")
     path = parent / f"apipi-{pid}"
     path.mkdir()
     (path / "cgroup.procs").write_text(str(pid))
+    if memory_bytes is not None:
+        (path / "memory.max").write_text(str(memory_bytes))
 
 
 def resolv_conf() -> Path:
@@ -222,7 +229,7 @@ async def spawn_jailed_pi(
         await process.wait()
         raise ConfigError("APIPI_RUN_MODE=jail cannot start")
     try:
-        attach_cgroup(pid)
+        attach_cgroup(pid, settings.jail_memory)
     except OSError as exc:
         process.kill()
         await process.wait()
