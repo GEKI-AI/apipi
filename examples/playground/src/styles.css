@@ -1,0 +1,269 @@
+:root {
+  color-scheme: dark;
+  --bg: #12141a;
+  --bg-raise: #1a1d26;
+  --bg-hover: #232734;
+  --line: #2c3140;
+  --text: #e8e6df;
+  --muted: #9a9588;
+  --accent: #d8b45a;
+  --danger: #e07a5f;
+  --user: #3d4a3a;
+  --assistant: #252a36;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.active {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+button.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-weight: 600;
+}
+
+h1 {
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+}
+
+h2 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+code,
+pre {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+pre {
+  margin: 0.35rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.top {
+  padding: 0.9rem 1.1rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.hint {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.banner {
+  margin: 0;
+  padding: 0.6rem 1.1rem;
+  background: #3a2420;
+  color: #f3d1c8;
+}
+
+.panes {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr) 16rem;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+}
+
+.pane.files {
+  border-right: 0;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.75rem 0.9rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.field select {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.35rem;
+}
+
+.sessions ul,
+.files ul {
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem;
+  overflow: auto;
+  flex: 1;
+}
+
+.sessions li button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.35rem;
+}
+
+.sessions .id {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.sessions .meta,
+.status {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.sessions .danger {
+  margin: 0.6rem 0.9rem 0.9rem;
+}
+
+.log {
+  flex: 1;
+  overflow: auto;
+  padding: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.empty {
+  color: var(--muted);
+}
+
+.bubble,
+.activity {
+  max-width: 42rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+}
+
+.bubble.user {
+  background: var(--user);
+  align-self: flex-end;
+}
+
+.bubble.assistant {
+  background: var(--assistant);
+}
+
+.activity {
+  border: 1px dashed var(--line);
+  font-size: 0.9rem;
+}
+
+.role {
+  display: block;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.composer {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.composer textarea {
+  flex: 1;
+  resize: none;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+}
+
+.composer button {
+  background: var(--accent);
+  color: #1a1408;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.files .hint,
+.files .empty {
+  padding: 0 0.9rem;
+}
+
+.files a {
+  color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .panes {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+  }
+}
