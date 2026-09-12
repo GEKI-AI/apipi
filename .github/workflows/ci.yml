@@ -33,6 +33,39 @@ jobs:
       - name: Tests
         run: uv run pytest
 
+  store:
+    name: Store
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: apipi
+          POSTGRES_PASSWORD: apipi
+          POSTGRES_DB: apipi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U apipi -d apipi"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
+      APIPI_TEST_DATABASE_URL: postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - name: Sync
+        run: uv sync --locked
+      - name: Migrate
+        run: uv run apipi migrate
+      - name: Tests
+        run: uv run pytest
+
   docs:
     name: Docs
     runs-on: ubuntu-latest

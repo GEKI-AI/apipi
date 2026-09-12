@@ -42,7 +42,7 @@ No `develop` branch. No merge commits on `main`. No force-push to
 
 1. An issue exists. The PR body starts with `Fixes #N`.
 2. Spec and code change together when they disagree.
-3. CI is green (`Check` and `Docs`).
+3. CI is green (`Check`, `Store`, and `Docs`).
 4. A human reviews, then squash-merges.
 
 If you already have a patch, file the issue first and link the patch.
@@ -78,8 +78,8 @@ change as the code.
 | Unknown fields fail clearly | Roadmap features |
 | Event log is the transcript | |
 
-Gateway tests mock Pi RPC. Postgres is the store for integration
-tests.
+Gateway tests mock Pi RPC. Local pytest uses SQLite. CI also runs
+the same tests against Postgres (`Store`).
 
 ## Before you commit
 
@@ -107,3 +107,11 @@ If you changed docs, also:
 ```
 uv run --no-project --with-requirements requirements-docs.txt mkdocs build --strict
 ```
+
+Local Postgres for `apipi migrate` / `apipi serve`:
+
+```
+docker compose up -d postgres
+```
+
+`DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi`.

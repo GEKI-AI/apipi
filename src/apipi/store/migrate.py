@@ -1,0 +1,23 @@
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+
+from apipi.config import load_settings, postgres_url
+
+
+def alembic_config(url: str) -> Config:
+    root = Path(__file__).resolve().parent / "migrations"
+    cfg = Config()
+    cfg.set_main_option("script_location", str(root))
+    cfg.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+    return cfg
+
+
+def upgrade_head(url: str) -> None:
+    command.upgrade(alembic_config(postgres_url(url)), "head")
+
+
+def migrate() -> None:
+    settings = load_settings()
+    upgrade_head(settings.database_url)
