@@ -11,6 +11,7 @@ from apipi.auth import AuthCache, load_authenticate
 from apipi.config import Settings, load_settings, postgres_url
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import register_exception_handlers
+from apipi.metrics import Metrics, mount_metrics
 from apipi.pi.harness import PiHarness
 from apipi.pi.pool import PiPool
 from apipi.request_id import RequestIdMiddleware
@@ -45,6 +46,7 @@ def create_app(
     app = FastAPI(title="ApiPi", version="0.0.0", lifespan=lifespan)
     app.add_middleware(RequestIdMiddleware)
     app.state.settings = resolved
+    app.state.metrics = Metrics() if resolved.metrics else None
     app.state.store = store
     app.state.mcp_http = {}
     app.state.mcp_stdio = {}
@@ -58,6 +60,8 @@ def create_app(
     app.include_router(sessions_router)
     app.include_router(agents_router)
     app.include_router(environments_router)
+    if isinstance(app.state.metrics, Metrics):
+        mount_metrics(app, app.state.metrics)
 
     @app.get("/health")
     def health() -> dict[str, str]:

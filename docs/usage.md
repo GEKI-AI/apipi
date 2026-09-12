@@ -81,10 +81,22 @@ Query params (one of):
 
 ## Prometheus
 
-`GET /metrics` when `APIPI_METRICS` is on. Off by default.
+`GET /metrics` when `APIPI_METRICS` is on. Off by default. No bearer.
+Prometheus text format. `/health` and `/metrics` are not counted.
 
-Series: requests, turns, tokens, latency, errors. Label by tenant
-where it is safe. Never by prompt or completion text.
+| Series | Type | Labels |
+| --- | --- | --- |
+| `apipi_requests_total` | counter | `tenant`, `method`, `path`, `status` |
+| `apipi_turns_total` | counter | `tenant`, `status` |
+| `apipi_tokens_total` | counter | `tenant`, `kind` |
+| `apipi_turn_latency_seconds` | histogram | `tenant` |
+| `apipi_errors_total` | counter | `tenant`, `code` |
+
+`tenant` is the tenant id. Empty when the request has no tenant.
+`path` is the route template, not the raw URL. `kind` is `prompt`,
+`completion`, `cache_read`, `cache_write`, or `total`. Turn `status`
+is `completed`, `failed`, or `cancelled`. Never prompt or completion
+text.
 
 ## OpenTelemetry
 

@@ -336,6 +336,7 @@ async def create_agent_session(
             mcp_http=connected,
             mcp_stdio=stdio,
             request_id=request_id_of(request),
+            metrics=request.app.state.metrics,
         )
     else:
         async with store.session() as db:
@@ -483,6 +484,7 @@ async def post_session_event(
             mcp_http=request.app.state.mcp_http.get(session_id),
             mcp_stdio=request.app.state.mcp_stdio.get(session_id),
             request_id=request_id_of(request),
+            metrics=request.app.state.metrics,
         )
     else:
         await run_turn(
@@ -495,6 +497,7 @@ async def post_session_event(
             mcp_http=request.app.state.mcp_http.get(session_id),
             mcp_stdio=request.app.state.mcp_stdio.get(session_id),
             request_id=request_id_of(request),
+            metrics=request.app.state.metrics,
         )
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)

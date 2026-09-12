@@ -1,6 +1,7 @@
 # Auth
 
-`Authorization: Bearer` on every request except `/health`.
+`Authorization: Bearer` on every request except `/health` and
+`/metrics`.
 
 We do not mint or store API keys. Callers reuse the bearer they already
 use with an LLM router. Isolation is by `tenant_id`. Wrong-tenant IDs

@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.errors import ApiError
+from apipi.metrics import Metrics, observe_turn
 from apipi.skills import discover_skill_dirs
 from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
@@ -428,6 +429,7 @@ async def _write_turn_log(
     usage: dict[str, int] | None = None,
     error_code: str | None = None,
     request_id: str | None = None,
+    metrics: Metrics | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is None:
@@ -445,6 +447,7 @@ async def _write_turn_log(
     tool_names, tool_counts, mcp_names, mcp_counts = await _tool_mcp_for_turn(
         db, tenant_id, session_id, turn_id, labels
     )
+    latency_ms = _latency_ms(turn.created_at)
     await append_turn_log(
         db,
         tenant_id,
@@ -453,7 +456,7 @@ async def _write_turn_log(
         status=status,
         agent_id=agent_id,
         model=model,
-        latency_ms=_latency_ms(turn.created_at),
+        latency_ms=latency_ms,
         prompt_tokens=stored["prompt_tokens"],
         completion_tokens=stored["completion_tokens"],
         cache_read_tokens=stored["cache_read_tokens"],
@@ -465,6 +468,18 @@ async def _write_turn_log(
         tool_counts=tool_counts,
         mcp_names=mcp_names,
         mcp_counts=mcp_counts,
+    )
+    observe_turn(
+        metrics,
+        tenant_id=tenant_id,
+        status=status,
+        latency_ms=latency_ms,
+        prompt_tokens=stored["prompt_tokens"],
+        completion_tokens=stored["completion_tokens"],
+        cache_read_tokens=stored["cache_read_tokens"],
+        cache_write_tokens=stored["cache_write_tokens"],
+        total_tokens=stored["total_tokens"],
+        error_code=error_code,
     )
 
 
@@ -478,6 +493,7 @@ async def _complete_turn(
     usage: dict[str, int],
     *,
     request_id: str | None = None,
+    metrics: Metrics | None = None,
 ) -> None:
     await _emit_item(
         db,
@@ -502,6 +518,7 @@ async def _complete_turn(
         status="completed",
         usage=stored,
         request_id=request_id,
+        metrics=metrics,
     )
     await persist_event(
         db,
@@ -530,6 +547,7 @@ async def _cancel_turn(
     turn_id: uuid.UUID,
     *,
     request_id: str | None = None,
+    metrics: Metrics | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is not None:
@@ -542,6 +560,7 @@ async def _cancel_turn(
         turn_id,
         status="cancelled",
         request_id=request_id,
+        metrics=metrics,
     )
     await persist_event(
         db,
@@ -610,6 +629,7 @@ async def run_turn(
     mcp_http: list[Any] | None = None,
     mcp_stdio: list[Any] | None = None,
     request_id: str | None = None,
+    metrics: Metrics | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
     try:
@@ -691,6 +711,7 @@ async def run_turn(
                     session_id,
                     turn_id,
                     request_id=request_id,
+                    metrics=metrics,
                 )
                 return
             if pending:
@@ -721,6 +742,7 @@ async def run_turn(
                 reply,
                 usage,
                 request_id=request_id,
+                metrics=metrics,
             )
     finally:
         hub.unwatch_turn(session_id)
@@ -741,6 +763,7 @@ async def continue_turn(
     mcp_http: list[Any] | None = None,
     mcp_stdio: list[Any] | None = None,
     request_id: str | None = None,
+    metrics: Metrics | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -856,4 +879,5 @@ async def continue_turn(
             reply,
             usage,
             request_id=request_id,
+            metrics=metrics,
         )
