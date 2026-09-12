@@ -76,13 +76,16 @@ Three stores. Do not mix them up.
 | Store | What | Where it lives | Lifetime |
 | --- | --- | --- | --- |
 | **Session** | Transcript: events, turns, items, artifact metadata | Postgres | Until the session is deleted. A session [export](api.md#export) is the thread. |
-| **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. `self_hosted`: the runner. `none`: no files. | While that computer exists. In `host` and `jail`, that directory is on the host today. In `microvm`, it is packed into the guest at boot; writes stay in the guest and are not copied back. |
-| **Artifacts** | Named outputs the API can fetch | Metadata in Postgres. Bytes today are still read from the live sandbox path (`openai_hosted` directory or the runner). | Until the artifact or session is deleted. `410` if the file is gone. |
+| **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. `self_hosted`: the runner. `none`: no files. | Scratch for `openai_hosted`: gone when Pi stops and when the session is deleted. Runner files stay on the runner. |
+| **Artifacts** | Named outputs the API can fetch | Metadata in Postgres. Bytes on the gateway host under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{session_id}/{id}`. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
 
-The event log is the source of truth for the conversation. Pi's files
-are a cache. Artifact bytes are not yet copied onto a durable host
-store, so `microvm` content is gone once the guest stops unless you
-published the file some other way. That copy-out is a follow-up.
+When Pi stops, the gateway copies files under `artifacts/` on that
+computer into the host store, then deletes the `openai_hosted`
+workspace. `host` and `jail` copy from the session directory.
+`microvm` pulls a tar over vsock while the guest is still up.
+`self_hosted` reads `artifacts/` from the runner if it is connected.
+A crash before stop can lose unpublished files. A later spawn recopies
+skills into a fresh workspace.
 
 ## `host`
 

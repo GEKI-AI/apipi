@@ -7,19 +7,20 @@ from pathlib import Path
 from typing import Annotated, Any, Self
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.api.agents import AgentWrite
 from apipi.auth import get_db, not_found, require_tenant
-from apipi.env.hub import EnvDisconnected, EnvironmentHub
+from apipi.env.hub import EnvironmentHub
 from apipi.errors import ApiError, gone, not_implemented
 from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.otel import set_span, start_span
-from apipi.pi.dirs import session_workspace
+from apipi.pi.artifacts import wipe_artifact_store
+from apipi.pi.dirs import artifact_blob_path, session_workspace
 from apipi.pi.pool import PiPool
 from apipi.request_id import request_id_of
 from apipi.runtime import (
@@ -148,25 +149,6 @@ def artifact_body(artifact: Artifact) -> dict[str, Any]:
         "content_type": artifact.content_type,
         "created_at": artifact.created_at.isoformat(),
     }
-
-
-def _sandbox_file(row: SessionRow, relative: str) -> Path | None:
-    directory = row.environment.get("directory")
-    if not isinstance(directory, str) or directory == "":
-        return None
-    root = Path(directory)
-    if not root.is_dir():
-        return None
-    if relative == "" or Path(relative).is_absolute():
-        return None
-    try:
-        resolved_root = root.resolve()
-        candidate = (resolved_root / relative).resolve()
-    except OSError:
-        return None
-    if not candidate.is_relative_to(resolved_root):
-        return None
-    return candidate
 
 
 def session_body(row: SessionRow) -> dict[str, Any]:
@@ -447,6 +429,9 @@ async def delete_agent_session(
     if isinstance(env_id_raw, str):
         env_hub: EnvironmentHub = request.app.state.env_hub
         await env_hub.close(uuid.UUID(env_id_raw))
+    pool: PiPool = request.app.state.pi_pool
+    await pool.kill(session_id)
+    wipe_artifact_store(request.app.state.settings, tenant.id, session_id)
     request.app.state.mcp_http.pop(session_id, None)
     stdio = request.app.state.mcp_stdio.pop(session_id, None)
     if stdio:
@@ -666,30 +651,15 @@ async def read_session_artifact_content(
     artifact = await get_session_artifact(db, tenant.id, session_id, artifact_id)
     if artifact is None:
         not_found()
-    if row.environment.get("type") == "self_hosted":
-        env_id_raw = row.environment.get("id")
-        if not isinstance(env_id_raw, str):
-            gone()
-        env_hub: EnvironmentHub = request.app.state.env_hub
-        try:
-            result = await env_hub.call(
-                uuid.UUID(env_id_raw), "read", path=artifact.path
-            )
-        except (EnvDisconnected, TimeoutError):
-            gone()
-        if not result.get("ok"):
-            gone()
-        content = result.get("content")
-        if not isinstance(content, str):
-            gone()
-        return Response(content=content.encode(), media_type=artifact.content_type)
-    path = _sandbox_file(row, artifact.path)
-    if path is None or not path.is_file():
+    path = artifact_blob_path(
+        request.app.state.settings, tenant.id, session_id, artifact_id
+    )
+    if not path.is_file():
         gone()
     return FileResponse(
         path,
         media_type=artifact.content_type,
-        filename=path.name,
+        filename=Path(artifact.path).name,
     )
 
 
@@ -697,6 +667,7 @@ async def read_session_artifact_content(
 async def delete_agent_session_artifact(
     session_id: uuid.UUID,
     artifact_id: uuid.UUID,
+    request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
@@ -706,9 +677,11 @@ async def delete_agent_session_artifact(
     artifact = await get_session_artifact(db, tenant.id, session_id, artifact_id)
     if artifact is None:
         not_found()
-    path = _sandbox_file(row, artifact.path)
-    if path is not None and path.is_file():
-        path.unlink()
+    blob = artifact_blob_path(
+        request.app.state.settings, tenant.id, session_id, artifact_id
+    )
+    if blob.is_file():
+        blob.unlink()
     deleted = await delete_session_artifact(db, tenant.id, session_id, artifact_id)
     if deleted is None:
         not_found()

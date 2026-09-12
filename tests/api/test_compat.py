@@ -12,7 +12,6 @@ from apipi.config import Settings
 from apipi.runtime import FAKE_USAGE, PUBLIC_EVENT_TYPES, EventHub, FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow
-from apipi.store.repo import create_artifact
 
 _TOOLS = [
     {
@@ -329,26 +328,24 @@ async def test_compat_skills(settings: Settings, store: Store, tmp_path: Path) -
         assert copied.is_file()
 
 
-async def test_compat_artifacts(client: AsyncClient, store: Store) -> None:
+async def test_compat_artifacts(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
     token = "compat-artifacts"
     agent_id = await _agent(client, token)
     created = await _session(client, token, agent_id=agent_id)
     session_id = created["id"]
     directory = Path(created["environment"]["directory"])
-    (directory / "note.txt").write_text("hello", encoding="utf-8")
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    from apipi.pi.artifacts import harvest_session
+
     async with store.session() as db:
-        row = await db.scalar(
-            select(SessionRow).where(SessionRow.id == uuid.UUID(session_id))
-        )
-        assert row is not None
-        artifact = await create_artifact(
-            db, row.tenant_id, row.id, path="note.txt", content_type="text/plain"
-        )
-        artifact_id = str(artifact.id)
+        await harvest_session(db, settings, uuid.UUID(session_id), None)
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
     )
-    assert listed.json()["data"][0]["id"] == artifact_id
+    artifact_id = listed.json()["data"][0]["id"]
     content = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
         headers=_auth(token),

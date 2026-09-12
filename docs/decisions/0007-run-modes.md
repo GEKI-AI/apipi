@@ -36,8 +36,8 @@ only. Nested jail or microvm inside a container is not the production
 path.
 
 The `openai_hosted` workspace is packed one-way into a microvm guest.
-Writes stay in the guest. Artifact bytes are still read from the live
-sandbox today.
+Writes stay in the guest except files under `artifacts/`, which are
+pulled to the host store when Pi stops. The workspace is scratch.
 
 ## Same server (default)
 

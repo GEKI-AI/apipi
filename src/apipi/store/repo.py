@@ -146,6 +146,12 @@ async def get_session(
     )
 
 
+async def get_session_by_id(
+    db: AsyncSession, session_id: uuid.UUID
+) -> SessionRow | None:
+    return await db.scalar(select(SessionRow).where(SessionRow.id == session_id))
+
+
 async def list_sessions(db: AsyncSession, tenant_id: uuid.UUID) -> list[SessionRow]:
     result = await db.scalars(
         select(SessionRow)

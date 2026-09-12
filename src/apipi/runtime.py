@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.errors import ApiError
 from apipi.metrics import Metrics, observe_turn
 from apipi.otel import Tracing, set_span, start_span
+from apipi.pi.artifacts import ensure_openai_workspace
 from apipi.skills import discover_skill_dirs
 from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
@@ -689,6 +690,7 @@ async def run_turn(
             row = await get_session(db, tenant_id, session_id)
             if row is None:
                 return
+            ensure_openai_workspace(row.environment)
             cwd_path, tools = _cwd_and_tools(row.environment)
             function_tools, model = await _agent_tools_and_model(
                 db, tenant_id, row.agent_id
@@ -915,6 +917,7 @@ async def continue_turn(
                 },
             )
             return
+        ensure_openai_workspace(row.environment)
         cwd_path, tools = _cwd_and_tools(row.environment)
         function_tools, model = await _agent_tools_and_model(
             db, tenant_id, row.agent_id
