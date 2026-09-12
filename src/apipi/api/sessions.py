@@ -562,6 +562,27 @@ async def get_session_events(
     )
 
 
+@router.get("/v1/agents/sessions/{session_id}/export")
+async def export_agent_session(
+    session_id: uuid.UUID,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
+    row = await get_session(db, tenant.id, session_id)
+    if row is None:
+        not_found()
+    events = await list_events(db, tenant.id, session_id)
+    turns = await list_turns(db, tenant.id, session_id)
+    items = await list_items(db, tenant.id, session_id)
+    if turns is None or items is None:
+        not_found()
+    return {
+        "events": [event_body(event) for event in events],
+        "turns": [turn_body(turn) for turn in turns],
+        "items": [item_body(item) for item in items],
+    }
+
+
 @router.get("/v1/agents/sessions/{session_id}/turns")
 async def list_session_turns(
     session_id: uuid.UUID,

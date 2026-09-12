@@ -113,6 +113,16 @@ connected. `410` if it is gone.
 `GET` turn may include `usage` (prompt, completion, cache read/write,
 total). Tokens only. See [usage](usage.md).
 
+## Export
+
+| Method | Path |
+| --- | --- |
+| `GET` | `/v1/agents/sessions/{session_id}/export` |
+
+JSON of the transcript from Postgres: public events, turns, and items.
+Same shapes as the list endpoints. Does not read Pi files. Wrong tenant
+is `404`.
+
 ## Usage
 
 | Method | Path |
@@ -157,6 +167,7 @@ See [environments](environments.md).
 | Skills (`capability_directories`, `SKILL.md`) | yes |
 | Artifacts | yes |
 | Usage tokens on turns | yes |
+| Session export | yes |
 | `/v1/chat/completions` | no |
 | `web_search` first-party | no (MCP; example: Tavily) |
 | Browser | no first-party (MCP; example: Playwright) |
