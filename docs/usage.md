@@ -28,8 +28,8 @@ returns it. Missing counts are `0`.
 
 Every turn, in every config, appends one Postgres row. Not optional.
 Config may add exports. It must not enable full prompt logging. A
-setting that would store prompt or completion bodies is rejected or
-ignored. Startup says which exports are on.
+setting that would store prompt or completion bodies is rejected.
+Startup says which exports are on.
 
 | Field | What |
 | --- | --- |

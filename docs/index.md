@@ -36,8 +36,11 @@ Not in this version: [roadmap](roadmap.md).
 | `APIPI_EXAMPLE_UI` | off | Example chat at `/_example/` |
 | `APIPI_AUTH` | default hash | Import path `package.mod:func` |
 | `APIPI_AUTH_CACHE_TTL` | `30s` | Cache callback result by key hash |
+| `APIPI_METRICS` | off | Prometheus at `/metrics` |
+| `APIPI_OTEL_ENDPOINT` | unset | OTLP export when set |
 
 `host` is not suited for production. The process logs a warning.
+Startup logs that the turn log is on and whether metrics and OTel are on.
 
 ## Stack
 
