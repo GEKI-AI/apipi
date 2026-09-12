@@ -19,6 +19,7 @@ from apipi.store.repo import (
     get_session_turn,
     update_session,
 )
+from apipi.usage import add_usage, empty_usage, usage_from
 
 PUBLIC_EVENT_TYPES = frozenset(
     {
@@ -107,6 +108,15 @@ class Harness(Protocol):
     async def abort(self, session_id: uuid.UUID) -> None: ...
 
 
+FAKE_USAGE = {
+    "prompt_tokens": 11,
+    "completion_tokens": 7,
+    "cache_read_tokens": 3,
+    "cache_write_tokens": 2,
+    "total_tokens": 23,
+}
+
+
 class FakeHarness:
     def __init__(self) -> None:
         self.function_calls: list[dict[str, Any]] = []
@@ -116,6 +126,7 @@ class FakeHarness:
         self.skill_dirs: list[str] | None = None
         self.tools: bool | None = None
         self.hold = False
+        self.usage: dict[str, int] = dict(FAKE_USAGE)
 
     def complete(self, text: str) -> str:
         return text if text else "ok"
@@ -159,6 +170,7 @@ class FakeHarness:
                 reply = error if isinstance(error, str) and error else "error"
             yield ("agent.session.turn.output_text.delta", {"delta": reply})
             yield ("agent.session.turn.output_text.done", {"text": reply})
+            yield ("usage", usage_from(self.usage))
             return
         if self.function_calls:
             call = self.function_calls.pop(0)
@@ -167,6 +179,7 @@ class FakeHarness:
         reply = self.complete(text)
         yield ("agent.session.turn.output_text.delta", {"delta": reply})
         yield ("agent.session.turn.output_text.done", {"text": reply})
+        yield ("usage", usage_from(self.usage))
 
 
 async def persist_event(
@@ -277,10 +290,14 @@ async def _consume_generate(
     session_id: uuid.UUID,
     turn_id: uuid.UUID,
     events: AsyncIterator[tuple[str, dict[str, Any]]],
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]], dict[str, int]]:
     reply = ""
     pending: list[dict[str, Any]] = []
+    usage = empty_usage()
     async for etype, data in events:
+        if etype == "usage":
+            usage = add_usage(usage, usage_from(data))
+            continue
         payload = dict(data)
         payload.setdefault("turn_id", str(turn_id))
         async with store.session() as db:
@@ -316,7 +333,7 @@ async def _consume_generate(
             await persist_event(
                 db, hub, tenant_id, session_id, type=etype, data=payload
             )
-    return reply, pending
+    return reply, pending, usage
 
 
 async def _complete_turn(
@@ -326,6 +343,7 @@ async def _complete_turn(
     session_id: uuid.UUID,
     turn_id: uuid.UUID,
     reply: str,
+    usage: dict[str, int],
 ) -> None:
     await _emit_item(
         db,
@@ -336,9 +354,11 @@ async def _complete_turn(
         type="message",
         data={"role": "assistant", "content": reply},
     )
+    stored = usage_from(usage)
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is not None:
         turn.status = "completed"
+        turn.usage = stored
         turn.updated_at = utc_now()
     await persist_event(
         db,
@@ -346,7 +366,7 @@ async def _complete_turn(
         tenant_id,
         session_id,
         type="agent.session.turn.completed",
-        data={"turn_id": str(turn_id)},
+        data={"turn_id": str(turn_id), "usage": stored},
     )
     row = await get_session(db, tenant_id, session_id)
     current = row.required_actions if row is not None else []
@@ -490,7 +510,7 @@ async def run_turn(
                 type="message",
                 data={"role": "user", "content": text},
             )
-        reply, pending = await _consume_generate(
+        reply, pending, usage = await _consume_generate(
             store,
             hub,
             tenant_id,
@@ -531,7 +551,7 @@ async def run_turn(
                     data={"turn_id": str(turn_id), "required_actions": actions},
                 )
                 return
-            await _complete_turn(db, hub, tenant_id, session_id, turn_id, reply)
+            await _complete_turn(db, hub, tenant_id, session_id, turn_id, reply, usage)
     finally:
         hub.unwatch_turn(session_id)
 
@@ -618,7 +638,7 @@ async def continue_turn(
             "output": output,
             "error": error,
         }
-    reply, pending = await _consume_generate(
+    reply, pending, usage = await _consume_generate(
         store,
         hub,
         tenant_id,
@@ -656,4 +676,4 @@ async def continue_turn(
                 data={"turn_id": str(turn_id), "required_actions": actions},
             )
             return
-        await _complete_turn(db, hub, tenant_id, session_id, turn_id, reply)
+        await _complete_turn(db, hub, tenant_id, session_id, turn_id, reply, usage)

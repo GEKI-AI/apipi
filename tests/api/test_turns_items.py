@@ -2,6 +2,11 @@ import uuid
 
 from httpx import AsyncClient
 
+from apipi.runtime import FAKE_USAGE
+from apipi.store.engine import Store
+from apipi.store.repo import get_session_turn
+from apipi.tokens import hash_token
+
 
 def _token(name: str = "t") -> str:
     return name
@@ -48,6 +53,7 @@ async def test_turns_and_items_after_a_turn(client: AsyncClient) -> None:
     )
     assert one.status_code == 200
     assert one.json()["id"] == turn_id
+    assert one.json()["usage"] == FAKE_USAGE
 
     items = await client.get(
         f"/v1/agents/sessions/{session_id}/items", headers=_auth(token)
@@ -60,6 +66,39 @@ async def test_turns_and_items_after_a_turn(client: AsyncClient) -> None:
     assert items.json()["data"][0]["data"]["content"] == "hello"
     assert items.json()["data"][1]["data"]["content"] == "hello"
     assert items.json()["data"][0]["turn_id"] == turn_id
+
+
+async def test_completed_turn_persists_usage(client: AsyncClient, store: Store) -> None:
+    token = _token()
+    session_id = await _session_with_turn(client, token)
+    events = await client.get(
+        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+    )
+    completed = [
+        event
+        for event in events.json()["data"]
+        if event["type"] == "agent.session.turn.completed"
+    ]
+    assert len(completed) == 1
+    usage = completed[0]["data"]["usage"]
+    assert usage == FAKE_USAGE
+    assert set(usage) == set(FAKE_USAGE)
+    assert "cost" not in usage
+    assert "prompt" not in usage
+    assert "hello" not in str(usage)
+    turn_id = completed[0]["data"]["turn_id"]
+    one = await client.get(
+        f"/v1/agents/sessions/{session_id}/turns/{turn_id}",
+        headers=_auth(token),
+    )
+    assert one.json()["usage"] == FAKE_USAGE
+    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    async with store.session() as db:
+        row = await get_session_turn(
+            db, tenant_id, uuid.UUID(session_id), uuid.UUID(turn_id)
+        )
+    assert row is not None
+    assert row.usage == FAKE_USAGE
 
 
 async def test_turns_items_unknown_session_is_404(client: AsyncClient) -> None:

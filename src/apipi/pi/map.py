@@ -1,5 +1,7 @@
 from typing import Any
 
+from apipi.usage import usage_from_messages
+
 
 def _tool_item_type(name: object) -> str:
     if isinstance(name, str) and name.lower().startswith("mcp"):
@@ -9,6 +11,11 @@ def _tool_item_type(name: object) -> str:
 
 def map_pi_event(event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     kind = event.get("type")
+    if kind == "agent_end":
+        usage = usage_from_messages(event.get("messages"))
+        if usage is None:
+            return []
+        return [("usage", usage)]
     if kind == "message_update":
         delta = event.get("assistantMessageEvent")
         if not isinstance(delta, dict):

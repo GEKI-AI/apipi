@@ -50,6 +50,7 @@ from apipi.store.repo import (
     update_session,
 )
 from apipi.tokens import hash_token
+from apipi.usage import usage_from
 
 router = APIRouter()
 
@@ -108,7 +109,7 @@ def turn_body(turn: Turn) -> dict[str, Any]:
         "id": str(turn.id),
         "session_id": str(turn.session_id),
         "status": turn.status,
-        "usage": turn.usage,
+        "usage": usage_from(turn.usage) if turn.usage is not None else None,
         "created_at": turn.created_at.isoformat(),
         "updated_at": turn.updated_at.isoformat(),
     }
