@@ -4,7 +4,8 @@ Specs describe the product as it is. Code follows. If they disagree, fix
 the spec or the code in the same change.
 
 Work that is not in this version lives in [roadmap.md](roadmap.md), not
-on the spec pages.
+on the spec pages. Do not implement the roadmap unless the spec has
+moved.
 
 | Kind | Where |
 | --- | --- |
@@ -23,29 +24,51 @@ Name, license, docs tools, git, and short files that point at
 `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`). They do
 not get decision files.
 
-When the constitution changes, update `AGENTS.md` in the same change.
+When the constitution changes, edit `CONSTITUTION.md` in place and
+update `AGENTS.md` in the same change. Do not append an amendment log.
+Opinion changes belong in the spec that is wrong, not in a new history
+file.
 
-Write docs, issues, and pull requests in simple technical English. See
-`CONTRIBUTING.md`.
+## Writing
+
+Use simple technical English and common words. Do not invent names for
+things that already have names. Do not invent features.
+
+Docs, specs, README, and the MkDocs site use complete sentences and
+enough explanation that a new reader can set up and use the API without
+guessing. Short choppy fragments are wrong for docs. Tables are still
+good for endpoints, env vars, and fields.
+
+Issues, pull request bodies, and commit messages stay short.
+
+Code comments stay omitted unless asked.
+
+See `CONTRIBUTING.md`.
 
 ## Change a decision
 
 Edit the decision file and the specs in the same change. Do not keep an
-old copy. Do not add a decision file for something that is just a fact
-of the repo.
+old copy. When a decision changes, edit the ADR. Law 9 in the
+constitution already says this.
 
-Small copy or event-name fixes do not need a decision file.
+Do not add a new ADR for copy, naming, or process nits. Add a new ADR
+only when architecture actually changes. Do not add a decision file for
+something that is just a fact of the repo.
 
 ## Docs site
 
-Separate from the apipi package. `requirements-docs.txt`, not
-`pyproject.toml`.
+The MkDocs site is separate from the apipi package. Dependencies live in
+`requirements-docs.txt`, not `pyproject.toml`. Markdown in git is the
+source. Do not add a custom docs app.
 
 ```
 uv run --no-project --with-requirements requirements-docs.txt mkdocs serve
 ```
 
-Markdown in git is the source. Do not add a custom docs app.
+The home page and the use pages (API, auth, environments, tools, usage,
+architecture) are for people who want to run the product. Contributing,
+the constitution, agent rules, the roadmap, and ADRs live under
+Contribute.
 
 ## Tests
 

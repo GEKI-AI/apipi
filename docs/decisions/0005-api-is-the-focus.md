@@ -2,6 +2,5 @@
 
 The product is `/v1`. Clients, SDKs, and other apps talk to that.
 
-The chat at `/_example/` is only an example. Off by default. On with
-`APIPI_EXAMPLE_UI=1`. Demo cookie on that path only. Real clients use
-bearer tokens and their own UI.
+ApiPi does not ship a first-party chat UI. Callers send a bearer token
+and bring their own client.
