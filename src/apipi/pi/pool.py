@@ -41,6 +41,12 @@ class PiPool:
             self._last[session_id] = time.monotonic()
             return proc
 
+    def peek(self, session_id: uuid.UUID) -> PiProc | None:
+        proc = self._procs.get(session_id)
+        if proc is None or not proc.alive:
+            return None
+        return proc
+
     def touch(self, session_id: uuid.UUID) -> None:
         self._last[session_id] = time.monotonic()
 

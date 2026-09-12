@@ -63,6 +63,9 @@ running one.
 Tool result: `agent.session.input.tool_result` with `turn_id`, `call_id`,
 `success`, `output` or `error`.
 
+Cancel: `agent.session.input.cancel` on a session in `in_progress`.
+Persists `agent.session.turn.cancelled` then `agent.session.idle`.
+
 `GET ?stream=true` is SSE. Stays open across `idle`. Reconnect and replay
 from the store.
 
