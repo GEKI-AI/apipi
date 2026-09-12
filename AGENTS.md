@@ -16,7 +16,9 @@ enough explanation that a new reader can set up and use the API without
 guessing. Short choppy fragments are wrong for docs. Tables are still
 good for endpoints, env vars, and fields.
 
-Issues, pull request bodies, and commit messages stay short.
+Issues can be as long as they need to be. Include known
+implementation details. Do not squeeze the goal. Pull request bodies
+and commit messages stay short.
 
 Code comments stay omitted unless asked.
 
@@ -83,13 +85,13 @@ How to plan, file issues, implement, and review lives in
 
 | Skill | When |
 | --- | --- |
-| `plan` | Split new work into issues |
+| `plan` | Plan work and file issues |
 | `create-issue` | File one GitHub issue |
 | `work-issue` | Do one change and open a PR |
 | `review` | Review a PR |
 
 An issue is common, not required. One checkout is one branch.
-Two changes at the same time must not edit the same files. Use another
+Parallel work is best effort when files do not overlap. Use another
 folder (`git worktree`) or another session.
 
 ## Git

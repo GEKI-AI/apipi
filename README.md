@@ -75,27 +75,28 @@ into a tenant id. The same key always maps to the same tenant.
 ```python
 from openai import OpenAI
 
-client = OpenAI(
+with OpenAI(
     base_url="http://localhost:8000/v1",
     api_key="dev-token",
-)
-
-agent = client.beta.agents.create(
-    name="demo",
-    model="gpt-4.1",
-    instructions="Be brief.",
-)
-session = client.beta.agents.sessions.create(
-    agent_id=agent.id,
-    input="Hello",
-)
-print(session.id)
+) as client:
+    with client.beta.agents.sessions.with_streaming_response.create(
+        agent={
+            "model": "gpt-4.1",
+            "instructions": "Write clean code, run it, and report the actual output.",
+        },
+        environment={"type": "openai_hosted"},
+        input="Create tree.py, run it, and show me the output.",
+        stream=True,
+    ) as response:
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                print(line.removeprefix("data: "), flush=True)
 ```
 
 Official clients work for the subset we implement. Unknown fields and
-missing features fail clearly. A runnable script that uses the official
-OpenAI Python SDK is [examples/openai_sdk.py](examples/openai_sdk.py).
-The full HTTP surface is in the docs.
+missing features fail clearly. A runnable script is
+[examples/openai_sdk.py](examples/openai_sdk.py). The same steps as
+OpenAI's Agents API quickstart are in the docs.
 
 ## Docs and contributing
 

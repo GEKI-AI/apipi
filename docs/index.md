@@ -11,7 +11,8 @@ bring any OpenAI-compatible model endpoint. The package and CLI are
 `apipi`. A hosted deploy lives at [geki.ai](https://geki.ai).
 
 This page is the product home: what the gateway is, how to install it,
-how to run it, and how to point a client at `/v1`. The pages after it
+how to run it, and how to point a client at `/v1`. The
+[quickstart](quickstart.md) is the client tutorial. The pages after it
 are the HTTP specs. Contributing, the constitution, and architecture
 decisions live under Contribute.
 
@@ -120,28 +121,30 @@ into a tenant id. The same key always maps to the same tenant. See
 ```python
 from openai import OpenAI
 
-client = OpenAI(
+with OpenAI(
     base_url="http://localhost:8000/v1",
     api_key="dev-token",
-)
-
-agent = client.beta.agents.create(
-    name="demo",
-    model="gpt-4.1",
-    instructions="Be brief.",
-)
-session = client.beta.agents.sessions.create(
-    agent_id=agent.id,
-    input="Hello",
-)
-print(session.id)
+) as client:
+    with client.beta.agents.sessions.with_streaming_response.create(
+        agent={
+            "model": "gpt-4.1",
+            "instructions": "Write clean code, run it, and report the actual output.",
+        },
+        environment={"type": "openai_hosted"},
+        input="Create tree.py, run it, and show me the output.",
+        stream=True,
+    ) as response:
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                print(line.removeprefix("data: "), flush=True)
 ```
 
 Official clients work for the subset we implement. Unknown fields and
 unimplemented features return an error (`invalid_request` or
 `not_implemented`). They are not stored and they are not ignored. A
-runnable script that uses the official OpenAI Python SDK is
-`examples/openai_sdk.py`. The HTTP surface is in [API](api.md).
+runnable script is `examples/openai_sdk.py`. The same steps as OpenAI's
+Agents API quickstart are in [Quickstart](quickstart.md). The HTTP
+surface is in [API](api.md).
 
 ## Config
 
@@ -170,12 +173,13 @@ startup.
 
 Use the API:
 
-1. [API](api.md)
-2. [Auth](auth.md)
-3. [Environments](environments.md)
-4. [Tools and skills](tools.md)
-5. [Usage](usage.md)
-6. [Architecture](architecture.md)
+1. [Quickstart](quickstart.md)
+2. [API](api.md)
+3. [Auth](auth.md)
+4. [Environments](environments.md)
+5. [Tools and skills](tools.md)
+6. [Usage](usage.md)
+7. [Architecture](architecture.md)
 
 If you are changing the code, start from [How we work](process.md) and
 [Contributing](contributing.md). Project rules are in the
