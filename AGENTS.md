@@ -45,8 +45,8 @@ OpenAI-compatible `base_url`. No Node in the gateway.
 - uv for all Python (`uv sync`, `uv run`, `uv lock`)
 - Before commit: format, lint, typecheck, tests (see `CONTRIBUTING.md`).
   Run the full suite locally. Do not commit until they pass.
-- GitHub CI is fast (lint, types, docs, `pytest -m "not slow"`). Do not
-  add the full suite or slow jobs there.
+- GitHub CI runs lint, types, docs, unit tests, and fast e2e
+  (`pytest -m "not slow"`). Slow/large validation stays local.
 
 ## Slices
 

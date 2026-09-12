@@ -7,7 +7,8 @@ Point it at any OpenAI-compatible model URL.
 
 ## Status
 
-Gateway: `apipi serve`. Run mode `host`. `jail` and `microvm` exit.
+Gateway: `apipi serve`. Run mode `host`. Sessions, FakeHarness, and
+host Pi (`pi --mode rpc`). `jail` and `microvm` exit.
 
 ## Read next
 

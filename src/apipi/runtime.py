@@ -1,6 +1,7 @@
 import asyncio
 import uuid
-from typing import Any
+from collections.abc import AsyncIterator
+from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -69,9 +70,35 @@ class EventHub:
             queue.put_nowait(event)
 
 
+class Harness(Protocol):
+    def generate(
+        self,
+        text: str,
+        *,
+        session_id: uuid.UUID | None = None,
+        cwd: str | None = None,
+        tools: bool = True,
+        **kwargs: object,
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]: ...
+
+
 class FakeHarness:
     def complete(self, text: str) -> str:
         return text if text else "ok"
+
+    async def generate(
+        self,
+        text: str,
+        *,
+        session_id: uuid.UUID | None = None,
+        cwd: str | None = None,
+        tools: bool = True,
+        **_kwargs: object,
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        del session_id, cwd, tools
+        reply = self.complete(text)
+        yield ("agent.session.turn.output_text.delta", {"delta": reply})
+        yield ("agent.session.turn.output_text.done", {"text": reply})
 
 
 async def persist_event(
@@ -93,7 +120,7 @@ async def persist_event(
 async def run_turn(
     db: AsyncSession,
     hub: EventHub,
-    harness: FakeHarness,
+    harness: Harness,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     text: str,
@@ -101,7 +128,10 @@ async def run_turn(
     row = await get_session(db, tenant_id, session_id)
     if row is None:
         return
-    reply = harness.complete(text)
+    environment = row.environment
+    tools = environment.get("type") != "none"
+    cwd = environment.get("directory")
+    cwd_path = cwd if isinstance(cwd, str) else None
     await update_session(db, tenant_id, session_id, changes={"status": "in_progress"})
     await persist_event(
         db, hub, tenant_id, session_id, type="agent.session.in_progress"
@@ -148,22 +178,17 @@ async def run_turn(
         type="agent.session.turn.item.done",
         data={"item_id": str(user_item.id)},
     )
-    await persist_event(
-        db,
-        hub,
-        tenant_id,
-        session_id,
-        type="agent.session.turn.output_text.delta",
-        data={"delta": reply, "turn_id": turn_id},
-    )
-    await persist_event(
-        db,
-        hub,
-        tenant_id,
-        session_id,
-        type="agent.session.turn.output_text.done",
-        data={"text": reply, "turn_id": turn_id},
-    )
+    reply = ""
+    async for etype, data in harness.generate(
+        text, session_id=session_id, cwd=cwd_path, tools=tools
+    ):
+        payload = dict(data)
+        payload.setdefault("turn_id", turn_id)
+        if etype == "agent.session.turn.output_text.done":
+            text_out = payload.get("text")
+            if isinstance(text_out, str):
+                reply = text_out
+        await persist_event(db, hub, tenant_id, session_id, type=etype, data=payload)
     assistant_item = await create_item(
         db,
         tenant_id,

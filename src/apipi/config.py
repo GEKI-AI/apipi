@@ -54,6 +54,22 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("APIPI_EXAMPLE_UI", "example_ui"),
     )
+    pi_command: str = Field(
+        default="pi",
+        validation_alias=AliasChoices("APIPI_PI_COMMAND", "pi_command"),
+    )
+    sessions_dir: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_SESSIONS_DIR", "sessions_dir"),
+    )
+    model_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_BASE_URL", "model_base_url"),
+    )
+    model_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_API_KEY", "model_api_key"),
+    )
 
     @model_validator(mode="after")
     def run_mode_known(self) -> Self:

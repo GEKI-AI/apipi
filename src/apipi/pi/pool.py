@@ -1,0 +1,59 @@
+import asyncio
+import time
+import uuid
+
+from apipi.config import Settings
+from apipi.pi.proc import PiProc, spawn_pi
+
+
+class PiPool:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self._procs: dict[uuid.UUID, PiProc] = {}
+        self._last: dict[uuid.UUID, float] = {}
+        self._lock = asyncio.Lock()
+
+    async def get(
+        self,
+        session_id: uuid.UUID,
+        *,
+        cwd: str | None,
+        tools: bool,
+    ) -> PiProc:
+        async with self._lock:
+            proc = self._procs.get(session_id)
+            if proc is None or not proc.alive:
+                proc = await spawn_pi(self.settings, cwd=cwd, tools=tools)
+                self._procs[session_id] = proc
+            self._last[session_id] = time.monotonic()
+            return proc
+
+    def touch(self, session_id: uuid.UUID) -> None:
+        self._last[session_id] = time.monotonic()
+
+    async def kill(self, session_id: uuid.UUID) -> None:
+        proc = self._procs.pop(session_id, None)
+        self._last.pop(session_id, None)
+        if proc is not None:
+            await proc.terminate()
+
+    def alive(self, session_id: uuid.UUID) -> bool:
+        proc = self._procs.get(session_id)
+        return proc is not None and proc.alive
+
+    async def reap(self) -> None:
+        ttl = self.settings.idle_ttl.total_seconds()
+        now = time.monotonic()
+        idle = [sid for sid, last in self._last.items() if now - last >= ttl]
+        for sid in idle:
+            await self.kill(sid)
+
+    async def reap_loop(self) -> None:
+        interval = min(1.0, max(0.02, self.settings.idle_ttl.total_seconds() / 5))
+        while True:
+            await asyncio.sleep(interval)
+            await self.reap()
+
+    async def close(self) -> None:
+        for sid in list(self._procs):
+            await self.kill(sid)

@@ -69,5 +69,6 @@ addopts = ["-q"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
-    "slow: long tests; run locally, not in GitHub CI",
+    "e2e: fast end-to-end tests; run in GitHub CI",
+    "slow: large local validation; not GitHub CI",
 ]
