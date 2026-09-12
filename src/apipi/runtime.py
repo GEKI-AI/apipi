@@ -1,11 +1,13 @@
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.errors import ApiError
+from apipi.skills import discover_skill_dirs
 from apipi.store.events import append_event
 from apipi.store.models import Event, utc_now
 from apipi.store.repo import (
@@ -96,6 +98,7 @@ class FakeHarness:
         self.function_tools: list[dict[str, Any]] | None = None
         self.mcp_http: list[Any] | None = None
         self.mcp_stdio: list[Any] | None = None
+        self.skill_dirs: list[str] | None = None
 
     def complete(self, text: str) -> str:
         return text if text else "ok"
@@ -111,6 +114,7 @@ class FakeHarness:
         tool_result: dict[str, Any] | None = None,
         mcp_http: list[Any] | None = None,
         mcp_stdio: list[Any] | None = None,
+        skill_dirs: list[str] | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         del session_id, cwd, tools
@@ -119,6 +123,7 @@ class FakeHarness:
         )
         self.mcp_http = list(mcp_http) if mcp_http is not None else None
         self.mcp_stdio = list(mcp_stdio) if mcp_stdio is not None else None
+        self.skill_dirs = list(skill_dirs) if skill_dirs is not None else None
         if tool_result is not None:
             if tool_result.get("success"):
                 output = tool_result.get("output")
@@ -169,6 +174,16 @@ def _cwd_and_tools(environment: dict[str, Any]) -> tuple[str | None, bool]:
     cwd_path = cwd if isinstance(cwd, str) else None
     tools = environment.get("type") != "none"
     return cwd_path, tools
+
+
+def _skill_dirs(environment: dict[str, Any]) -> list[str]:
+    cwd_path, _tools = _cwd_and_tools(environment)
+    workspace = Path(cwd_path) if cwd_path is not None else None
+    raw = environment.get("capability_directories")
+    directories = None
+    if isinstance(raw, list):
+        directories = [item for item in raw if isinstance(item, str)]
+    return discover_skill_dirs(workspace, directories)
 
 
 async def _agent_function_tools(
@@ -337,6 +352,7 @@ async def run_turn(
         return
     cwd_path, tools = _cwd_and_tools(row.environment)
     function_tools = await _agent_function_tools(db, tenant_id, row.agent_id)
+    skill_dirs = _skill_dirs(row.environment)
     await update_session(
         db,
         tenant_id,
@@ -387,6 +403,7 @@ async def run_turn(
             function_tools=function_tools,
             mcp_http=mcp_http,
             mcp_stdio=mcp_stdio,
+            skill_dirs=skill_dirs,
         ),
     )
     if pending:
@@ -466,6 +483,7 @@ async def continue_turn(
         return
     cwd_path, tools = _cwd_and_tools(row.environment)
     function_tools = await _agent_function_tools(db, tenant_id, row.agent_id)
+    skill_dirs = _skill_dirs(row.environment)
     result = {
         "call_id": call_id,
         "success": success,
@@ -487,6 +505,7 @@ async def continue_turn(
             tool_result=result,
             mcp_http=mcp_http,
             mcp_stdio=mcp_stdio,
+            skill_dirs=skill_dirs,
         ),
     )
     if pending:
