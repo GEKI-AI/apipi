@@ -5,7 +5,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.store.errors import NotFoundError
-from apipi.store.models import Agent, ApiKey, Event, Item, SessionRow, Tenant, Turn
+from apipi.store.models import (
+    Agent,
+    ApiKey,
+    Event,
+    Item,
+    SessionRow,
+    Tenant,
+    Turn,
+    utc_now,
+)
 
 
 async def create_tenant(db: AsyncSession, *, name: str) -> Tenant:
@@ -68,6 +77,42 @@ async def list_agents(db: AsyncSession, tenant_id: uuid.UUID) -> list[Agent]:
         select(Agent).where(Agent.tenant_id == tenant_id).order_by(Agent.created_at)
     )
     return list(result)
+
+
+async def update_agent(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    *,
+    changes: dict[str, Any],
+) -> Agent | None:
+    agent = await get_agent(db, tenant_id, agent_id)
+    if agent is None:
+        return None
+    if "name" in changes:
+        agent.name = changes["name"]
+    if "model" in changes:
+        agent.model = changes["model"]
+    if "instructions" in changes:
+        agent.instructions = changes["instructions"]
+    if "metadata" in changes:
+        agent.metadata_json = changes["metadata"]
+    if "tools" in changes:
+        agent.tools = changes["tools"]
+    agent.updated_at = utc_now()
+    await db.flush()
+    return agent
+
+
+async def delete_agent(
+    db: AsyncSession, tenant_id: uuid.UUID, agent_id: uuid.UUID
+) -> bool:
+    agent = await get_agent(db, tenant_id, agent_id)
+    if agent is None:
+        return False
+    await db.delete(agent)
+    await db.flush()
+    return True
 
 
 async def create_session(
