@@ -119,8 +119,9 @@ total). Tokens only. See [usage](usage.md).
 | --- | --- |
 | `GET` | `/v1/usage` |
 
-Tenant-scoped totals from the turn log. Filter by `session_id`,
-`turn_id`, or `day`. Not USD. See [usage](usage.md).
+Tenant-scoped totals from the turn log. Filter by exactly one of
+`session_id`, `turn_id`, or `day`. Tokens and turn counts, not USD.
+See [usage](usage.md).
 
 ## Request ids
 

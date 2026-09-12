@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -529,3 +530,39 @@ async def list_turn_logs(
         .order_by(TurnLog.created_at)
     )
     return list(result)
+
+
+async def usage_totals(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    session_id: uuid.UUID | None = None,
+    turn_id: uuid.UUID | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> dict[str, int]:
+    stmt = select(
+        func.coalesce(func.sum(TurnLog.prompt_tokens), 0),
+        func.coalesce(func.sum(TurnLog.completion_tokens), 0),
+        func.coalesce(func.sum(TurnLog.cache_read_tokens), 0),
+        func.coalesce(func.sum(TurnLog.cache_write_tokens), 0),
+        func.coalesce(func.sum(TurnLog.total_tokens), 0),
+        func.count(TurnLog.id),
+    ).where(TurnLog.tenant_id == tenant_id)
+    if session_id is not None:
+        stmt = stmt.where(TurnLog.session_id == session_id)
+    if turn_id is not None:
+        stmt = stmt.where(TurnLog.turn_id == turn_id)
+    if since is not None:
+        stmt = stmt.where(TurnLog.created_at >= since)
+    if until is not None:
+        stmt = stmt.where(TurnLog.created_at < until)
+    row = (await db.execute(stmt)).one()
+    return {
+        "prompt_tokens": int(row[0]),
+        "completion_tokens": int(row[1]),
+        "cache_read_tokens": int(row[2]),
+        "cache_write_tokens": int(row[3]),
+        "total_tokens": int(row[4]),
+        "turns": int(row[5]),
+    }
