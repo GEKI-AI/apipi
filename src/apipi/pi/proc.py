@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from apipi.config import ConfigError, Settings
@@ -11,8 +11,18 @@ from apipi.pi.version import PINNED_PI
 
 
 class PiProc:
-    def __init__(self, process: asyncio.subprocess.Process) -> None:
+    def __init__(
+        self,
+        process: asyncio.subprocess.Process,
+        *,
+        stdin: asyncio.StreamWriter | None = None,
+        stdout: asyncio.StreamReader | None = None,
+        on_stop: Callable[[], None] | None = None,
+    ) -> None:
         self.process = process
+        self._stdin = process.stdin if stdin is None else stdin
+        self._stdout = process.stdout if stdout is None else stdout
+        self._on_stop = on_stop
         self._buf = ""
 
     @property
@@ -20,10 +30,10 @@ class PiProc:
         return self.process.returncode is None
 
     async def send(self, payload: dict[str, Any]) -> None:
-        if self.process.stdin is None:
+        if self._stdin is None:
             raise RuntimeError("pi stdin closed")
-        self.process.stdin.write((json.dumps(payload) + "\n").encode())
-        await self.process.stdin.drain()
+        self._stdin.write((json.dumps(payload) + "\n").encode())
+        await self._stdin.drain()
 
     async def prompt(self, message: str) -> AsyncIterator[dict[str, Any]]:
         await self.send({"type": "prompt", "message": message})
@@ -38,10 +48,10 @@ class PiProc:
         await self.send({"type": "abort"})
 
     async def _events(self) -> AsyncIterator[dict[str, Any]]:
-        if self.process.stdout is None:
+        if self._stdout is None:
             return
         while self.alive:
-            line = await self.process.stdout.readline()
+            line = await self._stdout.readline()
             if not line:
                 return
             raw = line.decode().rstrip("\r\n")
@@ -58,14 +68,19 @@ class PiProc:
             yield event
 
     async def terminate(self) -> None:
-        if not self.alive:
-            return
-        self.process.terminate()
         try:
-            await asyncio.wait_for(self.process.wait(), timeout=2)
-        except TimeoutError:
-            self.process.kill()
-            await self.process.wait()
+            if not self.alive:
+                return
+            self.process.terminate()
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=2)
+            except TimeoutError:
+                self.process.kill()
+                await self.process.wait()
+        finally:
+            if self._on_stop is not None:
+                self._on_stop()
+                self._on_stop = None
 
 
 def pi_env(
@@ -131,6 +146,17 @@ async def spawn_pi(
         from apipi.pi.jail import spawn_jailed_pi
 
         return await spawn_jailed_pi(
+            settings,
+            cwd=cwd,
+            tools=tools,
+            mcp_http=mcp_http,
+            mcp_stdio=mcp_stdio,
+            skill_dirs=skill_dirs,
+        )
+    if settings.run_mode == "microvm":
+        from apipi.pi.microvm import spawn_microvm_pi
+
+        return await spawn_microvm_pi(
             settings,
             cwd=cwd,
             tools=tools,

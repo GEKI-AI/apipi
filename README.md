@@ -53,7 +53,9 @@ apipi serve
 ```
 
 If those tools are missing, the process exits. Operators without jail
-tools must set `host`. `microvm` is not available:
+tools must set `host`. `microvm` starts Pi in a Firecracker guest when
+`/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, and
+`iptables` are present. Otherwise that mode exits too:
 
 ```
 APIPI_RUN_MODE=host apipi serve

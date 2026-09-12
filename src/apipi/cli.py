@@ -27,7 +27,7 @@ log = logging.getLogger("apipi")
 def prepare_serve(settings: Settings | None = None) -> Settings:
     resolved = settings if settings is not None else load_settings()
     postgres_url(resolved.database_url)
-    require_run_mode(resolved.run_mode)
+    require_run_mode(resolved.run_mode, resolved)
     reject_prompt_body_logging()
     if resolved.run_mode == "host":
         log.warning(HOST_MODE_WARNING)

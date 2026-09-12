@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -87,9 +88,54 @@ def test_prepare_serve_rejects_sqlite() -> None:
         prepare_serve(settings)
 
 
-def test_microvm_run_mode_exits() -> None:
-    with pytest.raises(ConfigError, match="not available"):
+def test_microvm_run_mode_exits_without_kvm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: False)
+    with pytest.raises(ConfigError, match="/dev/kvm"):
         require_run_mode("microvm")
+
+
+def test_serve_microvm_does_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: False)
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("must not start")
+
+    monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
+    assert main(["serve"]) == 1
+
+
+def test_serve_microvm_starts_when_tools_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    kernel = tmp_path / "vmlinux"
+    rootfs = tmp_path / "rootfs.ext4"
+    kernel.write_bytes(b"k")
+    rootfs.write_bytes(b"r")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
+    monkeypatch.setenv("APIPI_MICROVM_KERNEL", str(kernel))
+    monkeypatch.setenv("APIPI_MICROVM_ROOTFS", str(rootfs))
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr(
+        "apipi.pi.microvm.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+    caplog.set_level(logging.WARNING)
+    called: dict[str, object] = {}
+
+    def fake_run(app: object, *, host: str, port: int) -> None:
+        called["host"] = host
+        called["port"] = port
+        called["app"] = app
+
+    monkeypatch.setattr("apipi.cli.uvicorn.run", fake_run)
+    assert main(["serve"]) == 0
+    assert called["host"] == "0.0.0.0"
+    assert called["port"] == 8000
+    assert HOST_MODE_WARNING not in caplog.text
 
 
 def test_serve_jail_does_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
