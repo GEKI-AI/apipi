@@ -26,6 +26,7 @@ from apipi.runtime import (
     run_turn,
 )
 from apipi.schemas import StrictModel
+from apipi.skills import copy_capability_directories
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import Item, SessionRow, Tenant, Turn
@@ -221,6 +222,11 @@ async def create_agent_session(
         )
         if environment.get("type") == "openai_hosted":
             directory = session_workspace(request.app.state.settings, tenant.id, row.id)
+            caps = environment.get("capability_directories")
+            if isinstance(caps, list):
+                copy_capability_directories(
+                    directory, [item for item in caps if isinstance(item, str)]
+                )
             environment = {**environment, "directory": str(directory)}
             row.environment = environment
             await db.flush()

@@ -24,6 +24,7 @@ class PiPool:
         tools: bool,
         mcp_http: list[McpHttpServer] | None = None,
         mcp_stdio: list[McpStdioServer] | None = None,
+        skill_dirs: list[str] | None = None,
     ) -> PiProc:
         async with self._lock:
             proc = self._procs.get(session_id)
@@ -34,6 +35,7 @@ class PiPool:
                     tools=tools,
                     mcp_http=mcp_http,
                     mcp_stdio=mcp_stdio,
+                    skill_dirs=skill_dirs,
                 )
                 self._procs[session_id] = proc
             self._last[session_id] = time.monotonic()

@@ -101,11 +101,16 @@ async def spawn_pi(
     tools: bool,
     mcp_http: list[McpHttpServer] | None = None,
     mcp_stdio: list[McpStdioServer] | None = None,
+    skill_dirs: list[str] | None = None,
 ) -> PiProc:
     command = settings.pi_command.split()
     args = [*command, "--mode", "rpc", "--no-session"]
     if not tools:
         args.append("--no-builtin-tools" if mcp_http or mcp_stdio else "--no-tools")
+    if skill_dirs is not None:
+        args.append("--no-skills")
+        for path in skill_dirs:
+            args.extend(["--skill", path])
     process = await asyncio.create_subprocess_exec(
         *args,
         stdin=asyncio.subprocess.PIPE,
