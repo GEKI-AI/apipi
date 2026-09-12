@@ -185,9 +185,11 @@ It is not equivalent to systemd on the host.
 
 ## Tests
 
-GitHub CI runs `host` e2e and mocked jail and microvm unit tests
-(`pytest -m "not slow"`). A live jail spawn is not in CI yet. Live
-microvm boots are local machines with KVM only. Do not add Firecracker
-to GitHub.
+GitHub CI installs `bubblewrap` and `passt` and tries cgroup v2
+delegation, then runs `pytest -m "not slow"`. That includes `host` e2e
+and live jail tests when `bwrap`, `pasta`, and cgroup v2 can start.
+If jail still cannot start, those tests skip. That skip is not a
+fallback to `host`. Live microvm boots are local machines with KVM
+only. Do not add Firecracker to GitHub.
 
 Settings for run mode are in [configuration](config.md).

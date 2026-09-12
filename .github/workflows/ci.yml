@@ -42,8 +42,15 @@ jobs:
           enable-cache: true
       - name: Sync
         run: uv sync --locked
-      - name: Unit and fast e2e
-        run: uv run pytest -m "not slow"
+      - name: Jail tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap passt
+          sudo mkdir -p /sys/fs/cgroup/apipi-ci
+          echo '+memory +pids' | sudo tee /sys/fs/cgroup/apipi-ci/cgroup.subtree_control || true
+          sudo chown -R "$(id -u):$(id -g)" /sys/fs/cgroup/apipi-ci || true
+          echo "$$" | sudo tee /sys/fs/cgroup/apipi-ci/cgroup.procs || true
+          uv run pytest -m "not slow"
 
   docs:
     name: Docs

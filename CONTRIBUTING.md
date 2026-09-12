@@ -125,7 +125,10 @@ Gateway tests mock Pi RPC. Local pytest uses SQLite.
 
 GitHub CI runs everything that finishes in a couple of seconds:
 format, lint, types, docs, unit tests, and fast e2e
-(`pytest -m "not slow"`).
+(`pytest -m "not slow"`). The test job installs `bubblewrap` and
+`passt` and tries cgroup v2 delegation so live jail tests can run.
+If jail still cannot start, those tests skip. That skip is not a
+fallback to `host`. No Firecracker on GitHub.
 
 The full suite is local: `./scripts/check` including
 `@pytest.mark.slow`. Optional Postgres: `APIPI_TEST_DATABASE_URL`.
