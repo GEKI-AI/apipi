@@ -50,9 +50,11 @@ Branch `issue-<n>-<slug>` from that `main`. Never commit on `main`.
 
 ### 2. Specs
 
-Before code, read the issue body and its spec paths. If it is not in a
-spec, update the spec in this change or stop. Acceptance checks in the
-issue are the scope. Anything not in the goal is out of scope.
+Before code, read `CONSTITUTION.md`, `docs/index.md`,
+`docs/decisions/`, the issue body, and the spec paths on the issue.
+If it is not in a spec, update the spec in this change or stop.
+Acceptance checks in the issue are the scope. Anything not in the
+goal is out of scope.
 
 ### 3. Implement
 
@@ -127,7 +129,7 @@ merged branch.
 ## Do not
 
 - One PR for several issues
-- Parallel branches that both edit `runtime.py` or `api/sessions.py`
+- Parallel work on overlapping files
 - Merge commits onto `main`
 - Roadmap items that are not in a spec
 - Tenant keys, secrets, or tokens in the PR
