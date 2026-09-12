@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 
 from apipi.cli import main
-from apipi.config import ConfigError, Settings, postgres_url
+from apipi.config import ConfigError, Settings, load_settings, postgres_url
 
 
 def test_postgres_url_accepts_postgresql() -> None:
@@ -54,3 +54,47 @@ def test_auth_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APIPI_AUTH_CACHE_TTL", "45s")
     assert Settings().auth == "pkg.mod:func"
     assert Settings().auth_cache_ttl == timedelta(seconds=45)
+
+
+def test_default_exports_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.delenv("APIPI_METRICS", raising=False)
+    monkeypatch.delenv("APIPI_OTEL_ENDPOINT", raising=False)
+    settings = Settings()
+    assert settings.metrics is False
+    assert settings.otel_endpoint is None
+    assert "turn_log" not in type(settings).model_fields
+    assert "log_prompts" not in type(settings).model_fields
+
+
+def test_metrics_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_METRICS", "on")
+    assert Settings().metrics is True
+    monkeypatch.setenv("APIPI_METRICS", "off")
+    assert Settings().metrics is False
+
+
+def test_otel_endpoint_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_OTEL_ENDPOINT", "http://otel:4318")
+    assert Settings().otel_endpoint == "http://otel:4318"
+    monkeypatch.setenv("APIPI_OTEL_ENDPOINT", "")
+    assert Settings().otel_endpoint is None
+
+
+def test_prompt_body_logging_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_LOG_PROMPTS", "1")
+    with pytest.raises(ConfigError, match="prompt or completion bodies"):
+        load_settings()
+
+
+def test_prompt_body_logging_off_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_LOG_PROMPTS", "off")
+    settings = load_settings()
+    assert settings.metrics is False
+    assert settings.otel_endpoint is None

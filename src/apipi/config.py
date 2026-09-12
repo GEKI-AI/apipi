@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 from typing import Annotated, Literal, Self
 
@@ -14,6 +15,25 @@ RunMode = Literal["host", "jail", "microvm"]
 IMPLEMENTED_RUN_MODES: frozenset[str] = frozenset({"host"})
 
 HOST_MODE_WARNING = "APIPI_RUN_MODE=host is not suited for production"
+TURN_LOG_ON = "turn log on"
+METRICS_ON = "APIPI_METRICS on"
+METRICS_OFF = "APIPI_METRICS off"
+OTEL_SET = "APIPI_OTEL_ENDPOINT set"
+OTEL_UNSET = "APIPI_OTEL_ENDPOINT unset"
+
+_PROMPT_BODY_ENV = frozenset(
+    {
+        "APIPI_LOG_PROMPTS",
+        "APIPI_LOG_PROMPT",
+        "APIPI_LOG_COMPLETIONS",
+        "APIPI_LOG_COMPLETION",
+        "APIPI_LOG_BODIES",
+        "APIPI_STORE_PROMPTS",
+        "APIPI_STORE_COMPLETIONS",
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+    }
+)
+_FLAG_OFF = frozenset({"", "0", "false", "off", "no", "n"})
 
 
 class ConfigError(Exception):
@@ -35,7 +55,14 @@ def parse_ttl(value: object) -> object:
     raise ValueError("TTL must be like 15m")
 
 
+def parse_optional_endpoint(value: object) -> object:
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
 IdleTtl = Annotated[timedelta, BeforeValidator(parse_ttl)]
+OtelEndpoint = Annotated[str | None, BeforeValidator(parse_optional_endpoint)]
 
 
 class Settings(BaseSettings):
@@ -70,6 +97,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("APIPI_SESSIONS_DIR", "sessions_dir"),
     )
+    metrics: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("APIPI_METRICS", "metrics"),
+    )
+    otel_endpoint: OtelEndpoint = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_OTEL_ENDPOINT", "otel_endpoint"),
+    )
     model_base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("OPENAI_BASE_URL", "model_base_url"),
@@ -86,11 +121,23 @@ class Settings(BaseSettings):
         return self
 
 
+def _flag_on(value: str) -> bool:
+    return value.strip().lower() not in _FLAG_OFF
+
+
+def reject_prompt_body_logging() -> None:
+    for name, value in os.environ.items():
+        if name.upper() in _PROMPT_BODY_ENV and _flag_on(value):
+            raise ConfigError(f"{name} would store prompt or completion bodies")
+
+
 def load_settings() -> Settings:
     try:
-        return Settings()
+        settings = Settings()
     except ValidationError as exc:
         raise ConfigError(_settings_message(exc)) from exc
+    reject_prompt_body_logging()
+    return settings
 
 
 def _settings_message(exc: ValidationError) -> str:
@@ -104,6 +151,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_IDLE_TTL must be like 15m"
         if "auth_cache_ttl" in loc:
             return "APIPI_AUTH_CACHE_TTL must be like 15m"
+        if "metrics" in loc:
+            return "APIPI_METRICS must be on or off"
     return "invalid configuration"
 
 

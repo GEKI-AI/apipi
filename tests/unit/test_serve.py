@@ -3,7 +3,17 @@ import logging
 import pytest
 
 from apipi.cli import main, prepare_serve
-from apipi.config import HOST_MODE_WARNING, ConfigError, Settings, require_run_mode
+from apipi.config import (
+    HOST_MODE_WARNING,
+    METRICS_OFF,
+    METRICS_ON,
+    OTEL_SET,
+    OTEL_UNSET,
+    TURN_LOG_ON,
+    ConfigError,
+    Settings,
+    require_run_mode,
+)
 
 
 def _host_settings() -> Settings:
@@ -17,6 +27,55 @@ def test_prepare_serve_warns_on_host(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.WARNING, logger="apipi")
     prepare_serve(_host_settings())
     assert HOST_MODE_WARNING in caplog.text
+
+
+def test_prepare_serve_logs_default_observability(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi")
+    prepare_serve(_host_settings())
+    messages = [record.getMessage() for record in caplog.records]
+    assert TURN_LOG_ON in messages
+    assert METRICS_OFF in messages
+    assert OTEL_UNSET in messages
+    assert METRICS_ON not in messages
+    assert OTEL_SET not in messages
+
+
+def test_prepare_serve_logs_enabled_exports(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi")
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="host",
+        metrics=True,
+        otel_endpoint="http://otel:4318",
+    )
+    prepare_serve(settings)
+    messages = [record.getMessage() for record in caplog.records]
+    assert TURN_LOG_ON in messages
+    assert METRICS_ON in messages
+    assert OTEL_SET in messages
+    assert METRICS_OFF not in messages
+    assert OTEL_UNSET not in messages
+
+
+def test_prepare_serve_turn_log_stays_on(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("APIPI_TURN_LOG", "off")
+    caplog.set_level(logging.INFO, logger="apipi")
+    prepare_serve(_host_settings())
+    assert TURN_LOG_ON in caplog.text
+
+
+def test_prepare_serve_rejects_prompt_body_logging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APIPI_LOG_PROMPTS", "1")
+    with pytest.raises(ConfigError, match="prompt or completion bodies"):
+        prepare_serve(_host_settings())
 
 
 def test_prepare_serve_rejects_sqlite() -> None:
