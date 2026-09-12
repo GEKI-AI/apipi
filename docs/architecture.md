@@ -95,7 +95,9 @@ See [environments](environments.md).
 ## Store
 
 Postgres holds tenants, agents, sessions, turns, items, the event
-log, environment state, usage, artifact metadata. Not API keys.
+log, the turn log (usage tokens and details, never prompt text),
+environment state, artifact metadata. Not API keys. Prometheus and
+OpenTelemetry are exports. See [usage](usage.md).
 
 Pi JSONL is a cache. Do not read it to serve the API.
 

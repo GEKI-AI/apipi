@@ -15,9 +15,10 @@ host Pi (`pi --mode rpc`). `jail` and `microvm` exit.
 1. [Architecture](architecture.md)
 2. [API](api.md)
 3. [Auth](auth.md)
-4. [Environments](environments.md)
-5. [Tools](tools.md)
-6. [Decisions](decisions/index.md)
+4. [Usage](usage.md)
+5. [Environments](environments.md)
+6. [Tools](tools.md)
+7. [Decisions](decisions/index.md)
 
 If you are writing code, also read [process](process.md) and
 [agents](agents.md).
