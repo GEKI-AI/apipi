@@ -7,7 +7,7 @@ Point it at any OpenAI-compatible model URL.
 
 ## Status
 
-Specs only. No gateway code yet.
+Gateway: `apipi serve`. Run mode `host`. `jail` and `microvm` exit.
 
 ## Read next
 
