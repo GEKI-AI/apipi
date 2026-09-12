@@ -8,9 +8,17 @@ When the constitution changes, update this file in the same change.
 
 ## Writing
 
-Use simple technical English. Short sentences. Common words.
-Do not invent names for things that already have names.
-Docs, issues, and pull requests follow this.
+Use simple technical English and common words. Do not invent names for
+things that already have names. Do not invent features.
+
+Docs, specs, README, and the MkDocs site use complete sentences and
+enough explanation that a new reader can set up and use the API without
+guessing. Short choppy fragments are wrong for docs. Tables are still
+good for endpoints, env vars, and fields.
+
+Issues, pull request bodies, and commit messages stay short.
+
+Code comments stay omitted unless asked.
 
 ## Map
 
@@ -33,7 +41,7 @@ Read `docs/decisions/` only if the architecture changes.
 
 Python 3.13, FastAPI, Postgres. uv only. Pi via RPC, one process per
 session. Run mode `APIPI_RUN_MODE` (`host` \| `jail` \| `microvm`),
-default `jail`. Example UI off unless `APIPI_EXAMPLE_UI=1`.
+default `jail`. Only `host` is implemented; `jail` and `microvm` exit.
 OpenAI-compatible `base_url`. No Node in the gateway.
 
 ## Do not
@@ -54,6 +62,7 @@ OpenAI-compatible `base_url`. No Node in the gateway.
 
 ## Do
 
+- Change `CONSTITUTION.md` rarely. Edit in place. No amendment log.
 - Tenant-scope every query. Auth is a callback; do not store keys.
 - Persist the public event before SSE
 - Fail unknown OpenAI fields clearly

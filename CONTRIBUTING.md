@@ -4,17 +4,24 @@ The usual path is a GitHub issue, then one change on a short-lived
 branch. A pull request without an issue is fine when the work was asked
 directly and is already small.
 
-Read [CONSTITUTION.md](CONSTITUTION.md), [docs/process.md](docs/process.md),
-and [AGENTS.md](AGENTS.md). If it is not in a spec, it is not in this
-version.
+Read `CONSTITUTION.md`, `docs/process.md`, and `AGENTS.md`. If it is
+not in a spec, it is not in this version.
 
-Agent steps: [`.agents/skills/`](.agents/skills/).
+Agent steps: `.agents/skills/`.
 
 ## Writing
 
-Use simple technical English. Short sentences. Common words.
-Do not invent names for things that already have names.
-Docs, issues, and pull requests follow this.
+Use simple technical English and common words. Do not invent names for
+things that already have names. Do not invent features.
+
+Docs, specs, README, and the MkDocs site use complete sentences and
+enough explanation that a new reader can set up and use the API without
+guessing. Short choppy fragments are wrong for docs. Tables are still
+good for endpoints, env vars, and fields.
+
+Issues, pull request bodies, and commit messages stay short.
+
+Code comments stay omitted unless asked.
 
 ## Issues
 
@@ -34,8 +41,8 @@ agents can work at the same time.
 
 Do not list what this is not. Anything not in the goal is out of scope.
 
-Do not file work that lives on [docs/roadmap.md](docs/roadmap.md)
-unless the spec has moved.
+Do not file work that lives on `docs/roadmap.md` unless the spec has
+moved.
 
 Keep each change small. One goal, few files. If two changes would edit
 the same file, land shared code first.

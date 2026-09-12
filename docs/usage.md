@@ -4,7 +4,8 @@ Tokens now. Dollar cost later. Postgres is the source of truth.
 Prometheus and OpenTelemetry are exports. See
 [0008](decisions/0008-usage-observability.md).
 
-Never store prompt or completion text in logs, metrics, or spans.
+Never store prompt or completion text in logs, metrics, or spans. A
+setting that would store those bodies is rejected at startup.
 
 ## Tokens
 
@@ -26,10 +27,10 @@ returns it. Missing counts are `0`.
 
 ## Turn log
 
-Every turn, in every config, appends one Postgres row. Not optional.
-Config may add exports. It must not enable full prompt logging. A
-setting that would store prompt or completion bodies is rejected.
-Startup says which exports are on.
+Every turn, in every config, appends one Postgres row. That write is
+not optional. Config may add Prometheus or OTLP exports. It must not
+enable full prompt logging. Startup logs that the turn log is on, and
+whether metrics and OTel are on.
 
 | Field | What |
 | --- | --- |
@@ -58,9 +59,9 @@ Reads are tenant-scoped. The row must not contain message text.
 
 Every public request except `/health` has an id.
 
-- Echo `x-request-id`. Generate if missing.
-- Honor `X-Client-Request-Id` when present (ASCII, ≤512). That value
-  becomes the request id.
+- Echo `x-request-id`. Generate a UUID if that header is missing.
+- Honor `X-Client-Request-Id` when present (ASCII, at most 512
+  characters). That value becomes the request id.
 - The turn log stores the id.
 
 ## Query
@@ -102,7 +103,7 @@ No USD. No message text.
 Prometheus text format. `/health` and `/metrics` are not counted.
 
 | Series | Type | Labels |
-| --- | --- | --- |
+| --- | --- |
 | `apipi_requests_total` | counter | `tenant`, `method`, `path`, `status` |
 | `apipi_turns_total` | counter | `tenant`, `status` |
 | `apipi_tokens_total` | counter | `tenant`, `kind` |
@@ -118,9 +119,9 @@ text.
 ## OpenTelemetry
 
 Export OTLP/HTTP traces when `APIPI_OTEL_ENDPOINT` is set. `/v1/traces`
-is appended when missing. Spans for session, turn, and the upstream
-model call. Attributes: request id, session, turn, model, status, token
-counts, tool names. Not message text.
+is appended when missing. Spans exist for session, turn, and the
+upstream model call. Attributes: request id, session, turn, model,
+status, token counts, tool names. Not message text.
 
 ## Config
 
@@ -136,7 +137,7 @@ completion bodies.
 
 `/v1/chat/completions` is not a product surface. We do not serve it.
 
-Compatibility tests are HTTP fixtures against [api.md](api.md). Each yes
-row has a named test. Fast tests do not require the OpenAI SDK. A slow
-SDK smoke against the official OpenAI Python client is local-only and
-skips if the SDK is not installed.
+Compatibility tests are HTTP fixtures against [api.md](api.md). Each
+yes row has a named test. Fast tests do not require the OpenAI SDK. A
+slow SDK smoke against the official OpenAI Python client is local-only
+and skips if the SDK is not installed.

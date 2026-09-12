@@ -1,7 +1,9 @@
 # Decisions
 
-Current choices only. If a choice changes, edit the file. Do not keep
-old versions.
+These files are the current architecture choices. If a choice changes,
+edit the file. Do not keep old versions. Do not add a new ADR for copy,
+naming, or process nits. Add a new ADR only when architecture actually
+changes.
 
 Name, license, docs tools, git, and tooling are not decision files.
 They live in `README.md`, `LICENSE`, `mkdocs.yml`,

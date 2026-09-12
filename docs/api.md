@@ -1,21 +1,27 @@
 # API
 
-Drop-in OpenAI Agents API. Prefix `/v1`. Official clients work for the
-subset we implement. Beta header `OpenAI-Beta: agents=v1` is accepted
-and ignored.
+ApiPi is a drop-in OpenAI Agents API. Every public route lives under
+`/v1`. Official OpenAI clients work for the subset we implement. The
+beta header `OpenAI-Beta: agents=v1` is accepted and ignored.
 
 Unknown fields and unimplemented features return an error
-(`invalid_request` or `not_implemented`). They are not stored and ignored.
+(`invalid_request` or `not_implemented`). They are not stored and they
+are not ignored. Extra JSON keys are rejected because request bodies
+use strict models.
 
-Auth: `Authorization: Bearer`. We do not mint or store keys. A callback
-maps the bearer to `key_id` and `tenant_id` ([auth](auth.md)).
-Tenant-scoped. Wrong-tenant IDs are `404`.
+Auth is `Authorization: Bearer` on every request except `/health` and
+`/metrics`. The gateway does not mint or store keys. A callback maps
+the bearer to `key_id` and `tenant_id`. See [auth](auth.md). Every
+query is tenant-scoped. An id that belongs to another tenant returns
+`404`, not `403`.
 
-The example UI uses a demo cookie on `/_example/` only.
+There is no first-party chat UI. Clients send a bearer and talk to
+`/v1`.
 
 ## Agents
 
-Saved config, not a running process.
+An agent is saved config, not a running process. There is no built-in
+agent on a fresh install.
 
 | Method | Path |
 | --- | --- |
@@ -30,9 +36,9 @@ Fields: `id`, `name`, `model`, `instructions`, `metadata`, `tools`
 
 Rejected: `multi_agent`, `tool_search`, `programmatic_tool_calling`.
 
-A session may pass `agent_id` or an inline `agent`. Inline config is not
-saved unless you `POST /v1/agents`. There is no built-in agent on a
-fresh install.
+A session may pass `agent_id` or an inline `agent`. You must provide
+exactly one of those. Inline config is used for that session only. It
+is not saved unless you `POST /v1/agents`.
 
 ## Sessions
 
@@ -44,12 +50,21 @@ fresh install.
 | `POST` | `/v1/agents/sessions/{session_id}` |
 | `DELETE` | `/v1/agents/sessions/{session_id}` |
 
-Create: `agent` or `agent_id`, `environment` (including
-`capability_directories`), `input`, `metadata`, `stream`.
+Create accepts `agent` or `agent_id`, `environment` (including
+`capability_directories`), `input`, `metadata`, and `stream`. If
+`environment` is omitted, the type is `openai_hosted`: a local session
+directory next to Pi, not OpenAI's cloud. `input` may be a string or an
+object with `content` or `text`. A non-empty input starts the first
+turn before the create response returns. `stream: true` returns SSE
+instead of the session JSON.
 
 Status: `idle | in_progress | requires_action | failed`.
 
 `required_actions`: `function_call`, `environment_connection`.
+
+`POST /v1/agents/sessions/{session_id}` updates `metadata` only.
+`DELETE` removes the session for that tenant and returns
+`{"id": "…", "deleted": true}`.
 
 ## Events
 
@@ -58,17 +73,23 @@ Status: `idle | in_progress | requires_action | failed`.
 | `POST` | `/v1/agents/sessions/{session_id}/events` |
 | `GET` | `/v1/agents/sessions/{session_id}/events` |
 
-`POST` body `agent.session.input.message` starts a turn, or steers a
-running one.
+`POST` with `type` `agent.session.input.message` starts a turn. Use
+`content` or `text` for the user text. Follow-up messages work the same
+way after the session is idle. A message while the session is
+`requires_action` is rejected; send a tool result instead.
 
-Tool result: `agent.session.input.tool_result` with `turn_id`, `call_id`,
-`success`, `output` or `error`.
+Tool result: `agent.session.input.tool_result` with `turn_id`,
+`call_id`, `success`, and `output` (on success) or `error` (on
+failure).
 
 Cancel: `agent.session.input.cancel` on a session in `in_progress`.
-Persists `agent.session.turn.cancelled` then `agent.session.idle`.
+The gateway persists `agent.session.turn.cancelled` then
+`agent.session.idle`.
 
-`GET ?stream=true` is SSE. Stays open across `idle`. Reconnect and replay
-from the store.
+`GET` returns `{"data": […]}`. `GET ?stream=true` is SSE. The stream
+stays open across `idle` and sends `: ping` keepalives. Reconnect and
+replay from the store with `after_seq`. The public event is written to
+Postgres before it is published on SSE.
 
 Only these event types are public. Anything else from Pi is an internal
 log line.
@@ -95,7 +116,8 @@ log line.
 | `agent.session.environment.disconnected` | Computer gone |
 | `agent.session.environment.failed` | Could not attach |
 
-Item types: `message`, `function_call`, `mcp_call`, `command_execution`.
+Item types: `message`, `function_call`, `mcp_call`,
+`command_execution`.
 
 ## Turns, items, artifacts
 
@@ -108,8 +130,9 @@ Item types: `message`, `function_call`, `mcp_call`, `command_execution`.
 | `GET` | `/v1/agents/sessions/{session_id}/artifacts/{id}/content` |
 | `DELETE` | `/v1/agents/sessions/{session_id}/artifacts/{id}` |
 
-Artifact bytes live on the sandbox. Content is proxied while it is
-connected. `410` if it is gone.
+Artifact bytes live on the sandbox. Content is proxied while that
+computer is connected. `410` if the file is gone. `DELETE` removes the
+metadata and the file when it is still on disk.
 
 `GET` turn may include `usage` (prompt, completion, cache read/write,
 total). Tokens only. See [usage](usage.md).
@@ -122,7 +145,8 @@ total). Tokens only. See [usage](usage.md).
 
 JSON of the transcript from Postgres: public events, turns, and items.
 Same shapes as the list endpoints. Does not read Pi files. Wrong tenant
-is `404`.
+is `404`. A session export is enough to leave: the customer keeps the
+thread if the gateway disappears.
 
 ## Usage
 
@@ -136,8 +160,10 @@ See [usage](usage.md).
 
 ## Request ids
 
-Echo `x-request-id`. Generate if missing. Honor `X-Client-Request-Id`
-when present (ASCII, ≤512).
+Every public request except `/health` has an id. The gateway echoes
+`x-request-id`. It generates a UUID if that header is missing. It
+honors `X-Client-Request-Id` when present (ASCII, at most 512
+characters). That client value becomes the request id.
 
 ## Environments
 
@@ -156,10 +182,10 @@ See [environments](environments.md).
 
 ## Compatibility
 
-Each **yes** row has a named test in `tests/api/test_compat.py`. Fast tests
-do not use the OpenAI SDK. Event types, the error envelope, and tenant
-`404` are `test_compat_event_types`, `test_compat_error_envelope`, and
-`test_compat_tenant_404`.
+Each **yes** row has a named test in `tests/api/test_compat.py`. Fast
+tests do not use the OpenAI SDK. Event types, the error envelope, and
+tenant `404` are `test_compat_event_types`,
+`test_compat_error_envelope`, and `test_compat_tenant_404`.
 
 | Surface | Status | Test |
 | --- | --- | --- |

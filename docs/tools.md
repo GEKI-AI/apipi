@@ -1,18 +1,25 @@
 # Tools and skills
 
-The base is Pi's four tools: read, write, edit, bash (when there is a
-computer). Everything else is attached per agent.
+The base tools are Pi's four: read, write, edit, and bash. Those exist
+when the session has a computer (`openai_hosted` or a connected
+`self_hosted` runner). They do not exist when `environment.type` is
+`none`. Everything else is attached per agent: function tools, MCP
+servers, and skills.
 
-Copy-paste configs live in `examples/` at the repo root.
+Copy-paste configs live in `examples/` at the repo root. Those files
+are MCP examples (Tavily, Playwright), not a first-party UI.
 
 ## Function tools
 
-Caller-defined functions. The session goes `requires_action`. The client
-posts `agent.session.input.tool_result`. Same idea as OpenAI.
+Caller-defined functions. The agent emits a `function_call` item. The
+session goes `requires_action` with a `function_call` action. The
+client posts `agent.session.input.tool_result` with `turn_id`,
+`call_id`, `success`, and `output` or `error`. That is the same idea as
+OpenAI's Agents API. The gateway does not execute the function.
 
 ## MCP
 
-HTTP (OpenAI shape):
+HTTP MCP uses OpenAI's shape:
 
 ```json
 {
@@ -25,7 +32,8 @@ HTTP (OpenAI shape):
 }
 ```
 
-Stdio (not in OpenAI's API; we accept it for local servers):
+Stdio MCP is not in OpenAI's API. We accept it for local servers that
+the gateway should spawn next to Pi:
 
 ```json
 {
@@ -36,49 +44,56 @@ Stdio (not in OpenAI's API; we accept it for local servers):
 }
 ```
 
-The gateway starts or connects these for the session and hands them to
-Pi. Credentials stay in env or secret store, not in git.
+An MCP tool must have `server_url` or `command`, not both. The gateway
+connects HTTP servers and starts stdio servers when the session is
+created, then hands them to Pi. Credentials stay in environment
+variables or a secret store, not in git.
 
 `web_search` as a first-party OpenAI tool is not implemented. Use MCP.
 
-### Search -- Tavily example
+### Search — Tavily example
 
-Tavily's hosted MCP. Set `TAVILY_API_KEY`. See `examples/tavily.yaml`.
-Swap for Brave, Exa, or anything else that speaks MCP.
+Tavily's hosted MCP is one search option. Set `TAVILY_API_KEY`. See
+`examples/tavily.yaml`. You can swap that for Brave, Exa, or any other
+server that speaks MCP.
 
-### Browser -- Playwright example
+### Browser — Playwright example
 
-[Playwright MCP](https://playwright.dev/mcp/introduction). `--headless`
-on a server. See `examples/playwright.yaml`.
+[Playwright MCP](https://playwright.dev/mcp/introduction) is one
+browser option. `--headless` is the usual server flag. See
+`examples/playwright.yaml`.
 
-The browser follows Pi (`host` / `jail` / `microvm`). Inside `jail`,
-Chromium needs `--no-sandbox`. Inside `microvm`, Chromium can use its
-own sandbox.
-
-Do not put Chromium in the gateway.
+The browser follows Pi (`host` today; `jail` / `microvm` when those
+modes exist). Inside a future `jail`, Chromium would need
+`--no-sandbox`. Inside a future `microvm`, Chromium could use its own
+sandbox. Do not put Chromium in the gateway.
 
 ## Skills
 
-[Agent Skills](https://agentskills.io/home): a directory with `SKILL.md`
-(name + description in front matter, then instructions). Optional
-`scripts/`, `references/`, `assets/`.
+[Agent Skills](https://agentskills.io/home) are a directory with
+`SKILL.md` (name and description in front matter, then instructions).
+Optional `scripts/`, `references/`, and `assets/` sit next to that
+file.
 
-OpenAI Agents API: put those directories on the computer and list the
-parent paths in `environment.capability_directories` on session create.
-The harness discovers `SKILL.md`, puts name and description in context,
-and reads the rest when the skill is used.
+On the OpenAI Agents API you put those directories on the computer and
+list the parent paths in `environment.capability_directories` on
+session create. The harness discovers `SKILL.md`, puts name and
+description in context, and reads the rest when the skill is used.
 
-We do the same. Pi already loads this format.
+ApiPi does the same. Pi already loads this format. On
+`openai_hosted`, listed directories that sit outside the workspace are
+copied into it when the session is created.
 
 Also discovered, if present on the workspace:
 
 - `.agents/skills/`
 - `.pi/skills/`
 
-No `/v1/skills` upload API. Skills are files on the computer.
+There is no `/v1/skills` upload API. Skills are files on the computer.
 
 ## Per agent
 
-MCP and function tools live on the saved agent (or inline session
+MCP and function tools live on the saved agent (or the inline session
 `agent`). Skills live on the computer, pointed at by
-`capability_directories`.
+`capability_directories`. Changing tools later means updating the
+saved agent; it does not rewrite history on existing sessions.

@@ -3,7 +3,8 @@
 Not in the first version. Specs describe what we build now. This file is
 the rest.
 
-Do not put "later" sections on the other spec pages.
+Do not put "later" sections on the other spec pages. Do not implement
+this file unless the spec for that work has moved.
 
 ## Docker sandbox
 
@@ -32,4 +33,13 @@ Pi is what we ship. A second adapter behind the same API, if needed.
 
 ## Docs
 
-mkdocstrings for the FastAPI surface, on the same MkDocs site.
+Later documentation work, not this version:
+
+- Guides for common setups (a hosted model URL, MCP, a `self_hosted`
+  runner)
+- OpenAPI and mkdocstrings for the FastAPI surface, on the same MkDocs
+  site
+- Deploy docs for running ApiPi in production
+
+Do not add a custom docs frontend. Do not put MkDocs in the apipi
+package.

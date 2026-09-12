@@ -1,7 +1,7 @@
 # ApiPi constitution
 
 Rules for the project. Specs say what we build. ADRs say why. Change this
-file rarely, and only with a dated amendment at the bottom.
+file rarely. Edit in place. Do not keep an amendment log.
 
 ## Laws
 
@@ -14,12 +14,14 @@ file rarely, and only with a dated amendment at the bottom.
 3. **The computer is replaceable.**
    none, local directory, or `self_hosted`. Independent of run mode
    (`host` / `jail` / `microvm`). Search and browser are MCP, not built in.
+   OpenAI's field `openai_hosted` is a local session directory, not OpenAI's
+   cloud.
 
 4. **Pi is the harness we ship.**
    Small loop, RPC. A second adapter later must not change the public API.
 
 5. **We do not mint or store tenant API keys.**
-   Browsers do not hold them. The example UI uses a demo cookie.
+   Browsers do not hold them.
    Production clients send a bearer the gateway does not keep.
    Auth is a callback; default hashes the key (`docs/auth.md`).
 
@@ -54,21 +56,3 @@ The package and CLI are `apipi`. Hosted at geki.ai.
 - A model host
 - A search engine
 - A copy of every OpenAI Agents object
-
-## Amendments
-
-### 2026-09-11
-
-The product is the API. The chat is only an example.
-
-`openai_hosted` is a local directory, not OpenAI's cloud.
-
-Run mode is `host` | `jail` | `microvm`. Default `jail`. Independent of
-environment.
-
-Pi is the harness we ship. Skills are `SKILL.md` on the computer.
-
-### 2026-09-12
-
-We do not mint or store tenant API keys. Auth is a callback. Default
-accepts any bearer and hashes it for `key_id` / `tenant_id`.
