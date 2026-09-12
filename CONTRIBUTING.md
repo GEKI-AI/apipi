@@ -13,12 +13,14 @@ version.
 [Open an issue](https://github.com/GEKI-AI/apipi/issues). That is the
 work queue.
 
-Write it so an agent can implement without asking you questions.
+Write it so a human and an agent can implement without a meeting.
 
 | Kind | Include |
 | --- | --- |
-| Request | Goal, acceptance checks, spec paths, non-goals |
+| Request | Goal, acceptance checks, spec paths |
 | Bug | Observed, expected, spec path, how to reproduce |
+
+Do not list non-goals. Anything not in the goal is out of scope.
 
 Do not file work that lives on [docs/roadmap.md](docs/roadmap.md)
 unless the spec has moved.

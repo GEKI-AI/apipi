@@ -43,7 +43,21 @@ OpenAI-compatible `base_url`. No Node in the gateway.
 - Warn at startup when run mode is `host`
 - Idle Pi TTL default 15 minutes (`APIPI_IDLE_TTL`)
 - uv for all Python (`uv sync`, `uv run`, `uv lock`)
-- Before commit: format, lint, typecheck, tests (see `CONTRIBUTING.md`)
+- Before commit: format, lint, typecheck, tests (see `CONTRIBUTING.md`).
+  Run them locally. Do not commit until they pass.
+
+## Slices
+
+After a slice lands, re-read `CONSTITUTION.md`, `docs/index.md`, the
+spec for the next surface, and the current code. Do not rely on
+memory from the previous slice.
+
+## Issues
+
+Write issues so a human can read them in one pass. Goal, acceptance,
+spec paths. Do not list non-goals. Anything not in the goal is out of
+scope. Mention a non-goal only when someone would reasonably think it
+was included.
 
 ## Git
 

@@ -5,8 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Write this so an agent can implement it without asking you
-        questions. We implement almost all code with coding agents.
+        Write this so a human can read it in one pass and an agent can
+        implement it. We implement almost all code with coding agents.
   - type: textarea
     id: goal
     attributes:
@@ -29,8 +29,4 @@ body:
       placeholder: docs/api.md
     validations:
       required: true
-  - type: textarea
-    id: non_goals
-    attributes:
-      label: Non-goals
-      description: What this issue must not do. Roadmap items stay on the roadmap.
+
