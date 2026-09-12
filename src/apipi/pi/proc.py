@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from apipi.config import Settings
+from apipi.mcp.http import McpHttpServer
 from apipi.pi.version import PINNED_PI
 
 
@@ -61,7 +62,9 @@ class PiProc:
             await self.process.wait()
 
 
-def _pi_env(settings: Settings) -> dict[str, str]:
+def _pi_env(
+    settings: Settings, mcp_http: list[McpHttpServer] | None = None
+) -> dict[str, str]:
     env = os.environ.copy()
     env.pop("DATABASE_URL", None)
     if settings.model_api_key:
@@ -69,6 +72,15 @@ def _pi_env(settings: Settings) -> dict[str, str]:
     if settings.model_base_url:
         env["OPENAI_BASE_URL"] = settings.model_base_url
     env["APIPI_PINNED_PI"] = PINNED_PI
+    if mcp_http:
+        env["APIPI_MCP_SERVERS"] = ",".join(server.server_label for server in mcp_http)
+        for index, server in enumerate(mcp_http):
+            prefix = f"APIPI_MCP_{index}"
+            env[f"{prefix}_LABEL"] = server.server_label
+            env[f"{prefix}_URL"] = server.server_url
+            for key, value in server.headers.items():
+                safe = key.upper().replace("-", "_")
+                env[f"{prefix}_{safe}"] = value
     return env
 
 
@@ -77,6 +89,7 @@ async def spawn_pi(
     *,
     cwd: str | None,
     tools: bool,
+    mcp_http: list[McpHttpServer] | None = None,
 ) -> PiProc:
     command = settings.pi_command.split()
     args = [*command, "--mode", "rpc", "--no-session"]
@@ -88,6 +101,6 @@ async def spawn_pi(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
-        env=_pi_env(settings),
+        env=_pi_env(settings, mcp_http),
     )
     return PiProc(process)

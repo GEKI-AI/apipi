@@ -3,6 +3,7 @@ import time
 import uuid
 
 from apipi.config import Settings
+from apipi.mcp.http import McpHttpServer
 from apipi.pi.proc import PiProc, spawn_pi
 
 
@@ -19,11 +20,14 @@ class PiPool:
         *,
         cwd: str | None,
         tools: bool,
+        mcp_http: list[McpHttpServer] | None = None,
     ) -> PiProc:
         async with self._lock:
             proc = self._procs.get(session_id)
             if proc is None or not proc.alive:
-                proc = await spawn_pi(self.settings, cwd=cwd, tools=tools)
+                proc = await spawn_pi(
+                    self.settings, cwd=cwd, tools=tools, mcp_http=mcp_http
+                )
                 self._procs[session_id] = proc
             self._last[session_id] = time.monotonic()
             return proc

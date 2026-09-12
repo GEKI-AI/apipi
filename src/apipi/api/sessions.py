@@ -13,12 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.api.agents import AgentWrite
 from apipi.auth import get_db, not_found, require_tenant
 from apipi.errors import ApiError, not_implemented
+from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
 from apipi.pi.dirs import session_workspace
 from apipi.runtime import (
     EventHub,
     Harness,
     continue_turn,
     event_body,
+    fail_session,
     persist_event,
     run_turn,
 )
@@ -198,11 +200,17 @@ async def create_agent_session(
     hub: EventHub = request.app.state.event_hub
     harness: Harness = request.app.state.harness
     environment = _environment_payload(body.environment)
+    raw_tools: list[Any] = []
     async with store.session() as db:
         if agent_id is not None:
             agent = await get_agent(db, tenant.id, agent_id)
             if agent is None:
                 not_found()
+            raw_tools = agent.tools
+        elif body.agent is not None and body.agent.tools is not None:
+            raw_tools = [
+                tool.model_dump(exclude_none=True) for tool in body.agent.tools
+            ]
         row = await create_session(
             db,
             tenant.id,
@@ -223,9 +231,20 @@ async def create_agent_session(
             type="agent.session.created",
             data={"id": str(row.id)},
         )
+        try:
+            connected = await connect_mcp_http_tools(raw_tools)
+        except McpConnectError as exc:
+            await fail_session(db, hub, tenant.id, row.id, str(exc))
+            row = await get_session(db, tenant.id, row.id)
+            if row is None:
+                not_found()
+            return session_body(row)
+        request.app.state.mcp_http[row.id] = connected
         text = _input_text(body.input)
         if text:
-            await run_turn(db, hub, harness, tenant.id, row.id, text)
+            await run_turn(
+                db, hub, harness, tenant.id, row.id, text, mcp_http=connected
+            )
         else:
             await persist_event(db, hub, tenant.id, row.id, type="agent.session.idle")
         row = await get_session(db, tenant.id, row.id)
@@ -282,12 +301,14 @@ async def update_agent_session(
 @router.delete("/v1/agents/sessions/{session_id}")
 async def delete_agent_session(
     session_id: uuid.UUID,
+    request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
     deleted = await delete_session(db, tenant.id, session_id)
     if not deleted:
         not_found()
+    request.app.state.mcp_http.pop(session_id, None)
     return {"id": str(session_id), "deleted": True}
 
 
@@ -326,6 +347,7 @@ async def post_session_event(
                 success=body.success,
                 output=body.output,
                 error=body.error,
+                mcp_http=request.app.state.mcp_http.get(session_id),
             )
         else:
             if row.status == "requires_action":
@@ -334,7 +356,10 @@ async def post_session_event(
                     "Session is waiting for a tool result",
                     code="invalid_request",
                 )
-            await run_turn(db, hub, harness, tenant.id, session_id, text)
+            mcp_http = request.app.state.mcp_http.get(session_id)
+            await run_turn(
+                db, hub, harness, tenant.id, session_id, text, mcp_http=mcp_http
+            )
         row = await get_session(db, tenant.id, session_id)
         if row is None:
             not_found()
