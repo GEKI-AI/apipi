@@ -9,13 +9,10 @@ from apipi.api.sessions import _event_stream
 from apipi.runtime import PUBLIC_EVENT_TYPES, EventHub
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow
-from apipi.tenants import provision_tenant
 
 
-async def _token(store: Store, name: str = "t") -> str:
-    async with store.session() as db:
-        _tenant, token = await provision_tenant(db, name=name)
-    return token
+def _token(name: str = "t") -> str:
+    return name
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -68,8 +65,8 @@ async def _create_agent(client: AsyncClient, token: str) -> str:
     return str(response.json()["id"])
 
 
-async def test_session_crud_environment_none(store: Store, client: AsyncClient) -> None:
-    token = await _token(store)
+async def test_session_crud_environment_none(client: AsyncClient) -> None:
+    token = _token()
     agent_id = await _create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
@@ -114,8 +111,8 @@ async def test_session_crud_environment_none(store: Store, client: AsyncClient) 
     assert gone.status_code == 404
 
 
-async def test_inline_agent_is_not_saved(store: Store, client: AsyncClient) -> None:
-    token = await _token(store)
+async def test_inline_agent_is_not_saved(client: AsyncClient) -> None:
+    token = _token()
     created = await client.post(
         "/v1/agents/sessions",
         headers=_auth(token),
@@ -130,8 +127,8 @@ async def test_inline_agent_is_not_saved(store: Store, client: AsyncClient) -> N
     assert agents.json() == {"data": []}
 
 
-async def test_unimplemented_environment(store: Store, client: AsyncClient) -> None:
-    token = await _token(store)
+async def test_unimplemented_environment(client: AsyncClient) -> None:
+    token = _token()
     agent_id = await _create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
@@ -143,10 +140,8 @@ async def test_unimplemented_environment(store: Store, client: AsyncClient) -> N
     assert response.json()["error"]["code"] == "self_hosted"
 
 
-async def test_default_environment_is_openai_hosted(
-    store: Store, client: AsyncClient
-) -> None:
-    token = await _token(store)
+async def test_default_environment_is_openai_hosted(client: AsyncClient) -> None:
+    token = _token()
     agent_id = await _create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
@@ -159,10 +154,8 @@ async def test_default_environment_is_openai_hosted(
     assert Path(env["directory"]).is_dir()
 
 
-async def test_fake_harness_determined_events(
-    store: Store, client: AsyncClient
-) -> None:
-    token = await _token(store)
+async def test_fake_harness_determined_events(client: AsyncClient) -> None:
+    token = _token()
     agent_id = await _create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
@@ -209,7 +202,7 @@ async def test_fake_harness_determined_events(
 
 
 async def test_sse_replays_persisted_events(store: Store, client: AsyncClient) -> None:
-    token = await _token(store)
+    token = _token()
     agent_id = await _create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
@@ -247,9 +240,9 @@ async def test_sse_replays_persisted_events(store: Store, client: AsyncClient) -
     assert replay[0]["type"] == "agent.session.idle"
 
 
-async def test_cross_tenant_session_is_404(store: Store, client: AsyncClient) -> None:
-    token_a = await _token(store, "a")
-    token_b = await _token(store, "b")
+async def test_cross_tenant_session_is_404(client: AsyncClient) -> None:
+    token_a = _token("a")
+    token_b = _token("b")
     agent_id = await _create_agent(client, token_a)
     created = await client.post(
         "/v1/agents/sessions",
@@ -267,8 +260,8 @@ async def test_cross_tenant_session_is_404(store: Store, client: AsyncClient) ->
     assert events.status_code == 404
 
 
-async def test_unknown_session_field(store: Store, client: AsyncClient) -> None:
-    token = await _token(store)
+async def test_unknown_session_field(client: AsyncClient) -> None:
+    token = _token()
     agent_id = await _create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",

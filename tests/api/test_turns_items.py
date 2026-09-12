@@ -2,14 +2,9 @@ import uuid
 
 from httpx import AsyncClient
 
-from apipi.store.engine import Store
-from apipi.tenants import provision_tenant
 
-
-async def _token(store: Store, name: str = "t") -> str:
-    async with store.session() as db:
-        _tenant, token = await provision_tenant(db, name=name)
-    return token
+def _token(name: str = "t") -> str:
+    return name
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -33,8 +28,8 @@ async def _session_with_turn(client: AsyncClient, token: str) -> str:
     return str(created.json()["id"])
 
 
-async def test_turns_and_items_after_a_turn(store: Store, client: AsyncClient) -> None:
-    token = await _token(store)
+async def test_turns_and_items_after_a_turn(client: AsyncClient) -> None:
+    token = _token()
     session_id = await _session_with_turn(client, token)
 
     turns = await client.get(
@@ -67,10 +62,8 @@ async def test_turns_and_items_after_a_turn(store: Store, client: AsyncClient) -
     assert items.json()["data"][0]["turn_id"] == turn_id
 
 
-async def test_turns_items_unknown_session_is_404(
-    store: Store, client: AsyncClient
-) -> None:
-    token = await _token(store)
+async def test_turns_items_unknown_session_is_404(client: AsyncClient) -> None:
+    token = _token()
     missing = uuid.uuid4()
     turns = await client.get(
         f"/v1/agents/sessions/{missing}/turns", headers=_auth(token)
@@ -82,10 +75,8 @@ async def test_turns_items_unknown_session_is_404(
     assert items.status_code == 404
 
 
-async def test_turn_from_other_session_is_404(
-    store: Store, client: AsyncClient
-) -> None:
-    token = await _token(store)
+async def test_turn_from_other_session_is_404(client: AsyncClient) -> None:
+    token = _token()
     session_a = await _session_with_turn(client, token)
     session_b = await _session_with_turn(client, token)
     turns_a = await client.get(
@@ -99,11 +90,9 @@ async def test_turn_from_other_session_is_404(
     assert other.status_code == 404
 
 
-async def test_cross_tenant_turns_items_are_404(
-    store: Store, client: AsyncClient
-) -> None:
-    token_a = await _token(store, "a")
-    token_b = await _token(store, "b")
+async def test_cross_tenant_turns_items_are_404(client: AsyncClient) -> None:
+    token_a = _token("a")
+    token_b = _token("b")
     session_id = await _session_with_turn(client, token_a)
     turns = await client.get(
         f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token_b)

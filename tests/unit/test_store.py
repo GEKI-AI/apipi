@@ -7,16 +7,16 @@ from apipi.store.errors import NotFoundError
 from apipi.store.events import append_event, list_events
 from apipi.store.repo import (
     create_agent,
-    create_api_key,
     create_item,
     create_session,
     create_tenant,
     create_turn,
     delete_agent,
+    ensure_tenant,
     get_agent,
-    get_api_key_by_hash,
     get_item,
     get_session,
+    get_tenant,
     get_turn,
     list_agents,
     update_agent,
@@ -92,14 +92,13 @@ async def test_sessions_turns_items_are_tenant_scoped(db: AsyncSession) -> None:
     assert await get_item(db, b.id, item.id) is None
 
 
-async def test_api_key_hash_roundtrip(db: AsyncSession) -> None:
-    tenant = await create_tenant(db, name="a")
-    key = await create_api_key(db, tenant.id, token_hash="a" * 64)
-    found = await get_api_key_by_hash(db, "a" * 64)
-    assert found is not None
-    assert found.id == key.id
-    assert found.tenant_id == tenant.id
-    assert await get_api_key_by_hash(db, "b" * 64) is None
+async def test_ensure_tenant_is_stable(db: AsyncSession) -> None:
+    tenant_id = uuid.uuid4()
+    first = await ensure_tenant(db, tenant_id)
+    second = await ensure_tenant(db, tenant_id)
+    assert first.id == tenant_id
+    assert second.id == tenant_id
+    assert await get_tenant(db, tenant_id) is not None
 
 
 async def test_event_module_is_append_only() -> None:

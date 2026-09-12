@@ -1,5 +1,7 @@
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Annotated, NoReturn
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -8,10 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.errors import ApiError
 from apipi.store.engine import Store
 from apipi.store.models import Tenant
-from apipi.store.repo import get_api_key_by_hash, get_tenant
-from apipi.tokens import hash_token, token_matches
+from apipi.store.repo import ensure_tenant
+from apipi.tokens import hash_token
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+@dataclass(frozen=True)
+class AuthIdentity:
+    key_id: str
+    tenant_id: UUID
 
 
 def unauthorized() -> NoReturn:
@@ -25,6 +33,11 @@ def unauthorized() -> NoReturn:
 
 def not_found() -> NoReturn:
     raise ApiError("invalid_request", "Not found", code="not_found", status_code=404)
+
+
+def authenticate(bearer: str) -> AuthIdentity:
+    key_id = hash_token(bearer)
+    return AuthIdentity(key_id=key_id, tenant_id=uuid5(NAMESPACE_URL, key_id))
 
 
 def _store(request: Request) -> Store:
@@ -45,12 +58,6 @@ async def require_tenant(
 ) -> Tenant:
     if creds is None or creds.scheme.lower() != "bearer" or not creds.credentials:
         unauthorized()
-    token = creds.credentials
+    identity = authenticate(creds.credentials)
     async with _store(request).session() as db:
-        key = await get_api_key_by_hash(db, hash_token(token))
-        if key is None or not token_matches(token, key.token_hash):
-            unauthorized()
-        tenant = await get_tenant(db, key.tenant_id)
-        if tenant is None:
-            unauthorized()
-        return tenant
+        return await ensure_tenant(db, identity.tenant_id)

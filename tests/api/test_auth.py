@@ -1,11 +1,15 @@
 import uuid
 
 from httpx import AsyncClient
+from sqlalchemy import select
 
+from apipi.auth import authenticate
 from apipi.store.engine import Store
-from apipi.store.repo import create_agent, get_api_key_by_hash
-from apipi.tenants import provision_tenant
-from apipi.tokens import hash_token
+from apipi.store.models import Tenant
+
+
+def _auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
 async def test_missing_bearer_is_401(client: AsyncClient) -> None:
@@ -16,42 +20,58 @@ async def test_missing_bearer_is_401(client: AsyncClient) -> None:
     assert body["error"]["code"] == "unauthorized"
 
 
-async def test_invalid_bearer_is_401(client: AsyncClient) -> None:
+async def test_empty_bearer_is_401(client: AsyncClient) -> None:
     response = await client.get(
         f"/v1/agents/{uuid.uuid4()}",
-        headers={"Authorization": "Bearer not-a-real-token"},
+        headers={"Authorization": "Bearer "},
     )
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "unauthorized"
 
 
-async def test_cross_tenant_id_is_404_not_403(
-    store: Store, client: AsyncClient
-) -> None:
-    async with store.session() as db:
-        a, token_a = await provision_tenant(db, name="a")
-        _b, token_b = await provision_tenant(db, name="b")
-        agent = await create_agent(db, a.id, name="one")
-        agent_id = agent.id
+async def test_any_bearer_is_accepted(client: AsyncClient) -> None:
+    response = await client.get("/v1/agents", headers=_auth("any-key"))
+    assert response.status_code == 200
+    assert response.json() == {"data": []}
 
-    ok = await client.get(
-        f"/v1/agents/{agent_id}",
-        headers={"Authorization": f"Bearer {token_a}"},
+
+async def test_same_bearer_is_stable(client: AsyncClient) -> None:
+    created = await client.post(
+        "/v1/agents", headers=_auth("stable"), json={"name": "one"}
     )
+    assert created.status_code == 200
+    agent_id = created.json()["id"]
+    again = await client.get(f"/v1/agents/{agent_id}", headers=_auth("stable"))
+    assert again.status_code == 200
+    assert again.json()["name"] == "one"
+
+
+async def test_cross_tenant_id_is_404_not_403(client: AsyncClient) -> None:
+    created = await client.post("/v1/agents", headers=_auth("a"), json={"name": "one"})
+    assert created.status_code == 200
+    agent_id = created.json()["id"]
+
+    ok = await client.get(f"/v1/agents/{agent_id}", headers=_auth("a"))
     assert ok.status_code == 200
     assert ok.json()["name"] == "one"
-    assert ok.json()["id"] == str(agent_id)
 
-    other = await client.get(
-        f"/v1/agents/{agent_id}",
-        headers={"Authorization": f"Bearer {token_b}"},
-    )
+    other = await client.get(f"/v1/agents/{agent_id}", headers=_auth("b"))
     assert other.status_code == 404
     assert other.json()["error"]["code"] == "not_found"
 
 
-async def test_provision_stores_hash_not_token(store: Store) -> None:
+async def test_tenant_row_created_on_first_use(
+    store: Store, client: AsyncClient
+) -> None:
+    identity = authenticate("first-use")
     async with store.session() as db:
-        _tenant, token = await provision_tenant(db, name="local")
-        assert await get_api_key_by_hash(db, token) is None
-        assert await get_api_key_by_hash(db, hash_token(token)) is not None
+        assert (
+            await db.scalar(select(Tenant).where(Tenant.id == identity.tenant_id))
+            is None
+        )
+    listed = await client.get("/v1/agents", headers=_auth("first-use"))
+    assert listed.status_code == 200
+    async with store.session() as db:
+        tenant = await db.scalar(select(Tenant).where(Tenant.id == identity.tenant_id))
+        assert tenant is not None
+        assert tenant.id == identity.tenant_id

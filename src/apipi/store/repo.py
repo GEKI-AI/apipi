@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.store.errors import NotFoundError
 from apipi.store.models import (
     Agent,
-    ApiKey,
     Event,
     Item,
     SessionRow,
@@ -28,17 +27,14 @@ async def get_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> Tenant | None:
     return await db.scalar(select(Tenant).where(Tenant.id == tenant_id))
 
 
-async def create_api_key(
-    db: AsyncSession, tenant_id: uuid.UUID, *, token_hash: str
-) -> ApiKey:
-    key = ApiKey(tenant_id=tenant_id, token_hash=token_hash)
-    db.add(key)
+async def ensure_tenant(db: AsyncSession, tenant_id: uuid.UUID) -> Tenant:
+    tenant = await get_tenant(db, tenant_id)
+    if tenant is not None:
+        return tenant
+    tenant = Tenant(id=tenant_id, name=str(tenant_id))
+    db.add(tenant)
     await db.flush()
-    return key
-
-
-async def get_api_key_by_hash(db: AsyncSession, token_hash: str) -> ApiKey | None:
-    return await db.scalar(select(ApiKey).where(ApiKey.token_hash == token_hash))
+    return tenant
 
 
 async def create_agent(
