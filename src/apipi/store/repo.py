@@ -238,6 +238,44 @@ async def get_item(
     )
 
 
+async def list_turns(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> list[Turn] | None:
+    if await get_session(db, tenant_id, session_id) is None:
+        return None
+    result = await db.scalars(
+        select(Turn)
+        .where(Turn.tenant_id == tenant_id, Turn.session_id == session_id)
+        .order_by(Turn.created_at)
+    )
+    return list(result)
+
+
+async def get_session_turn(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+) -> Turn | None:
+    turn = await get_turn(db, tenant_id, turn_id)
+    if turn is None or turn.session_id != session_id:
+        return None
+    return turn
+
+
+async def list_items(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> list[Item] | None:
+    if await get_session(db, tenant_id, session_id) is None:
+        return None
+    result = await db.scalars(
+        select(Item)
+        .where(Item.tenant_id == tenant_id, Item.session_id == session_id)
+        .order_by(Item.created_at)
+    )
+    return list(result)
+
+
 async def append_event(
     db: AsyncSession,
     tenant_id: uuid.UUID,

@@ -18,13 +18,16 @@ from apipi.runtime import EventHub, Harness, event_body, persist_event, run_turn
 from apipi.schemas import StrictModel
 from apipi.store.engine import Store
 from apipi.store.events import list_events
-from apipi.store.models import SessionRow, Tenant
+from apipi.store.models import Item, SessionRow, Tenant, Turn
 from apipi.store.repo import (
     create_session,
     delete_session,
     get_agent,
     get_session,
+    get_session_turn,
+    list_items,
     list_sessions,
+    list_turns,
     update_session,
 )
 
@@ -63,6 +66,28 @@ class SessionInput(StrictModel):
                 {"field": self.type},
             )
         return self
+
+
+def turn_body(turn: Turn) -> dict[str, Any]:
+    return {
+        "id": str(turn.id),
+        "session_id": str(turn.session_id),
+        "status": turn.status,
+        "usage": turn.usage,
+        "created_at": turn.created_at.isoformat(),
+        "updated_at": turn.updated_at.isoformat(),
+    }
+
+
+def item_body(item: Item) -> dict[str, Any]:
+    return {
+        "id": str(item.id),
+        "session_id": str(item.session_id),
+        "turn_id": str(item.turn_id) if item.turn_id is not None else None,
+        "type": item.type,
+        "data": item.data,
+        "created_at": item.created_at.isoformat(),
+    }
 
 
 def session_body(row: SessionRow) -> dict[str, Any]:
@@ -292,3 +317,40 @@ async def get_session_events(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
+
+
+@router.get("/v1/agents/sessions/{session_id}/turns")
+async def list_session_turns(
+    session_id: uuid.UUID,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
+    turns = await list_turns(db, tenant.id, session_id)
+    if turns is None:
+        not_found()
+    return {"data": [turn_body(turn) for turn in turns]}
+
+
+@router.get("/v1/agents/sessions/{session_id}/turns/{turn_id}")
+async def read_session_turn(
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
+    turn = await get_session_turn(db, tenant.id, session_id, turn_id)
+    if turn is None:
+        not_found()
+    return turn_body(turn)
+
+
+@router.get("/v1/agents/sessions/{session_id}/items")
+async def list_session_items(
+    session_id: uuid.UUID,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
+    items = await list_items(db, tenant.id, session_id)
+    if items is None:
+        not_found()
+    return {"data": [item_body(item) for item in items]}
