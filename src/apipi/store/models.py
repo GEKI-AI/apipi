@@ -95,6 +95,9 @@ class SessionRow(Base):
     metadata_json: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONType, default=dict, nullable=False
     )
+    required_actions: Mapped[list[Any]] = mapped_column(
+        JSONType, default=list, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

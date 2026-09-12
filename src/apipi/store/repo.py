@@ -167,6 +167,8 @@ async def update_session(
         row.metadata_json = changes["metadata"]
     if "environment" in changes:
         row.environment = changes["environment"]
+    if "required_actions" in changes:
+        row.required_actions = changes["required_actions"]
     row.updated_at = utc_now()
     await db.flush()
     return row

@@ -14,7 +14,14 @@ from apipi.api.agents import AgentWrite
 from apipi.auth import get_db, not_found, require_tenant
 from apipi.errors import ApiError, not_implemented
 from apipi.pi.dirs import session_workspace
-from apipi.runtime import EventHub, Harness, event_body, persist_event, run_turn
+from apipi.runtime import (
+    EventHub,
+    Harness,
+    continue_turn,
+    event_body,
+    persist_event,
+    run_turn,
+)
 from apipi.schemas import StrictModel
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -56,16 +63,29 @@ class SessionInput(StrictModel):
     type: str
     content: str | None = None
     text: str | None = None
+    turn_id: uuid.UUID | None = None
+    call_id: str | None = None
+    success: bool | None = None
+    output: str | None = None
+    error: str | None = None
 
     @model_validator(mode="after")
     def known_input(self) -> Self:
-        if self.type != "agent.session.input.message":
-            raise PydanticCustomError(
-                "not_implemented",
-                "{field} is not implemented",
-                {"field": self.type},
-            )
-        return self
+        if self.type == "agent.session.input.message":
+            return self
+        if self.type == "agent.session.input.tool_result":
+            if self.turn_id is None or self.call_id is None or self.success is None:
+                raise ValueError("tool_result needs turn_id, call_id, and success")
+            if self.success and self.output is None:
+                raise ValueError("tool_result success needs output")
+            if not self.success and self.error is None:
+                raise ValueError("tool_result failure needs error")
+            return self
+        raise PydanticCustomError(
+            "not_implemented",
+            "{field} is not implemented",
+            {"field": self.type},
+        )
 
 
 def turn_body(turn: Turn) -> dict[str, Any]:
@@ -97,7 +117,7 @@ def session_body(row: SessionRow) -> dict[str, Any]:
         "status": row.status,
         "environment": row.environment,
         "metadata": row.metadata_json,
-        "required_actions": [],
+        "required_actions": row.required_actions,
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
@@ -288,7 +308,33 @@ async def post_session_event(
         row = await get_session(db, tenant.id, session_id)
         if row is None:
             not_found()
-        await run_turn(db, hub, harness, tenant.id, session_id, text)
+        if body.type == "agent.session.input.tool_result":
+            if body.turn_id is None or body.call_id is None or body.success is None:
+                raise ApiError(
+                    "invalid_request",
+                    "tool_result needs turn_id, call_id, and success",
+                    code="invalid_request",
+                )
+            await continue_turn(
+                db,
+                hub,
+                harness,
+                tenant.id,
+                session_id,
+                turn_id=body.turn_id,
+                call_id=body.call_id,
+                success=body.success,
+                output=body.output,
+                error=body.error,
+            )
+        else:
+            if row.status == "requires_action":
+                raise ApiError(
+                    "invalid_request",
+                    "Session is waiting for a tool result",
+                    code="invalid_request",
+                )
+            await run_turn(db, hub, harness, tenant.id, session_id, text)
         row = await get_session(db, tenant.id, session_id)
         if row is None:
             not_found()
