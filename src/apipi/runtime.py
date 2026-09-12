@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.errors import ApiError
 from apipi.metrics import Metrics, observe_turn
+from apipi.otel import Tracing, set_span, start_span
 from apipi.skills import discover_skill_dirs
 from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
@@ -256,15 +257,15 @@ def _skill_dirs(environment: dict[str, Any]) -> list[str]:
     return discover_skill_dirs(workspace, directories)
 
 
-async def _agent_function_tools(
+async def _agent_tools_and_model(
     db: AsyncSession, tenant_id: uuid.UUID, agent_id: uuid.UUID | None
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str | None]:
     if agent_id is None:
-        return []
+        return [], None
     agent = await get_agent(db, tenant_id, agent_id)
     if agent is None:
-        return []
-    return _function_tools(agent.tools)
+        return [], None
+    return _function_tools(agent.tools), agent.model
 
 
 async def _emit_item(
@@ -430,6 +431,7 @@ async def _write_turn_log(
     error_code: str | None = None,
     request_id: str | None = None,
     metrics: Metrics | None = None,
+    tracing: Tracing | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is None:
@@ -481,6 +483,20 @@ async def _write_turn_log(
         total_tokens=stored["total_tokens"],
         error_code=error_code,
     )
+    set_span(
+        tracing,
+        request_id=request_id,
+        session_id=session_id,
+        turn_id=turn_id,
+        model=model,
+        status=status,
+        prompt_tokens=stored["prompt_tokens"],
+        completion_tokens=stored["completion_tokens"],
+        cache_read_tokens=stored["cache_read_tokens"],
+        cache_write_tokens=stored["cache_write_tokens"],
+        total_tokens=stored["total_tokens"],
+        tool_names=tool_names,
+    )
 
 
 async def _complete_turn(
@@ -494,6 +510,7 @@ async def _complete_turn(
     *,
     request_id: str | None = None,
     metrics: Metrics | None = None,
+    tracing: Tracing | None = None,
 ) -> None:
     await _emit_item(
         db,
@@ -519,6 +536,7 @@ async def _complete_turn(
         usage=stored,
         request_id=request_id,
         metrics=metrics,
+        tracing=tracing,
     )
     await persist_event(
         db,
@@ -548,6 +566,7 @@ async def _cancel_turn(
     *,
     request_id: str | None = None,
     metrics: Metrics | None = None,
+    tracing: Tracing | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is not None:
@@ -561,6 +580,7 @@ async def _cancel_turn(
         status="cancelled",
         request_id=request_id,
         metrics=metrics,
+        tracing=tracing,
     )
     await persist_event(
         db,
@@ -618,6 +638,30 @@ async def fail_session(
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.failed")
 
 
+def _model_span_attrs(
+    *,
+    request_id: str | None,
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    model: str | None,
+    usage: dict[str, int],
+    status: str,
+) -> dict[str, object]:
+    stored = usage_from(usage)
+    return {
+        "request_id": request_id,
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "model": model,
+        "status": status,
+        "prompt_tokens": stored["prompt_tokens"],
+        "completion_tokens": stored["completion_tokens"],
+        "cache_read_tokens": stored["cache_read_tokens"],
+        "cache_write_tokens": stored["cache_write_tokens"],
+        "total_tokens": stored["total_tokens"],
+    }
+
+
 async def run_turn(
     store: Store,
     hub: EventHub,
@@ -630,6 +674,7 @@ async def run_turn(
     mcp_stdio: list[Any] | None = None,
     request_id: str | None = None,
     metrics: Metrics | None = None,
+    tracing: Tracing | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
     try:
@@ -638,12 +683,15 @@ async def run_turn(
         tools: bool
         function_tools: list[dict[str, Any]]
         skill_dirs: list[str]
+        model: str | None
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
                 return
             cwd_path, tools = _cwd_and_tools(row.environment)
-            function_tools = await _agent_function_tools(db, tenant_id, row.agent_id)
+            function_tools, model = await _agent_tools_and_model(
+                db, tenant_id, row.agent_id
+            )
             skill_dirs = _skill_dirs(row.environment)
             await update_session(
                 db,
@@ -684,66 +732,99 @@ async def run_turn(
                 type="message",
                 data={"role": "user", "content": text},
             )
-        reply, pending, usage = await _consume_generate(
-            store,
-            hub,
-            tenant_id,
-            session_id,
-            turn_id,
-            harness.generate(
-                text,
+        with start_span(
+            tracing,
+            "turn",
+            request_id=request_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            model=model,
+        ):
+            with start_span(
+                tracing,
+                "model",
+                request_id=request_id,
                 session_id=session_id,
-                cwd=cwd_path,
-                tools=tools,
-                function_tools=function_tools,
-                mcp_http=mcp_http,
-                mcp_stdio=mcp_stdio,
-                skill_dirs=skill_dirs,
-                abort=abort,
-            ),
-        )
-        async with store.session() as db:
-            if abort.is_set():
-                await _cancel_turn(
+                turn_id=turn_id,
+                model=model,
+            ) as model_span:
+                reply, pending, usage = await _consume_generate(
+                    store,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    turn_id,
+                    harness.generate(
+                        text,
+                        session_id=session_id,
+                        cwd=cwd_path,
+                        tools=tools,
+                        function_tools=function_tools,
+                        mcp_http=mcp_http,
+                        mcp_stdio=mcp_stdio,
+                        skill_dirs=skill_dirs,
+                        abort=abort,
+                    ),
+                )
+                set_span(
+                    tracing,
+                    model_span,
+                    **_model_span_attrs(
+                        request_id=request_id,
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        model=model,
+                        usage=usage,
+                        status="cancelled" if abort.is_set() else "completed",
+                    ),
+                )
+            async with store.session() as db:
+                if abort.is_set():
+                    await _cancel_turn(
+                        db,
+                        hub,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                    )
+                    return
+                if pending:
+                    latest = await get_session(db, tenant_id, session_id)
+                    current = latest.required_actions if latest is not None else []
+                    actions = with_env_actions(current, pending)
+                    await update_session(
+                        db,
+                        tenant_id,
+                        session_id,
+                        changes={
+                            "status": "requires_action",
+                            "required_actions": actions,
+                        },
+                    )
+                    await persist_event(
+                        db,
+                        hub,
+                        tenant_id,
+                        session_id,
+                        type="agent.session.requires_action",
+                        data={"turn_id": str(turn_id), "required_actions": actions},
+                    )
+                    return
+                await _complete_turn(
                     db,
                     hub,
                     tenant_id,
                     session_id,
                     turn_id,
+                    reply,
+                    usage,
                     request_id=request_id,
                     metrics=metrics,
+                    tracing=tracing,
                 )
-                return
-            if pending:
-                latest = await get_session(db, tenant_id, session_id)
-                current = latest.required_actions if latest is not None else []
-                actions = with_env_actions(current, pending)
-                await update_session(
-                    db,
-                    tenant_id,
-                    session_id,
-                    changes={"status": "requires_action", "required_actions": actions},
-                )
-                await persist_event(
-                    db,
-                    hub,
-                    tenant_id,
-                    session_id,
-                    type="agent.session.requires_action",
-                    data={"turn_id": str(turn_id), "required_actions": actions},
-                )
-                return
-            await _complete_turn(
-                db,
-                hub,
-                tenant_id,
-                session_id,
-                turn_id,
-                reply,
-                usage,
-                request_id=request_id,
-                metrics=metrics,
-            )
     finally:
         hub.unwatch_turn(session_id)
 
@@ -764,12 +845,14 @@ async def continue_turn(
     mcp_stdio: list[Any] | None = None,
     request_id: str | None = None,
     metrics: Metrics | None = None,
+    tracing: Tracing | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
     function_tools: list[dict[str, Any]]
     skill_dirs: list[str]
     result: dict[str, Any]
+    model: str | None = None
     async with store.session() as db:
         row = await get_session(db, tenant_id, session_id)
         if row is None:
@@ -824,7 +907,9 @@ async def continue_turn(
             )
             return
         cwd_path, tools = _cwd_and_tools(row.environment)
-        function_tools = await _agent_function_tools(db, tenant_id, row.agent_id)
+        function_tools, model = await _agent_tools_and_model(
+            db, tenant_id, row.agent_id
+        )
         skill_dirs = _skill_dirs(row.environment)
         result = {
             "call_id": call_id,
@@ -832,52 +917,81 @@ async def continue_turn(
             "output": output,
             "error": error,
         }
-    reply, pending, usage = await _consume_generate(
-        store,
-        hub,
-        tenant_id,
-        session_id,
-        turn_id,
-        harness.generate(
-            "",
+    with start_span(
+        tracing,
+        "turn",
+        request_id=request_id,
+        session_id=session_id,
+        turn_id=turn_id,
+        model=model,
+    ):
+        with start_span(
+            tracing,
+            "model",
+            request_id=request_id,
             session_id=session_id,
-            cwd=cwd_path,
-            tools=tools,
-            function_tools=function_tools,
-            tool_result=result,
-            mcp_http=mcp_http,
-            mcp_stdio=mcp_stdio,
-            skill_dirs=skill_dirs,
-        ),
-    )
-    async with store.session() as db:
-        if pending:
-            latest = await get_session(db, tenant_id, session_id)
-            current = latest.required_actions if latest is not None else []
-            actions = with_env_actions(current, pending)
-            await update_session(
-                db,
+            turn_id=turn_id,
+            model=model,
+        ) as model_span:
+            reply, pending, usage = await _consume_generate(
+                store,
+                hub,
                 tenant_id,
                 session_id,
-                changes={"status": "requires_action", "required_actions": actions},
+                turn_id,
+                harness.generate(
+                    "",
+                    session_id=session_id,
+                    cwd=cwd_path,
+                    tools=tools,
+                    function_tools=function_tools,
+                    tool_result=result,
+                    mcp_http=mcp_http,
+                    mcp_stdio=mcp_stdio,
+                    skill_dirs=skill_dirs,
+                ),
             )
-            await persist_event(
+            set_span(
+                tracing,
+                model_span,
+                **_model_span_attrs(
+                    request_id=request_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    model=model,
+                    usage=usage,
+                    status="completed",
+                ),
+            )
+        async with store.session() as db:
+            if pending:
+                latest = await get_session(db, tenant_id, session_id)
+                current = latest.required_actions if latest is not None else []
+                actions = with_env_actions(current, pending)
+                await update_session(
+                    db,
+                    tenant_id,
+                    session_id,
+                    changes={"status": "requires_action", "required_actions": actions},
+                )
+                await persist_event(
+                    db,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    type="agent.session.requires_action",
+                    data={"turn_id": str(turn_id), "required_actions": actions},
+                )
+                return
+            await _complete_turn(
                 db,
                 hub,
                 tenant_id,
                 session_id,
-                type="agent.session.requires_action",
-                data={"turn_id": str(turn_id), "required_actions": actions},
+                turn_id,
+                reply,
+                usage,
+                request_id=request_id,
+                metrics=metrics,
+                tracing=tracing,
             )
-            return
-        await _complete_turn(
-            db,
-            hub,
-            tenant_id,
-            session_id,
-            turn_id,
-            reply,
-            usage,
-            request_id=request_id,
-            metrics=metrics,
-        )

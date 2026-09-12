@@ -12,6 +12,7 @@ from apipi.config import Settings, load_settings, postgres_url
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import register_exception_handlers
 from apipi.metrics import Metrics, mount_metrics
+from apipi.otel import Tracing
 from apipi.pi.harness import PiHarness
 from apipi.pi.pool import PiPool
 from apipi.request_id import RequestIdMiddleware
@@ -24,6 +25,7 @@ def create_app(
     store: Store | None = None,
     harness: FakeHarness | PiHarness | None = None,
     pool: PiPool | None = None,
+    tracing: Tracing | None = None,
 ) -> FastAPI:
     resolved = settings if settings is not None else load_settings()
     resolved_pool = pool if pool is not None else PiPool(resolved)
@@ -40,6 +42,9 @@ def create_app(
         finally:
             reap.cancel()
             await resolved_pool.close()
+            current = getattr(app.state, "tracing", None)
+            if isinstance(current, Tracing):
+                current.shutdown()
             if owned:
                 await app.state.store.dispose()
 
@@ -47,6 +52,12 @@ def create_app(
     app.add_middleware(RequestIdMiddleware)
     app.state.settings = resolved
     app.state.metrics = Metrics() if resolved.metrics else None
+    if tracing is not None:
+        app.state.tracing = tracing
+    elif resolved.otel_endpoint:
+        app.state.tracing = Tracing(endpoint=resolved.otel_endpoint)
+    else:
+        app.state.tracing = None
     app.state.store = store
     app.state.mcp_http = {}
     app.state.mcp_stdio = {}
