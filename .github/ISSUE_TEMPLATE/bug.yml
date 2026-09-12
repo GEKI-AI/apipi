@@ -6,6 +6,7 @@ body:
     attributes:
       value: |
         Write this so an agent can fix it without asking you questions.
+        Use simple technical English. Short sentences.
   - type: textarea
     id: observed
     attributes:

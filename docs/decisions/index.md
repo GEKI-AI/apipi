@@ -3,9 +3,9 @@
 Current choices only. If a choice changes, edit the file. Do not keep
 old versions.
 
-Name, license, docs toolchain, git, and tooling are not ADRs. They live
-in `README.md`, `LICENSE`, `mkdocs.yml`, `requirements-docs.txt`,
-`CONTRIBUTING.md`, and `pyproject.toml`.
+Name, license, docs tools, git, and tooling are not decision files.
+They live in `README.md`, `LICENSE`, `mkdocs.yml`,
+`requirements-docs.txt`, `CONTRIBUTING.md`, and `pyproject.toml`.
 
 | # | Title |
 | --- | --- |

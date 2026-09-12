@@ -1,62 +1,20 @@
 ---
 name: create-issue
-description: Create a GitHub issue for this repo using the GitHub CLI (gh) when available. Use when starting a session, filing a bug or request, or when work has no issue yet. Prefer an existing issue if one already covers the work.
+description: File one GitHub issue with Goal, Acceptance, and Specs. Use when filing a bug or request, or when plan is ready to file. Prefer an existing issue. Do not use to implement.
 ---
 
 # Create an issue
 
-Default process: start from an issue, do the work, end with a PR. That is the usual path, **not law**. If the user explicitly asks to skip the issue or to open a PR without one, do that.
+Follow `CONTRIBUTING.md` Issues. If those rules disagree with this
+skill, `CONTRIBUTING.md` wins.
 
-At session start:
+Prefer an existing open issue (`gh issue list`). Do not duplicate. If
+the user asked to skip an issue, stop.
 
-1. If the user pointed at an issue, use it.
-2. Else look for an existing open issue that already is this work (`gh issue list`). Reuse it. Do not duplicate.
-3. Else, most of the time, create an issue, then work from it.
+Use `gh`. If it is missing or not logged in, stop. Tell the user to
+install and log in to `gh`. Do not file another way unless they ask.
 
-Read before acting:
-
-- `CONTRIBUTING.md`
-- `AGENTS.md`
-- `CONSTITUTION.md`
-- `docs/process.md`
-
-Do not invent process. If those files disagree with this skill, those files win.
-
-## What to file
-
-Write so a human can read it in one pass and an agent can implement
-without asking questions.
-
-| Kind | Include |
-| --- | --- |
-| Request | Goal, acceptance checks, spec paths |
-| Bug | Observed, expected, spec path, how to reproduce |
-
-Do not list non-goals. Anything not in the goal is out of scope.
-Mention a non-goal only when someone would reasonably think it was
-included.
-
-Do not file work that lives on `docs/roadmap.md` unless the spec has moved. If it is not in a spec, say so; do not treat the issue as a license to build it anyway.
-
-## GitHub CLI
-
-Check that `gh` is installed **before** creating the issue:
-
-```
-command -v gh
-```
-
-If `gh` is present, use it. Do not fall back to the API or a browser while `gh` works.
-
-Then:
-
-```
-gh auth status
-```
-
-If `gh` is missing, not authenticated, or the command fails, stop. Tell the user to install and authenticate the GitHub CLI (`gh`), then retry. Do not open the issue another way unless they ask.
-
-## Create with `gh`
+Request:
 
 ```
 gh issue create --title "<title>" --body "$(cat <<'EOF'
@@ -67,15 +25,26 @@ gh issue create --title "<title>" --body "$(cat <<'EOF'
 ## Acceptance
 
 - <check>
-- <check>
 
 ## Specs
 
 - <path>
+
+## Files
+
+- <file this change is likely to edit>
+
+## Blocked by
+
+<issue number or none>
 EOF
 )"
 ```
 
-For a bug, use Observed / Expected / Spec path / How to reproduce instead of Goal / Acceptance.
+Bug: Observed, Expected, Specs, Reproduce instead of Goal / Acceptance.
+Files and Blocked by are optional.
 
-Title: short, specific. Return the issue URL. Then work on that issue (branch `issue-<n>-<slug>` from latest `main`) unless the user says otherwise.
+Do not list what this is not. Do not file `docs/roadmap.md` work unless
+the spec has moved. If it is not in a spec, say so.
+
+Return the issue URL. Do not start implementing.

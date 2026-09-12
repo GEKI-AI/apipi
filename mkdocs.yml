@@ -75,7 +75,7 @@ nav:
   - Tools and skills: tools.md
   - Roadmap: roadmap.md
   - How we work: process.md
-  - Standing orders: agents.md
+  - Agent rules: agents.md
   - Decisions:
       - Index: decisions/index.md
       - "0001 Python": decisions/0001-python-fastapi.md

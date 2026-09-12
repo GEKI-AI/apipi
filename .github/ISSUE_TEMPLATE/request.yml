@@ -6,7 +6,8 @@ body:
     attributes:
       value: |
         Write this so a human can read it in one pass and an agent can
-        implement it. We implement almost all code with coding agents.
+        implement it. Use simple technical English. Short sentences.
+        We implement almost all code with coding agents.
   - type: textarea
     id: goal
     attributes:
@@ -18,7 +19,7 @@ body:
     id: acceptance
     attributes:
       label: Acceptance
-      description: Checkable outcomes, not a design essay.
+      description: What you can check when it is done. Keep it short.
     validations:
       required: true
   - type: textarea
@@ -29,4 +30,15 @@ body:
       placeholder: docs/api.md
     validations:
       required: true
-
+  - type: textarea
+    id: files
+    attributes:
+      label: Files
+      description: Files this change is likely to edit. Helps run two changes at once.
+      placeholder: src/apipi/api/sessions.py
+  - type: textarea
+    id: blocked_by
+    attributes:
+      label: Blocked by
+      description: Issue that must land first, if any.
+      placeholder: none
