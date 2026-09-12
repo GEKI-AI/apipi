@@ -42,9 +42,9 @@ to `host`. Operators without jail tools must set
 production.
 
 `microvm` starts Pi (and stdio MCP) in a Firecracker guest when
-`/dev/kvm`, `firecracker`, `jailer`, and the kernel and rootfs images
-are present. If any of those are missing, the process exits. It does
-not fall back to `jail` or `host`.
+`/dev/kvm`, `firecracker`, `jailer`, the kernel and rootfs images, and
+host net tools (`ip`, `iptables`) are present. If any of those are
+missing, the process exits. It does not fall back to `jail` or `host`.
 
 ## Gateway
 
@@ -68,12 +68,12 @@ If the mode cannot start, the process exits.
 | --- | --- | --- |
 | `host` | None. Pi is a child of the gateway. | Implemented. Logs a warning. |
 | `jail` | Linux namespaces. Shared kernel. Config default. | Implemented when `bwrap`, `pasta`, and cgroup v2 can start. Otherwise the process exits. |
-| `microvm` | KVM guest. Own kernel. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, and guest images can start. Otherwise the process exits. |
+| `microvm` | KVM guest. Own kernel. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, and `iptables` can start. Otherwise the process exits. |
 
 `host` works everywhere we run tests. `jail` needs Linux with
 bubblewrap, pasta, and cgroup v2. `microvm` needs Linux with
-`/dev/kvm`, Firecracker, jailer, and operator-provided kernel and
-rootfs images.
+`/dev/kvm`, Firecracker, jailer, operator-provided kernel and rootfs
+images, `ip`, and `iptables`.
 
 ### Default (one server)
 
@@ -107,32 +107,41 @@ cgroup v2 cannot start, `apipi serve` exits. There is no fallback to
 [Firecracker](https://firecracker-microvm.github.io/) + jailer. The
 gateway never enters the guest. Pi, stdio MCP, and local file tools
 boot in a KVM guest with its own kernel. The session directory
-(`environment.openai_hosted`) is packed into a workspace drive and is
-the guest cwd.
+(`environment.openai_hosted`) is packed into a workspace drive at
+boot, unpacked onto a guest tmpfs, and is the guest cwd. Writes stay
+in the guest. They are not copied back to the host folder. That
+differs from jail, which bind-mounts the same directory.
+Skill directories from that workspace are packed with it, and
+`--skill` paths are rewritten to `/tmp/workspace` so Pi inside the
+guest can load them.
 
 RPC is JSON lines over vsock. The gateway does not pipe host stdin
 into the guest process tree. The Pi adapter still sends the same
 JSON-line RPC on that vsock stream.
 
+There is no host loopback, so the guest cannot reach Postgres on
+localhost. Network for the model URL and HTTP MCP goes through a TAP
+device and NAT, not host loopback. Pi RPC still runs over vsock.
+
 This is the mode that protects the host from a hostile user. The
 guest rootfs is operator-provided. It should include Node, Pi, and
 `/sbin/apipi-guest` (the script shipped as `src/apipi/pi/guest.sh`).
-That init mounts a tmpfs workspace, unpacks the workspace drive, and
-bridges vsock port 52 to `pi --mode rpc`. The guest needs `python3`
-or `socat` for that bridge. Do not vendor a distro in git. Set
-`APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` to the image files.
-Missing paths are a configuration error.
+That init mounts a tmpfs workspace, unpacks the workspace drive,
+brings up the TAP interface, and bridges vsock port 52 to
+`pi --mode rpc`. The guest needs `python3` or `socat` for that
+bridge. Do not vendor a distro in git. Set `APIPI_MICROVM_KERNEL` and
+`APIPI_MICROVM_ROOTFS` to the image files. Missing paths are a
+configuration error.
 
 Chromium can use its own sandbox inside the guest. Do not put
 Chromium in the gateway.
 
 VMM overhead is small (~5 MiB). Real cost is guest RAM (Pi alone is
-modest; Playwright needs hundreds of MiB). This version does not
-attach a TAP device. Pi RPC still runs over vsock.
+modest; Playwright needs hundreds of MiB).
 
-If `/dev/kvm`, `firecracker`, `jailer`, the kernel file, or the
-rootfs file cannot start, `apipi serve` exits. There is no fallback
-to `jail` or `host`.
+If `/dev/kvm`, `firecracker`, `jailer`, the kernel file, the rootfs
+file, `ip`, or `iptables` cannot start, `apipi serve` exits. There is
+no fallback to `jail` or `host`.
 
 ## Environment
 

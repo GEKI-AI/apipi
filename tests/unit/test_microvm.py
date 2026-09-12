@@ -17,13 +17,18 @@ from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.guest import _pi_args, _start_mcp
 from apipi.pi.microvm import (
     BOOT_ARGS,
+    GUEST_WORKSPACE,
     VSOCK_PORT,
     connect_vsock,
     guest_env,
+    guest_skill_dirs,
     jailer_argv,
     microvm_config,
     require_microvm,
+    setup_tap,
     spawn_microvm_pi,
+    tap_net,
+    tap_setup_argv,
     write_workspace_image,
 )
 from apipi.pi.proc import PiProc, spawn_pi
@@ -122,6 +127,32 @@ def test_require_microvm_missing_rootfs(
         )
 
 
+def test_require_microvm_missing_ip(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _images(tmp_path)
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr(
+        "apipi.pi.microvm.shutil.which",
+        lambda name: None if name == "ip" else _which_ok(name),
+    )
+    with pytest.raises(ConfigError, match=r"requires ip$"):
+        require_microvm(_settings(tmp_path))
+
+
+def test_require_microvm_missing_iptables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _images(tmp_path)
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr(
+        "apipi.pi.microvm.shutil.which",
+        lambda name: None if name == "iptables" else _which_ok(name),
+    )
+    with pytest.raises(ConfigError, match="requires iptables"):
+        require_microvm(_settings(tmp_path))
+
+
 def test_jailer_argv_and_config_use_vsock() -> None:
     argv = jailer_argv(
         jailer="/usr/bin/jailer",
@@ -136,21 +167,32 @@ def test_jailer_argv_and_config_use_vsock() -> None:
     assert argv[argv.index("--exec-file") + 1] == "/usr/bin/firecracker"
     assert "--" in argv
     assert argv[argv.index("--") + 1 :] == ["--no-api", "--config-file", "config.json"]
+    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
     config = microvm_config(
         kernel="vmlinux",
         rootfs="rootfs.ext4",
         workspace="workspace.tar",
         vsock="vsock.sock",
         cid=3,
+        net=net,
     )
     assert config["vsock"] == {"guest_cid": 3, "uds_path": "vsock.sock"}
     boot = cast(dict[str, str], config["boot-source"])
     assert boot["kernel_image_path"] == "vmlinux"
     assert "init=/sbin/apipi-guest" in BOOT_ARGS
-    assert boot["boot_args"] == BOOT_ARGS
+    assert boot["boot_args"].startswith(BOOT_ARGS)
+    assert f"ip={net.guest_ip}::{net.host_ip}:" in boot["boot_args"]
     drives = cast(list[dict[str, object]], config["drives"])
     assert drives[0]["path_on_host"] == "rootfs.ext4"
     assert drives[1]["path_on_host"] == "workspace.tar"
+    nics = cast(list[dict[str, str]], config["network-interfaces"])
+    assert nics == [
+        {
+            "iface_id": "eth0",
+            "guest_mac": net.mac,
+            "host_dev_name": net.name,
+        }
+    ]
 
 
 def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
@@ -158,11 +200,13 @@ def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
     cwd.mkdir()
     (cwd / "note.txt").write_text("hello")
     dest = tmp_path / "workspace.tar"
+    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
     write_workspace_image(
         dest,
         cwd=str(cwd),
         env={"OPENAI_API_KEY": "k", "DATABASE_URL": "postgresql://x"},
         pi_args=["pi", "--mode", "rpc", "--no-session"],
+        net=net,
     )
     with tarfile.open(dest, mode="r") as tar:
         names = tar.getnames()
@@ -174,8 +218,62 @@ def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
         env = tar.extractfile(".apipi/env")
         assert env is not None
         text = env.read().decode()
+        net_f = tar.extractfile(".apipi/net")
+        assert net_f is not None
+        net_text = net_f.read().decode()
     assert "OPENAI_API_KEY" in text
     assert "DATABASE_URL" not in text
+    assert net.guest_ip in net_text
+    assert net.host_ip in net_text
+    assert "127.0.0.1" not in net_text
+
+
+def test_tap_setup_nat_without_host_loopback() -> None:
+    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
+    argv = tap_setup_argv(
+        net, ip="/sbin/ip", iptables="/sbin/iptables", uid=123, gid=100
+    )
+    flat = " ".join(" ".join(part) for part in argv)
+    assert net.name in flat
+    assert "tuntap" in flat
+    assert "MASQUERADE" in flat
+    assert "127.0.0.1" not in flat
+    assert "DNAT" not in flat
+    assert "--map-host-loopback" not in flat
+
+
+def test_guest_skill_dirs_rewrite_workspace_paths(tmp_path: Path) -> None:
+    cwd = tmp_path / "session"
+    inside = cwd / "pack" / "demo"
+    inside.mkdir(parents=True)
+    outside = tmp_path / "other" / "cap"
+    outside.mkdir(parents=True)
+    mapped, extras = guest_skill_dirs(str(cwd), [str(inside), str(outside)])
+    assert mapped == [
+        f"{GUEST_WORKSPACE}/pack/demo",
+        f"{GUEST_WORKSPACE}/.apipi/skills/cap",
+    ]
+    assert extras == [(outside.resolve(), ".apipi/skills/cap")]
+
+
+def test_workspace_image_packs_outside_skills(tmp_path: Path) -> None:
+    cwd = tmp_path / "session"
+    cwd.mkdir()
+    outside = tmp_path / "cap-skill"
+    outside.mkdir()
+    (outside / "SKILL.md").write_text("hello")
+    dest = tmp_path / "workspace.tar"
+    write_workspace_image(
+        dest,
+        cwd=str(cwd),
+        env={},
+        pi_args=["pi", "--skill", f"{GUEST_WORKSPACE}/.apipi/skills/cap-skill"],
+        extra_dirs=[(outside, ".apipi/skills/cap-skill")],
+    )
+    with tarfile.open(dest, mode="r") as tar:
+        names = tar.getnames()
+    assert any(name.endswith("SKILL.md") for name in names)
+    assert any(".apipi/skills/cap-skill" in name for name in names)
 
 
 def test_guest_env_drops_host_path(tmp_path: Path) -> None:
@@ -252,6 +350,8 @@ async def test_spawn_pi_microvm_uses_jailer_and_vsock(
     cwd.mkdir()
     monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.pi.microvm.setup_tap", lambda *_a, **_k: None)
+    monkeypatch.setattr("apipi.pi.microvm.teardown_tap", lambda *_a, **_k: None)
     captured: dict[str, Any] = {}
     writer = _Writer()
 
@@ -275,6 +375,9 @@ async def test_spawn_pi_microvm_uses_jailer_and_vsock(
     assert "/usr/bin/firecracker" in args
     assert "--no-api" in args
     assert captured["vsock"] is True
+    assert captured["kwargs"]["stdin"] is asyncio.subprocess.DEVNULL
+    assert captured["kwargs"]["stdout"] is asyncio.subprocess.DEVNULL
+    assert captured["kwargs"]["stderr"] is asyncio.subprocess.DEVNULL
     await proc.send({"type": "prompt", "message": "hi"})
     assert b'"type": "prompt"' in writer.buf
     assert proc._stdin is writer
@@ -318,12 +421,79 @@ async def test_spawn_microvm_missing_firecracker_does_not_fallback(
     assert called is False
 
 
+async def test_spawn_microvm_missing_ip_does_not_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _images(tmp_path)
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr(
+        "apipi.pi.microvm.shutil.which",
+        lambda name: None if name == "ip" else _which_ok(name),
+    )
+    called = False
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        nonlocal called
+        called = True
+        return _Process()
+
+    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    with pytest.raises(ConfigError, match=r"requires ip$"):
+        await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
+    assert called is False
+
+
+async def test_spawn_microvm_sets_up_tap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _images(tmp_path)
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
+    taps: list[object] = []
+    monkeypatch.setattr(
+        "apipi.pi.microvm.setup_tap", lambda net, **_k: taps.append(net)
+    )
+    monkeypatch.setattr("apipi.pi.microvm.teardown_tap", lambda *_a, **_k: None)
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        return _Process()
+
+    async def fake_connect(*_args: object, **_kwargs: object) -> tuple[object, _Writer]:
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        return reader, _Writer()
+
+    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("apipi.pi.microvm.connect_vsock", fake_connect)
+    await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
+    assert len(taps) == 1
+
+
+def test_setup_tap_runs_ip_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    ran: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs: Any) -> None:
+        ran.append(list(argv))
+
+    monkeypatch.setattr("apipi.pi.microvm._enable_forward", lambda: None)
+    monkeypatch.setattr("apipi.pi.microvm._run", fake_run)
+    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
+    setup_tap(net, ip="/sbin/ip", iptables="/sbin/iptables", uid=1, gid=2)
+    flat = " ".join(" ".join(part) for part in ran)
+    assert "/sbin/ip tuntap add" in flat
+    assert "MASQUERADE" in flat
+    assert "127.0.0.1" not in flat
+
+
 async def test_spawn_microvm_stdio_stays_in_guest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
     monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.pi.microvm.setup_tap", lambda *_a, **_k: None)
+    monkeypatch.setattr("apipi.pi.microvm.teardown_tap", lambda *_a, **_k: None)
     captured: dict[str, Any] = {}
 
     async def fake_exec(*args: str, **_kwargs: Any) -> _Process:

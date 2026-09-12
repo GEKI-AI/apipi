@@ -29,7 +29,8 @@ gateway's working directory.
 In `host` this is a folder on the host. It is not a security boundary.
 In `jail`, that folder is bind-mounted into the namespace jail and is
 Pi's cwd. In `microvm`, that folder is packed into a workspace drive
-and is the guest cwd.
+at boot, unpacked onto a guest tmpfs, and is the guest cwd. Writes
+stay in the guest. They are not copied back to the host folder.
 
 There is no runner socket. The directory is created when the session is
 created. File tools (read, write, edit, bash) run against that folder

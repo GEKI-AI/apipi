@@ -43,9 +43,9 @@ Python 3.13, FastAPI, Postgres. uv only. Pi via RPC, one process per
 session. Run mode `APIPI_RUN_MODE` (`host` \| `jail` \| `microvm`),
 default `jail`. `host`, `jail`, and `microvm` are implemented. Jail
 still exits if `bwrap`, `pasta`, or cgroup v2 cannot start. `microvm`
-still exits if `/dev/kvm`, `firecracker`, `jailer`, kernel, or rootfs
-cannot start. No silent fallback. OpenAI-compatible `base_url`. No
-Node in the gateway.
+still exits if `/dev/kvm`, `firecracker`, `jailer`, kernel, rootfs,
+`ip`, or `iptables` cannot start. No silent fallback.
+OpenAI-compatible `base_url`. No Node in the gateway.
 
 ## Do not
 
