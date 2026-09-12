@@ -34,6 +34,9 @@ Postgres. Spawns Pi (`pi --mode rpc`). Stays on the host.
 Pi env gets model credentials and that session's MCP secrets. It does
 not get `DATABASE_URL` or gateway keys.
 
+Auth is a callback on the bearer. Default hashes the key. We do not
+store secrets. See [auth](auth.md).
+
 ## Run mode
 
 Server config. Not an OpenAI field. `APIPI_RUN_MODE`, default `jail`.
@@ -91,8 +94,8 @@ See [environments](environments.md).
 
 ## Store
 
-Postgres holds tenants, keys, agents, sessions, turns, items, the
-event log, environment state, usage, artifact metadata.
+Postgres holds tenants, agents, sessions, turns, items, the event
+log, environment state, usage, artifact metadata. Not API keys.
 
 Pi JSONL is a cache. Do not read it to serve the API.
 

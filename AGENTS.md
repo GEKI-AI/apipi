@@ -27,7 +27,7 @@ OpenAI-compatible `base_url`. No Node in the gateway.
 - Pi types in HTTP
 - Pi JSONL as the database
 - Accept `multi_agent` silently
-- Tenant keys in the browser
+- Tenant keys in the browser or in Postgres
 - Rewrite the event log
 - A custom docs frontend
 - A superseded ADR file
@@ -36,7 +36,7 @@ OpenAI-compatible `base_url`. No Node in the gateway.
 
 ## Do
 
-- Tenant-scope every query
+- Tenant-scope every query. Auth is a callback; do not store keys.
 - Persist the public event before SSE
 - Fail unknown OpenAI fields clearly
 - Pin Pi when touching the adapter

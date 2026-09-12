@@ -18,9 +18,10 @@ file rarely, and only with a dated amendment at the bottom.
 4. **Pi is the harness we ship.**
    Small loop, RPC. A second adapter later must not change the public API.
 
-5. **Browsers do not hold tenant API keys.**
-   The example UI uses a demo cookie. Production clients use bearer tokens
-   and their own frontend.
+5. **We do not mint or store tenant API keys.**
+   Browsers do not hold them. The example UI uses a demo cookie.
+   Production clients send a bearer the gateway does not keep.
+   Auth is a callback; default hashes the key (`docs/auth.md`).
 
 6. **Compatible where it helps, honest where it does not.**
    Official OpenAI clients should work for the subset we implement. Unknown
@@ -64,3 +65,8 @@ Run mode is `host` | `jail` | `microvm`. Default `jail`. Independent of
 environment.
 
 Pi is the harness we ship. Skills are `SKILL.md` on the computer.
+
+### 2026-09-12
+
+We do not mint or store tenant API keys. Auth is a callback. Default
+accepts any bearer and hashes it for `key_id` / `tenant_id`.
