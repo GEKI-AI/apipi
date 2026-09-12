@@ -18,6 +18,7 @@ from apipi.env.hub import EnvDisconnected, EnvironmentHub
 from apipi.errors import ApiError, gone, not_implemented
 from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
+from apipi.otel import set_span, start_span
 from apipi.pi.dirs import session_workspace
 from apipi.request_id import request_id_of
 from apipi.runtime import (
@@ -247,16 +248,20 @@ async def create_agent_session(
     raw_tools: list[Any] = []
     env_key: str | None = None
     env_id: uuid.UUID | None = None
+    model: str | None = None
     async with store.session() as db:
         if agent_id is not None:
             agent = await get_agent(db, tenant.id, agent_id)
             if agent is None:
                 not_found()
             raw_tools = agent.tools
-        elif body.agent is not None and body.agent.tools is not None:
-            raw_tools = [
-                tool.model_dump(exclude_none=True) for tool in body.agent.tools
-            ]
+            model = agent.model
+        elif body.agent is not None:
+            model = body.agent.model
+            if body.agent.tools is not None:
+                raw_tools = [
+                    tool.model_dump(exclude_none=True) for tool in body.agent.tools
+                ]
         row = await create_session(
             db,
             tenant.id,
@@ -311,38 +316,49 @@ async def create_agent_session(
                 data={"environment_id": str(env_id)},
             )
         session_id = row.id
-    try:
-        connected = await connect_mcp_http_tools(raw_tools)
-        stdio = await start_mcp_stdio_tools(raw_tools)
-    except McpConnectError as exc:
-        async with store.session() as db:
-            await fail_session(db, hub, tenant.id, session_id, str(exc))
-            row = await get_session(db, tenant.id, session_id)
-            if row is None:
-                not_found()
-            return session_body(row)
-    request.app.state.mcp_http[session_id] = connected
-    request.app.state.mcp_stdio[session_id] = stdio
-    request.app.state.pi_pool.put_stdio(session_id, stdio)
-    text = _input_text(body.input)
-    if text:
-        await run_turn(
-            store,
-            hub,
-            harness,
-            tenant.id,
-            session_id,
-            text,
-            mcp_http=connected,
-            mcp_stdio=stdio,
-            request_id=request_id_of(request),
-            metrics=request.app.state.metrics,
-        )
-    else:
-        async with store.session() as db:
-            await persist_event(
-                db, hub, tenant.id, session_id, type="agent.session.idle"
+    tracing = request.app.state.tracing
+    request_id = request_id_of(request)
+    with start_span(
+        tracing,
+        "session",
+        request_id=request_id,
+        session_id=session_id,
+        model=model,
+    ):
+        try:
+            connected = await connect_mcp_http_tools(raw_tools)
+            stdio = await start_mcp_stdio_tools(raw_tools)
+        except McpConnectError as exc:
+            async with store.session() as db:
+                await fail_session(db, hub, tenant.id, session_id, str(exc))
+                row = await get_session(db, tenant.id, session_id)
+                if row is None:
+                    not_found()
+                set_span(tracing, status="failed")
+                return session_body(row)
+        request.app.state.mcp_http[session_id] = connected
+        request.app.state.mcp_stdio[session_id] = stdio
+        request.app.state.pi_pool.put_stdio(session_id, stdio)
+        text = _input_text(body.input)
+        if text:
+            await run_turn(
+                store,
+                hub,
+                harness,
+                tenant.id,
+                session_id,
+                text,
+                mcp_http=connected,
+                mcp_stdio=stdio,
+                request_id=request_id,
+                metrics=request.app.state.metrics,
+                tracing=tracing,
             )
+        else:
+            async with store.session() as db:
+                await persist_event(
+                    db, hub, tenant.id, session_id, type="agent.session.idle"
+                )
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)
         if row is None:
@@ -459,6 +475,8 @@ async def post_session_event(
                     code="invalid_request",
                 )
             action = "message"
+    tracing = request.app.state.tracing
+    request_id = request_id_of(request)
     if action == "cancel":
         if abort_ev is not None:
             abort_ev.set()
@@ -470,35 +488,49 @@ async def post_session_event(
                 "tool_result needs turn_id, call_id, and success",
                 code="invalid_request",
             )
-        await continue_turn(
-            store,
-            hub,
-            harness,
-            tenant.id,
-            session_id,
-            turn_id=body.turn_id,
-            call_id=body.call_id,
-            success=body.success,
-            output=body.output,
-            error=body.error,
-            mcp_http=request.app.state.mcp_http.get(session_id),
-            mcp_stdio=request.app.state.mcp_stdio.get(session_id),
-            request_id=request_id_of(request),
-            metrics=request.app.state.metrics,
-        )
+        with start_span(
+            tracing,
+            "session",
+            request_id=request_id,
+            session_id=session_id,
+        ):
+            await continue_turn(
+                store,
+                hub,
+                harness,
+                tenant.id,
+                session_id,
+                turn_id=body.turn_id,
+                call_id=body.call_id,
+                success=body.success,
+                output=body.output,
+                error=body.error,
+                mcp_http=request.app.state.mcp_http.get(session_id),
+                mcp_stdio=request.app.state.mcp_stdio.get(session_id),
+                request_id=request_id,
+                metrics=request.app.state.metrics,
+                tracing=tracing,
+            )
     else:
-        await run_turn(
-            store,
-            hub,
-            harness,
-            tenant.id,
-            session_id,
-            text,
-            mcp_http=request.app.state.mcp_http.get(session_id),
-            mcp_stdio=request.app.state.mcp_stdio.get(session_id),
-            request_id=request_id_of(request),
-            metrics=request.app.state.metrics,
-        )
+        with start_span(
+            tracing,
+            "session",
+            request_id=request_id,
+            session_id=session_id,
+        ):
+            await run_turn(
+                store,
+                hub,
+                harness,
+                tenant.id,
+                session_id,
+                text,
+                mcp_http=request.app.state.mcp_http.get(session_id),
+                mcp_stdio=request.app.state.mcp_stdio.get(session_id),
+                request_id=request_id,
+                metrics=request.app.state.metrics,
+                tracing=tracing,
+            )
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)
         if row is None:

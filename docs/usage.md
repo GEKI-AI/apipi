@@ -100,9 +100,10 @@ text.
 
 ## OpenTelemetry
 
-Export OTLP when `APIPI_OTEL_ENDPOINT` is set. Spans for session, turn,
-and the upstream model call. Attributes: request id, session, turn,
-model, status, token counts, tool names. Not message text.
+Export OTLP/HTTP traces when `APIPI_OTEL_ENDPOINT` is set. `/v1/traces`
+is appended when missing. Spans for session, turn, and the upstream
+model call. Attributes: request id, session, turn, model, status, token
+counts, tool names. Not message text.
 
 ## Config
 
