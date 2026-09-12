@@ -62,7 +62,8 @@ def _not_implemented_field(exc: RequestValidationError | ValidationError) -> str
 
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
-    async def api_error(_request: Request, exc: ApiError) -> JSONResponse:
+    async def api_error(request: Request, exc: ApiError) -> JSONResponse:
+        request.state.error_code = exc.code or exc.type
         return JSONResponse(
             status_code=exc.status_code,
             content=error_body(exc.type, exc.message, exc.code),
@@ -70,10 +71,11 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(
-        _request: Request, exc: RequestValidationError
+        request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         field = _not_implemented_field(exc)
         if field is not None:
+            request.state.error_code = field
             return JSONResponse(
                 status_code=400,
                 content=error_body(
@@ -84,6 +86,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             )
         field = _unknown_field(exc)
         if field is not None:
+            request.state.error_code = "unknown_field"
             return JSONResponse(
                 status_code=400,
                 content=error_body(
@@ -92,6 +95,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                     "unknown_field",
                 ),
             )
+        request.state.error_code = "validation_error"
         return JSONResponse(
             status_code=400,
             content=error_body(
