@@ -30,10 +30,9 @@ a guest.
 
 ## Status
 
-`apipi serve` starts the gateway. Run modes `host` and `jail` are
-implemented. `microvm` is a name in config and in this spec. If you
-set `microvm`, the process exits with `APIPI_RUN_MODE=microvm is not
-available`. There is no fallback.
+`apipi serve` starts the gateway. Run modes `host`, `jail`, and
+`microvm` are implemented. There is no fallback from one mode to
+another.
 
 `jail` is the configured default. It starts Pi (and stdio MCP) in a
 Linux namespace jail when `bwrap`, `pasta`, and cgroup v2 can start.
@@ -41,6 +40,11 @@ If those tools are missing, the process exits. It does not fall back
 to `host`. Operators without jail tools must set
 `APIPI_RUN_MODE=host`. `host` logs a warning and is not suited for
 production.
+
+`microvm` starts Pi (and stdio MCP) in a Firecracker guest when
+`/dev/kvm`, `firecracker`, `jailer`, and the kernel and rootfs images
+are present. If any of those are missing, the process exits. It does
+not fall back to `jail` or `host`.
 
 ## Gateway
 
@@ -64,11 +68,12 @@ If the mode cannot start, the process exits.
 | --- | --- | --- |
 | `host` | None. Pi is a child of the gateway. | Implemented. Logs a warning. |
 | `jail` | Linux namespaces. Shared kernel. Config default. | Implemented when `bwrap`, `pasta`, and cgroup v2 can start. Otherwise the process exits. |
-| `microvm` | KVM guest. Own kernel. | Not implemented. Process exits. |
+| `microvm` | KVM guest. Own kernel. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, and guest images can start. Otherwise the process exits. |
 
 `host` works everywhere we run tests. `jail` needs Linux with
-bubblewrap, pasta, and cgroup v2. `microvm` is planned for Linux with
-`/dev/kvm`.
+bubblewrap, pasta, and cgroup v2. `microvm` needs Linux with
+`/dev/kvm`, Firecracker, jailer, and operator-provided kernel and
+rootfs images.
 
 ### Default (one server)
 
@@ -97,20 +102,37 @@ Chromium in that jail needs `--no-sandbox`. If `bwrap`, `pasta`, or
 cgroup v2 cannot start, `apipi serve` exits. There is no fallback to
 `host`.
 
-### `microvm` (not available)
+### `microvm`
 
-The plan is [Firecracker](https://firecracker-microvm.github.io/) +
-jailer. Pi (and stdio MCP) would boot in a guest with its own kernel.
-The session directory would be the guest workspace. RPC would go over
-vsock.
+[Firecracker](https://firecracker-microvm.github.io/) + jailer. The
+gateway never enters the guest. Pi, stdio MCP, and local file tools
+boot in a KVM guest with its own kernel. The session directory
+(`environment.openai_hosted`) is packed into a workspace drive and is
+the guest cwd.
 
-This is the mode that would protect the host from users. The guest
-would have a minimal rootfs (Node, Pi). Chromium could use its own
-sandbox inside the guest.
+RPC is JSON lines over vsock. The gateway does not pipe host stdin
+into the guest process tree. The Pi adapter still sends the same
+JSON-line RPC on that vsock stream.
+
+This is the mode that protects the host from a hostile user. The
+guest rootfs is operator-provided. It should include Node, Pi, and
+`/sbin/apipi-guest` (the script shipped as `src/apipi/pi/guest.sh`).
+That init mounts a tmpfs workspace, unpacks the workspace drive, and
+bridges vsock port 52 to `pi --mode rpc`. The guest needs `python3`
+or `socat` for that bridge. Do not vendor a distro in git. Set
+`APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` to the image files.
+Missing paths are a configuration error.
+
+Chromium can use its own sandbox inside the guest. Do not put
+Chromium in the gateway.
 
 VMM overhead is small (~5 MiB). Real cost is guest RAM (Pi alone is
-modest; Playwright needs hundreds of MiB). Setting
-`APIPI_RUN_MODE=microvm` exits today.
+modest; Playwright needs hundreds of MiB). This version does not
+attach a TAP device. Pi RPC still runs over vsock.
+
+If `/dev/kvm`, `firecracker`, `jailer`, the kernel file, or the
+rootfs file cannot start, `apipi serve` exits. There is no fallback
+to `jail` or `host`.
 
 ## Environment
 
@@ -131,7 +153,7 @@ OpenTelemetry are exports. See [usage](usage.md).
 
 Pi JSONL is a cache. Do not read it to serve the API.
 
-One Pi process (or, later, guest) per session. After 15 minutes idle
+One Pi process or guest per session. After 15 minutes idle
 (`APIPI_IDLE_TTL`), kill the process. The session row stays. Resume
 from the event log.
 

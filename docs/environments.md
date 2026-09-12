@@ -2,8 +2,7 @@
 
 An environment is where file and shell tools run. That choice is
 independent of [run mode](architecture.md), which is where Pi itself
-runs. A remote runner is valid with `host` and with `jail`. `microvm`
-is not available yet.
+runs. A remote runner is valid with `host`, `jail`, and `microvm`.
 
 ## Types
 
@@ -29,8 +28,8 @@ gateway's working directory.
 
 In `host` this is a folder on the host. It is not a security boundary.
 In `jail`, that folder is bind-mounted into the namespace jail and is
-Pi's cwd. When `microvm` exists, the plan is to use it as the guest
-workspace.
+Pi's cwd. In `microvm`, that folder is packed into a workspace drive
+and is the guest cwd.
 
 There is no runner socket. The directory is created when the session is
 created. File tools (read, write, edit, bash) run against that folder
@@ -43,7 +42,7 @@ work. There is no session directory and no shell.
 
 ## `self_hosted`
 
-Pi stays in the run mode (`host` or `jail`; `microvm` later). The
+Pi stays in the run mode (`host`, `jail`, or `microvm`). The
 computer is elsewhere.
 
 1. Create the session with `environment.type` `self_hosted`.

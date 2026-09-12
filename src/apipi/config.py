@@ -12,7 +12,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 RunMode = Literal["host", "jail", "microvm"]
-IMPLEMENTED_RUN_MODES: frozenset[str] = frozenset({"host", "jail"})
+IMPLEMENTED_RUN_MODES: frozenset[str] = frozenset({"host", "jail", "microvm"})
 
 HOST_MODE_WARNING = "APIPI_RUN_MODE=host is not suited for production"
 TURN_LOG_ON = "turn log on"
@@ -113,6 +113,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("OPENAI_API_KEY", "model_api_key"),
     )
+    microvm_kernel: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_MICROVM_KERNEL", "microvm_kernel"),
+    )
+    microvm_rootfs: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_MICROVM_ROOTFS", "microvm_rootfs"),
+    )
 
     @model_validator(mode="after")
     def run_mode_known(self) -> Self:
@@ -167,7 +175,7 @@ def postgres_url(url: str) -> str:
     return "postgresql+asyncpg://" + url.removeprefix("postgres://")
 
 
-def require_run_mode(mode: str) -> None:
+def require_run_mode(mode: str, settings: Settings | None = None) -> None:
     if mode not in {"host", "jail", "microvm"}:
         raise ConfigError("APIPI_RUN_MODE must be host, jail, or microvm")
     if mode not in IMPLEMENTED_RUN_MODES:
@@ -176,3 +184,7 @@ def require_run_mode(mode: str) -> None:
         from apipi.pi.jail import require_jail
 
         require_jail()
+    if mode == "microvm":
+        from apipi.pi.microvm import require_microvm
+
+        require_microvm(settings)

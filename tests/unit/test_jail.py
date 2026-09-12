@@ -36,7 +36,6 @@ def _which_ok(name: str) -> str:
 
 def test_jail_is_implemented() -> None:
     assert "jail" in IMPLEMENTED_RUN_MODES
-    assert "microvm" not in IMPLEMENTED_RUN_MODES
 
 
 def test_require_jail_missing_bwrap(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -158,11 +157,6 @@ async def test_spawn_jail_does_not_fallback_to_host(
     with pytest.raises(ConfigError, match="bwrap"):
         await spawn_pi(_settings(), cwd=None, tools=True)
     assert called is False
-
-
-async def test_spawn_microvm_does_not_fallback() -> None:
-    with pytest.raises(ConfigError, match="not available"):
-        await spawn_pi(_settings(run_mode="microvm"), cwd=None, tools=True)
 
 
 async def test_spawn_jail_stdio_runs_inside(

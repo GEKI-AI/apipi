@@ -21,8 +21,10 @@ decisions live under Contribute.
 child process (`pi --mode rpc`), one process per session. Run mode
 `jail` starts Pi (and stdio MCP) in a Linux namespace jail when
 `bwrap`, `pasta`, and cgroup v2 can start. If those tools are missing,
-the process exits. `microvm` is not implemented and also exits. There
-is no silent fallback.
+the process exits. Run mode `microvm` starts Pi (and stdio MCP) in a
+Firecracker guest when `/dev/kvm`, `firecracker`, `jailer`, and the
+kernel and rootfs images are present. If those are missing, the
+process exits. There is no silent fallback.
 
 The configured default for `APIPI_RUN_MODE` is `jail`. Operators
 without jail tools must set `APIPI_RUN_MODE=host`. `host` logs a
@@ -100,7 +102,8 @@ does not log that warning. Startup also logs that the turn log is on,
 and whether Prometheus metrics and OpenTelemetry export are on.
 
 If the selected run mode cannot start, the process exits. There is no
-fallback to another mode. `microvm` is not available.
+fallback to another mode. `microvm` needs `/dev/kvm`, Firecracker,
+jailer, `APIPI_MICROVM_KERNEL`, and `APIPI_MICROVM_ROOTFS`.
 
 `GET /health` returns `{"status": "ok"}` and does not require a bearer.
 
@@ -145,7 +148,9 @@ These are the settings the process reads.
 | Config | Default | What |
 | --- | --- | --- |
 | `DATABASE_URL` | required | Postgres URL. `postgresql+asyncpg://…` preferred. |
-| `APIPI_RUN_MODE` | `jail` | `host` \| `jail` \| `microvm`. `host` and `jail` start. Jail exits if `bwrap`, `pasta`, or cgroup v2 are missing. `microvm` exits. No fallback. |
+| `APIPI_RUN_MODE` | `jail` | `host` \| `jail` \| `microvm`. `host` and `jail` start. Jail exits if `bwrap`, `pasta`, or cgroup v2 are missing. `microvm` starts when `/dev/kvm`, `firecracker`, `jailer`, kernel, and rootfs are present. Otherwise it exits. No fallback. |
+| `APIPI_MICROVM_KERNEL` | unset | Guest kernel image. Required when `APIPI_RUN_MODE=microvm`. |
+| `APIPI_MICROVM_ROOTFS` | unset | Guest rootfs image. Required when `APIPI_RUN_MODE=microvm`. Do not vendor a distro in git. |
 | `APIPI_IDLE_TTL` | `15m` | Kill an idle Pi process. The session row stays. Resume from the event log. |
 | `APIPI_AUTH` | unset (default hash) | Import path `package.mod:func` for the auth callback. |
 | `APIPI_AUTH_CACHE_TTL` | `30s` | Cache the callback result by SHA-256 of the bearer, never the raw key. |

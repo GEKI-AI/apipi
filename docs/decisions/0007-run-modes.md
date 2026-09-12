@@ -11,9 +11,11 @@ Where Pi and stdio MCP run.
 Default: `jail`. Set `APIPI_RUN_MODE`. If the mode cannot start, the
 process exits. No fallback.
 
-`host` and `jail` are implemented. `jail` still exits if `bwrap`,
-`pasta`, or cgroup v2 cannot start. `microvm` exits at startup.
-Operators without jail tools must set `APIPI_RUN_MODE=host`.
+`host`, `jail`, and `microvm` are implemented. `jail` still exits if
+`bwrap`, `pasta`, or cgroup v2 cannot start. `microvm` still exits if
+`/dev/kvm`, `firecracker`, `jailer`, or the kernel and rootfs images
+cannot start. Operators without jail tools must set
+`APIPI_RUN_MODE=host`.
 
 `host` logs a warning: not suited for production.
 
