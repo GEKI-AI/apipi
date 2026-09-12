@@ -51,10 +51,20 @@ async def _agent_with_mcp(
 
 
 async def test_mcp_http_starts_with_session(
-    mcp_client: AsyncClient, mcp_harness: FakeHarness, mcp_url: str
+    mcp_client: AsyncClient,
+    mcp_harness: FakeHarness,
+    mcp_server: tuple[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    mcp_url, seen = mcp_server
+    monkeypatch.setenv("MCP_TOKEN", "from-env")
     token = "mcp"
-    agent_id = await _agent_with_mcp(mcp_client, token, mcp_url)
+    agent_id = await _agent_with_mcp(
+        mcp_client,
+        token,
+        mcp_url,
+        headers={"Authorization": "Bearer ${MCP_TOKEN}"},
+    )
     created = await mcp_client.post(
         "/v1/agents/sessions",
         headers=_auth(token),
@@ -68,6 +78,7 @@ async def test_mcp_http_starts_with_session(
     assert created.json()["status"] == "idle"
     assert mcp_harness.mcp_http is not None
     assert mcp_harness.mcp_http[0].server_label == "mock"
+    assert seen.get("Authorization") == "Bearer from-env"
     session_id = created.json()["id"]
     events = await mcp_client.get(
         f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
@@ -77,7 +88,7 @@ async def test_mcp_http_starts_with_session(
     assert types[-1] == "agent.session.idle"
     dumped = str(events.json())
     assert "Authorization" not in dumped
-    assert "secret" not in dumped
+    assert "from-env" not in dumped
 
 
 async def test_mcp_http_failure_is_session_failed(

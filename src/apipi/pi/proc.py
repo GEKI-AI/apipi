@@ -94,7 +94,7 @@ async def spawn_pi(
     command = settings.pi_command.split()
     args = [*command, "--mode", "rpc", "--no-session"]
     if not tools:
-        args.append("--no-tools")
+        args.append("--no-builtin-tools" if mcp_http else "--no-tools")
     process = await asyncio.create_subprocess_exec(
         *args,
         stdin=asyncio.subprocess.PIPE,

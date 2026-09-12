@@ -231,27 +231,31 @@ async def create_agent_session(
             type="agent.session.created",
             data={"id": str(row.id)},
         )
-        try:
-            connected = await connect_mcp_http_tools(raw_tools)
-        except McpConnectError as exc:
-            await fail_session(db, hub, tenant.id, row.id, str(exc))
-            row = await get_session(db, tenant.id, row.id)
+        session_id = row.id
+    try:
+        connected = await connect_mcp_http_tools(raw_tools)
+    except McpConnectError as exc:
+        async with store.session() as db:
+            await fail_session(db, hub, tenant.id, session_id, str(exc))
+            row = await get_session(db, tenant.id, session_id)
             if row is None:
                 not_found()
             return session_body(row)
-        request.app.state.mcp_http[row.id] = connected
+    request.app.state.mcp_http[session_id] = connected
+    async with store.session() as db:
         text = _input_text(body.input)
         if text:
             await run_turn(
-                db, hub, harness, tenant.id, row.id, text, mcp_http=connected
+                db, hub, harness, tenant.id, session_id, text, mcp_http=connected
             )
         else:
-            await persist_event(db, hub, tenant.id, row.id, type="agent.session.idle")
-        row = await get_session(db, tenant.id, row.id)
+            await persist_event(
+                db, hub, tenant.id, session_id, type="agent.session.idle"
+            )
+        row = await get_session(db, tenant.id, session_id)
         if row is None:
             not_found()
         payload = session_body(row)
-        session_id = row.id
     if body.stream:
         return StreamingResponse(
             _event_stream(store, hub, tenant.id, session_id, None),
