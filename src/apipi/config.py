@@ -32,7 +32,7 @@ def parse_ttl(value: object) -> object:
         return timedelta(minutes=int(raw[:-1]))
     if raw.endswith("s"):
         return timedelta(seconds=int(raw[:-1]))
-    raise ValueError("APIPI_IDLE_TTL must be like 15m")
+    raise ValueError("TTL must be like 15m")
 
 
 IdleTtl = Annotated[timedelta, BeforeValidator(parse_ttl)]
@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     idle_ttl: IdleTtl = Field(
         default=timedelta(minutes=15),
         validation_alias=AliasChoices("APIPI_IDLE_TTL", "idle_ttl"),
+    )
+    auth: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_AUTH", "auth"),
+    )
+    auth_cache_ttl: IdleTtl = Field(
+        default=timedelta(seconds=30),
+        validation_alias=AliasChoices("APIPI_AUTH_CACHE_TTL", "auth_cache_ttl"),
     )
     example_ui: bool = Field(
         default=False,
@@ -94,6 +102,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_RUN_MODE must be host, jail, or microvm"
         if "idle_ttl" in loc:
             return "APIPI_IDLE_TTL must be like 15m"
+        if "auth_cache_ttl" in loc:
+            return "APIPI_AUTH_CACHE_TTL must be like 15m"
     return "invalid configuration"
 
 

@@ -38,3 +38,19 @@ def test_default_run_mode_is_jail(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
     assert Settings().run_mode == "jail"
+
+
+def test_default_auth_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.delenv("APIPI_AUTH", raising=False)
+    monkeypatch.delenv("APIPI_AUTH_CACHE_TTL", raising=False)
+    assert Settings().auth is None
+    assert Settings().auth_cache_ttl == timedelta(seconds=30)
+
+
+def test_auth_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_AUTH", "pkg.mod:func")
+    monkeypatch.setenv("APIPI_AUTH_CACHE_TTL", "45s")
+    assert Settings().auth == "pkg.mod:func"
+    assert Settings().auth_cache_ttl == timedelta(seconds=45)

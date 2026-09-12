@@ -1,6 +1,9 @@
 from uuid import NAMESPACE_URL, uuid5
 
-from apipi.auth import authenticate
+import pytest
+
+from apipi.auth import authenticate, load_authenticate
+from apipi.config import ConfigError
 from apipi.tokens import hash_token
 
 
@@ -23,3 +26,13 @@ def test_same_bearer_same_tenant() -> None:
 
 def test_different_bearers_different_tenants() -> None:
     assert authenticate("a").tenant_id != authenticate("b").tenant_id
+
+
+def test_load_authenticate_default() -> None:
+    assert load_authenticate(None) is authenticate
+    assert load_authenticate("") is authenticate
+
+
+def test_load_authenticate_bad_path() -> None:
+    with pytest.raises(ConfigError, match="APIPI_AUTH"):
+        load_authenticate("not-a-path")
