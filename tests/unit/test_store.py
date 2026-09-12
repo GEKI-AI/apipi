@@ -12,12 +12,14 @@ from apipi.store.repo import (
     create_session,
     create_tenant,
     create_turn,
+    delete_agent,
     get_agent,
     get_api_key_by_hash,
     get_item,
     get_session,
     get_turn,
     list_agents,
+    update_agent,
 )
 
 
@@ -68,6 +70,13 @@ async def test_agents_are_tenant_scoped(db: AsyncSession) -> None:
     assert await get_agent(db, a.id, agent.id) is not None
     assert await get_agent(db, b.id, agent.id) is None
     assert await list_agents(db, b.id) == []
+    assert await update_agent(db, b.id, agent.id, changes={"name": "x"}) is None
+    assert await delete_agent(db, b.id, agent.id) is False
+    updated = await update_agent(db, a.id, agent.id, changes={"name": "two"})
+    assert updated is not None
+    assert updated.name == "two"
+    assert await delete_agent(db, a.id, agent.id) is True
+    assert await get_agent(db, a.id, agent.id) is None
 
 
 async def test_sessions_turns_items_are_tenant_scoped(db: AsyncSession) -> None:

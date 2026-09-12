@@ -35,6 +35,18 @@ def _unknown_field(exc: RequestValidationError | ValidationError) -> str | None:
     return None
 
 
+def _not_implemented_field(exc: RequestValidationError | ValidationError) -> str | None:
+    for error in exc.errors():
+        if error.get("type") == "not_implemented":
+            ctx = error.get("ctx") or {}
+            field = ctx.get("field")
+            if field is None:
+                loc = error.get("loc", ())
+                field = loc[-1] if loc else "unknown"
+            return str(field)
+    return None
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def api_error(_request: Request, exc: ApiError) -> JSONResponse:
@@ -47,6 +59,16 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def validation_error(
         _request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        field = _not_implemented_field(exc)
+        if field is not None:
+            return JSONResponse(
+                status_code=400,
+                content=error_body(
+                    "not_implemented",
+                    f"{field} is not implemented",
+                    field,
+                ),
+            )
         field = _unknown_field(exc)
         if field is not None:
             return JSONResponse(
