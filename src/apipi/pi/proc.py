@@ -4,7 +4,7 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
-from apipi.config import Settings
+from apipi.config import ConfigError, Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.version import PINNED_PI
@@ -68,7 +68,7 @@ class PiProc:
             await self.process.wait()
 
 
-def _pi_env(
+def pi_env(
     settings: Settings,
     mcp_http: list[McpHttpServer] | None = None,
     mcp_stdio: list[McpStdioServer] | None = None,
@@ -99,6 +99,25 @@ def _pi_env(
     return env
 
 
+def pi_command_args(
+    settings: Settings,
+    *,
+    tools: bool,
+    mcp_http: list[McpHttpServer] | None = None,
+    mcp_stdio: list[McpStdioServer] | None = None,
+    skill_dirs: list[str] | None = None,
+) -> list[str]:
+    command = settings.pi_command.split()
+    args = [*command, "--mode", "rpc", "--no-session"]
+    if not tools:
+        args.append("--no-builtin-tools" if mcp_http or mcp_stdio else "--no-tools")
+    if skill_dirs is not None:
+        args.append("--no-skills")
+        for path in skill_dirs:
+            args.extend(["--skill", path])
+    return args
+
+
 async def spawn_pi(
     settings: Settings,
     *,
@@ -108,20 +127,32 @@ async def spawn_pi(
     mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
 ) -> PiProc:
-    command = settings.pi_command.split()
-    args = [*command, "--mode", "rpc", "--no-session"]
-    if not tools:
-        args.append("--no-builtin-tools" if mcp_http or mcp_stdio else "--no-tools")
-    if skill_dirs is not None:
-        args.append("--no-skills")
-        for path in skill_dirs:
-            args.extend(["--skill", path])
+    if settings.run_mode == "jail":
+        from apipi.pi.jail import spawn_jailed_pi
+
+        return await spawn_jailed_pi(
+            settings,
+            cwd=cwd,
+            tools=tools,
+            mcp_http=mcp_http,
+            mcp_stdio=mcp_stdio,
+            skill_dirs=skill_dirs,
+        )
+    if settings.run_mode != "host":
+        raise ConfigError(f"APIPI_RUN_MODE={settings.run_mode} is not available")
+    args = pi_command_args(
+        settings,
+        tools=tools,
+        mcp_http=mcp_http,
+        mcp_stdio=mcp_stdio,
+        skill_dirs=skill_dirs,
+    )
     process = await asyncio.create_subprocess_exec(
         *args,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
-        env=_pi_env(settings, mcp_http, mcp_stdio),
+        env=pi_env(settings, mcp_http, mcp_stdio),
     )
     return PiProc(process)

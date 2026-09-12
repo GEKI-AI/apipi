@@ -30,14 +30,17 @@ a guest.
 
 ## Status
 
-`apipi serve` starts the gateway. Only run mode `host` is implemented:
-Pi is a child of the gateway. `jail` and `microvm` are names in config
-and in this spec. If you set either of them, the process exits with
-`APIPI_RUN_MODE=… is not available`. There is no fallback.
+`apipi serve` starts the gateway. Run modes `host` and `jail` are
+implemented. `microvm` is a name in config and in this spec. If you
+set `microvm`, the process exits with `APIPI_RUN_MODE=microvm is not
+available`. There is no fallback.
 
-The configured default is still `jail`. Serve with
-`APIPI_RUN_MODE=host` until jail exists. `host` logs a warning and is
-not suited for production.
+`jail` is the configured default. It starts Pi (and stdio MCP) in a
+Linux namespace jail when `bwrap`, `pasta`, and cgroup v2 can start.
+If those tools are missing, the process exits. It does not fall back
+to `host`. Operators without jail tools must set
+`APIPI_RUN_MODE=host`. `host` logs a warning and is not suited for
+production.
 
 ## Gateway
 
@@ -60,31 +63,39 @@ If the mode cannot start, the process exits.
 | Mode | Isolation | Today |
 | --- | --- | --- |
 | `host` | None. Pi is a child of the gateway. | Implemented. Logs a warning. |
-| `jail` | Linux namespaces. Shared kernel. Config default. | Not implemented. Process exits. |
+| `jail` | Linux namespaces. Shared kernel. Config default. | Implemented when `bwrap`, `pasta`, and cgroup v2 can start. Otherwise the process exits. |
 | `microvm` | KVM guest. Own kernel. | Not implemented. Process exits. |
 
-`host` works everywhere we run tests. `jail` is planned for Linux
-(bubblewrap). `microvm` is planned for Linux with `/dev/kvm`.
+`host` works everywhere we run tests. `jail` needs Linux with
+bubblewrap, pasta, and cgroup v2. `microvm` is planned for Linux with
+`/dev/kvm`.
 
 ### Default (one server)
 
 The intended same-server default is Pi in `jail` with files in a
 session directory next to Pi. That directory is
-`environment.openai_hosted` (not OpenAI's cloud). Until jail exists,
-the practical default is `APIPI_RUN_MODE=host` with the same local
+`environment.openai_hosted` (not OpenAI's cloud). Operators without
+jail tools should set `APIPI_RUN_MODE=host` with the same local
 directory.
 
 `self_hosted` if the computer is elsewhere. That combines with any run
 mode.
 
-### `jail` (not available)
+### `jail`
 
-The plan is bubblewrap + cgroup v2 + pasta. Pi, stdio MCP, and local
-file tools would run inside. No host loopback (Postgres). Not a VM.
-This mode would **not** protect the host from a hostile user.
+bubblewrap + cgroup v2 + pasta. The gateway never enters the jail. Pi,
+stdio MCP, and local file tools run inside. The session directory
+(`environment.openai_hosted`) is bind-mounted into the jail and is the
+cwd.
 
-Chromium in that jail would need `--no-sandbox`. Setting
-`APIPI_RUN_MODE=jail` exits today.
+There is no host loopback, so the jail cannot reach Postgres on
+localhost. Network for the model URL and HTTP MCP goes through pasta,
+not `--share-net` onto the host. This is not a VM. It does **not**
+protect the host from a hostile user.
+
+Chromium in that jail needs `--no-sandbox`. If `bwrap`, `pasta`, or
+cgroup v2 cannot start, `apipi serve` exits. There is no fallback to
+`host`.
 
 ### `microvm` (not available)
 

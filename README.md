@@ -45,9 +45,15 @@ Pi CLI (`pi --mode rpc`) on `PATH`.
 
 ## Run
 
-The configured default run mode is `jail`, but jail is not available
-yet. `microvm` is not available either. You must set `host`, or the
-process exits:
+The configured default run mode is `jail`. That starts Pi in a Linux
+namespace jail when `bwrap`, `pasta`, and cgroup v2 are present:
+
+```
+apipi serve
+```
+
+If those tools are missing, the process exits. Operators without jail
+tools must set `host`. `microvm` is not available:
 
 ```
 APIPI_RUN_MODE=host apipi serve

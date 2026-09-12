@@ -33,7 +33,7 @@ HTTP MCP uses OpenAI's shape:
 ```
 
 Stdio MCP is not in OpenAI's API. We accept it for local servers that
-the gateway should spawn next to Pi:
+follow Pi (on the host in `host` mode, inside the jail in `jail` mode):
 
 ```json
 {
@@ -45,8 +45,9 @@ the gateway should spawn next to Pi:
 ```
 
 An MCP tool must have `server_url` or `command`, not both. The gateway
-connects HTTP servers and starts stdio servers when the session is
-created, then hands them to Pi. Credentials stay in environment
+connects HTTP servers when the session is created, then hands them to
+Pi. Stdio servers start next to Pi: on the host in `host` mode, and
+inside the same jail in `jail` mode. Credentials stay in environment
 variables or a secret store, not in git.
 
 `web_search` as a first-party OpenAI tool is not implemented. Use MCP.
@@ -63,10 +64,10 @@ server that speaks MCP.
 browser option. `--headless` is the usual server flag. See
 `examples/playwright.yaml`.
 
-The browser follows Pi (`host` today; `jail` / `microvm` when those
-modes exist). Inside a future `jail`, Chromium would need
-`--no-sandbox`. Inside a future `microvm`, Chromium could use its own
-sandbox. Do not put Chromium in the gateway.
+The browser follows Pi (`host` or `jail`; `microvm` when that mode
+exists). Inside a `jail`, Chromium needs `--no-sandbox`. Inside a
+future `microvm`, Chromium could use its own sandbox. Do not put
+Chromium in the gateway.
 
 ## Skills
 

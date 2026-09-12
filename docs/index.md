@@ -18,14 +18,15 @@ decisions live under Contribute.
 ## Status
 
 `apipi serve` starts the FastAPI gateway. Run mode `host` works: Pi is a
-child process (`pi --mode rpc`), one process per session. `jail` and
-`microvm` are configured names, but they are not implemented. If you
-start the process with either of those modes, it exits. There is no
-silent fallback.
+child process (`pi --mode rpc`), one process per session. Run mode
+`jail` starts Pi (and stdio MCP) in a Linux namespace jail when
+`bwrap`, `pasta`, and cgroup v2 can start. If those tools are missing,
+the process exits. `microvm` is not implemented and also exits. There
+is no silent fallback.
 
-The configured default for `APIPI_RUN_MODE` is `jail`. Because jail is
-not available yet, you must set `APIPI_RUN_MODE=host` to serve. `host`
-logs a warning at startup and is not suited for production.
+The configured default for `APIPI_RUN_MODE` is `jail`. Operators
+without jail tools must set `APIPI_RUN_MODE=host`. `host` logs a
+warning at startup and is not suited for production.
 
 Postgres is required. Live turns need Pi on `PATH` and a model URL.
 Tests use a FakeHarness and do not need a live model.
@@ -78,9 +79,15 @@ gateway pins Pi 0.85.1. You can override the binary with
 
 ## Run
 
-The configured default run mode is `jail`, but jail is not available
-yet. `microvm` is not available either. You must set `host`, or the
-process exits:
+The configured default run mode is `jail`. That starts when `bwrap`,
+`pasta`, and cgroup v2 are present:
+
+```
+apipi serve
+```
+
+If jail tools are missing, the process exits. Operators without those
+tools must set `host`:
 
 ```
 APIPI_RUN_MODE=host apipi serve
@@ -88,12 +95,12 @@ APIPI_RUN_MODE=host apipi serve
 
 That binds `0.0.0.0:8000` by default (`--host` and `--port` change the
 bind). `host` runs Pi as a child of the gateway. The process logs a
-warning: `APIPI_RUN_MODE=host is not suited for production`. Startup
-also logs that the turn log is on, and whether Prometheus metrics and
-OpenTelemetry export are on.
+warning: `APIPI_RUN_MODE=host is not suited for production`. `jail`
+does not log that warning. Startup also logs that the turn log is on,
+and whether Prometheus metrics and OpenTelemetry export are on.
 
 If the selected run mode cannot start, the process exits. There is no
-fallback to another mode.
+fallback to another mode. `microvm` is not available.
 
 `GET /health` returns `{"status": "ok"}` and does not require a bearer.
 
@@ -138,7 +145,7 @@ These are the settings the process reads.
 | Config | Default | What |
 | --- | --- | --- |
 | `DATABASE_URL` | required | Postgres URL. `postgresql+asyncpg://…` preferred. |
-| `APIPI_RUN_MODE` | `jail` | `host` \| `jail` \| `microvm`. Only `host` is implemented. Serve with `host` or the process exits. |
+| `APIPI_RUN_MODE` | `jail` | `host` \| `jail` \| `microvm`. `host` and `jail` start. Jail exits if `bwrap`, `pasta`, or cgroup v2 are missing. `microvm` exits. No fallback. |
 | `APIPI_IDLE_TTL` | `15m` | Kill an idle Pi process. The session row stays. Resume from the event log. |
 | `APIPI_AUTH` | unset (default hash) | Import path `package.mod:func` for the auth callback. |
 | `APIPI_AUTH_CACHE_TTL` | `30s` | Cache the callback result by SHA-256 of the bearer, never the raw key. |

@@ -11,7 +11,7 @@ class McpStdioServer:
     server_label: str
     command: str
     args: list[str]
-    process: asyncio.subprocess.Process
+    process: asyncio.subprocess.Process | None = None
 
 
 def mcp_stdio_tools(tools: list[Any] | None) -> list[tuple[str, str, list[str]]]:
@@ -53,11 +53,20 @@ async def start_mcp_stdio(label: str, command: str, args: list[str]) -> McpStdio
     )
 
 
-async def start_mcp_stdio_tools(tools: list[Any] | None) -> list[McpStdioServer]:
+async def start_mcp_stdio_tools(
+    tools: list[Any] | None, *, on_host: bool = True
+) -> list[McpStdioServer]:
     started: list[McpStdioServer] = []
     try:
         for label, command, args in mcp_stdio_tools(tools):
-            started.append(await start_mcp_stdio(label, command, args))
+            if on_host:
+                started.append(await start_mcp_stdio(label, command, args))
+            else:
+                started.append(
+                    McpStdioServer(
+                        server_label=label, command=command, args=args, process=None
+                    )
+                )
     except McpConnectError:
         await stop_mcp_stdio(started)
         raise
@@ -67,7 +76,7 @@ async def start_mcp_stdio_tools(tools: list[Any] | None) -> list[McpStdioServer]
 async def stop_mcp_stdio(servers: list[McpStdioServer]) -> None:
     for server in servers:
         process = server.process
-        if process.returncode is not None:
+        if process is None or process.returncode is not None:
             continue
         process.terminate()
         try:
