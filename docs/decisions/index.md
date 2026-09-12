@@ -16,3 +16,4 @@ in `README.md`, `LICENSE`, `mkdocs.yml`, `requirements-docs.txt`,
 | 0005 | The API is the focus |
 | 0006 | Tools, MCP, and skills |
 | 0007 | Run modes |
+| 0009 | Pluggable auth, no stored keys |

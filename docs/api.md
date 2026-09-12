@@ -6,7 +6,9 @@ is accepted and ignored.
 Unknown fields and unimplemented features return an error
 (`invalid_request` or `not_implemented`). They are not stored and ignored.
 
-Auth: `Authorization: Bearer`. Tenant-scoped. Wrong-tenant IDs are `404`.
+Auth: `Authorization: Bearer`. We do not mint or store keys. A callback
+maps the bearer to `key_id` and `tenant_id` ([auth](auth.md)).
+Tenant-scoped. Wrong-tenant IDs are `404`.
 
 The example UI uses a demo cookie on `/_example/` only.
 

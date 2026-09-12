@@ -14,9 +14,10 @@ host Pi (`pi --mode rpc`). `jail` and `microvm` exit.
 
 1. [Architecture](architecture.md)
 2. [API](api.md)
-3. [Environments](environments.md)
-4. [Tools](tools.md)
-5. [Decisions](decisions/index.md)
+3. [Auth](auth.md)
+4. [Environments](environments.md)
+5. [Tools](tools.md)
+6. [Decisions](decisions/index.md)
 
 If you are writing code, also read [process](process.md) and
 [agents](agents.md).
@@ -32,6 +33,8 @@ Not in this version: [roadmap](roadmap.md).
 | `APIPI_RUN_MODE` | `jail` | `host` \| `jail` \| `microvm` |
 | `APIPI_IDLE_TTL` | `15m` | Kill idle Pi/guest; session stays |
 | `APIPI_EXAMPLE_UI` | off | Example chat at `/_example/` |
+| `APIPI_AUTH` | default hash | Import path `package.mod:func` |
+| `APIPI_AUTH_CACHE_TTL` | `30s` | Cache callback result by key hash |
 
 `host` is not suited for production. The process logs a warning.
 

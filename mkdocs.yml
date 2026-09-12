@@ -69,6 +69,7 @@ nav:
   - Constitution: constitution.md
   - Architecture: architecture.md
   - API: api.md
+  - Auth: auth.md
   - Environments: environments.md
   - Tools and skills: tools.md
   - Roadmap: roadmap.md
@@ -83,3 +84,4 @@ nav:
       - "0005 API is the focus": decisions/0005-api-is-the-focus.md
       - "0006 Tools, MCP, skills": decisions/0006-tools-mcp-skills.md
       - "0007 Run modes": decisions/0007-run-modes.md
+      - "0009 Pluggable auth": decisions/0009-pluggable-auth.md
