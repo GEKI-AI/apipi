@@ -6,6 +6,7 @@ from typing import Any
 
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
+from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.version import PINNED_PI
 
 
@@ -63,7 +64,9 @@ class PiProc:
 
 
 def _pi_env(
-    settings: Settings, mcp_http: list[McpHttpServer] | None = None
+    settings: Settings,
+    mcp_http: list[McpHttpServer] | None = None,
+    mcp_stdio: list[McpStdioServer] | None = None,
 ) -> dict[str, str]:
     env = os.environ.copy()
     env.pop("DATABASE_URL", None)
@@ -81,6 +84,13 @@ def _pi_env(
             for key, value in server.headers.items():
                 safe = key.upper().replace("-", "_")
                 env[f"{prefix}_{safe}"] = value
+    if mcp_stdio:
+        env["APIPI_MCP_STDIO"] = ",".join(server.server_label for server in mcp_stdio)
+        for index, server in enumerate(mcp_stdio):
+            prefix = f"APIPI_MCP_STDIO_{index}"
+            env[f"{prefix}_LABEL"] = server.server_label
+            env[f"{prefix}_COMMAND"] = server.command
+            env[f"{prefix}_ARGS"] = "\x1f".join(server.args)
     return env
 
 
@@ -90,17 +100,18 @@ async def spawn_pi(
     cwd: str | None,
     tools: bool,
     mcp_http: list[McpHttpServer] | None = None,
+    mcp_stdio: list[McpStdioServer] | None = None,
 ) -> PiProc:
     command = settings.pi_command.split()
     args = [*command, "--mode", "rpc", "--no-session"]
     if not tools:
-        args.append("--no-builtin-tools" if mcp_http else "--no-tools")
+        args.append("--no-builtin-tools" if mcp_http or mcp_stdio else "--no-tools")
     process = await asyncio.create_subprocess_exec(
         *args,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
-        env=_pi_env(settings, mcp_http),
+        env=_pi_env(settings, mcp_http, mcp_stdio),
     )
     return PiProc(process)
