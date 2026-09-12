@@ -27,25 +27,30 @@ def not_found() -> NoReturn:
     raise ApiError("invalid_request", "Not found", code="not_found", status_code=404)
 
 
-async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
+def _store(request: Request) -> Store:
     store: Store | None = getattr(request.app.state, "store", None)
     if store is None:
         unauthorized()
-    async with store.session() as session:
+    return store
+
+
+async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
+    async with _store(request).session() as session:
         yield session
 
 
 async def require_tenant(
     creds: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
 ) -> Tenant:
     if creds is None or creds.scheme.lower() != "bearer" or not creds.credentials:
         unauthorized()
     token = creds.credentials
-    key = await get_api_key_by_hash(db, hash_token(token))
-    if key is None or not token_matches(token, key.token_hash):
-        unauthorized()
-    tenant = await get_tenant(db, key.tenant_id)
-    if tenant is None:
-        unauthorized()
-    return tenant
+    async with _store(request).session() as db:
+        key = await get_api_key_by_hash(db, hash_token(token))
+        if key is None or not token_matches(token, key.token_hash):
+            unauthorized()
+        tenant = await get_tenant(db, key.tenant_id)
+        if tenant is None:
+            unauthorized()
+        return tenant

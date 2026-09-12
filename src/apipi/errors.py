@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, NoReturn
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -24,6 +24,15 @@ class ApiError(Exception):
 
 def error_body(type: str, message: str, code: str = "") -> dict[str, Any]:
     return {"error": {"type": type, "code": code, "message": message}}
+
+
+def not_implemented(code: str, message: str | None = None) -> NoReturn:
+    raise ApiError(
+        "not_implemented",
+        message if message is not None else f"{code} is not implemented",
+        code=code,
+        status_code=400,
+    )
 
 
 def _unknown_field(exc: RequestValidationError | ValidationError) -> str | None:

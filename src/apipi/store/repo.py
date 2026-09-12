@@ -146,6 +146,45 @@ async def get_session(
     )
 
 
+async def list_sessions(db: AsyncSession, tenant_id: uuid.UUID) -> list[SessionRow]:
+    result = await db.scalars(
+        select(SessionRow)
+        .where(SessionRow.tenant_id == tenant_id)
+        .order_by(SessionRow.created_at)
+    )
+    return list(result)
+
+
+async def update_session(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    changes: dict[str, Any],
+) -> SessionRow | None:
+    row = await get_session(db, tenant_id, session_id)
+    if row is None:
+        return None
+    if "status" in changes:
+        row.status = changes["status"]
+    if "metadata" in changes:
+        row.metadata_json = changes["metadata"]
+    row.updated_at = utc_now()
+    await db.flush()
+    return row
+
+
+async def delete_session(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> bool:
+    row = await get_session(db, tenant_id, session_id)
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.flush()
+    return True
+
+
 async def create_turn(
     db: AsyncSession,
     tenant_id: uuid.UUID,

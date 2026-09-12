@@ -4,8 +4,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from apipi.api.agents import router as agents_router
+from apipi.api.sessions import router as sessions_router
 from apipi.config import Settings, load_settings, postgres_url
 from apipi.errors import register_exception_handlers
+from apipi.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store, create_engine
 
 
@@ -25,7 +27,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     app = FastAPI(title="ApiPi", version="0.0.0", lifespan=lifespan)
     app.state.settings = resolved
     app.state.store = store
+    app.state.event_hub = EventHub()
+    app.state.harness = FakeHarness()
     register_exception_handlers(app)
+    app.include_router(sessions_router)
     app.include_router(agents_router)
 
     @app.get("/health")
