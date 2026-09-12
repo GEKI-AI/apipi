@@ -20,7 +20,8 @@ live model.
 Run mode `jail` needs `bwrap`, `pasta`, and cgroup v2. Run mode
 `microvm` needs `/dev/kvm`, `firecracker`, `jailer`, kernel and rootfs
 images, `ip`, and `iptables`. If the selected mode cannot start, the
-process exits. There is no silent fallback.
+process exits. There is no silent fallback. Packages, systemd, Docker,
+and when to use each mode are in [run modes](run-modes.md).
 
 ## Install
 
@@ -97,8 +98,10 @@ Do not run uvicorn workers in front of it.
 
 ## systemd
 
-A typical unit loads environment from a file and starts the CLI. Keep
-secrets out of the unit file.
+Production is systemd on the host. Keep secrets out of the unit file.
+Jail units need `Delegate=yes` so cgroup memory works. Microvm units
+need `/dev/kvm` and permission to create TAP devices. Full unit
+examples are in [run modes](run-modes.md).
 
 ```
 [Unit]
@@ -111,6 +114,8 @@ WorkingDirectory=/opt/apipi
 EnvironmentFile=/etc/apipi.env
 ExecStart=/opt/apipi/.venv/bin/apipi serve --config /etc/apipi.toml
 Restart=on-failure
+Delegate=yes
+DelegateControllers=memory pids
 
 [Install]
 WantedBy=multi-user.target
@@ -118,7 +123,8 @@ WantedBy=multi-user.target
 
 Environment variables in `/etc/apipi.env` override keys in the TOML
 file. Bind, run mode, and the auth callback are the usual ones to set
-there.
+there. Do not set `NoNewPrivileges=yes` on a jail unit; bubblewrap
+needs user namespaces.
 
 ## Auth callback
 

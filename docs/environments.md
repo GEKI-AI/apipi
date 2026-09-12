@@ -28,9 +28,15 @@ gateway's working directory.
 
 In `host` this is a folder on the host. It is not a security boundary.
 In `jail`, that folder is bind-mounted into the namespace jail and is
-Pi's cwd. In `microvm`, that folder is packed into a workspace drive
-at boot, unpacked onto a guest tmpfs, and is the guest cwd. Writes
-stay in the guest. They are not copied back to the host folder.
+Pi's cwd. The rest of `APIPI_SESSIONS_DIR` is a tmpfs, so other
+session directories are not readable. In `microvm`, that folder is
+packed into a workspace drive at boot, unpacked onto a guest tmpfs,
+and is the guest cwd. Writes stay in the guest. They are not copied
+back to the host folder.
+
+Session rows live in Postgres. Environment files are the computer.
+Artifact metadata is in Postgres; artifact bytes are still read from
+the live sandbox today. See [run modes](run-modes.md#storage).
 
 There is no runner socket. The directory is created when the session is
 created. File tools (read, write, edit, bash) run against that folder

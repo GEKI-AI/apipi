@@ -39,7 +39,9 @@ Later documentation work, not this version:
   runner)
 - OpenAPI and mkdocstrings for the FastAPI surface, on the same MkDocs
   site
-- Deploy docs for running ApiPi in production
+
+Run-mode production docs (packages, systemd, Docker, storage) are in
+[run modes](run-modes.md).
 
 Do not add a custom docs frontend. Do not put MkDocs in the apipi
 package.

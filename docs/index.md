@@ -50,8 +50,10 @@ APIPI_RUN_MODE=host apipi serve
 
 That binds `0.0.0.0:8000`. `jail` is the configured default when
 `bwrap`, `pasta`, and cgroup v2 can start. Operators without those
-tools must set `host`. The full install, systemd, and run-mode notes
-are in [Install](install.md). Every setting is in [Configuration](config.md).
+tools must set `host`. The full install notes are in [Install](install.md). Packages,
+systemd, and when to use `host`, `jail`, or `microvm` are in
+[run modes](run-modes.md). Every setting is in
+[Configuration](config.md).
 
 ## Use
 
@@ -94,14 +96,15 @@ surface is in [API](api.md).
 Use the API:
 
 1. [Install](install.md)
-2. [Configuration](config.md)
-3. [Quickstart](quickstart.md)
-4. [API](api.md)
-5. [Auth](auth.md)
-6. [Environments](environments.md)
-7. [Tools and skills](tools.md)
-8. [Usage](usage.md)
-9. [Architecture](architecture.md)
+2. [Run modes](run-modes.md)
+3. [Configuration](config.md)
+4. [Quickstart](quickstart.md)
+5. [API](api.md)
+6. [Auth](auth.md)
+7. [Environments](environments.md)
+8. [Tools and skills](tools.md)
+9. [Usage](usage.md)
+10. [Architecture](architecture.md)
 
 If you are changing the code, start from [How we work](process.md) and
 [Contributing](contributing.md). Project rules are in the

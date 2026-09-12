@@ -9,6 +9,7 @@ from pathlib import Path
 from apipi.config import ConfigError, Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
+from apipi.pi.dirs import sessions_root
 from apipi.pi.proc import PiProc, pi_command_args, pi_env
 
 PASTA_DNS = "169.254.254.254"
@@ -100,6 +101,7 @@ def jail_argv(
     bwrap: str,
     pasta: str,
     resolv: str,
+    sessions_dir: str | None = None,
 ) -> list[str]:
     argv = [
         pasta,
@@ -139,6 +141,8 @@ def jail_argv(
         resolv,
         "/etc/resolv.conf",
     ]
+    if sessions_dir:
+        argv.extend(["--tmpfs", sessions_dir])
     if cwd:
         argv.extend(["--bind", cwd, cwd, "--chdir", cwd])
     else:
@@ -194,6 +198,7 @@ async def spawn_jailed_pi(
     require_jail()
     bwrap, pasta = jail_binaries()
     cwd_abs = str(Path(cwd).resolve()) if cwd else None
+    sessions_dir = str(sessions_root(settings).resolve())
     env = pi_env(settings, mcp_http, mcp_stdio)
     env["HOME"] = cwd_abs or "/tmp"
     pi_args = pi_command_args(
@@ -212,6 +217,7 @@ async def spawn_jailed_pi(
         bwrap=bwrap,
         pasta=pasta,
         resolv=str(resolv_conf()),
+        sessions_dir=sessions_dir,
     )
     try:
         process = await asyncio.create_subprocess_exec(

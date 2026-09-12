@@ -64,7 +64,8 @@ Durations are like `15m`, `30s`, `2h`. Sizes are like `512M` or `1MiB`
 
 Run mode is server config, not an OpenAI field. `jail` is the default.
 Operators without jail tools must set `host`. `host` logs a warning and
-is not suited for production. See [architecture](architecture.md).
+is not suited for production. What to install, systemd, and when to
+use each mode are in [run modes](run-modes.md).
 
 ```toml
 run_mode = "jail"
