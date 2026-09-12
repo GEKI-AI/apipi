@@ -43,8 +43,10 @@ file rarely, and only with a dated amendment at the bottom.
 
 ## What this is
 
-An OpenAI-compatible Agents API. Sessions, events, tools, an optional
-computer. Pi runs the loop. You bring the model URL.
+ApiPi is a drop-in OpenAI Agents API. Point official clients at this
+gateway and bring your own model URL.
+
+The package and CLI are `apipi`. Hosted at geki.ai.
 
 ## What this is not
 
