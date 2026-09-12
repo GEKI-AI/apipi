@@ -327,7 +327,10 @@ async def create_agent_session(
     ):
         try:
             connected = await connect_mcp_http_tools(raw_tools)
-            stdio = await start_mcp_stdio_tools(raw_tools)
+            stdio = await start_mcp_stdio_tools(
+                raw_tools,
+                on_host=request.app.state.settings.run_mode == "host",
+            )
         except McpConnectError as exc:
             async with store.session() as db:
                 await fail_session(db, hub, tenant.id, session_id, str(exc))

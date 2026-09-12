@@ -12,7 +12,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 RunMode = Literal["host", "jail", "microvm"]
-IMPLEMENTED_RUN_MODES: frozenset[str] = frozenset({"host"})
+IMPLEMENTED_RUN_MODES: frozenset[str] = frozenset({"host", "jail"})
 
 HOST_MODE_WARNING = "APIPI_RUN_MODE=host is not suited for production"
 TURN_LOG_ON = "turn log on"
@@ -172,3 +172,7 @@ def require_run_mode(mode: str) -> None:
         raise ConfigError("APIPI_RUN_MODE must be host, jail, or microvm")
     if mode not in IMPLEMENTED_RUN_MODES:
         raise ConfigError(f"APIPI_RUN_MODE={mode} is not available")
+    if mode == "jail":
+        from apipi.pi.jail import require_jail
+
+        require_jail()

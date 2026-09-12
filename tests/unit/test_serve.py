@@ -87,21 +87,43 @@ def test_prepare_serve_rejects_sqlite() -> None:
         prepare_serve(settings)
 
 
-@pytest.mark.parametrize("mode", ["jail", "microvm"])
-def test_unimplemented_run_mode_exits(mode: str) -> None:
+def test_microvm_run_mode_exits() -> None:
     with pytest.raises(ConfigError, match="not available"):
-        require_run_mode(mode)
+        require_run_mode("microvm")
 
 
 def test_serve_jail_does_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "jail")
+    monkeypatch.setattr("apipi.pi.jail.shutil.which", lambda _name: None)
 
     def boom(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("must not start")
 
     monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
     assert main(["serve"]) == 1
+
+
+def test_serve_jail_starts_when_tools_present(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "jail")
+    monkeypatch.setattr("apipi.pi.jail.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("apipi.pi.jail.cgroup_v2_available", lambda: True)
+    caplog.set_level(logging.WARNING)
+    called: dict[str, object] = {}
+
+    def fake_run(app: object, *, host: str, port: int) -> None:
+        called["host"] = host
+        called["port"] = port
+        called["app"] = app
+
+    monkeypatch.setattr("apipi.cli.uvicorn.run", fake_run)
+    assert main(["serve"]) == 0
+    assert called["host"] == "0.0.0.0"
+    assert called["port"] == 8000
+    assert HOST_MODE_WARNING not in caplog.text
 
 
 def test_serve_host_starts(

@@ -41,8 +41,9 @@ Read `docs/decisions/` only if the architecture changes.
 
 Python 3.13, FastAPI, Postgres. uv only. Pi via RPC, one process per
 session. Run mode `APIPI_RUN_MODE` (`host` \| `jail` \| `microvm`),
-default `jail`. Only `host` is implemented; `jail` and `microvm` exit.
-OpenAI-compatible `base_url`. No Node in the gateway.
+default `jail`. `host` and `jail` are implemented. Jail still exits if
+`bwrap`, `pasta`, or cgroup v2 cannot start. `microvm` exits. No
+silent fallback. OpenAI-compatible `base_url`. No Node in the gateway.
 
 ## Do not
 

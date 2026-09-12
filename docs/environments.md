@@ -2,9 +2,8 @@
 
 An environment is where file and shell tools run. That choice is
 independent of [run mode](architecture.md), which is where Pi itself
-runs. A remote runner is valid with `host`, and it will be valid with
-`jail` and `microvm` when those modes exist. Today only `host` starts;
-`jail` and `microvm` exit.
+runs. A remote runner is valid with `host` and with `jail`. `microvm`
+is not available yet.
 
 ## Types
 
@@ -28,10 +27,10 @@ One directory per session. The path is
 `APIPI_SESSIONS_DIR` is unset, that root is `.apipi/sessions` under the
 gateway's working directory.
 
-In `host` (the only implemented run mode) this is a folder on the host.
-It is not a security boundary. When `jail` exists, the plan is to
-bind-mount that folder into the namespace jail. When `microvm` exists,
-the plan is to use it as the guest workspace.
+In `host` this is a folder on the host. It is not a security boundary.
+In `jail`, that folder is bind-mounted into the namespace jail and is
+Pi's cwd. When `microvm` exists, the plan is to use it as the guest
+workspace.
 
 There is no runner socket. The directory is created when the session is
 created. File tools (read, write, edit, bash) run against that folder
@@ -44,7 +43,7 @@ work. There is no session directory and no shell.
 
 ## `self_hosted`
 
-Pi stays in the run mode (`host` today; `jail` / `microvm` later). The
+Pi stays in the run mode (`host` or `jail`; `microvm` later). The
 computer is elsewhere.
 
 1. Create the session with `environment.type` `self_hosted`.

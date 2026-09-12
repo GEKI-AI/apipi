@@ -28,8 +28,10 @@ script only:
 uv run --with openai python examples/openai_sdk.py
 ```
 
-The gateway must already be running. Jail and microvm are not
-implemented, so serve with host mode and a bearer the client will send:
+The gateway must already be running. Jail is the default when `bwrap`,
+`pasta`, and cgroup v2 are present. Operators without those tools
+should serve with host mode. `microvm` is not implemented. Send a
+bearer the client will send:
 
 ```
 APIPI_RUN_MODE=host apipi serve
