@@ -6,6 +6,12 @@ choice: where file and shell tools run. See
 [environments](environments.md). A remote runner does not replace Pi
 isolation. The gateway always stays on the host.
 
+Production isolation is a Firecracker microVM: each session gets its
+own kernel so a hostile tenant cannot share the host kernel with the
+gateway or with other sessions. That is stronger than a
+shared-kernel container. Pi and the local computer share that guest.
+The HTTP API never runs inside it.
+
 If the selected mode cannot start, `apipi serve` exits before it binds
 HTTP. There is no silent fallback. For `microvm` and for a custom
 backend that sets `needs_probe`, the process also launches a throwaway
@@ -28,13 +34,13 @@ not the same setting.
 
 The process default is `none` so `apipi serve` can start on a machine
 without KVM. That is not the production posture. Production operators
-set `APIPI_RUN_MODE=microvm`. If microvm cannot launch, the process
+set `APIPI_RUN_MODE=microvm`. If the microVM cannot launch, the process
 exits; it does not fall back to `none`. `none` logs a warning.
 `host` and `jail` are not valid run modes.
 
-Production is systemd on the host next to Pi. Docker Compose in this
-repo starts Postgres only. Nested microvm inside a container is a lab
-setup, not the production path.
+Run production under systemd on the host, next to Pi. Docker Compose
+in this repo starts Postgres only. Nested microVM inside a container
+is a lab setup, not the production path.
 
 ## What to install
 
@@ -125,9 +131,11 @@ production. The process logs a warning.
 
 ## `microvm`
 
-[Firecracker](https://firecracker-microvm.github.io/) and jailer. The
-gateway never enters the guest. Pi, stdio MCP, and local file tools
-boot in a KVM guest with its own kernel.
+[Firecracker](https://firecracker-microvm.github.io/) is a KVM
+hypervisor built for short-lived microVMs. ApiPi uses it so a session
+that can run shell and file tools cannot take the host: the guest has
+its own kernel, the gateway never enters that guest, and Pi, stdio
+MCP, and local file tools boot inside it.
 
 The session directory is packed into a workspace drive at boot,
 unpacked onto a guest tmpfs, and is the guest cwd. Before the guest
@@ -146,9 +154,9 @@ from the guest, so those hosts must be allowed. Set
 rate-limited with `tc` (`APIPI_MICROVM_EGRESS_MBIT`, default 50). See
 [config](config.md).
 
-This is the mode that protects the host from a hostile user. Guest RAM
-is the real cost (`APIPI_MICROVM_MEM_MIB`, default 512). Chromium can
-use its own sandbox inside the guest. Do not put Chromium in the
+This is the mode that protects the host from a hostile session. Guest
+RAM is the real cost (`APIPI_MICROVM_MEM_MIB`, default 512). Chromium
+can use its own sandbox inside the guest. Do not put Chromium in the
 gateway.
 
 ## Custom isolation

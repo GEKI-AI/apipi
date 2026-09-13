@@ -39,8 +39,9 @@ Install it for the client only:
 uv run --with openai python examples/openai_sdk.py
 ```
 
-The gateway must already be running. The process default is isolation
-`none`. Production operators serve with `APIPI_RUN_MODE=microvm`.
+The gateway must already be running. Isolation `none` is the process
+default and is fine for this tutorial. Production operators serve with
+`APIPI_RUN_MODE=microvm` so each session runs in a Firecracker guest.
 
 ## 1. Run a task
 

@@ -92,10 +92,10 @@ Durations are like `15m`, `30s`, `2h`, `15d`. Sizes are like `512M` or `1MiB`
 
 Run mode is server config, not an OpenAI field. The process default is
 `none` so a machine without KVM can still start. Production operators
-set `microvm`. `none` logs a warning and is not suited for production.
-A custom backend uses the same setting with an import path. What to
-install, systemd, and when to use each mode are in
-[run modes](run-modes.md).
+set `microvm` so each session is a Firecracker guest. `none` logs a
+warning and is not suited for production. A custom backend uses the
+same setting with an import path. What to install, systemd, and when
+to use each mode are in [run modes](run-modes.md).
 
 ```toml
 run_mode = "microvm"

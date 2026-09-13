@@ -8,8 +8,8 @@ install the process is in [Install](install.md). How to call it is in
 ## Agents
 
 An agent is saved configuration: model, instructions, tools, and
-metadata. It is not a running process. There is no built-in agent on a
-fresh install.
+metadata. It is not a running process. A new install has no agents
+until you create one.
 
 You create agents with `POST /v1/agents`. They live in Postgres until
 you delete them. A session may pass `agent_id` or an inline `agent`.
