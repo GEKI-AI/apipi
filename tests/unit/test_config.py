@@ -41,6 +41,21 @@ def test_idle_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().idle_ttl == timedelta(minutes=15)
 
 
+def test_workspace_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_WORKSPACE_TTL", "2h")
+    assert Settings().workspace_ttl == timedelta(hours=2)
+
+
+def test_workspace_ttl_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_WORKSPACE_TTL", "nope")
+    with pytest.raises(ConfigError, match="APIPI_WORKSPACE_TTL must be like"):
+        load_settings()
+
+
 def test_default_run_mode_is_jail(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
@@ -134,6 +149,7 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.db_pool_size == 5
     assert settings.microvm_mem_mib == 512
     assert settings.microvm_vcpus == 1
+    assert settings.workspace_ttl == timedelta(hours=1)
     assert "example_ui" not in type(settings).model_fields
 
 

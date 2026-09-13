@@ -356,12 +356,14 @@ async def create_artifact(
     *,
     path: str,
     content_type: str = "application/octet-stream",
+    turn_id: uuid.UUID | None = None,
 ) -> Artifact:
     artifact = Artifact(
         tenant_id=tenant_id,
         session_id=session_id,
         path=path,
         content_type=content_type,
+        turn_id=turn_id,
     )
     db.add(artifact)
     await db.flush()

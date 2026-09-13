@@ -149,6 +149,10 @@ class Settings(BaseSettings):
         default=timedelta(minutes=15),
         validation_alias=AliasChoices("APIPI_IDLE_TTL", "idle_ttl"),
     )
+    workspace_ttl: IdleTtl = Field(
+        default=timedelta(hours=1),
+        validation_alias=AliasChoices("APIPI_WORKSPACE_TTL", "workspace_ttl"),
+    )
     max_sessions: int = Field(
         default=32,
         ge=1,
@@ -316,8 +320,10 @@ def _settings_message(exc: ValidationError) -> str:
             return "DATABASE_URL is required"
         if "run_mode" in loc:
             return "APIPI_RUN_MODE must be host, jail, or microvm"
-        if "idle_ttl" in loc:
+        if "idle_ttl" in loc or "APIPI_IDLE_TTL" in loc:
             return "APIPI_IDLE_TTL must be like 15m"
+        if "workspace_ttl" in loc or "APIPI_WORKSPACE_TTL" in loc:
+            return "APIPI_WORKSPACE_TTL must be like 15m"
         if "turn_timeout" in loc:
             return "APIPI_TURN_TIMEOUT must be like 15m"
         if "auth_cache_ttl" in loc:

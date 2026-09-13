@@ -35,9 +35,11 @@ Production is systemd on the host. Docker Compose starts Postgres
 only. Nested jail or microvm inside a container is not the production
 path.
 
-The `openai_hosted` workspace is packed one-way into a microvm guest.
-Writes stay in the guest except files under `artifacts/`, which are
-pulled to the host store when Pi stops. The workspace is scratch.
+The `openai_hosted` workspace is packed into a microvm guest at boot.
+Before the guest exits, the gateway pulls the workspace back to the
+host folder so the next pack still has those files. Files under
+`artifacts/` and `outputs/` are also published to the host artifact
+store when a turn completes.
 
 ## Same server (default)
 

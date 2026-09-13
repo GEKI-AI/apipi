@@ -1,14 +1,16 @@
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from apipi.config import Settings
-from apipi.pi.artifacts import harvest_session
+from apipi.pi.artifacts import harvest_session, reap_workspaces
+from apipi.pi.pool import PiPool
 from apipi.store.engine import Store
-from apipi.store.models import SessionRow
-from apipi.store.repo import create_artifact
+from apipi.store.models import SessionRow, utc_now
+from apipi.store.repo import create_artifact, get_session_by_id
 
 
 def _token(name: str = "t") -> str:
@@ -46,7 +48,7 @@ async def test_write_host_file_and_fetch_content(
     (directory / "artifacts").mkdir()
     (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
     await _harvest(store, settings, session_id)
-    assert not directory.exists()
+    assert directory.exists()
 
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
@@ -175,3 +177,140 @@ async def test_cross_tenant_artifacts_are_404(
     )
     assert content_a.status_code == 200
     assert content_a.content == b"hello"
+
+
+async def test_workspace_persists_after_harvest(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = _token()
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "keep.txt").write_text("stay", encoding="utf-8")
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    await _harvest(store, settings, session_id)
+    assert directory.exists()
+    assert (directory / "keep.txt").read_text(encoding="utf-8") == "stay"
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    assert listed.json()["data"][0]["path"] == "artifacts/note.txt"
+
+
+async def test_publish_on_turn_complete(client: AsyncClient) -> None:
+    token = _token()
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "out.bin").write_bytes(b"xyz")
+    turned = await client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(token),
+        json={"type": "agent.session.input.message", "content": "done"},
+    )
+    assert turned.status_code == 200
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    data = listed.json()["data"]
+    by_path = {item["path"]: item for item in data}
+    assert set(by_path) == {"artifacts/note.txt", "outputs/out.bin"}
+    assert by_path["artifacts/note.txt"]["turn_id"] is not None
+    assert by_path["outputs/out.bin"]["content_type"] == "application/octet-stream"
+    assert directory.exists()
+    note = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts/"
+        f"{by_path['artifacts/note.txt']['id']}/content",
+        headers=_auth(token),
+    )
+    assert note.content == b"hello"
+
+
+async def test_later_turn_publishes_new_artifact_for_same_path(
+    client: AsyncClient,
+) -> None:
+    token = _token()
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("one", encoding="utf-8")
+    await client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(token),
+        json={"type": "agent.session.input.message", "content": "first"},
+    )
+    (directory / "artifacts" / "note.txt").write_text("two", encoding="utf-8")
+    await client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(token),
+        json={"type": "agent.session.input.message", "content": "second"},
+    )
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    data = listed.json()["data"]
+    assert [item["path"] for item in data] == [
+        "artifacts/note.txt",
+        "artifacts/note.txt",
+    ]
+    assert data[0]["id"] != data[1]["id"]
+    first = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts/{data[0]['id']}/content",
+        headers=_auth(token),
+    )
+    second = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts/{data[1]['id']}/content",
+        headers=_auth(token),
+    )
+    assert first.content == b"one"
+    assert second.content == b"two"
+
+
+async def test_workspace_ttl_wipes_dir_keeps_artifacts(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = _token()
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "keep.txt").write_text("stay", encoding="utf-8")
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    await _harvest(store, settings, session_id)
+    async with store.session() as db:
+        row = await get_session_by_id(db, uuid.UUID(session_id))
+        assert row is not None
+        row.updated_at = utc_now() - timedelta(hours=2)
+    await reap_workspaces(settings, store, PiPool(settings))
+    assert not directory.exists()
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    artifact_id = listed.json()["data"][0]["id"]
+    content = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
+        headers=_auth(token),
+    )
+    assert content.content == b"hello"
+    events = await client.get(
+        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+    )
+    assert events.json()["data"]
+
+
+async def test_delete_session_removes_workspace_and_artifacts(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = _token()
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "keep.txt").write_text("stay", encoding="utf-8")
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    await _harvest(store, settings, session_id)
+    deleted = await client.delete(
+        f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+    )
+    assert deleted.status_code == 200
+    assert deleted.json() == {"id": session_id, "deleted": True}
+    assert not directory.exists()
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    assert listed.status_code == 404

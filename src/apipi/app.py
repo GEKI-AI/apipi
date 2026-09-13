@@ -17,6 +17,7 @@ from apipi.env.hub import EnvironmentHub
 from apipi.errors import error_body, register_exception_handlers
 from apipi.metrics import Metrics, mount_metrics
 from apipi.otel import Tracing
+from apipi.pi.artifacts import harvest_session, reap_workspace_loop
 from apipi.pi.harness import PiHarness
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
@@ -75,10 +76,14 @@ def create_app(
             )
             owned = True
         reap = asyncio.create_task(resolved_pool.reap_loop())
+        workspace_reap = asyncio.create_task(
+            reap_workspace_loop(resolved, app.state.store, resolved_pool)
+        )
         try:
             yield
         finally:
             reap.cancel()
+            workspace_reap.cancel()
             await resolved_pool.close()
             current = getattr(app.state, "tracing", None)
             if isinstance(current, Tracing):
@@ -111,10 +116,15 @@ def create_app(
         current = app.state.store
         if current is None:
             return
-        from apipi.pi.artifacts import harvest_session
-
         async with current.session() as db:
-            await harvest_session(db, resolved, session_id, proc, app.state.env_hub)
+            await harvest_session(
+                db,
+                resolved,
+                session_id,
+                proc,
+                app.state.env_hub,
+                sync_workspace=True,
+            )
 
     if resolved_pool.on_kill is None:
         resolved_pool.on_kill = harvest_killed

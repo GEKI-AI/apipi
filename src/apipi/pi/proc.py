@@ -19,12 +19,14 @@ class PiProc:
         stdout: asyncio.StreamReader | None = None,
         on_stop: Callable[[], None] | None = None,
         pull_artifacts: Callable[[], Awaitable[bytes]] | None = None,
+        pull_workspace: Callable[[], Awaitable[bytes]] | None = None,
     ) -> None:
         self.process = process
         self._stdin = process.stdin if stdin is None else stdin
         self._stdout = process.stdout if stdout is None else stdout
         self._on_stop = on_stop
         self.pull_artifacts = pull_artifacts
+        self.pull_workspace = pull_workspace
         self._buf = ""
 
     @property

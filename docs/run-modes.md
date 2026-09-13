@@ -97,16 +97,20 @@ Three stores. Do not mix them up.
 | Store | What | Where it lives | Lifetime |
 | --- | --- | --- | --- |
 | **Session** | Transcript: events, turns, items, artifact metadata | Postgres | Until the session is deleted. A session [export](api.md#export) is the thread. |
-| **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. `self_hosted`: the runner. `none`: no files. | Scratch for `openai_hosted`: gone when Pi stops and when the session is deleted. Runner files stay on the runner. |
+| **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. `self_hosted`: the runner. `none`: no files. | `openai_hosted` lasts across Pi stop until `APIPI_WORKSPACE_TTL` (default 1 hour) with no session activity, or until the session is deleted. Runner files stay on the runner. |
 | **Artifacts** | Named outputs the API can fetch | Metadata in Postgres. Bytes on the gateway host under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{session_id}/{id}`. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
 
-When Pi stops, the gateway copies files under `artifacts/` on that
-computer into the host store, then deletes the `openai_hosted`
-workspace. `host` and `jail` copy from the session directory.
-`microvm` pulls a tar over vsock while the guest is still up.
-`self_hosted` reads `artifacts/` from the runner if it is connected.
-A crash before stop can lose unpublished files. A later spawn recopies
-skills into a fresh workspace.
+When a turn completes, the gateway copies files under `artifacts/` and
+`outputs/` on that computer into the host store. Copies are immutable.
+`GET` content works before Pi stops. Harvest on Pi stop is a safety
+net for files written after the last completed turn. Killing idle Pi
+does not delete the `openai_hosted` directory. After workspace TTL
+with no activity, that directory is deleted and a later spawn recopies
+skills into a fresh workspace. `host` and `jail` read the session
+directory. `microvm` pulls a workspace tar over vsock before the guest
+exits so the next pack is not empty. `self_hosted` reads `artifacts/`
+and `outputs/` from the runner if it is connected. A crash before
+publish can lose unpublished files.
 
 ## `host`
 
@@ -141,9 +145,10 @@ gateway never enters the guest. Pi, stdio MCP, and local file tools
 boot in a KVM guest with its own kernel.
 
 The session directory is packed into a workspace drive at boot,
-unpacked onto a guest tmpfs, and is the guest cwd. Writes stay in the
-guest. They are not copied back to the host folder. Skill paths from
-that workspace are rewritten to `/tmp/workspace`.
+unpacked onto a guest tmpfs, and is the guest cwd. Before the guest
+exits, the gateway pulls the workspace back to the host folder so the
+next pack still has those files. Skill paths from that workspace are
+rewritten to `/tmp/workspace`.
 
 RPC is JSON lines over vsock. Egress uses a TAP device and NAT. There
 is no host loopback to Postgres.

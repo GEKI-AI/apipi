@@ -130,11 +130,14 @@ Item types: `message`, `function_call`, `mcp_call`,
 | `GET` | `/v1/agents/sessions/{session_id}/artifacts/{id}/content` |
 | `DELETE` | `/v1/agents/sessions/{session_id}/artifacts/{id}` |
 
-Artifact bytes live on the gateway host after Pi stops. The agent
-writes files under `artifacts/` on the computer. On Pi stop those
-files are copied into the host store. `GET` content reads that store
-in every run mode. `410` if nothing was published. `DELETE` removes
-the metadata and the stored file. See [run modes](run-modes.md#storage).
+When a turn completes, files under `artifacts/` and `outputs/` on the
+computer are copied into the host store. Copies are immutable and
+include `turn_id`. A later turn that writes the same path publishes
+another artifact. `GET` content works as soon as the turn has
+completed, even if Pi is still alive. Harvest on Pi stop is a safety
+net for files written after the last completed turn. `410` if nothing
+was published. `DELETE` removes the metadata and the stored file. The
+live file on the computer stays. See [run modes](run-modes.md#storage).
 
 `GET` turn may include `usage` (prompt, completion, cache read/write,
 total). Tokens only. See [usage](usage.md).

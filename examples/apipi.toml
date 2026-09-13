@@ -4,6 +4,7 @@ host = "0.0.0.0"
 port = 8000
 log_level = "info"
 idle_ttl = "15m"
+workspace_ttl = "1h"
 max_sessions = 32
 turn_timeout = "10m"
 auth_cache_ttl = "30s"

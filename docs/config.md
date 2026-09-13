@@ -39,7 +39,8 @@ secrets. Do not commit `.env`.
 | `APIPI_HOST` | `host` | `0.0.0.0` | Bind address. |
 | `APIPI_PORT` | `port` | `8000` | Bind port. |
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
-| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process. The session row stays. Resume from the event log. |
+| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process to free RAM. The session row and `openai_hosted` directory stay. Resume from the event log. |
+| `APIPI_WORKSPACE_TTL` | `workspace_ttl` | `1h` | Delete an `openai_hosted` directory after this long with no session activity, and only if Pi is already gone. Transcript and published artifacts stay. |
 | `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. |
 | `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Cancel a stuck turn. |
 | `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. |
@@ -101,9 +102,11 @@ of sessions can exhaust RAM and PIDs. `max_sessions` counts those live
 processes. The session row in Postgres can outlive the process; idle
 TTL kills the process and frees a slot.
 
-`turn_timeout` stops a generate that never returns. `jail_memory` and
-the microvm memory/vCPU settings bound each worker. `max_request_bytes`
-bounds HTTP bodies. `db_pool_size` bounds connections to Postgres.
+`turn_timeout` stops a generate that never returns. `workspace_ttl`
+deletes the local computer directory after idle Pi has already been
+killed. `jail_memory` and the microvm memory/vCPU settings bound each
+worker. `max_request_bytes` bounds HTTP bodies. `db_pool_size` bounds
+connections to Postgres.
 
 One `apipi serve` is one process. Do not add uvicorn workers; the pool
 is in memory in that process.
@@ -117,6 +120,7 @@ host = "0.0.0.0"
 port = 8000
 log_level = "info"
 idle_ttl = "15m"
+workspace_ttl = "1h"
 max_sessions = 32
 turn_timeout = "10m"
 auth_cache_ttl = "30s"

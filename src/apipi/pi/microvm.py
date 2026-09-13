@@ -20,6 +20,7 @@ from apipi.pi.proc import PiProc, pi_command_args, pi_env
 
 VSOCK_PORT = 52
 VSOCK_ARTIFACT_PORT = 53
+VSOCK_WORKSPACE_PORT = 54
 VSOCK_UDS = "vsock.sock"
 MEM_MIB = 512
 VCPU_COUNT = 1
@@ -631,10 +632,10 @@ async def spawn_microvm_pi(
         raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from exc
     vsock = chroot_dir / VSOCK_UDS
 
-    async def pull_artifacts() -> bytes:
+    async def _pull(port: int) -> bytes:
         art_reader, art_writer = await connect_vsock(
             vsock,
-            VSOCK_ARTIFACT_PORT,
+            port,
             timeout=5.0,
             process=process,
         )
@@ -642,10 +643,17 @@ async def spawn_microvm_pi(
         await _close_writer(art_writer)
         return data
 
+    async def pull_artifacts() -> bytes:
+        return await _pull(VSOCK_ARTIFACT_PORT)
+
+    async def pull_workspace() -> bytes:
+        return await _pull(VSOCK_WORKSPACE_PORT)
+
     return PiProc(
         process,
         stdin=writer,
         stdout=reader,
         on_stop=cleanup,
         pull_artifacts=pull_artifacts,
+        pull_workspace=pull_workspace,
     )
