@@ -1,11 +1,13 @@
 # Examples
 
-MCP configs, gateway config samples, and a small OpenAI Python SDK
-script. Keys come from the environment, not from these files.
+MCP configs, gateway config samples, a small OpenAI Python SDK
+script, and a local chat playground. Keys come from the environment,
+not from these files.
 
 | File | What |
 | --- | --- |
 | [openai_sdk.py](openai_sdk.py) | Official OpenAI Python client against this API |
+| [playground/](playground/) | Vite React playground (sessions, turns, artifacts) |
 | [apipi.toml](apipi.toml) | Gateway settings file |
 | [env.example](env.example) | Dotenv template; copy to `.env` |
 | [auth_callback.py](auth_callback.py) | Auth callback (`APIPI_AUTH`) |
@@ -60,3 +62,34 @@ uv run --with openai python examples/openai_sdk.py
 
 The product [quickstart](../docs/quickstart.md) walks through the same
 client: run a task, follow progress, continue, and delete.
+
+## Playground
+
+[playground/](playground/) is a local React app that talks to this API
+through a Vite proxy. It lists sessions, creates a session with a saved
+agent or an inline agent, streams turns, shows tool and command
+activity, deletes a session, and downloads artifacts. It is an example
+client, not a first-party UI. GitHub CI does not run it.
+
+The proxy injects `Authorization: Bearer` from `OPENAI_API_KEY`. That
+value is the gateway bearer (a local token, or a Geki tenant key), not
+the model host key that Pi uses. The browser never sees it. Default
+auth accepts any non-empty bearer. `OPENAI_BASE_URL` is the ApiPi
+gateway, the same meaning as in [openai_sdk.py](openai_sdk.py).
+
+The gateway must already be running. From `examples/playground`:
+
+```
+export OPENAI_API_KEY=dev-token
+export OPENAI_BASE_URL=http://localhost:8000/v1
+npm install
+npm run dev
+```
+
+That binds `0.0.0.0:8100` and proxies `/v1` to the gateway. Open
+http://localhost:8100 . If `OPENAI_API_KEY` is unset, the proxy sends
+`dev-token`.
+
+Artifact bytes exist after Pi stops and copies `artifacts/` into the
+host store. An empty list during a live turn is expected. Idle TTL is
+`APIPI_IDLE_TTL` (default 15 minutes).
