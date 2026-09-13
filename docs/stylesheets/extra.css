@@ -1,47 +1,4 @@
-@font-face {
-  font-family: "Poppins";
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url("../assets/fonts/poppins/poppins-Medium.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "Poppins";
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url("../assets/fonts/poppins/poppins-SemiBold.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "Geist";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("../assets/fonts/geist/geist-Regular.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "Geist";
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url("../assets/fonts/geist/geist-Medium.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "Geist Mono";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("../assets/fonts/geist-mono/GeistMono-Regular.woff2") format("woff2");
-}
-
 :root > * {
-  --md-text-font: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --md-code-font: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code",
-    monospace;
   --md-primary-fg-color: #100f0f;
   --md-primary-fg-color--light: #282726;
   --md-primary-fg-color--dark: #100f0f;
@@ -94,19 +51,10 @@
   background-color: transparent;
 }
 
-.md-header__title,
-.md-nav__title {
-  font-family: Poppins, ui-sans-serif, system-ui, sans-serif;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-}
-
 .md-typeset h1,
 .md-typeset h2,
 .md-typeset h3 {
-  font-family: Poppins, ui-sans-serif, system-ui, sans-serif;
   font-weight: 600;
-  letter-spacing: -0.02em;
   color: var(--md-default-fg-color);
 }
 
@@ -122,9 +70,4 @@
 .md-typeset code,
 .md-typeset pre {
   font-variant-ligatures: none;
-}
-
-.md-copyright,
-.md-footer-meta {
-  letter-spacing: 0.01em;
 }
