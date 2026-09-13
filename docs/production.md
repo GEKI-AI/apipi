@@ -6,20 +6,22 @@ Docker are in [run modes](run-modes.md). Sticky load balancing and
 nginx are in [multiple nodes](scale.md). Every setting is in
 [configuration](config.md).
 
-In this version the API process runs Pi (`none` / `microvm`)
-plus a local directory or a `self_hosted` runner. A later [worker
+In this version the API process runs Pi (`none` or `microvm`) plus a
+local directory or a `self_hosted` runner. A later [worker
 split](roadmap.md#workers) is not done. Do not treat this page as if
 workers already exist.
 
 ## Host selection
 
-Production is systemd on the host with `APIPI_RUN_MODE=microvm`. The
-host needs `/dev/kvm` (bare metal, or a VM that exposes KVM). Nested
-Docker or nested KVM is a lab setup. It is not the production path.
-The Compose file in this repo starts Postgres only.
+Run production under systemd on the host with `APIPI_RUN_MODE=microvm`
+so each session is a Firecracker guest with its own kernel. The host
+needs `/dev/kvm` (bare metal, or a VM that exposes KVM). Nested Docker
+or nested KVM is a lab setup. It is not the production path. The
+Compose file in this repo starts Postgres only.
 
-`none` is local and CI. If the selected mode cannot start, `apipi serve`
-exits before it binds HTTP. There is no silent fallback.
+Isolation `none` is for local machines and CI. If the selected mode
+cannot start, `apipi serve` exits before it binds HTTP. There is no
+silent fallback.
 
 Size the box from **live** sessions, not from Postgres row counts.
 Each live session is one Pi process or Firecracker guest. Guest RAM is
@@ -112,7 +114,7 @@ field. Details and defaults are in [configuration](config.md).
 
 | Setting | Why it matters |
 | --- | --- |
-| `APIPI_RUN_MODE` | Production is `microvm`. `none` is not production. |
+| `APIPI_RUN_MODE` | Set `microvm` for Firecracker production isolation. `none` is not production. |
 | `APIPI_MAX_SESSIONS` | Live Pi on this node. Hard cap (`429` `capacity`). |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | Live Pi for one tenant (`429` `capacity_tenant`). |
 | `APIPI_MICROVM_MEM_MIB` / `APIPI_MICROVM_VCPUS` | Guest RAM and vCPUs. Raise RAM for Playwright. Keep 1 vCPU unless the computer is CPU-heavy. |

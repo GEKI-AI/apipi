@@ -33,10 +33,11 @@ gateway always stays on the host. It is never placed inside a guest.
 `microvm`. A custom backend is an import path. There is no fallback
 from one mode to another. `host` and `jail` are not valid.
 
-Production SaaS and enterprise use `microvm`. The process default is
-`none` so a machine without KVM can still start; that is not the
-production posture. `none` logs a warning and is not suited for
-production.
+SaaS and enterprise production use `microvm`: [Firecracker](https://firecracker-microvm.github.io/)
+gives each session its own kernel so a hostile computer cannot share
+the host with the gateway. The process default is `none` so a machine
+without KVM can still start; that is not the production posture.
+`none` logs a warning and is not suited for production.
 
 `microvm` starts Pi (and stdio MCP) in a Firecracker guest when
 `/dev/kvm`, `firecracker`, `jailer`, the kernel and rootfs images, and
@@ -69,8 +70,8 @@ systemd, Docker, and storage are in [run modes](run-modes.md).
 | `microvm` | KVM guest. Own kernel. Production when a computer is in use. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, `iptables`, and `tc` can start, and a throwaway guest boots. Otherwise the process exits. |
 | `package.mod:Class` | Operator-provided backend. | Loaded at startup. Probe runs when the backend sets `needs_probe`. |
 
-Production is systemd on the host. The Compose file starts Postgres
-only. Host sizing and scale-out are in [production](production.md).
+Run production under systemd on the host. The Compose file starts
+Postgres only. Host sizing and scale-out are in [production](production.md).
 Several `apipi serve` processes need sticky routing because Pi
 and local files live on one node. See [multiple nodes](scale.md).
 
@@ -88,9 +89,11 @@ runner.
 
 ### `microvm`
 
-[Firecracker](https://firecracker-microvm.github.io/) + jailer. The
+[Firecracker](https://firecracker-microvm.github.io/) gives each
+session a KVM guest with its own kernel. Shared-kernel jails are not
+enough for untrusted multi-tenant computers; hardware virt is. The
 gateway never enters the guest. Pi, stdio MCP, and local file tools
-boot in a KVM guest with its own kernel. The session directory
+boot inside it. The session directory
 (`environment.openai_hosted`) is packed into a workspace drive at
 boot, unpacked onto a guest tmpfs, and is the guest cwd. Before the
 guest exits, those writes are pulled back to the host folder.
@@ -110,7 +113,7 @@ are rejected. The gateway's HTTP MCP probe is not TAP traffic; Pi's
 calls from the guest are. See [run modes](run-modes.md) and
 [config](config.md).
 
-This is the mode that protects the host from a hostile user. The
+This is the mode that protects the host from a hostile session. The
 guest rootfs is operator-provided. It should include Node, Pi, and
 `/sbin/apipi-guest` (the script shipped as `src/apipi/pi/guest.sh`).
 That init mounts a tmpfs workspace, unpacks the workspace drive,

@@ -1,16 +1,29 @@
 # ApiPi
 
-ApiPi is a drop-in OpenAI Agents API. Point official clients at this
-gateway and bring your own model URL.
+ApiPi is an open-source agent platform. [Pi](https://pi.dev) is the
+agent harness. You run agents at scale in isolated environments, keep
+full control of those agents, and point them at **your own** LLM
+endpoints. Clients talk to agents through an HTTP interface compatible
+with the OpenAI Agents API.
 
-You create an agent, open a session, send messages, and stream events.
-A session is a conversation that can use function tools, MCP servers,
-and an optional computer. The computer can be a local session directory
-or a runner you attach. Pi runs the agent loop behind the HTTP API. You
-bring any OpenAI-compatible model endpoint. The package and CLI are
-`apipi`. A hosted deploy lives at [geki.ai](https://geki.ai).
+This project is for teams that want to self-host or embed an Agents API
+gateway — SaaS builders and enterprise platform groups. It is not a
+workflow canvas, a model host, a search engine, or a copy of every
+OpenAI Agents object. There is no first-party chat UI, ChatKit, or
+`/v1/chat/completions`. Search and browser attach as MCP, not as
+built-in tools.
 
-## What this is
+In production, each live session runs in a hardware-virtualized microVM
+using [Firecracker](https://firecracker-microvm.github.io/). The guest
+has its own kernel, which is the isolation that protects the host from
+a hostile session. The gateway process stays on the host. Pi, stdio
+MCP, and a local session directory share the guest. How that works, and
+what to install, is in [run modes](run-modes.md) and
+[production](production.md).
+
+GEKI operates a managed ApiPi on European infrastructure if you want
+the same isolation and control without running the hosts yourself. See
+[geki.ai](https://geki.ai).
 
 Official OpenAI clients work for the subset we implement. Unknown
 fields and unimplemented features return an error (`invalid_request` or
@@ -18,11 +31,6 @@ fields and unimplemented features return an error (`invalid_request` or
 
 `environment.type` `openai_hosted` is OpenAI's field name for a **local
 session directory** next to Pi. It is not OpenAI's cloud VM.
-
-ApiPi is not a workflow builder, a model host, or a search engine. It
-is not a copy of every OpenAI Agents object. There is no first-party
-chat UI, ChatKit, or `/v1/chat/completions`. Search and browser attach
-as MCP, not as built-in tools.
 
 | You get | You bring |
 | --- | --- |
@@ -32,8 +40,8 @@ as MCP, not as built-in tools.
 
 ## Start
 
-Python 3.13+ and [uv](https://docs.astral.sh/uv/) only. Postgres is
-required. From a checkout:
+Python 3.13 or newer and [uv](https://docs.astral.sh/uv/) only. Postgres
+is required. From a checkout:
 
 ```
 uv sync
@@ -43,8 +51,10 @@ apipi migrate
 APIPI_RUN_MODE=none apipi serve
 ```
 
-That binds `0.0.0.0:8000`. Production is `microvm`. The process
-default is `none`. Full setup is in [Install](install.md).
+That binds `0.0.0.0:8000`. Isolation `none` is the process default so a
+laptop without KVM can start; it is not the production posture.
+Production operators set `APIPI_RUN_MODE=microvm`. Full setup is in
+[Install](install.md).
 
 Point a client at `http://localhost:8000/v1` with
 `Authorization: Bearer`. Default auth accepts any non-empty bearer and

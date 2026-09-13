@@ -16,13 +16,14 @@ Postgres 17 server with user `apipi`, password `apipi`, and database
 Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model URL.
 The gateway pins Pi 0.85.1.
 
-Production run mode is `microvm`. It needs `/dev/kvm`, `firecracker`,
-`jailer`, kernel and rootfs images, `ip`, `iptables`, and `tc`. `none`
-is for local tests. If the selected mode cannot start, the process
-exits before it binds HTTP. There is no silent fallback.
-Packages, systemd, Docker, and when to use each mode are in
-[run modes](run-modes.md). Host sizing, scale-out, and drain are in
-[production](production.md).
+Production sessions run in Firecracker microVMs (`APIPI_RUN_MODE=microvm`).
+That needs `/dev/kvm`, `firecracker`, `jailer`, kernel and rootfs
+images, `ip`, `iptables`, and `tc`. Isolation `none` is for local
+tests: Pi is a child of the gateway and is not a sandbox. If the
+selected mode cannot start, the process exits before it binds HTTP.
+There is no silent fallback. Packages, systemd, Docker, and when to
+use each mode are in [run modes](run-modes.md). Host sizing, scale-out,
+and drain are in [production](production.md).
 
 ## Install
 
@@ -66,10 +67,10 @@ Live turns also need Pi on `PATH`. You can override the binary with
 
 ## Serve
 
-Production operators set `APIPI_RUN_MODE=microvm`. That starts when
-`/dev/kvm`, Firecracker, jailer, guest images, `ip`, `iptables`, and `tc`
-are present, and after a throwaway guest has booted and been torn
-down:
+Production operators set `APIPI_RUN_MODE=microvm` so each session
+boots in a Firecracker guest. That starts when `/dev/kvm`, Firecracker,
+jailer, guest images, `ip`, `iptables`, and `tc` are present, and after
+a throwaway guest has booted and been torn down:
 
 ```
 APIPI_RUN_MODE=microvm apipi serve
@@ -104,10 +105,10 @@ sticky routing. See [production](production.md) and
 
 ## systemd
 
-Production is systemd on the host with `APIPI_RUN_MODE=microvm`. Keep
-secrets out of the unit file. Microvm units need `/dev/kvm` and
-permission to create TAP devices. Full unit examples are in
-[run modes](run-modes.md).
+Run the gateway under systemd on the host with
+`APIPI_RUN_MODE=microvm`. Keep secrets out of the unit file. MicroVM
+units need `/dev/kvm` and permission to create TAP devices. Full unit
+examples are in [run modes](run-modes.md).
 
 ```
 [Unit]

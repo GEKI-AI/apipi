@@ -1,18 +1,31 @@
 # ApiPi
 
-ApiPi is a drop-in OpenAI Agents API. Point official clients at this
-gateway and bring your own model URL.
+ApiPi is an open-source agent platform. [Pi](https://pi.dev) is the
+agent harness. You run agents at scale in isolated environments, keep
+full control of those agents, and point them at **your own** LLM
+endpoints. Clients talk to agents through an HTTP interface compatible
+with the OpenAI Agents API.
 
-You create agents and sessions over HTTP. A session is a conversation
-that can use function tools, MCP servers, and an optional computer
-(local files or a runner you attach). Pi runs the agent loop. You bring
-any OpenAI-compatible model endpoint. The package and CLI are `apipi`.
-A hosted deploy lives at [geki.ai](https://geki.ai).
+The audience is teams that want to self-host or embed an Agents API
+gateway — SaaS builders and enterprise platform groups — not a workflow
+canvas and not a model host.
+
+In production, each session runs in a hardware-virtualized microVM
+using [Firecracker](https://firecracker-microvm.github.io/). The guest
+has its own kernel, which isolates tenants more strongly than a
+shared-kernel container. The gateway stays on the host. Pi, stdio MCP,
+and the local session computer share that guest. Local development can
+skip the sandbox (`APIPI_RUN_MODE=none`); that mode is not for
+production.
+
+GEKI operates a managed ApiPi on European infrastructure if you want
+the same isolation and control without running the hosts yourself. See
+[geki.ai](https://geki.ai).
 
 ## Install
 
-Python 3.13+ and [uv](https://docs.astral.sh/uv/) only. Do not use pip
-or a bare `python -m venv`.
+Python 3.13 or newer and [uv](https://docs.astral.sh/uv/) only. Do not
+use pip or a bare `python -m venv`.
 
 ```
 uv sync
@@ -45,26 +58,26 @@ Pi CLI (`pi --mode rpc`) on `PATH`.
 
 ## Run
 
-Production run mode is `microvm`. The process default is `none` so a
-machine without KVM can still start. `none` runs Pi as a child of the
-gateway and logs a warning: it is not suited for production.
+The process default is `none`, so `apipi serve` can start on a laptop
+without KVM. Pi then runs as a child of the gateway and the process
+logs a warning that this is not for production:
 
 ```
 apipi serve
 ```
 
-`microvm` starts Pi in a Firecracker guest when `/dev/kvm`,
-`firecracker`, `jailer`, guest images, `ip`, and `iptables` are
-present. Otherwise that mode exits. There is no silent fallback to
-another mode:
+For SaaS or enterprise, set `APIPI_RUN_MODE=microvm`. That boots each
+session in a Firecracker guest when `/dev/kvm`, `firecracker`,
+`jailer`, guest images, `ip`, and `iptables` are present. If that
+cannot start, the process exits. There is no silent fallback:
 
 ```
 APIPI_RUN_MODE=microvm apipi serve
 ```
 
 That binds `0.0.0.0:8000` by default. Settings load from environment
-variables, optional `.env`, and optional `apipi.toml`. See the install
-and configuration pages in the docs.
+variables, optional `.env`, and optional `apipi.toml`. Operator
+install, Firecracker images, and systemd are in the docs.
 
 ## Use
 

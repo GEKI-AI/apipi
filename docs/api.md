@@ -1,8 +1,8 @@
 # API
 
-ApiPi is a drop-in OpenAI Agents API. Every public route lives under
-`/v1`. Official OpenAI clients work for the subset we implement. The
-beta header `OpenAI-Beta: agents=v1` is accepted and ignored.
+Every public route lives under `/v1`. Official OpenAI clients work for
+the subset we implement. The beta header `OpenAI-Beta: agents=v1` is
+accepted and ignored.
 
 Unknown fields and unimplemented features return an error
 (`invalid_request` or `not_implemented`). They are not stored and they
@@ -22,8 +22,8 @@ There is no first-party chat UI. Clients send a bearer and talk to
 
 ## Agents
 
-An agent is saved config, not a running process. There is no built-in
-agent on a fresh install.
+An agent is saved config, not a running process. A new install has no
+agents until you create one.
 
 | Method | Path |
 | --- | --- |
