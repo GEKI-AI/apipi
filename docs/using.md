@@ -13,7 +13,8 @@ apipi migrate`, `uv run apipi serve`. Live turns need Pi on `PATH` and
 `OPENAI_BASE_URL` on the gateway process (the **model** host, not this
 API). The client bearer is the model key unless
 `OPENAI_API_KEY_OVERWRITE` is set. `agent.model` must exist on that
-host.
+host. When `agent.instructions` are set, they are appended to Pi's
+system prompt so the model follows them.
 
 In a second shell, point the official client at the gateway. For this
 script, `OPENAI_BASE_URL` is the ApiPi gateway and `OPENAI_API_KEY` is
@@ -34,7 +35,8 @@ Isolation `none` is enough for this tutorial. Production usually uses
 
 Save the example as `examples/openai_sdk.py`, or run the copy in this
 repo. The request creates a session with an inline agent, uses the
-local sandbox, submits a coding task, and streams progress.
+local sandbox, submits a coding task, and streams progress. Those
+instructions reach the model through Pi, not only the agent JSON.
 
 ```python
 import json

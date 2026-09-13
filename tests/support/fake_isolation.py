@@ -35,6 +35,7 @@ class FakeIsolation:
         mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
         model: str | None = None,
+        instructions: str | None = None,
         api_key: str | None = None,
     ) -> PiProc:
         type(self).spawned = True
@@ -46,6 +47,7 @@ class FakeIsolation:
             mcp_stdio=mcp_stdio,
             skill_dirs=skill_dirs,
             model=model,
+            instructions=instructions,
             api_key=api_key,
         )
 

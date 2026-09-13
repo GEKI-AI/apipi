@@ -76,6 +76,20 @@ def test_pi_command_args_include_provider_and_model(tmp_path: Path) -> None:
     assert args[args.index("--model") + 1] == "m1"
 
 
+def test_pi_command_args_append_system_prompt(tmp_path: Path) -> None:
+    args = pi_command_args(_settings(tmp_path), tools=True, instructions="be brief")
+    assert args[args.index("--append-system-prompt") + 1] == "be brief"
+    assert "--system-prompt" not in args
+
+
+def test_pi_command_args_omit_empty_instructions(tmp_path: Path) -> None:
+    args = pi_command_args(_settings(tmp_path), tools=True, instructions="")
+    assert "--append-system-prompt" not in args
+    assert "--system-prompt" not in args
+    args = pi_command_args(_settings(tmp_path), tools=True)
+    assert "--append-system-prompt" not in args
+
+
 def test_pi_env_uses_request_key_not_openai_api_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

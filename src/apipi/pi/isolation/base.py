@@ -26,5 +26,6 @@ class Isolation(Protocol):
         mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
         model: str | None = None,
+        instructions: str | None = None,
         api_key: str | None = None,
     ) -> PiProc: ...

@@ -156,6 +156,7 @@ class FakeHarness:
         self.mcp_http: list[Any] | None = None
         self.mcp_stdio: list[Any] | None = None
         self.skill_dirs: list[str] | None = None
+        self.instructions: str | None = None
         self.tools: bool | None = None
         self.computer_calls: list[dict[str, Any]] = []
         self.hold = False
@@ -195,6 +196,12 @@ class FakeHarness:
         self.mcp_http = list(mcp_http) if mcp_http is not None else None
         self.mcp_stdio = list(mcp_stdio) if mcp_stdio is not None else None
         self.skill_dirs = list(skill_dirs) if skill_dirs is not None else None
+        raw_instructions = _kwargs.get("instructions")
+        self.instructions = (
+            raw_instructions
+            if isinstance(raw_instructions, str) and raw_instructions
+            else None
+        )
         if tools and computer is not None and self.computer_calls:
             calls = list(self.computer_calls)
             self.computer_calls = []
@@ -320,13 +327,13 @@ def _skill_dirs(environment: dict[str, Any]) -> list[str]:
 
 async def _agent_tools_and_model(
     db: AsyncSession, tenant_id: uuid.UUID, row: SessionRow
-) -> tuple[list[dict[str, Any]], str | None]:
+) -> tuple[list[dict[str, Any]], str | None, str | None]:
     if row.agent_id is None:
-        return [], row.model
+        return [], row.model, row.instructions
     agent = await get_agent(db, tenant_id, row.agent_id)
     if agent is None:
-        return [], row.model
-    return _function_tools(agent.tools), agent.model
+        return [], row.model, row.instructions
+    return _function_tools(agent.tools), agent.model, agent.instructions
 
 
 async def _emit_item(
@@ -907,12 +914,15 @@ async def run_turn(
         function_tools: list[dict[str, Any]]
         skill_dirs: list[str]
         model: str | None
+        instructions: str | None
         computer: Computer | None
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
                 return
-            function_tools, model = await _agent_tools_and_model(db, tenant_id, row)
+            function_tools, model, instructions = await _agent_tools_and_model(
+                db, tenant_id, row
+            )
             model = require_model(model)
             if settings is not None and settings.model_base_url:
                 ids = listed_models(settings.model_base_url, api_key)
@@ -994,6 +1004,7 @@ async def run_turn(
                     computer=computer,
                     tenant_id=tenant_id,
                     model=model,
+                    instructions=instructions,
                     api_key=api_key,
                     key_id=key_id,
                 )
@@ -1137,6 +1148,7 @@ async def continue_turn(
     skill_dirs: list[str]
     result: dict[str, Any]
     model: str | None = None
+    instructions: str | None = None
     computer: Computer | None
     async with store.session() as db:
         row = await get_session(db, tenant_id, session_id)
@@ -1198,7 +1210,9 @@ async def continue_turn(
             if env_hub is not None and env_id is not None
             else None
         )
-        function_tools, model = await _agent_tools_and_model(db, tenant_id, row)
+        function_tools, model, instructions = await _agent_tools_and_model(
+            db, tenant_id, row
+        )
         model = require_model(model)
         if settings is not None and settings.model_base_url:
             ids = listed_models(settings.model_base_url, api_key)
@@ -1240,6 +1254,7 @@ async def continue_turn(
                 computer=computer,
                 tenant_id=tenant_id,
                 model=model,
+                instructions=instructions,
                 api_key=api_key,
                 key_id=key_id,
             )

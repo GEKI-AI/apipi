@@ -280,6 +280,7 @@ async def create_agent_session(
     env_key: str | None = None
     env_id: uuid.UUID | None = None
     model: str | None = None
+    instructions: str | None = None
     async with store.session() as db:
         if agent_id is not None:
             agent = await get_agent(db, tenant.id, agent_id)
@@ -289,6 +290,7 @@ async def create_agent_session(
             model = agent.model
         elif body.agent is not None:
             model = body.agent.model
+            instructions = body.agent.instructions
             if body.agent.tools is not None:
                 raw_tools = [
                     tool.model_dump(exclude_none=True) for tool in body.agent.tools
@@ -299,6 +301,7 @@ async def create_agent_session(
             tenant.id,
             agent_id=agent_id,
             model=model if agent_id is None else None,
+            instructions=instructions if agent_id is None else None,
             environment=environment,
             metadata=body.metadata,
             key_id=key_id if isinstance(key_id, str) else "",
