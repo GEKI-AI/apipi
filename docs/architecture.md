@@ -47,7 +47,7 @@ must set `APIPI_RUN_MODE=host`.
 
 `microvm` starts Pi (and stdio MCP) in a Firecracker guest when
 `/dev/kvm`, `firecracker`, `jailer`, the kernel and rootfs images, and
-host net tools (`ip`, `iptables`) are present, and after a throwaway
+host net tools (`ip`, `iptables`, `tc`) are present, and after a throwaway
 guest has booted. If any of those are missing or the probe fails, the
 process exits. It does not fall back to `jail` or `host`.
 
@@ -74,7 +74,7 @@ systemd, Docker, and storage are in [run modes](run-modes.md).
 | --- | --- | --- |
 | `host` | None. Pi is a child of the gateway. | Implemented. Logs a warning. Not for production. |
 | `jail` | Linux namespaces. Shared kernel. Fallback when microvm cannot run. | Implemented when `bwrap`, `pasta`, and cgroup v2 can start, and a throwaway jail launches. Otherwise the process exits. |
-| `microvm` | KVM guest. Own kernel. Production when a computer is in use. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, and `iptables` can start, and a throwaway guest boots. Otherwise the process exits. |
+| `microvm` | KVM guest. Own kernel. Production when a computer is in use. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, `iptables`, and `tc` can start, and a throwaway guest boots. Otherwise the process exits. |
 
 Production is systemd on the host. The Compose file starts Postgres
 only.
@@ -127,7 +127,11 @@ JSON-line RPC on that vsock stream.
 
 There is no host loopback, so the guest cannot reach Postgres on
 localhost. Network for the model URL and HTTP MCP goes through a TAP
-device and NAT, not host loopback. Pi RPC still runs over vsock.
+device and NAT, not host loopback. Pi RPC still runs over vsock. That
+TAP is allowlisted and rate-limited by default. Unlisted destinations
+are rejected. The gateway's HTTP MCP probe is not TAP traffic; Pi's
+calls from the guest are. See [run modes](run-modes.md) and
+[config](config.md).
 
 This is the mode that protects the host from a hostile user. The
 guest rootfs is operator-provided. It should include Node, Pi, and
@@ -147,9 +151,9 @@ VMM overhead is small (~5 MiB). Real cost is guest RAM (Pi alone is
 modest; Playwright needs hundreds of MiB).
 
 If `/dev/kvm`, `firecracker`, `jailer`, the kernel file, the rootfs
-file, `ip`, or `iptables` cannot start, or the throwaway guest probe
-fails, `apipi serve` exits before it binds HTTP. There is no fallback
-to `jail` or `host`.
+file, `ip`, `iptables`, or `tc` cannot start, or the throwaway guest
+probe fails, `apipi serve` exits before it binds HTTP. There is no
+fallback to `jail` or `host`.
 
 ## Environment
 

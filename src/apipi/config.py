@@ -107,9 +107,16 @@ def parse_optional_endpoint(value: object) -> object:
     return value
 
 
+def parse_hosts(value: object) -> object:
+    if isinstance(value, list):
+        return ",".join(str(item).strip() for item in value if str(item).strip())
+    return value
+
+
 IdleTtl = Annotated[timedelta, BeforeValidator(parse_ttl)]
 ByteSize = Annotated[int, BeforeValidator(parse_bytes)]
 OtelEndpoint = Annotated[str | None, BeforeValidator(parse_optional_endpoint)]
+HostList = Annotated[str, BeforeValidator(parse_hosts)]
 
 
 class MappingSource(PydanticBaseSettingsSource):
@@ -231,6 +238,25 @@ class Settings(BaseSettings):
         default=1,
         ge=1,
         validation_alias=AliasChoices("APIPI_MICROVM_VCPUS", "microvm_vcpus"),
+    )
+    microvm_egress_allowlist: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "APIPI_MICROVM_EGRESS_ALLOWLIST", "microvm_egress_allowlist"
+        ),
+    )
+    microvm_egress_hosts: HostList = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "APIPI_MICROVM_EGRESS_HOSTS", "microvm_egress_hosts"
+        ),
+    )
+    microvm_egress_mbit: int = Field(
+        default=50,
+        ge=1,
+        validation_alias=AliasChoices(
+            "APIPI_MICROVM_EGRESS_MBIT", "microvm_egress_mbit"
+        ),
     )
     db_pool_size: int = Field(
         default=5,
@@ -379,6 +405,10 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_MICROVM_MEM_MIB must be at least 1"
         if "microvm_vcpus" in loc:
             return "APIPI_MICROVM_VCPUS must be at least 1"
+        if "microvm_egress_allowlist" in loc or "APIPI_MICROVM_EGRESS_ALLOWLIST" in loc:
+            return "APIPI_MICROVM_EGRESS_ALLOWLIST must be on or off"
+        if "microvm_egress_mbit" in loc or "APIPI_MICROVM_EGRESS_MBIT" in loc:
+            return "APIPI_MICROVM_EGRESS_MBIT must be at least 1"
     return "invalid configuration"
 
 

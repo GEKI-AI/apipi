@@ -17,7 +17,7 @@ Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model URL.
 The gateway pins Pi 0.85.1.
 
 Production run mode is `microvm`. It needs `/dev/kvm`, `firecracker`,
-`jailer`, kernel and rootfs images, `ip`, and `iptables`. `jail` is a
+`jailer`, kernel and rootfs images, `ip`, `iptables`, and `tc`. `jail` is a
 fallback when KVM cannot run; it needs `bwrap`, `pasta`, and cgroup
 v2. `host` is for local tests. If the selected mode cannot start, the
 process exits before it binds HTTP. There is no silent fallback.
@@ -67,7 +67,7 @@ Live turns also need Pi on `PATH`. You can override the binary with
 ## Serve
 
 Production operators set `APIPI_RUN_MODE=microvm`. That starts when
-`/dev/kvm`, Firecracker, jailer, guest images, `ip`, and `iptables`
+`/dev/kvm`, Firecracker, jailer, guest images, `ip`, `iptables`, and `tc`
 are present, and after a throwaway guest has booted and been torn
 down:
 
@@ -91,7 +91,8 @@ of the gateway. The process logs a warning:
 is on, and whether Prometheus metrics and OpenTelemetry export are on.
 
 `microvm` reaches the model URL and HTTP MCP through a TAP device.
-There is no host loopback to Postgres. Set `APIPI_MICROVM_KERNEL` and
+There is no host loopback to Postgres. That TAP is allowlisted and
+rate-limited by default. Set `APIPI_MICROVM_KERNEL` and
 `APIPI_MICROVM_ROOTFS`.
 
 `GET /health` returns `{"status": "ok"}` and does not require a bearer.

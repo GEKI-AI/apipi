@@ -152,6 +152,9 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.db_pool_size == 5
     assert settings.microvm_mem_mib == 512
     assert settings.microvm_vcpus == 1
+    assert settings.microvm_egress_allowlist is True
+    assert settings.microvm_egress_hosts == ""
+    assert settings.microvm_egress_mbit == 50
     assert settings.workspace_ttl == timedelta(hours=1)
     assert "example_ui" not in type(settings).model_fields
 
@@ -165,6 +168,26 @@ def test_limit_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.max_sessions_per_tenant == 4
     assert settings.max_workspace_bytes == 1024 * 1024 * 1024
     assert settings.max_artifact_bytes == 512 * 1024 * 1024
+
+
+def test_egress_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_MICROVM_EGRESS_ALLOWLIST", "off")
+    monkeypatch.setenv("APIPI_MICROVM_EGRESS_HOSTS", "mcp.tavily.com, api.example.com")
+    monkeypatch.setenv("APIPI_MICROVM_EGRESS_MBIT", "25")
+    settings = Settings()
+    assert settings.microvm_egress_allowlist is False
+    assert settings.microvm_egress_hosts == "mcp.tavily.com, api.example.com"
+    assert settings.microvm_egress_mbit == 25
+
+
+def test_egress_mbit_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_MICROVM_EGRESS_MBIT", "0")
+    with pytest.raises(ConfigError, match="APIPI_MICROVM_EGRESS_MBIT must be"):
+        load_settings()
 
 
 def test_max_sessions_per_tenant_invalid(

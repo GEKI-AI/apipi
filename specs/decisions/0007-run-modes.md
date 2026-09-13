@@ -15,15 +15,17 @@ before it binds HTTP. No fallback.
 `host`, `jail`, and `microvm` are implemented. `jail` still exits if
 `bwrap`, `pasta`, or cgroup v2 cannot start, or if a throwaway jail
 cannot launch. `microvm` still exits if `/dev/kvm`, `firecracker`,
-`jailer`, the kernel and rootfs images, `ip`, or `iptables` cannot
+`jailer`, the kernel and rootfs images, `ip`, `iptables`, or `tc` cannot
 start, or if a throwaway guest cannot boot. Operators without jail
 tools must set `APIPI_RUN_MODE=host`.
 
 `jail` uses pasta so Pi can reach the model URL and HTTP MCP with no
 host loopback to Postgres. Other session directories under
 `APIPI_SESSIONS_DIR` are a tmpfs; only the current session directory
-is bind-mounted. `microvm` attaches a TAP device for egress. Neither
-mode falls back to the other.
+is bind-mounted. `microvm` attaches a TAP device for egress. That TAP
+is allowlisted (model host, session HTTP MCP hosts, extra operator
+hosts, and DNS) and rate-limited with `tc`. Unlisted destinations are
+dropped. Neither mode falls back to the other.
 
 `host` logs a warning: not suited for production.
 

@@ -13,23 +13,29 @@ from apipi.config import (
     Settings,
     require_run_mode,
 )
+from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.artifacts import unpack_workspace_tar
 from apipi.pi.guest import _pi_args, _start_mcp, workspace_tar_bytes
 from apipi.pi.microvm import (
     BOOT_ARGS,
+    GUEST_DNS,
     GUEST_WORKSPACE,
     VSOCK_PORT,
     connect_vsock,
+    egress_host,
     guest_env,
     guest_skill_dirs,
     jailer_argv,
     microvm_config,
+    microvm_egress_hosts,
     require_microvm,
+    resolve_host_ips,
     setup_tap,
     spawn_microvm_pi,
     tap_net,
     tap_setup_argv,
+    tap_teardown_argv,
     write_workspace_image,
 )
 from apipi.pi.proc import PiProc, spawn_pi
@@ -154,6 +160,19 @@ def test_require_microvm_missing_iptables(
         require_microvm(_settings(tmp_path))
 
 
+def test_require_microvm_missing_tc(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _images(tmp_path)
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr(
+        "apipi.pi.microvm.shutil.which",
+        lambda name: None if name == "tc" else _which_ok(name),
+    )
+    with pytest.raises(ConfigError, match="requires tc"):
+        require_microvm(_settings(tmp_path))
+
+
 def test_jailer_argv_and_config_use_vsock() -> None:
     argv = jailer_argv(
         jailer="/usr/bin/jailer",
@@ -257,7 +276,13 @@ def test_guest_workspace_pull_is_source_for_next_pack(tmp_path: Path) -> None:
 def test_tap_setup_nat_without_host_loopback() -> None:
     net = tap_net("551e7604-e35c-42b3-b825-416853441234")
     argv = tap_setup_argv(
-        net, ip="/sbin/ip", iptables="/sbin/iptables", uid=123, gid=100
+        net,
+        ip="/sbin/ip",
+        iptables="/sbin/iptables",
+        uid=123,
+        gid=100,
+        tc="/sbin/tc",
+        allowed_ips=["203.0.113.10"],
     )
     flat = " ".join(" ".join(part) for part in argv)
     assert net.name in flat
@@ -266,6 +291,69 @@ def test_tap_setup_nat_without_host_loopback() -> None:
     assert "127.0.0.1" not in flat
     assert "DNAT" not in flat
     assert "--map-host-loopback" not in flat
+    assert "REJECT" in flat
+    assert "203.0.113.10" in flat
+    assert "50mbit" in flat
+    for dns in GUEST_DNS:
+        assert dns in flat
+    assert "198.51.100.9" not in flat
+
+
+def test_tap_setup_allowlist_off_accepts_all() -> None:
+    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
+    argv = tap_setup_argv(
+        net,
+        ip="/sbin/ip",
+        iptables="/sbin/iptables",
+        uid=123,
+        gid=100,
+        allowlist=False,
+    )
+    flat = " ".join(" ".join(part) for part in argv)
+    assert "-j ACCEPT" in flat
+    assert "REJECT" not in flat
+
+
+def test_tap_teardown_cleans_tc_and_chain() -> None:
+    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
+    argv = tap_teardown_argv(
+        net, ip="/sbin/ip", iptables="/sbin/iptables", tc="/sbin/tc"
+    )
+    flat = " ".join(" ".join(part) for part in argv)
+    assert "qdisc del" in flat
+    assert f"{net.name}eg" in flat
+    assert "link delete" in flat
+
+
+def test_egress_host_and_session_hosts(tmp_path: Path) -> None:
+    assert egress_host("https://api.openai.com/v1") == "api.openai.com"
+    assert egress_host("mcp.tavily.com") == "mcp.tavily.com"
+    settings = _settings(tmp_path).model_copy(
+        update={
+            "model_base_url": "https://api.openai.com/v1",
+            "microvm_egress_hosts": "mcp.tavily.com",
+        }
+    )
+    mcp = [
+        McpHttpServer(
+            server_label="search",
+            server_url="https://mcp.example.com/mcp",
+            headers={},
+        )
+    ]
+    hosts = microvm_egress_hosts(settings, mcp)
+    assert hosts == ["api.openai.com", "mcp.tavily.com", "mcp.example.com"]
+
+
+def test_resolve_host_ips(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "apipi.pi.microvm.socket.getaddrinfo",
+        lambda *_a, **_k: [
+            (0, 0, 0, "", ("203.0.113.10", 0)),
+            (0, 0, 0, "", ("203.0.113.10", 0)),
+        ],
+    )
+    assert resolve_host_ips("api.example.com") == ["203.0.113.10"]
 
 
 def test_guest_skill_dirs_rewrite_workspace_paths(tmp_path: Path) -> None:
@@ -505,11 +593,22 @@ def test_setup_tap_runs_ip_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("apipi.pi.microvm._enable_forward", lambda: None)
     monkeypatch.setattr("apipi.pi.microvm._run", fake_run)
     net = tap_net("551e7604-e35c-42b3-b825-416853441234")
-    setup_tap(net, ip="/sbin/ip", iptables="/sbin/iptables", uid=1, gid=2)
+    setup_tap(
+        net,
+        ip="/sbin/ip",
+        iptables="/sbin/iptables",
+        uid=1,
+        gid=2,
+        tc="/sbin/tc",
+        allowed_ips=["203.0.113.10"],
+        egress_mbit=25,
+    )
     flat = " ".join(" ".join(part) for part in ran)
     assert "/sbin/ip tuntap add" in flat
     assert "MASQUERADE" in flat
     assert "127.0.0.1" not in flat
+    assert "25mbit" in flat
+    assert "203.0.113.10" in flat
 
 
 async def test_spawn_microvm_stdio_stays_in_guest(
