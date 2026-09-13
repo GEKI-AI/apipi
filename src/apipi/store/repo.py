@@ -121,6 +121,7 @@ async def create_session(
     tenant_id: uuid.UUID,
     *,
     agent_id: uuid.UUID | None = None,
+    model: str | None = None,
     status: str = "idle",
     environment: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
@@ -129,6 +130,7 @@ async def create_session(
     row = SessionRow(
         tenant_id=tenant_id,
         agent_id=agent_id,
+        model=model,
         status=status,
         environment=environment if environment is not None else {},
         metadata_json=metadata if metadata is not None else {},

@@ -49,9 +49,11 @@ The gateway is Python 3.13 and FastAPI. It authenticates callers,
 owns sessions, appends the event log, and streams SSE. It talks to
 Postgres. It spawns Pi (`pi --mode rpc`).
 
-Pi's environment gets model credentials (`OPENAI_BASE_URL`,
-`OPENAI_API_KEY`) and that session's MCP secrets. It does not get
-`DATABASE_URL` or gateway keys.
+Pi's environment gets `OPENAI_BASE_URL`, the model key (the request
+bearer, or `OPENAI_API_KEY_OVERWRITE` when set), and that session's MCP
+secrets. It does not get `DATABASE_URL` or gateway keys. Pi is started
+with the request `agent.model` against that host. It does not use Pi's
+built-in default model.
 
 Auth is a callback on the bearer. Default hashes the key. We do not
 store secrets. See [auth](auth.md).

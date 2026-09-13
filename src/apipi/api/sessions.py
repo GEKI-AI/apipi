@@ -176,6 +176,26 @@ def session_body(row: SessionRow) -> dict[str, Any]:
     }
 
 
+def _model_key(request: Request) -> str:
+    overwrite = request.app.state.settings.model_api_key_overwrite
+    if isinstance(overwrite, str) and overwrite:
+        return overwrite
+    bearer = getattr(request.state, "bearer", None)
+    if isinstance(bearer, str) and bearer:
+        return bearer
+    raise ApiError(
+        "invalid_request",
+        "Invalid bearer token",
+        code="unauthorized",
+        status_code=401,
+    )
+
+
+def _key_id(request: Request) -> str | None:
+    value = getattr(request.state, "key_id", None)
+    return value if isinstance(value, str) else None
+
+
 def _input_text(value: str | dict[str, Any] | None) -> str:
     if value is None:
         return ""
@@ -206,6 +226,9 @@ def _sse(event: dict[str, Any]) -> str:
     return f"id: {event['seq']}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
 
 
+SSE_PING = ": ping\n"
+
+
 async def _event_stream(
     store: Store,
     hub: EventHub,
@@ -225,7 +248,7 @@ async def _event_stream(
             try:
                 payload = await asyncio.wait_for(queue.get(), timeout=15)
             except TimeoutError:
-                yield ": ping\n\n"
+                yield SSE_PING
                 continue
             seq = int(payload["seq"])
             if seq <= last:
@@ -275,6 +298,7 @@ async def create_agent_session(
             db,
             tenant.id,
             agent_id=agent_id,
+            model=model if agent_id is None else None,
             environment=environment,
             metadata=body.metadata,
             key_id=key_id if isinstance(key_id, str) else "",
@@ -371,6 +395,8 @@ async def create_agent_session(
                 env_hub=request.app.state.env_hub,
                 settings=request.app.state.settings,
                 pool=request.app.state.pi_pool,
+                api_key=_model_key(request),
+                key_id=_key_id(request),
             )
         else:
             async with store.session() as db:
@@ -540,6 +566,8 @@ async def post_session_event(
                 env_hub=request.app.state.env_hub,
                 settings=request.app.state.settings,
                 pool=request.app.state.pi_pool,
+                api_key=_model_key(request),
+                key_id=_key_id(request),
             )
     else:
         with start_span(
@@ -565,6 +593,8 @@ async def post_session_event(
                 env_hub=request.app.state.env_hub,
                 settings=request.app.state.settings,
                 pool=request.app.state.pi_pool,
+                api_key=_model_key(request),
+                key_id=_key_id(request),
             )
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)

@@ -89,6 +89,7 @@ class SessionRow(Base):
     agent_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), nullable=True
     )
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="idle")
     environment: Mapped[dict[str, Any]] = mapped_column(
         JSONType, default=dict, nullable=False

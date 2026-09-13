@@ -8,24 +8,22 @@ Pi (OpenAI's name for that field).
 
 ## Prerequisites
 
-Have the gateway running ([Install](install.md)): Postgres, `apipi
-migrate`, `apipi serve`. Live turns need Pi on `PATH` and a model URL.
-On the gateway process, `OPENAI_BASE_URL` and `OPENAI_API_KEY` are the
-**model** host passed into Pi.
+Have the gateway running ([Install](install.md)): Postgres, `uv run
+apipi migrate`, `uv run apipi serve`. Live turns need Pi on `PATH` and
+`OPENAI_BASE_URL` on the gateway process (the **model** host, not this
+API). The client bearer is the model key unless
+`OPENAI_API_KEY_OVERWRITE` is set. `agent.model` must exist on that
+host.
 
-In a second shell, point the official client at the gateway. Default
-auth accepts any non-empty bearer and hashes it into a tenant id. The
-same key always maps to the same tenant. See [auth](auth.md).
+In a second shell, point the official client at the gateway. For this
+script, `OPENAI_BASE_URL` is the ApiPi gateway and `OPENAI_API_KEY` is
+the bearer the gateway will accept. Default auth hashes that bearer
+into a tenant id. The same key always maps to the same tenant. See
+[auth](auth.md).
 
 ```
 export OPENAI_API_KEY=dev-token
 export OPENAI_BASE_URL=http://localhost:8000/v1
-```
-
-For this script, `OPENAI_BASE_URL` is the ApiPi gateway. Install the
-`openai` package for the client:
-
-```
 uv run --with openai python examples/openai_sdk.py
 ```
 

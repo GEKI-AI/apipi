@@ -27,6 +27,8 @@ class NoneIsolation:
         mcp_http: list[McpHttpServer] | None = None,
         mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
     ) -> PiProc:
         args = pi_command_args(
             settings,
@@ -34,6 +36,7 @@ class NoneIsolation:
             mcp_http=mcp_http,
             mcp_stdio=mcp_stdio,
             skill_dirs=skill_dirs,
+            model=model,
         )
         process = await asyncio.create_subprocess_exec(
             *args,
@@ -41,6 +44,6 @@ class NoneIsolation:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
-            env=pi_env(settings, mcp_http, mcp_stdio),
+            env=pi_env(settings, mcp_http, mcp_stdio, api_key=api_key),
         )
         return PiProc(process)

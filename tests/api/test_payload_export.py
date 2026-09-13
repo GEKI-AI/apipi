@@ -88,7 +88,10 @@ async def test_payload_export_sends_items_not_turn_log(
         )
         secrets = tuple(
             value
-            for value in (_settings.model_api_key, _settings.payload_export_token)
+            for value in (
+                _settings.model_api_key_overwrite,
+                _settings.payload_export_token,
+            )
             if isinstance(value, str) and value
         )
         captured.append(redact_payload(event, secrets))

@@ -202,5 +202,6 @@ async def require_tenant(
         identity = parsed
     request.state.tenant_id = identity.tenant_id
     request.state.key_id = identity.key_id
+    request.state.bearer = token
     async with _store(request).session() as db:
         return await ensure_tenant(db, identity.tenant_id)
