@@ -1,14 +1,58 @@
 import asyncio
+import importlib
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
-from apipi.config import Settings
+from apipi.config import ConfigError, Settings
 from apipi.metrics import Metrics
 
 log = logging.getLogger("apipi")
+
+_sink_cache: dict[str, "EventSink"] = {}
+
+
+class EventSink(Protocol):
+    def emit(self, event: dict[str, Any]) -> None: ...
+
+
+def split_sink_paths(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def load_sink(path: str, setting: str) -> EventSink:
+    cached = _sink_cache.get(path)
+    if cached is not None:
+        return cached
+    if ":" not in path:
+        raise ConfigError(f"{setting} must be package.mod:Class")
+    module_name, attr_name = path.rsplit(":", 1)
+    if not module_name or not attr_name:
+        raise ConfigError(f"{setting} must be package.mod:Class")
+    try:
+        module = importlib.import_module(module_name)
+        attr = getattr(module, attr_name)
+    except (ImportError, AttributeError) as exc:
+        raise ConfigError(f"{setting} sink not found: {path}") from exc
+    sink = attr() if isinstance(attr, type) or callable(attr) else attr
+    if not hasattr(sink, "emit"):
+        raise ConfigError(f"{setting} sink missing emit: {path}")
+    _sink_cache[path] = sink
+    return sink
+
+
+def load_custom_sinks(paths: str, setting: str) -> list[EventSink]:
+    return [load_sink(path, setting) for path in split_sink_paths(paths)]
+
+
+def emit_all(sinks: list[EventSink], event: dict[str, Any], *, failed: str) -> None:
+    for sink in sinks:
+        try:
+            sink.emit(event)
+        except Exception:
+            log.warning(failed, exc_info=True)
 
 
 class HttpExporter:
@@ -93,9 +137,23 @@ class UsageExporter:
         await self._http._post(event)
 
 
+def load_usage_sinks(
+    settings: Settings, metrics: Metrics | None = None
+) -> list[EventSink]:
+    sinks: list[EventSink] = []
+    if settings.usage_export_url:
+        sinks.append(UsageExporter(settings, metrics))
+    sinks.extend(load_custom_sinks(settings.usage_sinks, "APIPI_USAGE_SINKS"))
+    return sinks
+
+
 def export_usage(
     settings: Settings | None, metrics: Metrics | None, event: dict[str, Any]
 ) -> None:
-    if settings is None or not settings.usage_export_url:
+    if settings is None:
         return
-    UsageExporter(settings, metrics).emit(event)
+    emit_all(
+        load_usage_sinks(settings, metrics),
+        event,
+        failed="usage sink failed",
+    )

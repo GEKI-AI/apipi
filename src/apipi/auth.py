@@ -19,7 +19,6 @@ from apipi.tokens import hash_token
 
 _bearer = HTTPBearer(auto_error=False)
 _MISS = object()
-_REJECT = object()
 
 Authenticate = Callable[[str], object]
 
@@ -28,6 +27,21 @@ Authenticate = Callable[[str], object]
 class AuthIdentity:
     key_id: str
     tenant_id: UUID
+
+
+@dataclass(frozen=True)
+class AuthReject:
+    status_code: int
+    code: str
+    message: str
+    type: str = "invalid_request"
+
+
+UNAUTHORIZED = AuthReject(
+    status_code=401,
+    code="unauthorized",
+    message="Invalid bearer token",
+)
 
 
 class AuthCache:
@@ -49,13 +63,17 @@ class AuthCache:
         self._entries[key_hash] = (monotonic() + self._ttl.total_seconds(), value)
 
 
-def unauthorized() -> NoReturn:
+def raise_auth(reject: AuthReject) -> NoReturn:
     raise ApiError(
-        "invalid_request",
-        "Invalid bearer token",
-        code="unauthorized",
-        status_code=401,
+        reject.type,
+        reject.message,
+        code=reject.code,
+        status_code=reject.status_code,
     )
+
+
+def unauthorized() -> NoReturn:
+    raise_auth(UNAUTHORIZED)
 
 
 def not_found() -> NoReturn:
@@ -85,19 +103,54 @@ def load_authenticate(path: str | None) -> Authenticate:
     return fn
 
 
-def identity_from_result(result: object) -> AuthIdentity | None:
+def _reject_from_dict(result: dict[str, object]) -> AuthReject:
+    raw_status = result.get("status_code", 401)
+    status_code = 401
+    if isinstance(raw_status, int):
+        status_code = raw_status
+    elif isinstance(raw_status, str) and raw_status.isdigit():
+        status_code = int(raw_status)
+    code = result.get("code")
+    message = result.get("message")
+    err_type = result.get("type")
+    if status_code == 429:
+        default_code = "rate_limited"
+        default_message = "Too many requests"
+    else:
+        default_code = "unauthorized"
+        default_message = "Invalid bearer token"
+    return AuthReject(
+        status_code=status_code,
+        code=str(code) if code else default_code,
+        message=str(message) if message else default_message,
+        type=str(err_type) if err_type else "invalid_request",
+    )
+
+
+def auth_from_result(result: object) -> AuthIdentity | AuthReject:
     if result is None:
-        return None
+        return UNAUTHORIZED
+    if isinstance(result, AuthReject):
+        return result
     if isinstance(result, AuthIdentity):
         return result
     if isinstance(result, dict):
         key_id = result.get("key_id")
         tenant_id = result.get("tenant_id")
-        if not key_id or tenant_id is None:
-            raise TypeError("authenticate must return key_id and tenant_id")
-        parsed = tenant_id if isinstance(tenant_id, UUID) else UUID(str(tenant_id))
-        return AuthIdentity(key_id=str(key_id), tenant_id=parsed)
+        if key_id and tenant_id is not None:
+            parsed = tenant_id if isinstance(tenant_id, UUID) else UUID(str(tenant_id))
+            return AuthIdentity(key_id=str(key_id), tenant_id=parsed)
+        if "status_code" in result or "code" in result:
+            return _reject_from_dict(result)
+        raise TypeError("authenticate must return key_id and tenant_id")
     raise TypeError("authenticate must return key_id and tenant_id")
+
+
+def identity_from_result(result: object) -> AuthIdentity | None:
+    parsed = auth_from_result(result)
+    if isinstance(parsed, AuthIdentity):
+        return parsed
+    return None
 
 
 def _store(request: Request) -> Store:
@@ -112,6 +165,10 @@ async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
         yield session
 
 
+def _cache_reject(reject: AuthReject) -> bool:
+    return reject.status_code != 429
+
+
 async def require_tenant(
     creds: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     request: Request,
@@ -122,14 +179,14 @@ async def require_tenant(
     key_hash = hash_token(token)
     cache: AuthCache = request.app.state.auth_cache
     cached = cache.get(key_hash)
-    if cached is _REJECT:
-        unauthorized()
+    if isinstance(cached, AuthReject):
+        raise_auth(cached)
     if isinstance(cached, AuthIdentity):
         identity = cached
     else:
         fn: Authenticate = request.app.state.authenticate
         try:
-            identity = identity_from_result(fn(token))
+            parsed = auth_from_result(fn(token))
         except Exception as exc:
             raise ApiError(
                 "invalid_request",
@@ -137,10 +194,12 @@ async def require_tenant(
                 code="unauthorized",
                 status_code=401,
             ) from exc
-        if identity is None:
-            cache.put(key_hash, _REJECT)
-            unauthorized()
-        cache.put(key_hash, identity)
+        if isinstance(parsed, AuthReject):
+            if _cache_reject(parsed):
+                cache.put(key_hash, parsed)
+            raise_auth(parsed)
+        cache.put(key_hash, parsed)
+        identity = parsed
     request.state.tenant_id = identity.tenant_id
     request.state.key_id = identity.key_id
     async with _store(request).session() as db:

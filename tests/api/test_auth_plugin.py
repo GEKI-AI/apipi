@@ -79,6 +79,66 @@ async def test_plugin_reject_is_401(
 
 @pytest.mark.parametrize(
     "plugin_client",
+    [("tests.support.auth_plugin:reject_typed", timedelta(seconds=30))],
+    indirect=True,
+)
+async def test_plugin_typed_401_is_cached(
+    plugin_client: tuple[AsyncClient, FastAPI],
+) -> None:
+    client, app = plugin_client
+    first = await client.get("/v1/agents", headers=_auth("expired"))
+    second = await client.get("/v1/agents", headers=_auth("expired"))
+    assert first.status_code == 401
+    assert first.json()["error"] == {
+        "type": "invalid_request",
+        "code": "unauthorized",
+        "message": "Expired key",
+    }
+    assert second.status_code == 401
+    assert auth_plugin.calls == ["expired"]
+    cached = list(app.state.auth_cache._entries.values())
+    assert len(cached) == 1
+
+
+@pytest.mark.parametrize(
+    "plugin_client",
+    [("tests.support.auth_plugin:limit", timedelta(seconds=30))],
+    indirect=True,
+)
+async def test_plugin_429_is_not_cached(
+    plugin_client: tuple[AsyncClient, FastAPI],
+) -> None:
+    client, app = plugin_client
+    first = await client.get("/v1/agents", headers=_auth("hot"))
+    second = await client.get("/v1/agents", headers=_auth("hot"))
+    assert first.status_code == 429
+    assert first.json()["error"] == {
+        "type": "invalid_request",
+        "code": "rate_limited",
+        "message": "Too many requests",
+    }
+    assert second.status_code == 429
+    assert auth_plugin.calls == ["hot", "hot"]
+    assert app.state.auth_cache._entries == {}
+
+
+@pytest.mark.parametrize(
+    "plugin_client",
+    [("tests.support.auth_plugin:quota", timedelta(seconds=30))],
+    indirect=True,
+)
+async def test_plugin_quota_dict_is_429(
+    plugin_client: tuple[AsyncClient, FastAPI],
+) -> None:
+    client, _app = plugin_client
+    response = await client.get("/v1/agents", headers=_auth("full"))
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "quota"
+    assert response.json()["error"]["message"] == "No more agents for this tenant"
+
+
+@pytest.mark.parametrize(
+    "plugin_client",
     [("tests.support.auth_plugin:boom", timedelta(seconds=30))],
     indirect=True,
 )

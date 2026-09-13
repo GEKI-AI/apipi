@@ -5,7 +5,7 @@ from typing import Any
 from apipi.config import Settings
 from apipi.metrics import Metrics
 from apipi.store.models import Item
-from apipi.usage_export import HttpExporter
+from apipi.usage_export import EventSink, HttpExporter, emit_all, load_custom_sinks
 
 _BEARER = re.compile(r"(?i)(authorization:\s*bearer\s+)\S+")
 
@@ -80,6 +80,16 @@ class PayloadExporter:
         await self._http._post(event)
 
 
+def load_payload_sinks(
+    settings: Settings, metrics: Metrics | None = None
+) -> list[EventSink]:
+    sinks: list[EventSink] = []
+    if settings.payload_export_url:
+        sinks.append(PayloadExporter(settings, metrics))
+    sinks.extend(load_custom_sinks(settings.payload_sinks, "APIPI_PAYLOAD_SINKS"))
+    return sinks
+
+
 def export_payload(
     settings: Settings | None,
     metrics: Metrics | None,
@@ -90,7 +100,10 @@ def export_payload(
     request_id: str | None,
     items: list[Item],
 ) -> None:
-    if settings is None or not settings.payload_export_url:
+    if settings is None:
+        return
+    sinks = load_payload_sinks(settings, metrics)
+    if not sinks:
         return
     event = payload_event(
         tenant_id=tenant_id,
@@ -99,4 +112,8 @@ def export_payload(
         request_id=request_id,
         items=items,
     )
-    PayloadExporter(settings, metrics).emit(redact_payload(event, _secrets(settings)))
+    emit_all(
+        sinks,
+        redact_payload(event, _secrets(settings)),
+        failed="payload sink failed",
+    )
