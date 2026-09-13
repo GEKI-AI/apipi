@@ -189,7 +189,8 @@ gateway.
 
 Run `apipi serve` under systemd on the host with
 `APIPI_RUN_MODE=microvm`. Keep secrets in an environment file that the
-unit loads. One process: do not add uvicorn workers.
+unit loads. One process per host: do not add uvicorn workers. Several
+hosts need sticky load balancing. See [multiple nodes](scale.md).
 
 A typical microvm unit:
 

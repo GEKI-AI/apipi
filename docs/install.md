@@ -98,7 +98,8 @@ rate-limited by default. Set `APIPI_MICROVM_KERNEL` and
 `GET /health` returns `{"status": "ok"}` and does not require a bearer.
 
 One `apipi serve` is one process. The Pi pool lives in that process.
-Do not run uvicorn workers in front of it.
+Do not run uvicorn workers in front of it. Several processes need
+sticky routing. See [multiple nodes](scale.md).
 
 ## systemd
 

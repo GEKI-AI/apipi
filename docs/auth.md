@@ -31,7 +31,9 @@ tenants.
 A plugin returns `tenant_id` and `key_id`, or rejects (returns `None`
 or raises). `key_id` is for logs and metrics. Queries stay
 tenant-scoped. The plugin must not expect the gateway to persist the
-raw bearer.
+raw bearer. After a successful callback, HTTP responses include
+`X-Tenant-Id` and `X-User-Id` (`key_id`). Incoming values of those
+headers are not trusted for auth.
 
 ## Cache
 

@@ -77,7 +77,8 @@ systemd, Docker, and storage are in [run modes](run-modes.md).
 | `microvm` | KVM guest. Own kernel. Production when a computer is in use. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, `iptables`, and `tc` can start, and a throwaway guest boots. Otherwise the process exits. |
 
 Production is systemd on the host. The Compose file starts Postgres
-only.
+only. Several `apipi serve` processes need sticky routing because Pi
+and local files live on one node. See [multiple nodes](scale.md).
 
 ### Default (one server)
 
@@ -187,7 +188,10 @@ stays. Resume from the event log. Live processes are capped by
 `APIPI_MAX_SESSIONS` and `APIPI_MAX_SESSIONS_PER_TENANT`. Workspace
 and artifact bytes are capped per session. See [config](config.md).
 
-Cross-tenant IDs return `404`, not `403`.
+Cross-tenant IDs return `404`, not `403`. Live Pi, the local
+workspace, and artifact bytes stay on the node that created the
+session until that process stops. Postgres is shared across nodes.
+
 
 ## Tools
 

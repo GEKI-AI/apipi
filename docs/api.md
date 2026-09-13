@@ -90,7 +90,9 @@ The gateway persists `agent.session.turn.cancelled` then
 `GET` returns `{"data": […]}`. `GET ?stream=true` is SSE. The stream
 stays open across `idle` and sends `: ping` keepalives. Reconnect and
 replay from the store with `after_seq`. The public event is written to
-Postgres before it is published on SSE.
+Postgres before it is published on SSE. Behind more than one gateway
+process, the stream and the next turn must hit the node that owns Pi.
+See [multiple nodes](scale.md).
 
 Only these event types are public. Anything else from Pi is an internal
 log line.
@@ -169,7 +171,13 @@ See [usage](usage.md).
 Every public request except `/health` has an id. The gateway echoes
 `x-request-id`. It generates a UUID if that header is missing. It
 honors `X-Client-Request-Id` when present (ASCII, at most 512
-characters). That client value becomes the request id.
+characters). That client value becomes the request id. When
+`APIPI_INSTANCE_ID` is set, responses also include `X-ApiPi-Instance`.
+After a successful bearer, responses include `X-Tenant-Id` (auth
+`tenant_id`) and `X-User-Id` (auth `key_id`). Those request headers are
+not used for auth. When a trace is known (`traceparent`, or an active
+OpenTelemetry span), responses include `X-Trace-Id`. `/health` omits
+these. See [multiple nodes](scale.md).
 
 ## Environments
 

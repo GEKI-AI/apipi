@@ -38,6 +38,7 @@ secrets. Do not commit `.env`.
 | `APIPI_RUN_MODE` | `run_mode` | `jail` | `host` \| `jail` \| `microvm`. Production SaaS/enterprise is `microvm`. `jail` is a fallback when KVM cannot run. `host` is local/dev. `jail` and `microvm` launch a throwaway sandbox before the API listens. If the mode cannot start, the process exits. No fallback. |
 | `APIPI_HOST` | `host` | `0.0.0.0` | Bind address. |
 | `APIPI_PORT` | `port` | `8000` | Bind port. |
+| `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
 | `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process to free RAM. The session row and `openai_hosted` directory stay. Resume from the event log. |
 | `APIPI_WORKSPACE_TTL` | `workspace_ttl` | `1h` | Delete an `openai_hosted` directory after this long with no session activity, and only if Pi is already gone. Transcript and published artifacts stay. |
@@ -107,7 +108,8 @@ See [auth](auth.md) and `examples/auth_callback.py`.
 These are operator settings, not customer tiers. There is no plan or
 SKU field. One `apipi serve` process has one profile. Change a setting
 and restart the process. Do not add uvicorn workers; the pool is in
-memory in that process.
+memory in that process. Several processes behind a load balancer need
+session affinity. See [multiple nodes](scale.md).
 
 Each live session is one Pi process (or guest). Without a cap, a burst
 of sessions can exhaust RAM and PIDs. `max_sessions` counts those live

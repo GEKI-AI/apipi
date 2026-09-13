@@ -107,6 +107,19 @@ def parse_optional_endpoint(value: object) -> object:
     return value
 
 
+def parse_instance_id(value: object) -> object:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value
+    raw = value.strip()
+    if not raw:
+        return None
+    if len(raw) > 128 or not raw.isascii() or "\r" in raw or "\n" in raw:
+        raise ValueError("APIPI_INSTANCE_ID must be short ASCII")
+    return raw
+
+
 def parse_hosts(value: object) -> object:
     if isinstance(value, list):
         return ",".join(str(item).strip() for item in value if str(item).strip())
@@ -117,6 +130,7 @@ IdleTtl = Annotated[timedelta, BeforeValidator(parse_ttl)]
 ByteSize = Annotated[int, BeforeValidator(parse_bytes)]
 OtelEndpoint = Annotated[str | None, BeforeValidator(parse_optional_endpoint)]
 HostList = Annotated[str, BeforeValidator(parse_hosts)]
+InstanceId = Annotated[str | None, BeforeValidator(parse_instance_id)]
 
 
 class MappingSource(PydanticBaseSettingsSource):
@@ -155,6 +169,10 @@ class Settings(BaseSettings):
         ge=1,
         le=65535,
         validation_alias=AliasChoices("APIPI_PORT", "port"),
+    )
+    instance_id: InstanceId = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_INSTANCE_ID", "instance_id"),
     )
     log_level: LogLevel = Field(
         default="info",
@@ -385,6 +403,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_METRICS must be on or off"
         if "port" in loc:
             return "APIPI_PORT must be 1-65535"
+        if "instance_id" in loc or "APIPI_INSTANCE_ID" in loc:
+            return "APIPI_INSTANCE_ID must be short ASCII"
         if "max_sessions_per_tenant" in loc or "APIPI_MAX_SESSIONS_PER_TENANT" in loc:
             return "APIPI_MAX_SESSIONS_PER_TENANT must be at least 1"
         if "max_sessions" in loc:

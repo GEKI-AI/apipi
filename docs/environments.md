@@ -80,7 +80,9 @@ need files can still run. If nothing connects, file tools stay off.
 
 The runner opens `/v1/environments/{environment_id}` as a WebSocket and
 sends `hello` with the key. Wrong id or key is not found. There is no
-`/v1/runners` resource. One key is one workspace.
+`/v1/runners` resource. One key is one workspace. That socket must
+reach the same gateway process that created the session. See
+[multiple nodes](scale.md).
 
 Messages are JSON objects. `hello` is first:
 
