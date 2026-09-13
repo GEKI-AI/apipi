@@ -61,7 +61,7 @@ export OPENAI_BASE_URL=http://localhost:8000/v1
 uv run --with openai python examples/openai_sdk.py
 ```
 
-The product [quickstart](../docs/quickstart.md) walks through the same
+The product [Using the API](../docs/using.md) page walks through the same
 client: run a task, follow progress, continue, and delete.
 
 ## self_hosted runner

@@ -73,5 +73,6 @@ with OpenAI(
 ```
 
 A runnable script is `examples/openai_sdk.py`. The same steps as
-OpenAI's Agents API quickstart are in [Quickstart](quickstart.md). The
-HTTP surface is in [API](api.md).
+OpenAI's Agents API quickstart are in [Using the API](using.md). The
+HTTP surface is in [API](api.md). Agents, sessions, and files are in
+[Concepts](concepts.md).

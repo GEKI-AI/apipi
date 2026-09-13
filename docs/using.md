@@ -1,10 +1,13 @@
-# Quickstart
+# Using the API
 
-This page is a client tutorial. Point the official OpenAI Python SDK at
-this gateway, create a session, stream events, send a follow-up, and
-delete the session when you are done. The create-and-stream call matches
+This page is a client tutorial. Install and serve the gateway first
+([Install](install.md), [Configuration](config.md)). Then point the
+official OpenAI Python SDK at this gateway, create a session, stream
+events, send a follow-up, and delete the session when you are done. The
+create-and-stream call matches
 [OpenAI's Agents API quickstart](https://developers.openai.com/api/docs/guides/agents-api/quickstart?lang=python).
-The HTTP surface is in [API](api.md). Token totals and the turn log are
+The HTTP surface is in [API](api.md). How agents, sessions, and files
+last is in [Concepts](concepts.md). Token totals and the turn log are
 in [Usage](usage.md), not here.
 
 `environment.type` `openai_hosted` is OpenAI's field name for a **local
@@ -150,8 +153,8 @@ before that POST if you want the follow-up as SSE.
 ## 4. Clean up
 
 Keep the session for more tasks, or delete it when you are done. Save
-any files you need first. Artifact bytes live on the sandbox. See
-[environments](environments.md).
+any files you need first. The workspace is scratch after Pi stops;
+published files are artifacts. See [Concepts](concepts.md).
 
 Replace the illustrative session id with the id you saved.
 
@@ -164,6 +167,7 @@ The response is `{"id": "…", "deleted": true}`.
 
 ## Next
 
+- [Concepts](concepts.md) for agents, sessions, files, and artifacts.
 - [API](api.md) for routes, events, and compatibility.
 - [Environments](environments.md) for the local directory, `none`, and
   `self_hosted`.

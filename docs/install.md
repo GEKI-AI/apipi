@@ -1,8 +1,8 @@
 # Install and run
 
 This page is how you install ApiPi and start the API process. Settings,
-files, and every environment variable are in [config](config.md). Point
-a client at the running server with the [quickstart](quickstart.md).
+files, and every environment variable are in [config](config.md). After
+the server is up, [Using the API](using.md) is the client tutorial.
 
 ## Requirements
 
