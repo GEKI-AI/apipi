@@ -6,18 +6,29 @@ choice: where file and shell tools run. See
 [environments](environments.md). A remote runner does not replace Pi
 isolation. The gateway always stays on the host.
 
-If the selected mode cannot start, `apipi serve` exits. There is no
-silent fallback.
+If the selected mode cannot start, `apipi serve` exits before it binds
+HTTP. There is no silent fallback. For `jail` and `microvm` the
+process also launches a throwaway sandbox and tears it down. That
+probe must succeed before the API listens.
+
+When the computer is local (`openai_hosted` or the `hosted` alias), Pi
+and the session files share that jail or guest. The only supported
+split is `self_hosted`: Pi stays in the run mode, and the runner is
+elsewhere. The customer must sandbox the runner. Tests that do not
+need a computer can use `environment.type=none`.
 
 | Mode | When to use | Isolation |
 | --- | --- | --- |
-| `host` | Local tests and laptops without jail tools | None. Pi is a child of the gateway. |
-| `jail` | Default. Self-host and internal multi-tenant | Linux namespaces. Shared kernel. Tenants cannot write the host, reach Postgres on loopback, or read other session directories. |
-| `microvm` | Public or otherwise hostile tenants | KVM guest with its own kernel. Protects the host from a hostile session. |
+| `host` | Local tests and laptops without sandbox tools | None. Pi is a child of the gateway. Not for production. |
+| `jail` | Fallback when microvm cannot run: no KVM, nested Docker, lab, CI | Linux namespaces. Shared kernel. Tenants cannot write the host, reach Postgres on loopback, or read other session directories. |
+| `microvm` | SaaS and enterprise production when a computer is in use | KVM guest with its own kernel. Protects the host from a hostile session. |
 
-`jail` is the configured default. Operators without jail tools must
-set `APIPI_RUN_MODE=host`. `host` logs a warning and is not suited for
-production.
+The process default is `jail` so `apipi serve` can start on a machine
+without KVM. That is a fallback, not the production posture.
+Production operators set `APIPI_RUN_MODE=microvm`. If microvm cannot
+launch, the process exits; it does not fall back to `jail` or `host`.
+Operators without jail tools must set `APIPI_RUN_MODE=host`. `host`
+logs a warning.
 
 Production is systemd on the host next to Pi. Docker Compose in this
 repo starts Postgres only. Nested jail or microvm inside a container
@@ -160,11 +171,36 @@ gateway.
 
 ## Production
 
-Run `apipi serve` under systemd on the host. Keep secrets in an
-environment file that the unit loads. One process: do not add uvicorn
-workers.
+Run `apipi serve` under systemd on the host with
+`APIPI_RUN_MODE=microvm`. Keep secrets in an environment file that the
+unit loads. One process: do not add uvicorn workers.
 
-A typical jail unit:
+A typical microvm unit:
+
+```
+[Unit]
+Description=ApiPi gateway
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/apipi
+EnvironmentFile=/etc/apipi.env
+ExecStart=/opt/apipi/.venv/bin/apipi serve --config /etc/apipi.toml
+Restart=on-failure
+DeviceAllow=/dev/kvm rw
+DeviceAllow=/dev/net/tun rw
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Many operators run that unit as root so jailer can chroot Firecracker
+and the process can create TAP devices. Set `APIPI_MICROVM_KERNEL` and
+`APIPI_MICROVM_ROOTFS` in the environment file.
+
+A typical jail unit, only when microvm cannot run on that host:
 
 ```
 [Unit]
@@ -187,20 +223,6 @@ WantedBy=multi-user.target
 `Delegate=yes` lets the service create child cgroups for
 `APIPI_JAIL_MEMORY`. Do not set `NoNewPrivileges=yes`; bubblewrap
 needs user namespaces.
-
-A typical microvm unit adds KVM and net:
-
-```
-[Service]
-DeviceAllow=/dev/kvm rw
-DeviceAllow=/dev/net/tun rw
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-```
-
-Many operators run the microvm unit as root so jailer can chroot
-Firecracker and the process can create TAP devices. Set
-`APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` in the environment
-file.
 
 ## Docker
 

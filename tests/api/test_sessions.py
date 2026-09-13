@@ -140,6 +140,24 @@ async def test_unknown_environment_type(client: AsyncClient) -> None:
     assert response.json()["error"]["code"] == "foo"
 
 
+async def test_hosted_alias_is_openai_hosted(client: AsyncClient) -> None:
+    token = _token()
+    agent_id = await _create_agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent_id, "environment": {"type": "hosted"}},
+    )
+    assert created.status_code == 200
+    env = created.json()["environment"]
+    assert env["type"] == "openai_hosted"
+    assert Path(env["directory"]).is_dir()
+    got = await client.get(
+        f"/v1/agents/sessions/{created.json()['id']}", headers=_auth(token)
+    )
+    assert got.json()["environment"]["type"] == "openai_hosted"
+
+
 async def test_default_environment_is_openai_hosted(client: AsyncClient) -> None:
     token = _token()
     agent_id = await _create_agent(client, token)

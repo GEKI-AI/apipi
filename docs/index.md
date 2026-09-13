@@ -43,9 +43,10 @@ apipi migrate
 APIPI_RUN_MODE=host apipi serve
 ```
 
-That binds `0.0.0.0:8000`. `jail` is the configured default when
-`bwrap`, `pasta`, and cgroup v2 can start. Operators without those
-tools must set `host`. Full setup is in [Install](install.md).
+That binds `0.0.0.0:8000`. Production is `microvm`. The process
+default is `jail` when `bwrap`, `pasta`, and cgroup v2 can start.
+Operators without those tools must set `host`. Full setup is in
+[Install](install.md).
 
 Point a client at `http://localhost:8000/v1` with
 `Authorization: Bearer`. Default auth accepts any non-empty bearer and

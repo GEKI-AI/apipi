@@ -98,6 +98,15 @@ def require_microvm(settings: Settings | None = None) -> None:
     microvm_images(settings)
 
 
+async def probe_microvm(settings: Settings) -> None:
+    proc = await spawn_microvm_pi(settings, cwd=None, tools=False)
+    try:
+        if not proc.alive:
+            raise ConfigError("APIPI_RUN_MODE=microvm cannot start")
+    finally:
+        await proc.terminate()
+
+
 def guest_cid(vm_id: str) -> int:
     return uuid.UUID(vm_id).int % (2**32 - 3) + 3
 
@@ -456,8 +465,11 @@ def tap_teardown_argv(
 
 
 def _enable_forward() -> None:
+    path = Path("/proc/sys/net/ipv4/ip_forward")
     try:
-        Path("/proc/sys/net/ipv4/ip_forward").write_text("1")
+        if path.read_text().strip() == "1":
+            return
+        path.write_text("1")
     except OSError as exc:
         raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from exc
 
@@ -624,8 +636,9 @@ async def spawn_microvm_pi(
             process=process,
         )
     except (ConfigError, OSError) as exc:
-        process.kill()
-        await process.wait()
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
         cleanup()
         if isinstance(exc, ConfigError):
             raise

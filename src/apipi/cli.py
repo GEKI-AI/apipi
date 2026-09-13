@@ -19,6 +19,7 @@ from apipi.config import (
     reject_prompt_body_logging,
     require_run_mode,
 )
+from apipi.pi.probe import probe_run_mode
 from apipi.store.migrate import migrate
 
 log = logging.getLogger("apipi")
@@ -32,6 +33,7 @@ def prepare_serve(
     )
     postgres_url(resolved.database_url)
     require_run_mode(resolved.run_mode, resolved)
+    probe_run_mode(resolved)
     reject_prompt_body_logging()
     logging.getLogger().setLevel(resolved.log_level.upper())
     if resolved.run_mode == "host":

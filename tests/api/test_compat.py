@@ -215,6 +215,16 @@ async def test_compat_environment_openai_hosted(client: AsyncClient) -> None:
     assert Path(env["directory"]).is_dir()
 
 
+async def test_compat_environment_hosted_alias(client: AsyncClient) -> None:
+    token = "compat-hosted-alias"
+    agent_id = await _agent(client, token)
+    created = await _session(
+        client, token, agent_id=agent_id, environment={"type": "hosted"}
+    )
+    assert created["environment"]["type"] == "openai_hosted"
+    assert Path(created["environment"]["directory"]).is_dir()
+
+
 async def test_compat_environment_none(client: AsyncClient) -> None:
     token = "compat-none"
     agent_id = await _agent(client, token)

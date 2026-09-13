@@ -1,5 +1,6 @@
 import json
 import sys
+from pathlib import Path
 
 PI_USAGE = {
     "input": 5,
@@ -31,6 +32,7 @@ def main() -> None:
             continue
         message = command.get("message")
         text = message if isinstance(message, str) and message else "ok"
+        Path("keep.txt").write_text(text, encoding="utf-8")
         events = [
             {"type": "agent_start"},
             {"type": "turn_start"},

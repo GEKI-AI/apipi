@@ -16,11 +16,13 @@ Postgres 17 server with user `apipi`, password `apipi`, and database
 Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model URL.
 The gateway pins Pi 0.85.1.
 
-Run mode `jail` needs `bwrap`, `pasta`, and cgroup v2. Run mode
-`microvm` needs `/dev/kvm`, `firecracker`, `jailer`, kernel and rootfs
-images, `ip`, and `iptables`. If the selected mode cannot start, the
-process exits. There is no silent fallback. Packages, systemd, Docker,
-and when to use each mode are in [run modes](run-modes.md).
+Production run mode is `microvm`. It needs `/dev/kvm`, `firecracker`,
+`jailer`, kernel and rootfs images, `ip`, and `iptables`. `jail` is a
+fallback when KVM cannot run; it needs `bwrap`, `pasta`, and cgroup
+v2. `host` is for local tests. If the selected mode cannot start, the
+process exits before it binds HTTP. There is no silent fallback.
+Packages, systemd, Docker, and when to use each mode are in
+[run modes](run-modes.md).
 
 ## Install
 
@@ -64,15 +66,18 @@ Live turns also need Pi on `PATH`. You can override the binary with
 
 ## Serve
 
-The configured default run mode is `jail`. That starts when `bwrap`,
-`pasta`, and cgroup v2 are present:
+Production operators set `APIPI_RUN_MODE=microvm`. That starts when
+`/dev/kvm`, Firecracker, jailer, guest images, `ip`, and `iptables`
+are present, and after a throwaway guest has booted and been torn
+down:
 
 ```
-apipi serve
+APIPI_RUN_MODE=microvm apipi serve
 ```
 
-If jail tools are missing, the process exits. Operators without those
-tools must set `host`:
+The process default is `jail` so a machine without KVM can still
+start. That is a fallback. If jail tools are missing, the process
+exits. Operators without those tools must set `host`:
 
 ```
 APIPI_RUN_MODE=host apipi serve
@@ -81,14 +86,13 @@ APIPI_RUN_MODE=host apipi serve
 That binds `0.0.0.0:8000` by default. `--host`, `--port`, and
 `--config` change the bind and the TOML file. `host` runs Pi as a child
 of the gateway. The process logs a warning:
-`APIPI_RUN_MODE=host is not suited for production`. `jail` does not log
-that warning. Startup also logs that the turn log is on, and whether
-Prometheus metrics and OpenTelemetry export are on.
+`APIPI_RUN_MODE=host is not suited for production`. `jail` and
+`microvm` do not log that warning. Startup also logs that the turn log
+is on, and whether Prometheus metrics and OpenTelemetry export are on.
 
-`microvm` needs `/dev/kvm`, Firecracker, jailer, `APIPI_MICROVM_KERNEL`,
-`APIPI_MICROVM_ROOTFS`, `ip`, and `iptables`. The guest reaches the
-model URL and HTTP MCP through a TAP device. There is no host loopback
-to Postgres.
+`microvm` reaches the model URL and HTTP MCP through a TAP device.
+There is no host loopback to Postgres. Set `APIPI_MICROVM_KERNEL` and
+`APIPI_MICROVM_ROOTFS`.
 
 `GET /health` returns `{"status": "ok"}` and does not require a bearer.
 
@@ -97,10 +101,11 @@ Do not run uvicorn workers in front of it.
 
 ## systemd
 
-Production is systemd on the host. Keep secrets out of the unit file.
-Jail units need `Delegate=yes` so cgroup memory works. Microvm units
-need `/dev/kvm` and permission to create TAP devices. Full unit
-examples are in [run modes](run-modes.md).
+Production is systemd on the host with `APIPI_RUN_MODE=microvm`. Keep
+secrets out of the unit file. Microvm units need `/dev/kvm` and
+permission to create TAP devices. Jail units, when used as a fallback,
+need `Delegate=yes` so cgroup memory works. Full unit examples are in
+[run modes](run-modes.md).
 
 ```
 [Unit]
