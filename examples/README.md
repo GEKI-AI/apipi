@@ -1,12 +1,13 @@
 # Examples
 
 MCP configs, gateway config samples, a small OpenAI Python SDK
-script, and a local chat playground. Keys come from the environment,
-not from these files.
+script, a self_hosted runner, and a local chat playground. Keys come
+from the environment, not from these files.
 
 | File | What |
 | --- | --- |
 | [openai_sdk.py](openai_sdk.py) | Official OpenAI Python client against this API |
+| [self_hosted_runner.py](self_hosted_runner.py) | Local directory as a `self_hosted` computer |
 | [playground/](playground/) | Vite React playground (sessions, turns, artifacts) |
 | [apipi.toml](apipi.toml) | Gateway settings file |
 | [env.example](env.example) | Dotenv template; copy to `.env` |
@@ -62,6 +63,34 @@ uv run --with openai python examples/openai_sdk.py
 
 The product [quickstart](../docs/quickstart.md) walks through the same
 client: run a task, follow progress, continue, and delete.
+
+## self_hosted runner
+
+[self_hosted_runner.py](self_hosted_runner.py) attaches a local
+directory as the session computer. Create a session with
+`environment.type` `self_hosted`. The create response includes
+`environment_id` and a one-time `key`. The runner opens
+`/v1/environments/{environment_id}` as a WebSocket and sends `hello`
+with that key. After that it serves `exec`, `read`, `write`, `edit`,
+`list`, `artifact`, `ping`, and `close` against the directory. The
+protocol is in [docs/environments.md](../docs/environments.md).
+
+The `websockets` package is not an ApiPi dependency. Install it for
+this script only. The gateway must already be running. `OPENAI_BASE_URL`
+is the ApiPi gateway, the same meaning as in [openai_sdk.py](openai_sdk.py).
+If you omit it, the default is `http://localhost:8000/v1`. Put the
+one-time key in the environment, not in the file:
+
+```
+export OPENAI_BASE_URL=http://localhost:8000/v1
+export APIPI_ENVIRONMENT_ID=...
+export APIPI_ENVIRONMENT_KEY=...
+uv run --with websockets python examples/self_hosted_runner.py --dir ./workspace
+```
+
+`--dir` is the workspace. You can also set `APIPI_RUNNER_DIR`. File
+and shell tools reach that folder over the socket once the runner is
+connected.
 
 ## Playground
 
