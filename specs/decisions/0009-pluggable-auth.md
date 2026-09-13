@@ -8,5 +8,11 @@ Default: hash the bearer for `key_id`, UUID5 of that hash for
 30s) is keyed by the hash so an upstream plugin is not hit on every
 request.
 
+The plugin may reject with HTTP status, public `code`, and `message`.
+Invalid keys are `401` `unauthorized`. Rate limits and auth-level
+quotas are `429` with a plugin `code`. Success and `401` rejects are
+cached as themselves. `429` is not cached. Unexpected plugin errors
+stay `401` and are not cached as success.
+
 Postgres keeps tenants, sessions, and the event log. It does not keep
 secrets.

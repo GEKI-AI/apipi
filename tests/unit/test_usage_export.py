@@ -2,9 +2,10 @@ import json
 
 import httpx
 import pytest
+from tests.support import fake_sink
 
-from apipi.config import Settings
-from apipi.usage_export import UsageExporter
+from apipi.config import ConfigError, Settings
+from apipi.usage_export import UsageExporter, export_usage, load_usage_sinks
 
 _OriginalClient = httpx.AsyncClient
 
@@ -61,3 +62,25 @@ async def test_usage_export_drop_does_not_raise(
         lambda **_kwargs: _Client(transport),
     )
     await UsageExporter(_settings(retries=0))._post({"turn_id": "x"})
+
+
+def test_custom_usage_sink_receives_event() -> None:
+    fake_sink.reset()
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        usage_sinks="tests.support.fake_sink:FakeSink",
+    )
+    event = {"tenant_id": "t", "status": "completed"}
+    export_usage(settings, None, event)
+    assert fake_sink.events == [event]
+
+
+def test_missing_usage_sink_fails_at_load() -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        usage_sinks="tests.support.missing_sink:Nope",
+    )
+    with pytest.raises(ConfigError, match="sink not found"):
+        load_usage_sinks(settings)

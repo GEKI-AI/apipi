@@ -205,6 +205,8 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.payload_export_token is None
     assert settings.payload_export_timeout == timedelta(seconds=5)
     assert settings.payload_export_retries == 1
+    assert settings.usage_sinks == ""
+    assert settings.payload_sinks == ""
     assert "example_ui" not in type(settings).model_fields
 
 

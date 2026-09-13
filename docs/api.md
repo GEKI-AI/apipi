@@ -11,9 +11,11 @@ use strict models.
 
 Auth is `Authorization: Bearer` on every request except `/health` and
 `/metrics`. The gateway does not mint or store keys. A callback maps
-the bearer to `key_id` and `tenant_id`. See [auth](auth.md). Every
-query is tenant-scoped. An id that belongs to another tenant returns
-`404`, not `403`.
+the bearer to `key_id` and `tenant_id`, or rejects with a status,
+`code`, and `message`. Invalid keys are `401` with code
+`unauthorized`. An auth plugin may return `429` for a rate limit or
+quota. See [auth](auth.md). Every query is tenant-scoped. An id that
+belongs to another tenant returns `404`, not `403`.
 
 There is no first-party chat UI. Clients send a bearer and talk to
 `/v1`.
@@ -230,8 +232,10 @@ steps are in [Using the API](using.md).
 { "error": { "type": "not_implemented", "code": "...", "message": "..." } }
 ```
 
-A new turn that would pass `APIPI_MAX_SESSIONS` live Pi processes
-returns `429` with code `capacity`. A tenant that would pass
+Missing or invalid bearer is `401` with code `unauthorized`. An auth
+plugin may return `429` with a plugin `code` such as `rate_limited` or
+`quota`. A new turn that would pass `APIPI_MAX_SESSIONS` live Pi
+processes returns `429` with code `capacity`. A tenant that would pass
 `APIPI_MAX_SESSIONS_PER_TENANT` returns `429` with code
 `capacity_tenant`. A request body larger than
 `APIPI_MAX_REQUEST_BYTES` returns `413` with code `payload_too_large`.

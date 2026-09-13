@@ -18,6 +18,7 @@ from apipi.env.hub import EnvironmentHub
 from apipi.errors import error_body, register_exception_handlers
 from apipi.metrics import Metrics, mount_metrics
 from apipi.otel import Tracing, current_trace_id
+from apipi.payload_export import load_payload_sinks
 from apipi.pi.artifacts import harvest_session, reap_workspace_loop
 from apipi.pi.harness import PiHarness
 from apipi.pi.isolation import load_isolation
@@ -28,6 +29,7 @@ from apipi.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store, create_engine
 from apipi.store.models import utc_now
 from apipi.store.repo import purge_turn_logs
+from apipi.usage_export import load_usage_sinks
 
 _SKIP_CONTEXT = frozenset({"/health", "/metrics"})
 _CONTEXT_HEADERS = frozenset(
@@ -213,6 +215,8 @@ def create_app(
     app.state.mcp_stdio = {}
     app.state.authenticate = load_authenticate(resolved.auth)
     app.state.auth_cache = AuthCache(resolved.auth_cache_ttl)
+    app.state.usage_sinks = load_usage_sinks(resolved, app.state.metrics)
+    app.state.payload_sinks = load_payload_sinks(resolved, app.state.metrics)
     app.state.event_hub = EventHub()
     app.state.env_hub = EnvironmentHub()
     app.state.pi_pool = resolved_pool

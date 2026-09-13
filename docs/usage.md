@@ -148,6 +148,12 @@ when Prometheus is on.
 This is the path for long-term SaaS analytics. It is not LLM-call
 tracing. Existing `APIPI_OTEL_ENDPOINT` stays traces, without bodies.
 
+Extra usage sinks use `APIPI_USAGE_SINKS` (TOML `usage_sinks`): a
+comma-separated list of `package.mod:Class`. Each sink implements
+`emit(event)` with the same non-text usage object. A missing import
+fails at startup. A failed `emit` is logged and does not break the
+turn. The HTTPS URL, when set, is one sink on that list.
+
 ## Payload export
 
 Set `APIPI_PAYLOAD_EXPORT_URL` to POST one JSON agent payload per
@@ -155,7 +161,8 @@ turn. Off when unset (the default). This is session text and tool
 arguments/results as items on that turn, not individual LLM API
 calls. Join to usage events with `tenant_id`, `session_id`,
 `turn_id`, and `request_id`. Retention and PII policy live in the
-external tool.
+external tool. Extra payload sinks use `APIPI_PAYLOAD_SINKS` the same
+way as usage sinks.
 
 ```json
 {

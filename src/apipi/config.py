@@ -427,6 +427,14 @@ class Settings(BaseSettings):
             "APIPI_PAYLOAD_EXPORT_RETRIES", "payload_export_retries"
         ),
     )
+    usage_sinks: HostList = Field(
+        default="",
+        validation_alias=AliasChoices("APIPI_USAGE_SINKS", "usage_sinks"),
+    )
+    payload_sinks: HostList = Field(
+        default="",
+        validation_alias=AliasChoices("APIPI_PAYLOAD_SINKS", "payload_sinks"),
+    )
 
     @model_validator(mode="after")
     def run_mode_known(self) -> Self:

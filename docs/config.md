@@ -46,8 +46,8 @@ secrets. Do not commit `.env`.
 | `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | `max_sessions_per_tenant` | `32` | Live Pi processes for one tenant. A new turn that would pass the cap returns `429` with code `capacity_tenant`. The node cap still applies. |
 | `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Cancel a stuck turn. |
-| `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. |
-| `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache the callback result by SHA-256 of the bearer, never the raw key. |
+| `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. The callback may return a typed reject (`401` or `429`). See [auth](auth.md). |
+| `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache success and `401` rejects by SHA-256 of the bearer, never the raw key. `429` rejects are not cached. |
 | `APIPI_PI_COMMAND` | `pi_command` | `pi` | Pi binary used as `pi --mode rpc`. |
 | `APIPI_SESSIONS_DIR` | `sessions_dir` | `.apipi/sessions` under cwd | Root for local session directories (`openai_hosted`). |
 | `APIPI_MICROVM_KERNEL` | `microvm_kernel` | unset | Guest kernel image. Required when `run_mode` is `microvm`. |
@@ -79,6 +79,8 @@ secrets. Do not commit `.env`.
 | `APIPI_PAYLOAD_EXPORT_TOKEN` | `payload_export_token` | unset | Bearer for the payload export URL. Put this in the process environment. |
 | `APIPI_PAYLOAD_EXPORT_TIMEOUT` | `payload_export_timeout` | `5s` | Timeout for each payload export attempt. |
 | `APIPI_PAYLOAD_EXPORT_RETRIES` | `payload_export_retries` | `1` | Extra tries after the first, then drop. A failed export does not break the turn. |
+| `APIPI_USAGE_SINKS` | `usage_sinks` | empty | Extra usage sinks, comma-separated `package.mod:Class`. Each object needs `emit(event)`. The HTTPS usage URL, when set, is also a sink. See [usage](usage.md). |
+| `APIPI_PAYLOAD_SINKS` | `payload_sinks` | empty | Extra payload sinks, comma-separated `package.mod:Class`. The HTTPS payload URL, when set, is also a sink. |
 | `APIPI_METRICS` | `metrics` | off | Prometheus text at `/metrics` when on. No bearer. |
 | `APIPI_OTEL_ENDPOINT` | `otel_endpoint` | unset | OTLP/HTTP traces when set. `/v1/traces` is appended if missing. |
 | `APIPI_CONFIG` | — | unset | Path to a TOML file. Ignored when `apipi serve --config` is set. |
@@ -118,7 +120,14 @@ export APIPI_AUTH=mycompany.apipi_auth:authenticate
 ```
 
 The function is `authenticate(bearer) -> {key_id, tenant_id} | reject`.
-See [auth](auth.md) and `examples/auth_callback.py`.
+Reject may be `None` (`401`) or `AuthReject` with status, `code`, and
+`message` (`401` or `429`). See [auth](auth.md) and
+`examples/auth_callback.py`.
+
+Extension points use the same import-path idea: `APIPI_AUTH` for the
+callback, `APIPI_RUN_MODE=package.mod:Class` for a custom isolation
+backend, `APIPI_USAGE_SINKS` / `APIPI_PAYLOAD_SINKS` for extra export
+handlers, and `APIPI_ARTIFACT_STORE` for local or S3 artifact bytes.
 
 ## Limits
 
