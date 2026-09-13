@@ -4,6 +4,7 @@ from pathlib import Path
 from httpx import ASGITransport, AsyncClient
 
 from apipi.app import create_app
+from apipi.auth import authenticate
 from apipi.config import Settings
 from apipi.runtime import FakeHarness
 from apipi.store.engine import Store
@@ -75,6 +76,46 @@ async def test_turn_log_stores_request_id(client: AsyncClient, store: Store) -> 
     assert row.request_id == "turn-req"
 
 
+async def test_auth_context_headers(client: AsyncClient) -> None:
+    token = "ctx"
+    identity = authenticate(token)
+    response = await client.get("/v1/agents", headers=_auth(token))
+    assert response.status_code == 200
+    assert response.headers["x-tenant-id"] == str(identity.tenant_id)
+    assert response.headers["x-user-id"] == identity.key_id
+
+
+async def test_unauthorized_has_no_tenant_headers(client: AsyncClient) -> None:
+    response = await client.get("/v1/agents")
+    assert response.status_code == 401
+    assert "x-tenant-id" not in response.headers
+    assert "x-user-id" not in response.headers
+
+
+async def test_trace_id_from_traceparent(client: AsyncClient) -> None:
+    trace_id = "0af7651916cd43dd8448eb211c80319c"
+    response = await client.get(
+        "/v1/agents",
+        headers={
+            **_auth("t"),
+            "traceparent": f"00-{trace_id}-b7ad6b7169203331-01",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["x-trace-id"] == trace_id
+
+
+async def test_incoming_tenant_header_is_not_trusted(client: AsyncClient) -> None:
+    token = "ctx-trust"
+    identity = authenticate(token)
+    response = await client.get(
+        "/v1/agents",
+        headers={**_auth(token), "x-tenant-id": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert response.status_code == 200
+    assert response.headers["x-tenant-id"] == str(identity.tenant_id)
+
+
 async def test_instance_header_when_set(store: Store, tmp_path: Path) -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
@@ -92,6 +133,8 @@ async def test_instance_header_when_set(store: Store, tmp_path: Path) -> None:
     assert response.headers["x-apipi-instance"] == "node-a"
     assert health.status_code == 200
     assert "x-apipi-instance" not in health.headers
+    assert "x-tenant-id" not in health.headers
+    assert "x-user-id" not in health.headers
 
 
 async def test_health_has_no_request_id(client: AsyncClient) -> None:

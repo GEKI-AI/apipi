@@ -22,7 +22,11 @@ N gateway hosts, one Postgres, one load balancer. Each host runs
 Set `APIPI_INSTANCE_ID` to a short name per process (`node-a`). When
 set, HTTP responses except `/health` include `X-ApiPi-Instance`. Use
 that header to confirm the balancer is sticky. An empty value turns
-the header off.
+the header off. Authenticated responses also include `X-Tenant-Id` and
+`X-User-Id`. A trusted proxy in front of the balancer may send those
+on the request for tenant-pool hashing; the gateway still authenticates
+from the bearer only. When a trace is known, responses include
+`X-Trace-Id`.
 
 `POST /v1/agents/sessions` may land on any node. After create, the
 session id is in the path. Follow-up REST and SSE must return to the

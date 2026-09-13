@@ -173,6 +173,11 @@ Every public request except `/health` has an id. The gateway echoes
 honors `X-Client-Request-Id` when present (ASCII, at most 512
 characters). That client value becomes the request id. When
 `APIPI_INSTANCE_ID` is set, responses also include `X-ApiPi-Instance`.
+After a successful bearer, responses include `X-Tenant-Id` (auth
+`tenant_id`) and `X-User-Id` (auth `key_id`). Those request headers are
+not used for auth. When a trace is known (`traceparent`, or an active
+OpenTelemetry span), responses include `X-Trace-Id`. `/health` omits
+these. See [multiple nodes](scale.md).
 
 ## Environments
 

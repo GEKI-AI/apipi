@@ -62,6 +62,8 @@ Every public request except `/health` has an id.
 - Honor `X-Client-Request-Id` when present (ASCII, at most 512
   characters). That value becomes the request id.
 - The turn log stores the id.
+- Authenticated responses include `X-Tenant-Id` and `X-User-Id`.
+- When a trace is known, responses include `X-Trace-Id`.
 
 ## Query
 

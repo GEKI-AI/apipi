@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
     SpanExporter,
 )
-from opentelemetry.trace import Span, get_current_span
+from opentelemetry.trace import Span, format_trace_id, get_current_span
 from opentelemetry.util.types import AttributeValue
 
 _ALLOWED = frozenset(
@@ -107,6 +107,13 @@ class Tracing:
 
     def shutdown(self) -> None:
         self._provider.shutdown()
+
+
+def current_trace_id() -> str | None:
+    context = get_current_span().get_span_context()
+    if not context.is_valid:
+        return None
+    return format_trace_id(context.trace_id)
 
 
 def start_span(tracing: Tracing | None, name: str, **attrs: object) -> Any:

@@ -16,7 +16,7 @@ from apipi.config import Settings, load_settings, postgres_url
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import error_body, register_exception_handlers
 from apipi.metrics import Metrics, mount_metrics
-from apipi.otel import Tracing
+from apipi.otel import Tracing, current_trace_id
 from apipi.pi.artifacts import harvest_session, reap_workspace_loop
 from apipi.pi.harness import PiHarness
 from apipi.pi.pool import PiPool
@@ -25,6 +25,52 @@ from apipi.request_id import RequestIdMiddleware
 from apipi.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store, create_engine
 
+_SKIP_CONTEXT = frozenset({"/health", "/metrics"})
+_CONTEXT_HEADERS = frozenset(
+    {b"x-apipi-instance", b"x-tenant-id", b"x-user-id", b"x-trace-id"}
+)
+
+
+def _ascii_header(value: object) -> bytes | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if (
+        not text
+        or len(text) > 512
+        or not text.isascii()
+        or "\r" in text
+        or "\n" in text
+    ):
+        return None
+    return text.encode("ascii")
+
+
+def _trace_id_from_parent(value: str | None) -> str | None:
+    if value is None:
+        return None
+    parts = value.strip().split("-")
+    if len(parts) != 4:
+        return None
+    trace_id = parts[1].lower()
+    if len(trace_id) != 32 or trace_id == "0" * 32:
+        return None
+    try:
+        int(trace_id, 16)
+    except ValueError:
+        return None
+    return trace_id
+
+
+def _header_value(scope: Scope, name: bytes) -> str | None:
+    for key, value in scope.get("headers", []):
+        if key == name:
+            try:
+                return value.decode("ascii")
+            except UnicodeDecodeError:
+                return None
+    return None
+
 
 class InstanceMiddleware:
     def __init__(self, app: ASGIApp, instance_id: str | None) -> None:
@@ -32,26 +78,39 @@ class InstanceMiddleware:
         self.instance_id = instance_id.encode("ascii") if instance_id else None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            self.instance_id is None
-            or scope["type"] != "http"
-            or scope.get("path") == "/health"
-        ):
+        if scope["type"] != "http" or scope.get("path") in _SKIP_CONTEXT:
             await self.app(scope, receive, send)
             return
+        state = scope.setdefault("state", {})
+        incoming = _trace_id_from_parent(_header_value(scope, b"traceparent"))
+        if incoming is not None:
+            state["trace_id"] = incoming
 
-        async def send_with_instance(message: Message) -> None:
+        async def send_with_context(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = [
                     (name, value)
                     for name, value in message.get("headers", [])
-                    if name != b"x-apipi-instance"
+                    if name not in _CONTEXT_HEADERS
                 ]
-                headers.append((b"x-apipi-instance", self.instance_id or b""))
+                extra: list[tuple[bytes, bytes]] = []
+                if self.instance_id is not None:
+                    extra.append((b"x-apipi-instance", self.instance_id))
+                tenant = _ascii_header(state.get("tenant_id"))
+                if tenant is not None:
+                    extra.append((b"x-tenant-id", tenant))
+                user = _ascii_header(state.get("key_id"))
+                if user is not None:
+                    extra.append((b"x-user-id", user))
+                trace = current_trace_id() or state.get("trace_id")
+                encoded = _ascii_header(trace) if trace is not None else None
+                if encoded is not None:
+                    extra.append((b"x-trace-id", encoded))
+                headers.extend(extra)
                 message = {**message, "headers": headers}
             await send(message)
 
-        await self.app(scope, receive, send_with_instance)
+        await self.app(scope, receive, send_with_context)
 
 
 class MaxBodyMiddleware:

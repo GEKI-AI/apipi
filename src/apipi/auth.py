@@ -142,5 +142,6 @@ async def require_tenant(
             unauthorized()
         cache.put(key_hash, identity)
     request.state.tenant_id = identity.tenant_id
+    request.state.key_id = identity.key_id
     async with _store(request).session() as db:
         return await ensure_tenant(db, identity.tenant_id)
