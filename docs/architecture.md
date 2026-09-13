@@ -180,7 +180,8 @@ One Pi process or guest per session. After the idle TTL
 not delete the workspace. Files under `artifacts/` and `outputs/` are
 copied to the host store when a turn completes. The session row
 stays. Resume from the event log. Live processes are capped by
-`APIPI_MAX_SESSIONS`. See [config](config.md).
+`APIPI_MAX_SESSIONS` and `APIPI_MAX_SESSIONS_PER_TENANT`. Workspace
+and artifact bytes are capped per session. See [config](config.md).
 
 Cross-tenant IDs return `404`, not `403`.
 

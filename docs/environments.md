@@ -42,9 +42,12 @@ back to the host folder.
 
 Session rows live in Postgres. Environment files are the computer.
 The `openai_hosted` directory lasts across Pi stop until
-`APIPI_WORKSPACE_TTL` or session delete. Artifact metadata is in
-Postgres; artifact bytes are copied to the gateway host when a turn
-completes. See [run modes](run-modes.md#storage).
+`APIPI_WORKSPACE_TTL` or session delete. That directory is also
+bounded by `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB). Artifact
+metadata is in Postgres; artifact bytes are copied to the gateway host
+when a turn completes, up to `APIPI_MAX_ARTIFACT_BYTES` (default
+512MiB) per session. See [run modes](run-modes.md#storage) and
+[config](config.md).
 
 There is no runner socket. The directory is created when the session is
 created. File tools (read, write, edit, bash) run against that folder.

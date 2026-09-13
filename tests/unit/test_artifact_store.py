@@ -1,8 +1,11 @@
 import uuid
 from pathlib import Path
 
-from apipi.config import Settings
+import pytest
+
+from apipi.config import DiskLimitError, Settings
 from apipi.pi.artifacts import (
+    dir_bytes,
     read_workspace_artifacts,
     unpack_artifact_tar,
     unpack_workspace_tar,
@@ -36,6 +39,24 @@ def test_unpack_artifact_tar_roundtrip(tmp_path: Path) -> None:
 
 def test_unpack_empty_tar() -> None:
     assert unpack_artifact_tar(b"") == []
+
+
+def test_dir_bytes(tmp_path: Path) -> None:
+    (tmp_path / "a.bin").write_bytes(b"abcd")
+    nested = tmp_path / "dir"
+    nested.mkdir()
+    (nested / "b.bin").write_bytes(b"xy")
+    assert dir_bytes(tmp_path) == 6
+    assert dir_bytes(tmp_path / "missing") == 0
+
+
+def test_unpack_workspace_tar_rejects_over_cap(tmp_path: Path) -> None:
+    (tmp_path / "note.txt").write_text("hello", encoding="utf-8")
+    dest = tmp_path / "host"
+    with pytest.raises(DiskLimitError) as exc:
+        unpack_workspace_tar(workspace_tar_bytes(tmp_path), dest, max_bytes=1)
+    assert exc.value.code == "workspace_too_large"
+    assert not dest.exists() or dir_bytes(dest) == 0
 
 
 def test_unpack_workspace_tar_skips_apipi(tmp_path: Path) -> None:

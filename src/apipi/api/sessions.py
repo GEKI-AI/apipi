@@ -59,15 +59,26 @@ from apipi.usage import usage_from
 router = APIRouter()
 
 
-def _require_capacity(request: Request, session_id: uuid.UUID) -> None:
+def _require_capacity(
+    request: Request, session_id: uuid.UUID, tenant_id: uuid.UUID
+) -> None:
     pool = request.app.state.pi_pool
-    if isinstance(pool, PiPool) and not pool.has_capacity(session_id):
-        raise ApiError(
-            "invalid_request",
-            "Too many live sessions",
-            code="capacity",
-            status_code=429,
-        )
+    if not isinstance(pool, PiPool):
+        return
+    code = pool.capacity_code(session_id, tenant_id)
+    if code is None:
+        return
+    message = (
+        "Too many live sessions for this tenant"
+        if code == "capacity_tenant"
+        else "Too many live sessions"
+    )
+    raise ApiError(
+        "invalid_request",
+        message,
+        code=code,
+        status_code=429,
+    )
 
 
 class EnvironmentSpec(StrictModel):
@@ -341,7 +352,7 @@ async def create_agent_session(
         request.app.state.pi_pool.put_stdio(session_id, stdio)
         text = _input_text(body.input)
         if text:
-            _require_capacity(request, session_id)
+            _require_capacity(request, session_id, tenant.id)
             await run_turn(
                 store,
                 hub,
@@ -533,7 +544,7 @@ async def post_session_event(
             request_id=request_id,
             session_id=session_id,
         ):
-            _require_capacity(request, session_id)
+            _require_capacity(request, session_id, tenant.id)
             await run_turn(
                 store,
                 hub,

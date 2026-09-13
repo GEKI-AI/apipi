@@ -140,17 +140,42 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("APIPI_TURN_TIMEOUT", raising=False)
     settings = Settings()
     assert settings.max_sessions == 32
+    assert settings.max_sessions_per_tenant == 32
     assert settings.turn_timeout == timedelta(minutes=10)
     assert settings.host == "0.0.0.0"
     assert settings.port == 8000
     assert settings.log_level == "info"
     assert settings.jail_memory == 512 * 1024 * 1024
     assert settings.max_request_bytes == 1024 * 1024
+    assert settings.max_workspace_bytes == 1024 * 1024 * 1024
+    assert settings.max_artifact_bytes == 512 * 1024 * 1024
     assert settings.db_pool_size == 5
     assert settings.microvm_mem_mib == 512
     assert settings.microvm_vcpus == 1
     assert settings.workspace_ttl == timedelta(hours=1)
     assert "example_ui" not in type(settings).model_fields
+
+
+def test_limit_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_MAX_SESSIONS_PER_TENANT", "4")
+    monkeypatch.setenv("APIPI_MAX_WORKSPACE_BYTES", "1GiB")
+    monkeypatch.setenv("APIPI_MAX_ARTIFACT_BYTES", "512MiB")
+    settings = Settings()
+    assert settings.max_sessions_per_tenant == 4
+    assert settings.max_workspace_bytes == 1024 * 1024 * 1024
+    assert settings.max_artifact_bytes == 512 * 1024 * 1024
+
+
+def test_max_sessions_per_tenant_invalid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_MAX_SESSIONS_PER_TENANT", "0")
+    with pytest.raises(ConfigError, match="APIPI_MAX_SESSIONS_PER_TENANT must be"):
+        load_settings()
 
 
 def test_load_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

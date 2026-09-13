@@ -112,6 +112,13 @@ Three stores. Do not mix them up.
 | **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. `self_hosted`: the runner. `none`: no files. | `openai_hosted` lasts across Pi stop until `APIPI_WORKSPACE_TTL` (default 1 hour) with no session activity, or until the session is deleted. Runner files stay on the runner. |
 | **Artifacts** | Named outputs the API can fetch | Metadata in Postgres. Bytes on the gateway host under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{session_id}/{id}`. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
 
+`APIPI_MAX_WORKSPACE_BYTES` (default 1GiB) caps one `openai_hosted`
+directory. An oversized microvm pull is not unpacked onto the host.
+`APIPI_MAX_ARTIFACT_BYTES` (default 512MiB) caps the published host
+store for one session. Over those caps, harvest emits
+`agent.session.error` with `workspace_too_large` or
+`artifact_too_large`. See [config](config.md).
+
 When a turn completes, the gateway copies files under `artifacts/` and
 `outputs/` on that computer into the host store. Copies are immutable.
 `GET` content works before Pi stops. Harvest on Pi stop is a safety

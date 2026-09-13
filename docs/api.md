@@ -221,5 +221,12 @@ steps are in [Using the API](using.md).
 ```
 
 A new turn that would pass `APIPI_MAX_SESSIONS` live Pi processes
-returns `429` with code `capacity`. A request body larger than
+returns `429` with code `capacity`. A tenant that would pass
+`APIPI_MAX_SESSIONS_PER_TENANT` returns `429` with code
+`capacity_tenant`. A request body larger than
 `APIPI_MAX_REQUEST_BYTES` returns `413` with code `payload_too_large`.
+An `openai_hosted` directory over `APIPI_MAX_WORKSPACE_BYTES` emits
+`agent.session.error` with code `workspace_too_large`. Publishing
+artifacts that would pass `APIPI_MAX_ARTIFACT_BYTES` emits
+`agent.session.error` with code `artifact_too_large`. Settings and
+defaults are in [config](config.md).

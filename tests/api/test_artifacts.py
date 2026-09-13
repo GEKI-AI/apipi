@@ -2,10 +2,11 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from apipi.config import Settings
+from apipi.config import DiskLimitError, Settings
 from apipi.pi.artifacts import harvest_session, reap_workspaces
 from apipi.pi.pool import PiPool
 from apipi.store.engine import Store
@@ -37,7 +38,9 @@ async def _hosted_session(client: AsyncClient, token: str) -> tuple[str, Path]:
 
 async def _harvest(store: Store, settings: Settings, session_id: str) -> None:
     async with store.session() as db:
-        await harvest_session(db, settings, uuid.UUID(session_id), None)
+        _row, error = await harvest_session(db, settings, uuid.UUID(session_id), None)
+    if error is not None:
+        raise error
 
 
 async def test_write_host_file_and_fetch_content(
@@ -314,3 +317,58 @@ async def test_delete_session_removes_workspace_and_artifacts(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
     )
     assert listed.status_code == 404
+
+
+async def test_artifact_cap_rejects_publish(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = "disk-art"
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "big.bin").write_bytes(b"x" * 64)
+    limited = settings.model_copy(update={"max_artifact_bytes": 16})
+    with pytest.raises(DiskLimitError) as exc:
+        await _harvest(store, limited, session_id)
+    assert exc.value.code == "artifact_too_large"
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    assert listed.status_code == 200
+    assert listed.json()["data"] == []
+
+
+async def test_artifact_cap_allows_under_limit(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = "disk-ok"
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    limited = settings.model_copy(update={"max_artifact_bytes": 64})
+    await _harvest(store, limited, session_id)
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    assert listed.status_code == 200
+    assert listed.json()["data"][0]["path"] == "artifacts/note.txt"
+
+
+async def test_workspace_cap_emits_error_and_can_still_publish(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = "disk-ws"
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "scratch.bin").write_bytes(b"x" * 64)
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("hi", encoding="utf-8")
+    limited = settings.model_copy(
+        update={"max_workspace_bytes": 16, "max_artifact_bytes": 1024}
+    )
+    with pytest.raises(DiskLimitError) as exc:
+        await _harvest(store, limited, session_id)
+    assert exc.value.code == "workspace_too_large"
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    assert listed.status_code == 200
+    assert listed.json()["data"][0]["path"] == "artifacts/note.txt"
