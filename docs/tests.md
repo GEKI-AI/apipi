@@ -22,8 +22,8 @@ From a checkout after `uv sync`:
 | Public HTTP only | `uv run pytest tests/api` |
 | Fast e2e (host, jail, microvm) | `uv run pytest -m e2e` |
 | Host e2e | `uv run pytest tests/e2e/test_host_pi.py` |
-| Jail e2e | `uv run pytest tests/e2e/test_jail_pi.py` |
-| Microvm e2e | `uv run pytest tests/e2e/test_microvm_pi.py` |
+| Jail e2e | `uv run pytest -m jail` |
+| Microvm e2e | `uv run pytest -m microvm` |
 | Slow only | `uv run pytest -m slow` |
 | Lint, types, and tests | `./scripts/check` |
 | Like GitHub (skip slow) | `./scripts/check --fast` |
@@ -39,8 +39,8 @@ fallback to another run mode.
 | `tests/unit/` | none | Internals with mocks: config, store, jail argv, microvm image packing, artifacts | yes |
 | `tests/api/` | none | Public HTTP vs [api.md](api.md). FakeHarness. Tenant isolation. `test_compat.py` has one named test per yes row on the API page | yes |
 | `tests/e2e/test_host_pi.py` | `e2e` | Live session against a fake Pi process in `host` mode | yes |
-| `tests/e2e/test_jail_pi.py` | `e2e` | Same shape inside a real bubblewrap jail | yes, if jail tools start |
-| `tests/e2e/test_microvm_pi.py` | `e2e` | Same shape inside a real Firecracker guest | no (skips without KVM) |
+| `tests/e2e/test_jail_pi.py` | `e2e`, `jail` | Same shape inside a real bubblewrap jail | yes, if jail tools start |
+| `tests/e2e/test_microvm_pi.py` | `e2e`, `microvm` | Same shape inside a real Firecracker guest | no (skips without KVM) |
 | `tests/e2e/test_metrics_scrape.py` | `e2e` | `/metrics` scrape | yes |
 | `tests/e2e/test_pi_live.py` | `slow` | `pi` is on `PATH` | no |
 | `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against FakeHarness | no |
@@ -72,7 +72,7 @@ Needs Linux, cgroup v2, unprivileged user namespaces, `bwrap`, and
 # Debian / Ubuntu
 sudo apt-get install -y bubblewrap passt
 
-uv run pytest tests/e2e/test_jail_pi.py
+uv run pytest -m jail
 ```
 
 The service user must be able to create a child cgroup. See
@@ -112,7 +112,7 @@ Do not vendor a distro in git. Build images on the machine:
 ./scripts/microvm-rootfs
 export APIPI_MICROVM_KERNEL="$HOME/.cache/apipi/microvm/vmlinux"
 export APIPI_MICROVM_ROOTFS="$HOME/.cache/apipi/microvm/rootfs.ext4"
-uv run pytest tests/e2e/test_microvm_pi.py
+uv run pytest -m microvm
 ```
 
 `./scripts/microvm-rootfs` needs `curl`, `tar`, `mkfs.ext4`, `mount`,

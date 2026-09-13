@@ -79,4 +79,6 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "e2e: fast end-to-end tests; run in GitHub CI",
     "slow: large local validation; not GitHub CI",
+    "jail: live bubblewrap jail; needs bwrap, pasta, cgroup v2",
+    "microvm: live Firecracker guest; needs KVM, images, TAP",
 ]
