@@ -31,6 +31,8 @@ USAGE_STORE_ROLLUPS = "usage store rollups"
 USAGE_STORE_TURNS = "usage store turns"
 USAGE_EXPORT_ON = "usage export on"
 USAGE_EXPORT_OFF = "usage export off"
+PAYLOAD_EXPORT_ON = "payload export on"
+PAYLOAD_EXPORT_OFF = "payload export off"
 METRICS_ON = "APIPI_METRICS on"
 METRICS_OFF = "APIPI_METRICS off"
 OTEL_SET = "APIPI_OTEL_ENDPOINT set"
@@ -406,6 +408,29 @@ class Settings(BaseSettings):
             "APIPI_USAGE_EXPORT_RETRIES", "usage_export_retries"
         ),
     )
+    payload_export_url: ExportUrl = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_PAYLOAD_EXPORT_URL", "payload_export_url"),
+    )
+    payload_export_token: OtelEndpoint = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "APIPI_PAYLOAD_EXPORT_TOKEN", "payload_export_token"
+        ),
+    )
+    payload_export_timeout: IdleTtl = Field(
+        default=timedelta(seconds=5),
+        validation_alias=AliasChoices(
+            "APIPI_PAYLOAD_EXPORT_TIMEOUT", "payload_export_timeout"
+        ),
+    )
+    payload_export_retries: int = Field(
+        default=1,
+        ge=0,
+        validation_alias=AliasChoices(
+            "APIPI_PAYLOAD_EXPORT_RETRIES", "payload_export_retries"
+        ),
+    )
 
     @model_validator(mode="after")
     def run_mode_known(self) -> Self:
@@ -560,6 +585,12 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_USAGE_EXPORT_TIMEOUT must be like 15m"
         if "usage_export_retries" in loc or "APIPI_USAGE_EXPORT_RETRIES" in loc:
             return "APIPI_USAGE_EXPORT_RETRIES must be at least 0"
+        if "payload_export_url" in loc or "APIPI_PAYLOAD_EXPORT_URL" in loc:
+            return "APIPI_PAYLOAD_EXPORT_URL must be an http URL"
+        if "payload_export_timeout" in loc or "APIPI_PAYLOAD_EXPORT_TIMEOUT" in loc:
+            return "APIPI_PAYLOAD_EXPORT_TIMEOUT must be like 15m"
+        if "payload_export_retries" in loc or "APIPI_PAYLOAD_EXPORT_RETRIES" in loc:
+            return "APIPI_PAYLOAD_EXPORT_RETRIES must be at least 0"
     return "invalid configuration"
 
 

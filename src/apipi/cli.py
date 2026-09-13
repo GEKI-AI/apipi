@@ -11,6 +11,8 @@ from apipi.config import (
     METRICS_ON,
     OTEL_SET,
     OTEL_UNSET,
+    PAYLOAD_EXPORT_OFF,
+    PAYLOAD_EXPORT_ON,
     USAGE_EXPORT_OFF,
     USAGE_EXPORT_ON,
     ConfigError,
@@ -44,6 +46,7 @@ def prepare_serve(
     log.info(usage_store_log(resolved.usage_store))
     log.info(usage_retention_log(resolved.usage_retention))
     log.info(USAGE_EXPORT_ON if resolved.usage_export_url else USAGE_EXPORT_OFF)
+    log.info(PAYLOAD_EXPORT_ON if resolved.payload_export_url else PAYLOAD_EXPORT_OFF)
     log.info(METRICS_ON if resolved.metrics else METRICS_OFF)
     log.info(OTEL_SET if resolved.otel_endpoint else OTEL_UNSET)
     return resolved

@@ -6,9 +6,10 @@ totals when the harness reports them. It does not trace individual LLM
 API calls. That belongs on the model host. It does not store USD.
 Operators convert tokens and counters later.
 
-Never store prompt or completion text in Postgres, logs, metrics, or
-spans. A setting that would store those bodies is rejected at startup.
-Payload bodies, if you need them, are a separate optional export.
+Never store prompt or completion text in the usage tables, logs,
+metrics, or default spans. A setting that would write those bodies
+into ApiPi Postgres is rejected at startup. Payload bodies, if you
+need them, go to an optional external HTTPS export.
 
 Postgres is the **hot** store: recent turns and daily rollups for
 quotas and `GET /v1/usage`. Long-term analytics go through an optional
@@ -50,7 +51,8 @@ tenant per UTC day stays small. After turn rows expire, `GET /v1/usage`
 by `session_id` or `turn_id` only sees what is still hot. `day` still
 reads the rollup.
 
-Startup logs the store, the retention, and whether usage export is on.
+Startup logs the store, the retention, and whether usage and payload
+export are on.
 
 ### Agent usage event
 
@@ -146,6 +148,37 @@ when Prometheus is on.
 This is the path for long-term SaaS analytics. It is not LLM-call
 tracing. Existing `APIPI_OTEL_ENDPOINT` stays traces, without bodies.
 
+## Payload export
+
+Set `APIPI_PAYLOAD_EXPORT_URL` to POST one JSON agent payload per
+turn. Off when unset (the default). This is session text and tool
+arguments/results as items on that turn, not individual LLM API
+calls. Join to usage events with `tenant_id`, `session_id`,
+`turn_id`, and `request_id`. Retention and PII policy live in the
+external tool.
+
+```json
+{
+  "tenant_id": "...",
+  "session_id": "...",
+  "turn_id": "...",
+  "request_id": "...",
+  "items": [
+    {"type": "message", "role": "user", "content": "..."},
+    {"type": "function_call", "call_id": "...", "name": "...", "arguments": {}},
+    {"type": "message", "role": "assistant", "content": "..."}
+  ]
+}
+```
+
+Configured model API keys and export tokens are replaced with
+`[redacted]`. `Authorization: Bearer` values are redacted the same
+way. Timeout, retries, and drop policy match usage export
+(`APIPI_PAYLOAD_EXPORT_TIMEOUT`, `APIPI_PAYLOAD_EXPORT_RETRIES`). A
+failed export does not change the session transcript.
+`apipi_payload_export_total` counts `ok` and `drop` when Prometheus
+is on.
+
 ## Prometheus
 
 `GET /metrics` when `APIPI_METRICS` is on. Off by default. No bearer.
@@ -159,6 +192,7 @@ Prometheus text format. `/health` and `/metrics` are not counted.
 | `apipi_turn_latency_seconds` | histogram | `tenant` |
 | `apipi_errors_total` | counter | `tenant`, `code` |
 | `apipi_usage_export_total` | counter | `result` (`ok` or `drop`) |
+| `apipi_payload_export_total` | counter | `result` (`ok` or `drop`) |
 
 `tenant` is the tenant id. Empty when the request has no tenant.
 `path` is the route template, not the raw URL. `kind` is `prompt`,
@@ -184,12 +218,17 @@ for agent usage history.
 | `APIPI_USAGE_EXPORT_TOKEN` | unset | Bearer for that URL |
 | `APIPI_USAGE_EXPORT_TIMEOUT` | `5s` | Export HTTP timeout |
 | `APIPI_USAGE_EXPORT_RETRIES` | `1` | Extra tries, then drop |
+| `APIPI_PAYLOAD_EXPORT_URL` | unset | HTTPS POST of one agent payload per turn |
+| `APIPI_PAYLOAD_EXPORT_TOKEN` | unset | Bearer for that URL |
+| `APIPI_PAYLOAD_EXPORT_TIMEOUT` | `5s` | Payload HTTP timeout |
+| `APIPI_PAYLOAD_EXPORT_RETRIES` | `1` | Extra tries, then drop |
 | `APIPI_METRICS` | off | Prometheus at `/metrics` |
 | `APIPI_OTEL_ENDPOINT` | unset | OTLP traces when set |
 
 The full setting list is in [configuration](config.md).
 
-There is no flag that writes prompt or completion bodies into ApiPi.
+There is no flag that writes prompt or completion bodies into ApiPi
+Postgres, logs, metrics, or default spans.
 
 ## Compatibility
 
