@@ -1,29 +1,16 @@
 # Install and run
 
-This page is how you install ApiPi and start the API process. Settings,
-files, and every environment variable are in [config](config.md). After
-the server is up, [Using the API](using.md) is the client tutorial.
+You need Python 3.13, [uv](https://docs.astral.sh/uv/), and Postgres.
+Live turns also need the Pi CLI (`pi --mode rpc`) on `PATH` and a model
+URL. The gateway pins Pi 0.85.1.
 
-## Requirements
+A Compose file at the repo root starts Postgres 17 (user `apipi`,
+password `apipi`, database `apipi`) on port 5432.
 
-Python 3.13 or newer and [uv](https://docs.astral.sh/uv/) only. Do not
-use pip or a bare `python -m venv`.
-
-Postgres is required. A Compose file at the repo root starts a local
-Postgres 17 server with user `apipi`, password `apipi`, and database
-`apipi`, published on host port 5432.
-
-Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model URL.
-The gateway pins Pi 0.85.1.
-
-Production sessions run in Firecracker microVMs (`APIPI_RUN_MODE=microvm`).
-That needs `/dev/kvm`, `firecracker`, `jailer`, kernel and rootfs
-images, `ip`, `iptables`, and `tc`. Isolation `none` is for local
-tests: Pi is a child of the gateway and is not a sandbox. If the
-selected mode cannot start, the process exits before it binds HTTP.
-There is no silent fallback. Packages, systemd, Docker, and when to
-use each mode are in [run modes](run-modes.md). Host sizing, scale-out,
-and drain are in [production](production.md).
+Firecracker (`APIPI_RUN_MODE=microvm`) needs `/dev/kvm`, `firecracker`,
+`jailer`, kernel and rootfs images, `ip`, `iptables`, and `tc`. Isolation
+`none` runs Pi as a child of the gateway. If the selected mode cannot
+start, `apipi serve` exits before it binds HTTP.
 
 ## Install
 
@@ -48,11 +35,8 @@ apipi migrate
 ```
 
 `DATABASE_URL` is required. `postgres://` and `postgresql://` URLs are
-rewritten to `postgresql+asyncpg://`. SQLite is for tests only and is
-rejected by `apipi serve` and `apipi migrate`.
-
-You can put `DATABASE_URL` in `.env` or `apipi.toml` instead of
-exporting it. See [config](config.md).
+rewritten to `postgresql+asyncpg://`. You can put it in `.env` or
+`apipi.toml` instead of exporting it.
 
 ## Model URL
 
@@ -76,20 +60,17 @@ a throwaway guest has booted and been torn down:
 APIPI_RUN_MODE=microvm apipi serve
 ```
 
-The process default is `none` so a machine without KVM can still
-start. That is not production:
+The process default is `none` (Pi as a child of the gateway). It logs
+a warning that this isolation is meant for laptops and CI:
 
 ```
 APIPI_RUN_MODE=none apipi serve
 ```
 
 That binds `0.0.0.0:8000` by default. `--host`, `--port`, and
-`--config` change the bind and the TOML file. `none` runs Pi as a child
-of the gateway. The process logs a warning:
-`APIPI_RUN_MODE=none is not suited for production`. `microvm` does not
-log that warning. Startup also logs usage store depth, retention,
-whether usage and payload export are on, and whether Prometheus
-metrics and OpenTelemetry traces are on.
+`--config` change the bind and the TOML file. Startup also logs usage
+store depth, retention, whether usage and payload export are on, and
+whether Prometheus metrics and OpenTelemetry traces are on.
 
 `microvm` reaches the model URL and HTTP MCP through a TAP device.
 There is no host loopback to Postgres. That TAP is allowlisted and
@@ -98,10 +79,9 @@ rate-limited by default. Set `APIPI_MICROVM_KERNEL` and
 
 `GET /health` returns `{"status": "ok"}` and does not require a bearer.
 
-One `apipi serve` is one process. The Pi pool lives in that process.
-Do not run uvicorn workers in front of it. Several processes need
-sticky routing. See [production](production.md) and
-[multiple nodes](scale.md).
+One `apipi serve` is one process. The Pi pool lives in that process, so
+extra uvicorn workers are a poor fit. Several processes need sticky
+routing ([production](production.md), [multiple nodes](scale.md)).
 
 ## systemd
 

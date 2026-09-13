@@ -6,9 +6,7 @@ and `/metrics`. Missing or empty bearer is `401` with code
 
 The gateway does not mint or store API keys. Callers reuse the bearer
 they already use with an LLM router. Isolation is by `tenant_id`. An
-id that belongs to another tenant is `404`, not `403`. Browsers must
-not hold tenant keys. There is no first-party UI that would need a
-cookie.
+id that belongs to another tenant is `404`, not `403`.
 
 ## Callback
 

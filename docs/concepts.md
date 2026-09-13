@@ -1,15 +1,12 @@
 # Concepts
 
-This page is how the gateway holds work: agents, sessions, the
-computer, and artifacts. The HTTP routes are in [API](api.md). How to
-install the process is in [Install](install.md). How to call it is in
-[Using the API](using.md).
+Agents, sessions, the computer, and artifacts are the pieces the
+gateway keeps in Postgres (and, for files, on disk or object storage).
 
 ## Agents
 
 An agent is saved configuration: model, instructions, tools, and
-metadata. It is not a running process. A new install has no agents
-until you create one.
+metadata. You create them; a fresh database has none.
 
 You create agents with `POST /v1/agents`. They live in Postgres until
 you delete them. A session may pass `agent_id` or an inline `agent`.
@@ -117,5 +114,5 @@ Session conversation state is similar: both keep turns and items so
 you can continue later. OpenAI stores that on their side. ApiPi stores
 it in your Postgres. Export is how you take the thread with you.
 
-Do not send OpenAI-only environment fields such as `packages`,
-`network`, or `files` on create. Unknown fields return an error.
+OpenAI-only environment fields such as `packages`, `network`, or
+`files` on create return an error (unknown field).

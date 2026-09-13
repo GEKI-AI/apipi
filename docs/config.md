@@ -6,11 +6,8 @@ Pi), and the **sandbox** (isolation backend, guest images, resources,
 and networking). Put the bulk of that in a TOML file. Keep secrets and
 sparse overrides in the process environment or `.env`.
 
-Install the process first ([Install](install.md)). Call it with
-[Using the API](using.md). How to size `max_sessions` and guest RAM is
-in [production](production.md). The canonical file in this repo is `examples/apipi.toml`. Copy
-`examples/env.example` to `.env` and fill in secrets. Do not commit
-`.env`.
+The example file in this repo is `examples/apipi.toml`. Copy
+`examples/env.example` to `.env` for secrets.
 
 ## Load order
 
@@ -114,11 +111,10 @@ auth = "mycompany.apipi_auth:authenticate"
 auth_cache_ttl = "30s"
 ```
 
-These are operator settings, not customer tiers. There is no plan or
-SKU field. One `apipi serve` process has one profile. Change a setting
-and restart the process. Do not add uvicorn workers; the pool is in
-memory in that process. Several processes behind a load balancer need
-session affinity. See [multiple nodes](scale.md).
+One `apipi serve` process has one profile. Change a setting and restart.
+The Pi pool is in memory in that process, so extra uvicorn workers do
+not share it. Several processes behind a load balancer need session
+affinity ([multiple nodes](scale.md)).
 
 Each live session is one Pi process (or guest). `max_sessions` counts
 those live processes on the node. `max_sessions_per_tenant` counts them

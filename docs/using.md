@@ -1,26 +1,17 @@
 # Using the API
 
-This page is a client tutorial. Install and serve the gateway first
-([Install](install.md), [Configuration](config.md)). Then point the
-official OpenAI Python SDK at this gateway, create a session, stream
-events, send a follow-up, and delete the session when you are done. The
-create-and-stream call matches
-[OpenAI's Agents API quickstart](https://developers.openai.com/api/docs/guides/agents-api/quickstart?lang=python).
-The HTTP surface is in [API](api.md). How agents, sessions, and files
-last is in [Concepts](concepts.md). Token totals and usage are
-in [Usage](usage.md), not here.
-
-`environment.type` `openai_hosted` is OpenAI's field name for a **local
-session directory** next to Pi. It is not OpenAI's cloud VM. See
-[environments](environments.md).
+This walkthrough matches
+[OpenAI's Agents API quickstart](https://developers.openai.com/api/docs/guides/agents-api/quickstart?lang=python):
+create a session, stream events, send a follow-up, then delete the
+session. `environment.type` `openai_hosted` is a local folder next to
+Pi (OpenAI's name for that field).
 
 ## Prerequisites
 
-Install and serve the gateway as in [Install](install.md). You need
-Postgres, `apipi migrate`, and `apipi serve`. Live turns also need Pi
-on `PATH` and a model URL. The gateway process reads `OPENAI_BASE_URL`
-and `OPENAI_API_KEY` as the **model** host. Those values are passed into
-Pi. They are not this gateway.
+Have the gateway running ([Install](install.md)): Postgres, `apipi
+migrate`, `apipi serve`. Live turns need Pi on `PATH` and a model URL.
+On the gateway process, `OPENAI_BASE_URL` and `OPENAI_API_KEY` are the
+**model** host passed into Pi.
 
 In a second shell, point the official client at the gateway. Default
 auth accepts any non-empty bearer and hashes it into a tenant id. The
@@ -31,17 +22,15 @@ export OPENAI_API_KEY=dev-token
 export OPENAI_BASE_URL=http://localhost:8000/v1
 ```
 
-For this script, `OPENAI_BASE_URL` is the ApiPi gateway, not the model
-host that Pi uses. The `openai` package is not an ApiPi dependency.
-Install it for the client only:
+For this script, `OPENAI_BASE_URL` is the ApiPi gateway. Install the
+`openai` package for the client:
 
 ```
 uv run --with openai python examples/openai_sdk.py
 ```
 
-The gateway must already be running. Isolation `none` is the process
-default and is fine for this tutorial. Production operators serve with
-`APIPI_RUN_MODE=microvm` so each session runs in a Firecracker guest.
+Isolation `none` is enough for this tutorial. Production usually uses
+`APIPI_RUN_MODE=microvm`.
 
 ## 1. Run a task
 
