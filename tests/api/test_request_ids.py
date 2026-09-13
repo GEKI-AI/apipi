@@ -1,7 +1,11 @@
 import uuid
+from pathlib import Path
 
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
+from apipi.app import create_app
+from apipi.config import Settings
+from apipi.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.turn_logs import get_turn_log
 from apipi.tokens import hash_token
@@ -14,6 +18,7 @@ def _auth(token: str) -> dict[str, str]:
 async def test_generates_request_id(client: AsyncClient) -> None:
     response = await client.get("/v1/agents", headers=_auth("t"))
     assert response.status_code == 200
+    assert "x-apipi-instance" not in response.headers
     request_id = response.headers["x-request-id"]
     assert request_id
     assert request_id.isascii()
@@ -68,6 +73,25 @@ async def test_turn_log_stores_request_id(client: AsyncClient, store: Store) -> 
         row = await get_turn_log(db, tenant_id, turn_id)
     assert row is not None
     assert row.request_id == "turn-req"
+
+
+async def test_instance_header_when_set(store: Store, tmp_path: Path) -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="host",
+        sessions_dir=str(tmp_path / "sessions"),
+        instance_id="node-a",
+    )
+    app = create_app(settings, store=store, harness=FakeHarness())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/v1/agents", headers=_auth("t"))
+        health = await client.get("/health")
+    assert response.status_code == 200
+    assert response.headers["x-apipi-instance"] == "node-a"
+    assert health.status_code == 200
+    assert "x-apipi-instance" not in health.headers
 
 
 async def test_health_has_no_request_id(client: AsyncClient) -> None:

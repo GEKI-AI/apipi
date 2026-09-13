@@ -144,6 +144,7 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.turn_timeout == timedelta(minutes=10)
     assert settings.host == "0.0.0.0"
     assert settings.port == 8000
+    assert settings.instance_id is None
     assert settings.log_level == "info"
     assert settings.jail_memory == 512 * 1024 * 1024
     assert settings.max_request_bytes == 1024 * 1024
@@ -168,6 +169,23 @@ def test_limit_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.max_sessions_per_tenant == 4
     assert settings.max_workspace_bytes == 1024 * 1024 * 1024
     assert settings.max_artifact_bytes == 512 * 1024 * 1024
+
+
+def test_instance_id_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_INSTANCE_ID", "node-a")
+    assert Settings().instance_id == "node-a"
+    monkeypatch.setenv("APIPI_INSTANCE_ID", "")
+    assert Settings().instance_id is None
+
+
+def test_instance_id_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_INSTANCE_ID", "bad\nid")
+    with pytest.raises(ConfigError, match="APIPI_INSTANCE_ID must be short ASCII"):
+        load_settings()
 
 
 def test_egress_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

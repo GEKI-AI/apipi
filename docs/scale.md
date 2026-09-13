@@ -1,0 +1,128 @@
+# Multiple nodes
+
+One `apipi serve` process owns its live Pi processes, local
+`openai_hosted` directories, artifact bytes, SSE subscribers, and
+`self_hosted` runner sockets. Those are in memory or on that host's
+disk. Postgres is the shared transcript. There is no handoff of a live
+session to another node.
+
+You can run more than one process behind a load balancer. Requests for
+a live session must hit the node that owns it. That is sticky (session
+affinity). Do not add uvicorn workers inside one process; scale by
+adding systemd units instead. Docker-in-Docker is not the production
+path. A later worker split is not this version.
+
+## Topology
+
+N gateway hosts, one Postgres, one load balancer. Each host runs
+`apipi serve` under systemd with `APIPI_RUN_MODE=microvm` as in
+[run modes](run-modes.md#production). Give each process its own
+`APIPI_SESSIONS_DIR`. Point every process at the same `DATABASE_URL`.
+
+Set `APIPI_INSTANCE_ID` to a short name per process (`node-a`). When
+set, HTTP responses except `/health` include `X-ApiPi-Instance`. Use
+that header to confirm the balancer is sticky. An empty value turns
+the header off.
+
+`POST /v1/agents/sessions` may land on any node. After create, the
+session id is in the path. Follow-up REST and SSE must return to the
+same node.
+
+## Affinity
+
+Official OpenAI clients put `session_id` in
+`/v1/agents/sessions/{session_id}/…`. They do not store cookies by
+default. Hash that path segment.
+
+`GET /v1/agents/sessions/{id}/events?stream=true` uses the same path.
+If SSE drops, reconnect with `after_seq` to replay from Postgres. The
+next turn still needs the node that holds Pi.
+
+`/v1/environments/{environment_id}` is the `self_hosted` runner
+WebSocket. That id is not the session id, so a hash on session id will
+not send the runner to the same node. For `self_hosted` with more than
+one node, use a dedicated tenant pool with one node, or send the
+runner to the instance shown in `X-ApiPi-Instance` on create. Cookie
+stickiness only works if the client stores cookies; the OpenAI SDK
+does not.
+
+Do not send a follow-up turn to a different node and expect Pi or the
+workspace to be there.
+
+## nginx
+
+Health checks should call `GET /health`. Do not probe a session. Take
+a node out of the upstream, wait until turns finish or idle TTL has
+killed Pi, then stop the unit. Do not fail health in the middle of a
+turn.
+
+Long-lived SSE and WebSockets need buffering off and a long read
+timeout. One hour matches a long turn plus idle.
+
+```
+map $uri $apipi_session {
+    ~^/v1/agents/sessions/(?<sid>[0-9a-fA-F-]+) $sid;
+    default "";
+}
+
+upstream apipi_any {
+    least_conn;
+    server 192.0.2.10:8000;
+    server 192.0.2.11:8000;
+}
+
+upstream apipi_session {
+    hash $apipi_session consistent;
+    server 192.0.2.10:8000;
+    server 192.0.2.11:8000;
+}
+
+server {
+    listen 443 ssl;
+    location ~ ^/v1/agents/sessions/[0-9a-fA-F-]+ {
+        proxy_pass http://apipi_session;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+    location /v1/environments/ {
+        proxy_pass http://apipi_any;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+    }
+    location / {
+        proxy_pass http://apipi_any;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+}
+```
+
+The `/v1/environments/` location is for a single-node tenant pool or
+for a runner you already send to the owning instance. It is not
+session-sticky by itself.
+
+## Tenant pools
+
+Some tenants get their own gateway pool: a separate Host name or load
+balancer backend group. Auth still returns `tenant_id`. You map that
+tenant to the pool outside the gateway (DNS, balancer rule, or which
+bearers the auth callback accepts on that pool). The public Agents API
+does not change.
+
+Shared: Postgres. Isolated: Pi, `APIPI_SESSIONS_DIR`, artifact bytes
+on that pool's disks. Sticky rules above still apply inside the pool.
+Until artifacts live in external object storage, do not share a
+sessions directory across nodes.
+
+## Out of scope
+
+This page does not add a distributed worker registry, a job queue in
+place of SSE, or Docker-in-Docker as production. Those are later work.

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from apipi.api.agents import router as agents_router
 from apipi.api.environments import router as environments_router
@@ -24,6 +24,34 @@ from apipi.pi.proc import PiProc
 from apipi.request_id import RequestIdMiddleware
 from apipi.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store, create_engine
+
+
+class InstanceMiddleware:
+    def __init__(self, app: ASGIApp, instance_id: str | None) -> None:
+        self.app = app
+        self.instance_id = instance_id.encode("ascii") if instance_id else None
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            self.instance_id is None
+            or scope["type"] != "http"
+            or scope.get("path") == "/health"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_instance(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = [
+                    (name, value)
+                    for name, value in message.get("headers", [])
+                    if name != b"x-apipi-instance"
+                ]
+                headers.append((b"x-apipi-instance", self.instance_id or b""))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_instance)
 
 
 class MaxBodyMiddleware:
@@ -93,6 +121,7 @@ def create_app(
 
     app = FastAPI(title="ApiPi", version="0.0.0", lifespan=lifespan)
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(InstanceMiddleware, instance_id=resolved.instance_id)
     app.add_middleware(MaxBodyMiddleware, max_bytes=resolved.max_request_bytes)
     app.state.settings = resolved
     app.state.metrics = Metrics() if resolved.metrics else None
