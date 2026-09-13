@@ -1,5 +1,5 @@
 database_url = "postgresql+asyncpg://apipi:apipi@localhost:5432/apipi"
-run_mode = "host"
+run_mode = "none"
 host = "0.0.0.0"
 port = 8000
 log_level = "info"
@@ -10,7 +10,6 @@ max_sessions_per_tenant = 32
 turn_timeout = "10m"
 auth_cache_ttl = "30s"
 pi_command = "pi"
-jail_memory = "512M"
 microvm_egress_allowlist = true
 microvm_egress_hosts = ""
 microvm_egress_mbit = 50

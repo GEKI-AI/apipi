@@ -6,9 +6,9 @@ import uvicorn
 
 from apipi.app import create_app
 from apipi.config import (
-    HOST_MODE_WARNING,
     METRICS_OFF,
     METRICS_ON,
+    NONE_MODE_WARNING,
     OTEL_SET,
     OTEL_UNSET,
     PAYLOAD_EXPORT_OFF,
@@ -24,6 +24,7 @@ from apipi.config import (
     usage_retention_log,
     usage_store_log,
 )
+from apipi.pi.isolation import load_isolation
 from apipi.pi.probe import probe_run_mode
 from apipi.store.migrate import migrate
 
@@ -41,8 +42,12 @@ def prepare_serve(
     probe_run_mode(resolved)
     reject_prompt_body_logging()
     logging.getLogger().setLevel(resolved.log_level.upper())
-    if resolved.run_mode == "host":
-        log.warning(HOST_MODE_WARNING)
+    backend = load_isolation(resolved.run_mode)
+    if backend.warn_not_production:
+        if backend.name == "none":
+            log.warning(NONE_MODE_WARNING)
+        else:
+            log.warning(f"APIPI_RUN_MODE={backend.name} is not suited for production")
     log.info(usage_store_log(resolved.usage_store))
     log.info(usage_retention_log(resolved.usage_retention))
     log.info(USAGE_EXPORT_ON if resolved.usage_export_url else USAGE_EXPORT_OFF)

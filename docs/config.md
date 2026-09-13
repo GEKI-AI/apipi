@@ -21,7 +21,7 @@ secrets.
    `apipi.toml` in the working directory if it exists.
 4. Defaults in code.
 
-TOML keys are snake_case field names (`run_mode = "jail"`). Unknown
+TOML keys are snake_case field names (`run_mode = "none"`). Unknown
 TOML keys fail at startup. A setting that would store prompt or
 completion bodies is rejected at startup.
 
@@ -36,7 +36,7 @@ secrets. Do not commit `.env`.
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | `database_url` | required | Postgres URL. `postgresql+asyncpg://…` preferred. |
-| `APIPI_RUN_MODE` | `run_mode` | `jail` | `host` \| `jail` \| `microvm`. Production SaaS/enterprise is `microvm`. `jail` is a fallback when KVM cannot run. `host` is local/dev. `jail` and `microvm` launch a throwaway sandbox before the API listens. If the mode cannot start, the process exits. No fallback. |
+| `APIPI_RUN_MODE` | `run_mode` | `none` | `none` \| `microvm` \| `package.mod:Class`. Production SaaS/enterprise is `microvm`. `none` is local/dev. `microvm` and custom backends that set `needs_probe` launch a throwaway sandbox before the API listens. If the mode cannot start, the process exits. No fallback. `host` and `jail` are not valid. |
 | `APIPI_HOST` | `host` | `0.0.0.0` | Bind address. |
 | `APIPI_PORT` | `port` | `8000` | Bind port. |
 | `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |
@@ -50,7 +50,6 @@ secrets. Do not commit `.env`.
 | `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache the callback result by SHA-256 of the bearer, never the raw key. |
 | `APIPI_PI_COMMAND` | `pi_command` | `pi` | Pi binary used as `pi --mode rpc`. |
 | `APIPI_SESSIONS_DIR` | `sessions_dir` | `.apipi/sessions` under cwd | Root for local session directories (`openai_hosted`). |
-| `APIPI_JAIL_MEMORY` | `jail_memory` | `512M` | cgroup `memory.max` for each jailed Pi. |
 | `APIPI_MICROVM_KERNEL` | `microvm_kernel` | unset | Guest kernel image. Required when `run_mode` is `microvm`. |
 | `APIPI_MICROVM_ROOTFS` | `microvm_rootfs` | unset | Guest rootfs image. Required when `run_mode` is `microvm`. Do not vendor a distro in git. |
 | `APIPI_MICROVM_MEM_MIB` | `microvm_mem_mib` | `512` | Guest RAM in MiB. |
@@ -90,10 +89,11 @@ Durations are like `15m`, `30s`, `2h`, `15d`. Sizes are like `512M` or `1MiB`
 ## Run mode
 
 Run mode is server config, not an OpenAI field. The process default is
-`jail` so a machine without KVM can still start. Production operators
-set `microvm`. Operators without jail tools must set `host`. `host`
-logs a warning and is not suited for production. What to install,
-systemd, and when to use each mode are in [run modes](run-modes.md).
+`none` so a machine without KVM can still start. Production operators
+set `microvm`. `none` logs a warning and is not suited for production.
+A custom backend uses the same setting with an import path. What to
+install, systemd, and when to use each mode are in
+[run modes](run-modes.md).
 
 ```toml
 run_mode = "microvm"
@@ -136,8 +136,8 @@ kills the process and frees a slot.
 
 `turn_timeout` stops a generate that never returns. `workspace_ttl`
 deletes the local computer directory after idle Pi has already been
-killed. `jail_memory` and the microvm memory/vCPU settings bound each
-worker. `max_request_bytes` bounds HTTP bodies. `max_workspace_bytes`
+killed. The microvm memory/vCPU settings bound each guest.
+`max_request_bytes` bounds HTTP bodies. `max_workspace_bytes`
 bounds one `openai_hosted` directory. `max_artifact_bytes` bounds the
 published host store for one session. `db_pool_size` bounds connections
 to Postgres.
@@ -154,8 +154,8 @@ unless the computer must hold more. Microvm TAP egress is allowlisted
 and capped at `50` Mbit by default. Add extra hosts with
 `microvm_egress_hosts`. The gateway's own HTTP MCP probe stays on the
 host; Pi still dials those URLs from the guest, so those hosts are
-added to the TAP allowlist when the session starts. Jail/pasta egress
-is not filtered by these settings. Change a setting and restart.
+added to the TAP allowlist when the session starts. Change a setting
+and restart.
 
 | Failure | HTTP or event | Code |
 | --- | --- | --- |
@@ -165,10 +165,10 @@ is not filtered by these settings. Change a setting and restart.
 | Workspace directory too large | `agent.session.error` | `workspace_too_large` |
 | Artifact store too large | `agent.session.error` | `artifact_too_large` |
 
-The gateway does not intercept every write inside a jail or guest.
+The gateway does not intercept every write inside a guest.
 Guest tmpfs is already bounded by `microvm_mem_mib`. Workspace and
 artifact caps are enforced when the host unpacks or publishes. Host
-and jail files that are already on disk stay until workspace TTL.
+files that are already on disk stay until workspace TTL.
 `self_hosted` runner disk is not capped; bytes published onto the
 gateway still count toward `max_artifact_bytes`.
 
@@ -197,7 +197,7 @@ bucket.
 
 ```toml
 database_url = "postgresql+asyncpg://apipi:apipi@localhost:5432/apipi"
-run_mode = "host"
+run_mode = "none"
 host = "0.0.0.0"
 port = 8000
 log_level = "info"
@@ -207,7 +207,6 @@ max_sessions = 32
 max_sessions_per_tenant = 32
 turn_timeout = "10m"
 auth_cache_ttl = "30s"
-jail_memory = "512M"
 microvm_egress_allowlist = true
 microvm_egress_hosts = ""
 microvm_egress_mbit = 50

@@ -18,14 +18,15 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-RunMode = Literal["host", "jail", "microvm"]
+RunMode = str
 LogLevel = Literal["debug", "info", "warning", "error", "critical"]
 ArtifactStore = Literal["local", "s3"]
 S3Addressing = Literal["auto", "path", "virtual"]
 UsageStore = Literal["off", "rollups", "turns"]
-IMPLEMENTED_RUN_MODES: frozenset[str] = frozenset({"host", "jail", "microvm"})
+BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "microvm"})
 
-HOST_MODE_WARNING = "APIPI_RUN_MODE=host is not suited for production"
+NONE_MODE_WARNING = "APIPI_RUN_MODE=none is not suited for production"
+RUN_MODE_HELP = "APIPI_RUN_MODE must be none, microvm, or package.mod:Class"
 USAGE_STORE_OFF = "usage store off"
 USAGE_STORE_ROLLUPS = "usage store rollups"
 USAGE_STORE_TURNS = "usage store turns"
@@ -214,7 +215,7 @@ class Settings(BaseSettings):
 
     database_url: str
     run_mode: RunMode = Field(
-        default="jail",
+        default="none",
         validation_alias=AliasChoices("APIPI_RUN_MODE", "run_mode"),
     )
     host: str = Field(
@@ -274,11 +275,6 @@ class Settings(BaseSettings):
     sessions_dir: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_SESSIONS_DIR", "sessions_dir"),
-    )
-    jail_memory: ByteSize = Field(
-        default=512 * 1024 * 1024,
-        ge=1,
-        validation_alias=AliasChoices("APIPI_JAIL_MEMORY", "jail_memory"),
     )
     metrics: bool = Field(
         default=False,
@@ -434,8 +430,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def run_mode_known(self) -> Self:
-        if self.run_mode not in {"host", "jail", "microvm"}:
-            raise ValueError("APIPI_RUN_MODE must be host, jail, or microvm")
+        mode = self.run_mode
+        if mode in {"host", "jail"}:
+            raise ValueError(f"APIPI_RUN_MODE={mode} is not valid")
+        if mode not in BUILTIN_RUN_MODES and ":" not in mode:
+            raise ValueError(RUN_MODE_HELP)
         if self.artifact_store == "s3" and not (
             self.s3_bucket and self.s3_bucket.strip()
         ):
@@ -527,10 +526,16 @@ def _settings_message(exc: ValidationError) -> str:
         msg = str(error.get("msg", ""))
         if "APIPI_S3_BUCKET" in msg:
             return "APIPI_S3_BUCKET is required"
+        if "APIPI_RUN_MODE=host is not valid" in msg:
+            return "APIPI_RUN_MODE=host is not valid"
+        if "APIPI_RUN_MODE=jail is not valid" in msg:
+            return "APIPI_RUN_MODE=jail is not valid"
+        if RUN_MODE_HELP in msg:
+            return RUN_MODE_HELP
         if "database_url" in loc:
             return "DATABASE_URL is required"
         if "run_mode" in loc:
-            return "APIPI_RUN_MODE must be host, jail, or microvm"
+            return RUN_MODE_HELP
         if "idle_ttl" in loc or "APIPI_IDLE_TTL" in loc:
             return "APIPI_IDLE_TTL must be like 15m"
         if "workspace_ttl" in loc or "APIPI_WORKSPACE_TTL" in loc:
@@ -549,8 +554,6 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_MAX_SESSIONS_PER_TENANT must be at least 1"
         if "max_sessions" in loc:
             return "APIPI_MAX_SESSIONS must be at least 1"
-        if "jail_memory" in loc:
-            return "APIPI_JAIL_MEMORY must be like 512M"
         if "max_request_bytes" in loc:
             return "APIPI_MAX_REQUEST_BYTES must be like 1MiB"
         if "max_workspace_bytes" in loc:
@@ -606,15 +609,6 @@ def postgres_url(url: str) -> str:
 
 
 def require_run_mode(mode: str, settings: Settings | None = None) -> None:
-    if mode not in {"host", "jail", "microvm"}:
-        raise ConfigError("APIPI_RUN_MODE must be host, jail, or microvm")
-    if mode not in IMPLEMENTED_RUN_MODES:
-        raise ConfigError(f"APIPI_RUN_MODE={mode} is not available")
-    if mode == "jail":
-        from apipi.pi.jail import require_jail
+    from apipi.pi.isolation import load_isolation
 
-        require_jail()
-    if mode == "microvm":
-        from apipi.pi.microvm import require_microvm
-
-        require_microvm(settings)
+    load_isolation(mode).require(settings)

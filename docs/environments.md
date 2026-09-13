@@ -3,7 +3,7 @@
 An environment is where file and shell tools run. That choice is
 independent of [run mode](architecture.md), which is where Pi itself
 runs. When the computer is local, Pi and the files share the same
-jail or guest. A remote runner is valid with `host`, `jail`, and
+isolation boundary. A remote runner is valid with `none` and
 `microvm`. That is the only supported split.
 
 ## Types
@@ -32,13 +32,10 @@ one sandbox and the local files in another. The path is
 `APIPI_SESSIONS_DIR` is unset, that root is `.apipi/sessions` under the
 gateway's working directory.
 
-In `host` this is a folder on the host. It is not a security boundary.
-In `jail`, that folder is bind-mounted into the namespace jail and is
-Pi's cwd. The rest of `APIPI_SESSIONS_DIR` is a tmpfs, so other
-session directories are not readable. In `microvm`, that folder is
-packed into a workspace drive at boot, unpacked onto a guest tmpfs,
-and is the guest cwd. Before the guest exits, those writes are pulled
-back to the host folder.
+In isolation `none` this is a folder on the host. It is not a security
+boundary. In `microvm`, that folder is packed into a workspace drive
+at boot, unpacked onto a guest tmpfs, and is the guest cwd. Before the
+guest exits, those writes are pulled back to the host folder.
 
 Session rows live in Postgres. Environment files are the computer.
 The `openai_hosted` directory lasts across Pi stop until
@@ -59,7 +56,7 @@ work. There is no session directory and no shell.
 
 ## `self_hosted`
 
-Pi stays in the run mode (`host`, `jail`, or `microvm`). Production
+Pi stays in the run mode (`none` or `microvm`). Production
 SaaS and enterprise still run that Pi under `microvm`. The computer
 is elsewhere. You must sandbox the runner. The gateway does not nest
 the remote runner in a microvm.

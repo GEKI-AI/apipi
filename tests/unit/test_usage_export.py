@@ -12,7 +12,7 @@ _OriginalClient = httpx.AsyncClient
 def _settings(*, retries: int = 1) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
         usage_export_url="http://export.test/usage",
         usage_export_retries=retries,
     )

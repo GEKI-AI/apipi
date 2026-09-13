@@ -7,32 +7,34 @@ choice: where file and shell tools run. See
 isolation. The gateway always stays on the host.
 
 If the selected mode cannot start, `apipi serve` exits before it binds
-HTTP. There is no silent fallback. For `jail` and `microvm` the
-process also launches a throwaway sandbox and tears it down. That
-probe must succeed before the API listens.
+HTTP. There is no silent fallback. For `microvm` and for a custom
+backend that sets `needs_probe`, the process also launches a throwaway
+sandbox and tears it down. That probe must succeed before the API
+listens.
 
 When the computer is local (`openai_hosted` or the `hosted` alias), Pi
-and the session files share that jail or guest. The only supported
+and the session files share that isolation boundary. The only supported
 split is `self_hosted`: Pi stays in the run mode, and the runner is
 elsewhere. The customer must sandbox the runner. Tests that do not
-need a computer can use `environment.type=none`.
+need a computer can use `environment.type=none`. That environment value
+means “no files.” Isolation `none` means “no sandbox for Pi.” They are
+not the same setting.
 
 | Mode | When to use | Isolation |
 | --- | --- | --- |
-| `host` | Local tests and laptops without sandbox tools | None. Pi is a child of the gateway. Not for production. |
-| `jail` | Fallback when microvm cannot run: no KVM, nested Docker, lab, CI | Linux namespaces. Shared kernel. Tenants cannot write the host, reach Postgres on loopback, or read other session directories. |
+| `none` | Local tests and laptops without a sandbox | None. Pi is a child of the gateway. Not for production. |
 | `microvm` | SaaS and enterprise production when a computer is in use | KVM guest with its own kernel. Protects the host from a hostile session. |
+| `package.mod:Class` | An operator-provided backend | Whatever that class implements. Missing import fails at startup. |
 
-The process default is `jail` so `apipi serve` can start on a machine
-without KVM. That is a fallback, not the production posture.
-Production operators set `APIPI_RUN_MODE=microvm`. If microvm cannot
-launch, the process exits; it does not fall back to `jail` or `host`.
-Operators without jail tools must set `APIPI_RUN_MODE=host`. `host`
-logs a warning.
+The process default is `none` so `apipi serve` can start on a machine
+without KVM. That is not the production posture. Production operators
+set `APIPI_RUN_MODE=microvm`. If microvm cannot launch, the process
+exits; it does not fall back to `none`. `none` logs a warning.
+`host` and `jail` are not valid run modes.
 
 Production is systemd on the host next to Pi. Docker Compose in this
-repo starts Postgres only. Nested jail or microvm inside a container
-is a lab setup, not the production path.
+repo starts Postgres only. Nested microvm inside a container is a lab
+setup, not the production path.
 
 ## What to install
 
@@ -40,28 +42,10 @@ Every mode needs Python 3.13, [uv](https://docs.astral.sh/uv/),
 Postgres, the Pi CLI (`pi --mode rpc`) on `PATH`, and a model URL.
 See [install](install.md). The extra OS packages differ by mode.
 
-### `host`
+### `none`
 
 Nothing beyond the gateway requirements. This mode is for development
-and CI that cannot start a jail.
-
-### `jail`
-
-Linux with cgroup v2 and unprivileged user namespaces. Install
-bubblewrap and pasta:
-
-```
-# Debian / Ubuntu
-sudo apt-get install -y bubblewrap passt
-
-# Fedora
-sudo dnf install -y bubblewrap passt
-```
-
-`pasta` is in the `passt` package. The service user must be able to
-create a child cgroup and set `memory.max`. On systemd, set
-`Delegate=yes` on the unit (see [Production](#production)). If
-`bwrap`, `pasta`, or cgroup v2 cannot start, the process exits.
+and CI that cannot start a microvm.
 
 ### `microvm`
 
@@ -104,7 +88,9 @@ the live microvm tests is in [tests](tests.md).
 
 ## Storage
 
-Three stores. Do not mix them up.
+Session state, environment files, and artifacts are three different
+stores. Mixing them up leads to the wrong lifetime and the wrong
+machine.
 
 | Store | What | Where it lives | Lifetime |
 | --- | --- | --- | --- |
@@ -125,37 +111,17 @@ When a turn completes, the gateway copies files under `artifacts/` and
 net for files written after the last completed turn. Killing idle Pi
 does not delete the `openai_hosted` directory. After workspace TTL
 with no activity, that directory is deleted and a later spawn recopies
-skills into a fresh workspace. `host` and `jail` read the session
-directory. `microvm` pulls a workspace tar over vsock before the guest
-exits so the next pack is not empty. `self_hosted` reads `artifacts/`
-and `outputs/` from the runner if it is connected. A crash before
-publish can lose unpublished files.
+skills into a fresh workspace. Isolation `none` reads the session
+directory on the host. `microvm` pulls a workspace tar over vsock
+before the guest exits so the next pack is not empty. `self_hosted`
+reads `artifacts/` and `outputs/` from the runner if it is connected.
+A crash before publish can lose unpublished files.
 
-## `host`
+## `none`
 
 Pi is a child of `apipi serve`. There is no namespace, cgroup, or
-guest. Use this when jail tools are missing. Do not use it in
-production.
-
-## `jail`
-
-bubblewrap, pasta, and cgroup v2. The gateway never enters the jail.
-Pi, stdio MCP, and local file tools run inside.
-
-The session directory is bind-mounted read-write and is Pi's cwd. The
-rest of `APIPI_SESSIONS_DIR` is a tmpfs, so a jailed process cannot
-read other tenants' session directories. The host filesystem is still
-visible read-only (binaries, `/usr`). The jail runs as the gateway
-UID. Do not leave tenant data or secrets in files outside
-`APIPI_SESSIONS_DIR` if a session should not see them.
-
-Pasta gives the jail a network namespace with no host loopback, so Pi
-cannot reach Postgres on localhost. Egress for the model URL and HTTP
-MCP goes through pasta. This is not a VM. A kernel exploit can still
-reach the host.
-
-Chromium inside the jail needs `--no-sandbox`. Memory is capped with
-cgroup `memory.max` (`APIPI_JAIL_MEMORY`, default 512M).
+guest. Use this when a microvm cannot run. Do not use it in
+production. The process logs a warning.
 
 ## `microvm`
 
@@ -184,6 +150,33 @@ This is the mode that protects the host from a hostile user. Guest RAM
 is the real cost (`APIPI_MICROVM_MEM_MIB`, default 512). Chromium can
 use its own sandbox inside the guest. Do not put Chromium in the
 gateway.
+
+## Custom isolation
+
+Operators and embedders can implement another isolation backend
+without forking the gateway. The built-in names stay `none` and
+`microvm`. A custom backend is selected with the same setting:
+
+```
+APIPI_RUN_MODE=package.mod:Class
+```
+
+The attribute must be a class, a zero-argument factory, or an instance.
+It needs `name`, `needs_probe`, `stdio_on_host`,
+`warn_not_production`, `require`, `probe`, and `spawn`. `spawn` starts
+Pi and returns the RPC process. If `needs_probe` is true, startup
+launches a throwaway sandbox before HTTP listen, the same way
+`microvm` does. A missing module or attribute fails at startup with
+`APIPI_RUN_MODE backend not found`. `host` and `jail` are not aliases
+for a custom backend.
+
+`name` is what usage events store as `run_mode`. Pick a short stable
+string. `stdio_on_host` controls whether stdio MCP is started next to
+the gateway (`none` does this) or inside the sandbox with Pi
+(`microvm` does this).
+
+A small wrapper around `none` is `examples/isolation.py`. Put your
+module on `PYTHONPATH`.
 
 ## Production
 
@@ -218,38 +211,14 @@ Many operators run that unit as root so jailer can chroot Firecracker
 and the process can create TAP devices. Set `APIPI_MICROVM_KERNEL` and
 `APIPI_MICROVM_ROOTFS` in the environment file.
 
-A typical jail unit, only when microvm cannot run on that host:
-
-```
-[Unit]
-Description=ApiPi gateway
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/apipi
-EnvironmentFile=/etc/apipi.env
-ExecStart=/opt/apipi/.venv/bin/apipi serve --config /etc/apipi.toml
-Restart=on-failure
-Delegate=yes
-DelegateControllers=memory pids
-
-[Install]
-WantedBy=multi-user.target
-```
-
-`Delegate=yes` lets the service create child cgroups for
-`APIPI_JAIL_MEMORY`. Do not set `NoNewPrivileges=yes`; bubblewrap
-needs user namespaces.
-
 ## Docker
 
 The Compose file at the repo root starts Postgres and publishes it on
 the host. It does not start the gateway.
 
 Running the gateway inside Docker is not the production path. Nested
-user namespaces, cgroup delegation, TAP devices, and `/dev/kvm` each
-need extra capabilities. A privileged container can be used in a lab.
-It is not equivalent to systemd on the host.
+user namespaces, TAP devices, and `/dev/kvm` each need extra
+capabilities. A privileged container can be used in a lab. It is not
+equivalent to systemd on the host.
 
 Settings for run mode are in [configuration](config.md).

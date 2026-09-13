@@ -12,8 +12,8 @@ file rarely. Edit in place. Do not keep an amendment log.
    The event log is the transcript. Pi's files are a cache.
 
 3. **The computer is replaceable.**
-   none, local directory, or `self_hosted`. Independent of run mode
-   (`host` / `jail` / `microvm`). Search and browser are MCP, not built in.
+    none, local directory, or `self_hosted`. Independent of run mode
+    (`none` / `microvm`). Search and browser are MCP, not built in.
    OpenAI's field `openai_hosted` is a local session directory, not OpenAI's
    cloud. `hosted` is the same local directory.
 

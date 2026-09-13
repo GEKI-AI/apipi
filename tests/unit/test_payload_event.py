@@ -77,6 +77,6 @@ def test_redact_payload_strips_secrets_and_bearer() -> None:
 def test_payload_export_defaults_off() -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
     )
     assert settings.payload_export_url is None

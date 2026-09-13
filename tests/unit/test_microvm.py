@@ -7,9 +7,8 @@ from typing import Any, cast
 import pytest
 
 from apipi.config import (
-    IMPLEMENTED_RUN_MODES,
+    BUILTIN_RUN_MODES,
     ConfigError,
-    RunMode,
     Settings,
     require_run_mode,
 )
@@ -44,7 +43,7 @@ from apipi.pi.proc import PiProc, spawn_pi
 def _settings(
     tmp_path: Path,
     *,
-    run_mode: RunMode = "microvm",
+    run_mode: str = "microvm",
     kernel: str | None = None,
     rootfs: str | None = None,
 ) -> Settings:
@@ -70,7 +69,7 @@ def _which_ok(name: str) -> str:
 
 
 def test_microvm_is_implemented() -> None:
-    assert "microvm" in IMPLEMENTED_RUN_MODES
+    assert "microvm" in BUILTIN_RUN_MODES
 
 
 def test_require_microvm_missing_kvm(monkeypatch: pytest.MonkeyPatch) -> None:

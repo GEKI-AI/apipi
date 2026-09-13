@@ -19,7 +19,7 @@ Workers register with the API and advertise `pi`, `sandbox`, or both.
 - Run workers on other machines
 - Assign a session to a worker
 
-Until then the API process runs Pi (`host` / `jail` / `microvm`) plus
+Until then the API process runs Pi (`none` / `microvm`) plus
 the local directory or a `self_hosted` runner.
 
 ## Remote browser

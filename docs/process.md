@@ -78,7 +78,7 @@ under Contribute. Architecture decisions live in `specs/decisions/`.
 Pytest. Product pages say what is true. Tests check the public API and
 the constitution, not Pi internals. Mock Pi RPC. Same change as the
 code. Checks before commit are policy, not git hooks. Commands, suites,
-and what jail and microvm need are in [tests](tests.md). See
+and what microvm needs are in [tests](tests.md). See
 `CONTRIBUTING.md`.
 
 ## Contribute

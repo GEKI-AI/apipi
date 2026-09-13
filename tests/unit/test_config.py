@@ -31,8 +31,8 @@ def test_migrate_requires_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_run_mode_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
-    assert Settings().run_mode == "host"
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    assert Settings().run_mode == "none"
 
 
 def test_idle_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -50,16 +50,50 @@ def test_workspace_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_workspace_ttl_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_WORKSPACE_TTL", "nope")
     with pytest.raises(ConfigError, match="APIPI_WORKSPACE_TTL must be like"):
         load_settings()
 
 
-def test_default_run_mode_is_jail(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_run_mode_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
-    assert Settings().run_mode == "jail"
+    assert Settings().run_mode == "none"
+
+
+def test_run_mode_host_is_not_valid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    with pytest.raises(ConfigError, match="APIPI_RUN_MODE=host is not valid"):
+        load_settings()
+
+
+def test_run_mode_jail_is_not_valid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "jail")
+    with pytest.raises(ConfigError, match="APIPI_RUN_MODE=jail is not valid"):
+        load_settings()
+
+
+def test_run_mode_custom_import_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "tests.support.fake_isolation:FakeIsolation")
+    assert Settings().run_mode == "tests.support.fake_isolation:FakeIsolation"
+
+
+def test_run_mode_unknown_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "gvisor")
+    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
+        load_settings()
 
 
 def test_default_auth_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,7 +144,7 @@ def test_prompt_body_logging_rejected(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_LOG_PROMPTS", "1")
     with pytest.raises(ConfigError, match="prompt or completion bodies"):
         load_settings()
@@ -121,7 +155,7 @@ def test_prompt_body_logging_off_is_ignored(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_LOG_PROMPTS", "off")
     settings = load_settings()
     assert settings.metrics is False
@@ -146,7 +180,6 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.port == 8000
     assert settings.instance_id is None
     assert settings.log_level == "info"
-    assert settings.jail_memory == 512 * 1024 * 1024
     assert settings.max_request_bytes == 1024 * 1024
     assert settings.max_workspace_bytes == 1024 * 1024 * 1024
     assert settings.max_artifact_bytes == 512 * 1024 * 1024
@@ -197,7 +230,7 @@ def test_instance_id_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_instance_id_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_INSTANCE_ID", "bad\nid")
     with pytest.raises(ConfigError, match="APIPI_INSTANCE_ID must be short ASCII"):
         load_settings()
@@ -217,7 +250,7 @@ def test_egress_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_egress_mbit_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_MICROVM_EGRESS_MBIT", "0")
     with pytest.raises(ConfigError, match="APIPI_MICROVM_EGRESS_MBIT must be"):
         load_settings()
@@ -228,7 +261,7 @@ def test_max_sessions_per_tenant_invalid(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_MAX_SESSIONS_PER_TENANT", "0")
     with pytest.raises(ConfigError, match="APIPI_MAX_SESSIONS_PER_TENANT must be"):
         load_settings()
@@ -240,12 +273,12 @@ def test_load_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
     (tmp_path / "apipi.toml").write_text(
         'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
-        'run_mode = "host"\n'
+        'run_mode = "none"\n'
         "max_sessions = 4\n"
         'idle_ttl = "5m"\n'
     )
     settings = load_settings()
-    assert settings.run_mode == "host"
+    assert settings.run_mode == "none"
     assert settings.max_sessions == 4
     assert settings.idle_ttl == timedelta(minutes=5)
 
@@ -254,10 +287,10 @@ def test_env_overrides_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "apipi.toml").write_text(
         'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
-        'run_mode = "jail"\n'
+        'run_mode = "microvm"\n'
     )
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
-    assert load_settings().run_mode == "host"
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    assert load_settings().run_mode == "none"
 
 
 def test_dotenv_overrides_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -265,10 +298,10 @@ def test_dotenv_overrides_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
     (tmp_path / "apipi.toml").write_text(
         'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
-        'run_mode = "jail"\n'
+        'run_mode = "microvm"\n'
     )
-    (tmp_path / ".env").write_text("APIPI_RUN_MODE=host\n")
-    assert load_settings().run_mode == "host"
+    (tmp_path / ".env").write_text("APIPI_RUN_MODE=none\n")
+    assert load_settings().run_mode == "none"
 
 
 def test_unknown_toml_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -304,7 +337,7 @@ def test_usage_retention_empty_is_none(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_USAGE_RETENTION", "")
     assert load_settings().usage_retention is None
 
@@ -312,7 +345,7 @@ def test_usage_retention_empty_is_none(
 def test_usage_store_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_USAGE_STORE", "warehouse")
     with pytest.raises(ConfigError, match="APIPI_USAGE_STORE must be"):
         load_settings()
@@ -323,7 +356,7 @@ def test_usage_export_url_invalid(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_USAGE_EXPORT_URL", "not-a-url")
     with pytest.raises(ConfigError, match="APIPI_USAGE_EXPORT_URL must be"):
         load_settings()
@@ -334,7 +367,7 @@ def test_payload_export_url_invalid(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_PAYLOAD_EXPORT_URL", "not-a-url")
     with pytest.raises(ConfigError, match="APIPI_PAYLOAD_EXPORT_URL must be"):
         load_settings()

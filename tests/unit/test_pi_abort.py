@@ -31,7 +31,7 @@ class _Process:
 def _settings(tmp_path: Path) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
     )
 

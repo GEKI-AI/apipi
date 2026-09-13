@@ -32,7 +32,7 @@ def _auth(token: str) -> dict[str, str]:
 def metrics_host_settings(tmp_path: Path) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
         pi_command=f"{sys.executable} {_FAKE_PI}",
         sessions_dir=str(tmp_path / "sessions"),
         metrics=True,

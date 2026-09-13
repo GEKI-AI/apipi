@@ -5,12 +5,12 @@
                  |
                  |  bearer key
                  v
-           FastAPI gateway          <- never in jail or guest
-           Postgres
-                 |
-                 |  rpc
-                 v
-           Pi  (+ stdio MCP)        <- host | jail | microvm
+            FastAPI gateway          <- never in the guest
+            Postgres
+                  |
+                  |  rpc
+                  v
+            Pi  (+ stdio MCP)        <- none | microvm
                  |
                  +-- local files    <- next to Pi
                  +-- or remote env  <- self_hosted runner
@@ -25,31 +25,24 @@ Two independent choices:
 | **Environment** | Where file/shell tools run |
 
 They combine. A remote environment does not replace Pi isolation. The
-gateway always stays on the host. It is never placed inside a jail or
-a guest.
+gateway always stays on the host. It is never placed inside a guest.
 
 ## Status
 
-`apipi serve` starts the gateway. Run modes `host`, `jail`, and
-`microvm` are implemented. There is no fallback from one mode to
-another.
+`apipi serve` starts the gateway. Built-in run modes are `none` and
+`microvm`. A custom backend is an import path. There is no fallback
+from one mode to another. `host` and `jail` are not valid.
 
 Production SaaS and enterprise use `microvm`. The process default is
-`jail` so a machine without KVM can still start; that is a fallback,
-not the production posture. `host` logs a warning and is not suited
-for production.
-
-`jail` starts Pi (and stdio MCP) in a Linux namespace jail when
-`bwrap`, `pasta`, and cgroup v2 can start, and after a throwaway jail
-has launched. If that probe fails, the process exits before it binds
-HTTP. It does not fall back to `host`. Operators without jail tools
-must set `APIPI_RUN_MODE=host`.
+`none` so a machine without KVM can still start; that is not the
+production posture. `none` logs a warning and is not suited for
+production.
 
 `microvm` starts Pi (and stdio MCP) in a Firecracker guest when
 `/dev/kvm`, `firecracker`, `jailer`, the kernel and rootfs images, and
 host net tools (`ip`, `iptables`, `tc`) are present, and after a throwaway
 guest has booted. If any of those are missing or the probe fails, the
-process exits. It does not fall back to `jail` or `host`.
+process exits. It does not fall back to `none`.
 
 ## Gateway
 
@@ -72,9 +65,9 @@ systemd, Docker, and storage are in [run modes](run-modes.md).
 
 | Mode | Isolation | Today |
 | --- | --- | --- |
-| `host` | None. Pi is a child of the gateway. | Implemented. Logs a warning. Not for production. |
-| `jail` | Linux namespaces. Shared kernel. Fallback when microvm cannot run. | Implemented when `bwrap`, `pasta`, and cgroup v2 can start, and a throwaway jail launches. Otherwise the process exits. |
+| `none` | None. Pi is a child of the gateway. | Implemented. Logs a warning. Not for production. |
 | `microvm` | KVM guest. Own kernel. Production when a computer is in use. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, `iptables`, and `tc` can start, and a throwaway guest boots. Otherwise the process exits. |
+| `package.mod:Class` | Operator-provided backend. | Loaded at startup. Probe runs when the backend sets `needs_probe`. |
 
 Production is systemd on the host. The Compose file starts Postgres
 only. Host sizing and scale-out are in [production](production.md).
@@ -87,29 +80,11 @@ The intended same-server production path is Pi in `microvm` with files
 in a session directory next to Pi. That directory is
 `environment.openai_hosted` (or the `hosted` alias). It is not
 OpenAI's cloud. Pi and those files share one guest. Operators without
-KVM should set `APIPI_RUN_MODE=jail`. Operators without jail tools
-should set `APIPI_RUN_MODE=host` with the same local directory.
+KVM should set `APIPI_RUN_MODE=none` with the same local directory.
 
 `self_hosted` if the computer is elsewhere. That is the only supported
 split. It combines with any run mode. The customer must sandbox the
 runner.
-
-### `jail`
-
-bubblewrap + cgroup v2 + pasta. The gateway never enters the jail. Pi,
-stdio MCP, and local file tools run inside. The session directory
-(`environment.openai_hosted`) is bind-mounted into the jail and is the
-cwd. The rest of `APIPI_SESSIONS_DIR` is a tmpfs, so other session
-directories are not readable.
-
-There is no host loopback, so the jail cannot reach Postgres on
-localhost. Network for the model URL and HTTP MCP goes through pasta,
-not `--share-net` onto the host. This is not a VM. It does **not**
-protect the host from a hostile user.
-
-Chromium in that jail needs `--no-sandbox`. If `bwrap`, `pasta`, or
-cgroup v2 cannot start, `apipi serve` exits. There is no fallback to
-`host`.
 
 ### `microvm`
 
@@ -155,7 +130,7 @@ modest; Playwright needs hundreds of MiB).
 If `/dev/kvm`, `firecracker`, `jailer`, the kernel file, the rootfs
 file, `ip`, `iptables`, or `tc` cannot start, or the throwaway guest
 probe fails, `apipi serve` exits before it binds HTTP. There is no
-fallback to `jail` or `host`.
+fallback to `none`.
 
 ## Environment
 
@@ -165,7 +140,7 @@ See [environments](environments.md).
 | --- | --- |
 | `openai_hosted` (default) | Session directory, same place as Pi. `hosted` is an alias. |
 | `none` | No file tools |
-| `self_hosted` | Proxied to a runner. Outside jail/guest. The only supported split. |
+| `self_hosted` | Proxied to a runner. Outside the guest. The only supported split. |
 
 ## Store
 

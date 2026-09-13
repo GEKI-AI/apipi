@@ -104,7 +104,7 @@ def test_usage_event_has_no_message_text() -> None:
         mcp_names=[],
         mcp_counts={},
         environment_type="none",
-        run_mode="host",
+        run_mode="none",
         instance_id="node-a",
         artifact_bytes=0,
         request_id="req-1",
