@@ -352,6 +352,7 @@ async def create_agent_session(
                 metrics=request.app.state.metrics,
                 tracing=tracing,
                 turn_timeout=request.app.state.settings.turn_timeout,
+                env_hub=request.app.state.env_hub,
             )
         else:
             async with store.session() as db:
@@ -513,6 +514,7 @@ async def post_session_event(
                 metrics=request.app.state.metrics,
                 tracing=tracing,
                 turn_timeout=request.app.state.settings.turn_timeout,
+                env_hub=request.app.state.env_hub,
             )
     else:
         with start_span(
@@ -535,6 +537,7 @@ async def post_session_event(
                 metrics=request.app.state.metrics,
                 tracing=tracing,
                 turn_timeout=request.app.state.settings.turn_timeout,
+                env_hub=request.app.state.env_hub,
             )
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)

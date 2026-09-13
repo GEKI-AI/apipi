@@ -73,6 +73,18 @@ def test_agent_end_maps_usage_without_cost_or_text() -> None:
     assert mapped[0][0] not in PUBLIC_EVENT_TYPES
 
 
+def test_bash_tool_is_command_execution() -> None:
+    mapped = map_pi_event(
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "c1",
+            "toolName": "bash",
+        }
+    )
+    assert mapped[0][1]["item_type"] == "command_execution"
+    assert mapped[0][1]["name"] == "bash"
+
+
 def test_mcp_tool_is_mcp_call() -> None:
     mapped = map_pi_event(
         {
