@@ -104,6 +104,11 @@ have `id`. Replies: `{"id": "...", "ok": true, ...}` or
 Artifact bytes are `read` while the socket is up. `410` if the file is
 gone or the runner is disconnected.
 
+A runnable example that attaches a local directory as that computer is
+`examples/self_hosted_runner.py`. It speaks this protocol. Pass the
+one-time `key` and `environment_id` from session create in the
+environment, not in the file. Setup is in `examples/README.md`.
+
 ## Skills
 
 `environment.capability_directories` lists paths on this computer that
