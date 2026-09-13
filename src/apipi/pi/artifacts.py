@@ -1,22 +1,34 @@
+import asyncio
+import contextlib
 import io
 import mimetypes
 import shutil
 import tarfile
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apipi.config import Settings
+from apipi.config import ConfigError, Settings
 from apipi.env.hub import EnvDisconnected, EnvironmentHub
 from apipi.pi.dirs import artifact_blob_path, sessions_root
+from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
 from apipi.skills import copy_capability_directories
-from apipi.store.models import SessionRow
-from apipi.store.repo import create_artifact, get_session_by_id
+from apipi.store.engine import Store
+from apipi.store.models import SessionRow, utc_now
+from apipi.store.repo import (
+    create_artifact,
+    get_session,
+    get_session_by_id,
+    list_artifacts,
+)
 
 WORKSPACE_ARTIFACTS = "artifacts"
+WORKSPACE_OUTPUTS = "outputs"
+PUBLISH_DIRS = (WORKSPACE_ARTIFACTS, WORKSPACE_OUTPUTS)
 
 
 def _content_type(path: str) -> str:
@@ -24,6 +36,18 @@ def _content_type(path: str) -> str:
     if guessed:
         return guessed
     return "application/octet-stream"
+
+
+def _publish_path(name: str) -> bool:
+    return any(
+        name == folder or name.startswith(f"{folder}/") for folder in PUBLISH_DIRS
+    )
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def unpack_artifact_tar(data: bytes) -> list[tuple[str, bytes]]:
@@ -40,7 +64,7 @@ def unpack_artifact_tar(data: bytes) -> list[tuple[str, bytes]]:
             parts = Path(name).parts
             if ".." in parts:
                 continue
-            if not name.startswith(f"{WORKSPACE_ARTIFACTS}/"):
+            if not _publish_path(name):
                 continue
             handle = tar.extractfile(info)
             if handle is None:
@@ -49,16 +73,39 @@ def unpack_artifact_tar(data: bytes) -> list[tuple[str, bytes]]:
     return files
 
 
+def unpack_workspace_tar(data: bytes, dest: Path) -> None:
+    if not data:
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r") as tar:
+        for info in tar.getmembers():
+            if not info.isfile():
+                continue
+            name = info.name
+            if name.startswith("./"):
+                name = name[2:]
+            parts = Path(name).parts
+            if not parts or ".." in parts or parts[0] == ".apipi":
+                continue
+            handle = tar.extractfile(info)
+            if handle is None:
+                continue
+            target = dest / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(handle.read())
+
+
 def read_workspace_artifacts(workspace: Path) -> list[tuple[str, bytes]]:
-    root = workspace / WORKSPACE_ARTIFACTS
-    if not root.is_dir():
-        return []
     files: list[tuple[str, bytes]] = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
+    for folder in PUBLISH_DIRS:
+        root = workspace / folder
+        if not root.is_dir():
             continue
-        rel = path.relative_to(workspace).as_posix()
-        files.append((rel, path.read_bytes()))
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(workspace).as_posix()
+            files.append((rel, path.read_bytes()))
     return files
 
 
@@ -98,46 +145,86 @@ async def _persist_files(
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     files: list[tuple[str, bytes]],
+    *,
+    turn_id: uuid.UUID | None = None,
 ) -> None:
+    existing = await list_artifacts(db, tenant_id, session_id)
+    latest: dict[str, bytes] = {}
+    if existing:
+        for artifact in existing:
+            blob = artifact_blob_path(settings, tenant_id, session_id, artifact.id)
+            if blob.is_file():
+                latest[artifact.path] = blob.read_bytes()
     for rel, data in files:
+        if latest.get(rel) == data:
+            continue
         artifact = await create_artifact(
             db,
             tenant_id,
             session_id,
             path=rel,
             content_type=_content_type(rel),
+            turn_id=turn_id,
         )
         dest = artifact_blob_path(settings, tenant_id, session_id, artifact.id)
         dest.write_bytes(data)
+        latest[rel] = data
 
 
 async def _harvest_self_hosted(
     env_hub: EnvironmentHub, env_id: uuid.UUID
 ) -> list[tuple[str, bytes]]:
-    try:
-        listed = await env_hub.call(env_id, "list", path=WORKSPACE_ARTIFACTS)
-    except (EnvDisconnected, TimeoutError):
-        return []
-    if not listed.get("ok"):
-        return []
-    names = listed.get("names")
-    if not isinstance(names, list):
-        return []
     files: list[tuple[str, bytes]] = []
-    for raw in names:
-        if not isinstance(raw, str) or not raw.startswith(f"{WORKSPACE_ARTIFACTS}/"):
-            continue
+    for folder in PUBLISH_DIRS:
         try:
-            result = await env_hub.call(env_id, "read", path=raw)
+            listed = await env_hub.call(env_id, "list", path=folder)
         except (EnvDisconnected, TimeoutError):
             continue
-        if not result.get("ok"):
+        if not listed.get("ok"):
             continue
-        content = result.get("content")
-        if not isinstance(content, str):
+        names = listed.get("names")
+        if not isinstance(names, list):
             continue
-        files.append((raw, content.encode()))
+        for raw in names:
+            if not isinstance(raw, str) or not _publish_path(raw):
+                continue
+            try:
+                result = await env_hub.call(env_id, "read", path=raw)
+            except (EnvDisconnected, TimeoutError):
+                continue
+            if not result.get("ok"):
+                continue
+            content = result.get("content")
+            if not isinstance(content, str):
+                continue
+            files.append((raw, content.encode()))
     return files
+
+
+async def _hosted_files(
+    proc: PiProc | None,
+    dest: Path | None,
+    *,
+    sync_workspace: bool,
+) -> list[tuple[str, bytes]]:
+    if (
+        sync_workspace
+        and proc is not None
+        and proc.pull_workspace is not None
+        and dest is not None
+    ):
+        with contextlib.suppress(OSError, TimeoutError, ConfigError):
+            unpack_workspace_tar(await proc.pull_workspace(), dest)
+    if proc is not None and proc.pull_artifacts is not None:
+        try:
+            return unpack_artifact_tar(await proc.pull_artifacts())
+        except (OSError, TimeoutError, ConfigError):
+            if dest is None:
+                return []
+            return read_workspace_artifacts(dest)
+    if dest is None:
+        return []
+    return read_workspace_artifacts(dest)
 
 
 async def harvest_session(
@@ -146,6 +233,9 @@ async def harvest_session(
     session_id: uuid.UUID,
     proc: PiProc | None,
     env_hub: EnvironmentHub | None = None,
+    *,
+    turn_id: uuid.UUID | None = None,
+    sync_workspace: bool = False,
 ) -> SessionRow | None:
     row = await get_session_by_id(db, session_id)
     if row is None:
@@ -157,17 +247,53 @@ async def harvest_session(
         if isinstance(env_id_raw, str):
             files = await _harvest_self_hosted(env_hub, uuid.UUID(env_id_raw))
     elif env_type == "openai_hosted":
-        if proc is not None and proc.pull_artifacts is not None:
-            data = await proc.pull_artifacts()
-            files = unpack_artifact_tar(data)
-        else:
-            directory = row.environment.get("directory")
-            if isinstance(directory, str) and directory:
-                files = read_workspace_artifacts(Path(directory))
-    if files:
-        await _persist_files(db, settings, row.tenant_id, row.id, files)
-    if env_type == "openai_hosted":
         directory = row.environment.get("directory")
-        if isinstance(directory, str) and directory:
-            wipe_workspace(Path(directory))
+        dest = Path(directory) if isinstance(directory, str) and directory else None
+        files = await _hosted_files(proc, dest, sync_workspace=sync_workspace)
+    if files:
+        await _persist_files(
+            db, settings, row.tenant_id, row.id, files, turn_id=turn_id
+        )
     return row
+
+
+async def reap_workspaces(
+    settings: Settings,
+    store: Store,
+    pool: PiPool,
+    *,
+    now: datetime | None = None,
+) -> None:
+    current = _utc(now or utc_now())
+    ttl: timedelta = settings.workspace_ttl
+    root = sessions_root(settings)
+    for tenant_dir in root.iterdir():
+        if not tenant_dir.is_dir() or tenant_dir.name.startswith("."):
+            continue
+        try:
+            tenant_id = uuid.UUID(tenant_dir.name)
+        except ValueError:
+            continue
+        for session_dir in tenant_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            try:
+                session_id = uuid.UUID(session_dir.name)
+            except ValueError:
+                continue
+            if pool.alive(session_id):
+                continue
+            async with store.session() as db:
+                row = await get_session(db, tenant_id, session_id)
+            if row is None:
+                wipe_workspace(session_dir)
+                continue
+            if current - _utc(row.updated_at) >= ttl:
+                wipe_workspace(session_dir)
+
+
+async def reap_workspace_loop(settings: Settings, store: Store, pool: PiPool) -> None:
+    interval = min(1.0, max(0.02, settings.workspace_ttl.total_seconds() / 5))
+    while True:
+        await asyncio.sleep(interval)
+        await reap_workspaces(settings, store, pool)

@@ -152,9 +152,11 @@ before that POST if you want the follow-up as SSE.
 
 ## 4. Clean up
 
-Keep the session for more tasks, or delete it when you are done. Save
-any files you need first. The workspace is scratch after Pi stops;
-published files are artifacts. See [Concepts](concepts.md).
+Keep the session for more tasks, or delete it when you are done. The
+workspace lasts until `APIPI_WORKSPACE_TTL` after idle Pi has stopped,
+or until you delete the session. Files under `artifacts/` and
+`outputs/` are published when a turn completes. See
+[Concepts](concepts.md).
 
 Replace the illustrative session id with the id you saved.
 

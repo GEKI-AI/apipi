@@ -19,7 +19,7 @@ from apipi.errors import ApiError, gone, not_implemented
 from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.otel import set_span, start_span
-from apipi.pi.artifacts import wipe_artifact_store
+from apipi.pi.artifacts import wipe_artifact_store, wipe_workspace
 from apipi.pi.dirs import artifact_blob_path, session_workspace
 from apipi.pi.pool import PiPool
 from apipi.request_id import request_id_of
@@ -145,6 +145,7 @@ def artifact_body(artifact: Artifact) -> dict[str, Any]:
     return {
         "id": str(artifact.id),
         "session_id": str(artifact.session_id),
+        "turn_id": str(artifact.turn_id) if artifact.turn_id is not None else None,
         "path": artifact.path,
         "content_type": artifact.content_type,
         "created_at": artifact.created_at.isoformat(),
@@ -353,6 +354,8 @@ async def create_agent_session(
                 tracing=tracing,
                 turn_timeout=request.app.state.settings.turn_timeout,
                 env_hub=request.app.state.env_hub,
+                settings=request.app.state.settings,
+                pool=request.app.state.pi_pool,
             )
         else:
             async with store.session() as db:
@@ -424,6 +427,7 @@ async def delete_agent_session(
     if row is None:
         not_found()
     env_id_raw = row.environment.get("id")
+    directory = row.environment.get("directory")
     deleted = await delete_session(db, tenant.id, session_id)
     if not deleted:
         not_found()
@@ -432,6 +436,8 @@ async def delete_agent_session(
         await env_hub.close(uuid.UUID(env_id_raw))
     pool: PiPool = request.app.state.pi_pool
     await pool.kill(session_id)
+    if isinstance(directory, str) and directory:
+        wipe_workspace(Path(directory))
     wipe_artifact_store(request.app.state.settings, tenant.id, session_id)
     request.app.state.mcp_http.pop(session_id, None)
     stdio = request.app.state.mcp_stdio.pop(session_id, None)
@@ -515,6 +521,8 @@ async def post_session_event(
                 tracing=tracing,
                 turn_timeout=request.app.state.settings.turn_timeout,
                 env_hub=request.app.state.env_hub,
+                settings=request.app.state.settings,
+                pool=request.app.state.pi_pool,
             )
     else:
         with start_span(
@@ -538,6 +546,8 @@ async def post_session_event(
                 tracing=tracing,
                 turn_timeout=request.app.state.settings.turn_timeout,
                 env_hub=request.app.state.env_hub,
+                settings=request.app.state.settings,
+                pool=request.app.state.pi_pool,
             )
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)

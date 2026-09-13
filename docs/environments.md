@@ -31,17 +31,17 @@ In `jail`, that folder is bind-mounted into the namespace jail and is
 Pi's cwd. The rest of `APIPI_SESSIONS_DIR` is a tmpfs, so other
 session directories are not readable. In `microvm`, that folder is
 packed into a workspace drive at boot, unpacked onto a guest tmpfs,
-and is the guest cwd. Writes stay in the guest. They are not copied
+and is the guest cwd. Before the guest exits, those writes are pulled
 back to the host folder.
 
-Session rows live in Postgres. Environment files are the computer and
-are scratch for `openai_hosted`. Artifact metadata is in Postgres;
-artifact bytes are copied to the gateway host when Pi stops. See
-[run modes](run-modes.md#storage).
+Session rows live in Postgres. Environment files are the computer.
+The `openai_hosted` directory lasts across Pi stop until
+`APIPI_WORKSPACE_TTL` or session delete. Artifact metadata is in
+Postgres; artifact bytes are copied to the gateway host when a turn
+completes. See [run modes](run-modes.md#storage).
 
 There is no runner socket. The directory is created when the session is
-created. File tools (read, write, edit, bash) run against that folder
-while Pi is alive.
+created. File tools (read, write, edit, bash) run against that folder.
 
 ## `none`
 

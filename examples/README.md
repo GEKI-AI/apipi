@@ -119,6 +119,7 @@ That binds `0.0.0.0:8100` and proxies `/v1` to the gateway. Open
 http://localhost:8100 . If `OPENAI_API_KEY` is unset, the proxy sends
 `dev-token`.
 
-Artifact bytes exist after Pi stops and copies `artifacts/` into the
-host store. An empty list during a live turn is expected. Idle TTL is
-`APIPI_IDLE_TTL` (default 15 minutes).
+Artifact bytes exist after a turn completes. Files under `artifacts/`
+and `outputs/` are copied into the host store then. Idle Pi TTL is
+`APIPI_IDLE_TTL` (default 15 minutes). The workspace lasts until
+`APIPI_WORKSPACE_TTL` (default 1 hour).

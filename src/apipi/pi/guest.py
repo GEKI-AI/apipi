@@ -7,9 +7,12 @@ import subprocess
 import sys
 import tarfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 ARTIFACT_PORT = 53
+WORKSPACE_PORT = 54
+PUBLISH_DIRS = ("artifacts", "outputs")
 
 
 def _start_mcp() -> None:
@@ -45,16 +48,33 @@ def _pi_args() -> list[str]:
 
 
 def artifacts_tar_bytes(root: Path) -> bytes:
-    src = root / "artifacts"
-    if not src.is_dir():
-        return b""
     buf = io.BytesIO()
+    added = False
     with tarfile.open(fileobj=buf, mode="w") as tar:
-        tar.add(str(src), arcname="artifacts")
+        for folder in PUBLISH_DIRS:
+            src = root / folder
+            if src.is_dir():
+                tar.add(str(src), arcname=folder)
+                added = True
+    if not added:
+        return b""
     return buf.getvalue()
 
 
-def _serve_artifacts(port: int) -> None:
+def workspace_tar_bytes(root: Path) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if rel == ".apipi" or rel.startswith(".apipi/"):
+                continue
+            tar.add(str(path), arcname=rel)
+    return buf.getvalue()
+
+
+def _serve_tar(port: int, build: Callable[[Path], bytes]) -> None:
     sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((socket.VMADDR_CID_ANY, port))
@@ -63,11 +83,19 @@ def _serve_artifacts(port: int) -> None:
     while True:
         conn, _ = sock.accept()
         try:
-            conn.sendall(artifacts_tar_bytes(root))
+            conn.sendall(build(root))
         except OSError:
             pass
         finally:
             conn.close()
+
+
+def _serve_artifacts(port: int) -> None:
+    _serve_tar(port, artifacts_tar_bytes)
+
+
+def _serve_workspace(port: int) -> None:
+    _serve_tar(port, workspace_tar_bytes)
 
 
 def _serve_rpc(args: list[str], port: int) -> None:
@@ -122,6 +150,9 @@ def main(argv: list[str] | None = None) -> None:
     _start_mcp()
     threading.Thread(
         target=_serve_artifacts, args=(ARTIFACT_PORT,), daemon=True
+    ).start()
+    threading.Thread(
+        target=_serve_workspace, args=(WORKSPACE_PORT,), daemon=True
     ).start()
     _serve_rpc(_pi_args(), port)
 

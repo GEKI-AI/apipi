@@ -7,12 +7,15 @@ from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apipi.config import Settings
 from apipi.env.computer import Computer, bind_computer, computer_item_events
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import ApiError
 from apipi.metrics import Metrics, observe_turn
 from apipi.otel import Tracing, set_span, start_span
-from apipi.pi.artifacts import ensure_openai_workspace
+from apipi.pi.artifacts import ensure_openai_workspace, harvest_session
+from apipi.pi.pool import PiPool
+from apipi.pi.proc import PiProc
 from apipi.skills import discover_skill_dirs
 from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
@@ -549,6 +552,9 @@ async def _complete_turn(
     request_id: str | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
+    settings: Settings | None = None,
+    proc: PiProc | None = None,
+    env_hub: EnvironmentHub | None = None,
 ) -> None:
     await _emit_item(
         db,
@@ -576,6 +582,8 @@ async def _complete_turn(
         metrics=metrics,
         tracing=tracing,
     )
+    if settings is not None:
+        await harvest_session(db, settings, session_id, proc, env_hub, turn_id=turn_id)
     await persist_event(
         db,
         hub,
@@ -715,6 +723,8 @@ async def run_turn(
     tracing: Tracing | None = None,
     turn_timeout: timedelta | None = None,
     env_hub: EnvironmentHub | None = None,
+    settings: Settings | None = None,
+    pool: PiPool | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
     try:
@@ -879,6 +889,9 @@ async def run_turn(
                     request_id=request_id,
                     metrics=metrics,
                     tracing=tracing,
+                    settings=settings,
+                    proc=pool.peek(session_id) if pool is not None else None,
+                    env_hub=env_hub,
                 )
     finally:
         hub.unwatch_turn(session_id)
@@ -903,6 +916,8 @@ async def continue_turn(
     tracing: Tracing | None = None,
     turn_timeout: timedelta | None = None,
     env_hub: EnvironmentHub | None = None,
+    settings: Settings | None = None,
+    pool: PiPool | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -1076,4 +1091,7 @@ async def continue_turn(
                 request_id=request_id,
                 metrics=metrics,
                 tracing=tracing,
+                settings=settings,
+                proc=pool.peek(session_id) if pool is not None else None,
+                env_hub=env_hub,
             )

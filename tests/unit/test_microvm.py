@@ -14,7 +14,8 @@ from apipi.config import (
     require_run_mode,
 )
 from apipi.mcp.stdio import McpStdioServer
-from apipi.pi.guest import _pi_args, _start_mcp
+from apipi.pi.artifacts import unpack_workspace_tar
+from apipi.pi.guest import _pi_args, _start_mcp, workspace_tar_bytes
 from apipi.pi.microvm import (
     BOOT_ARGS,
     GUEST_WORKSPACE,
@@ -226,6 +227,31 @@ def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
     assert net.guest_ip in net_text
     assert net.host_ip in net_text
     assert "127.0.0.1" not in net_text
+
+
+def test_guest_workspace_pull_is_source_for_next_pack(tmp_path: Path) -> None:
+    guest = tmp_path / "guest"
+    guest.mkdir()
+    (guest / "keep.txt").write_text("from-guest")
+    (guest / ".apipi").mkdir()
+    (guest / ".apipi" / "env").write_text("secret")
+    host = tmp_path / "session"
+    unpack_workspace_tar(workspace_tar_bytes(guest), host)
+    dest = tmp_path / "workspace.tar"
+    write_workspace_image(
+        dest,
+        cwd=str(host),
+        env={},
+        pi_args=["pi", "--mode", "rpc", "--no-session"],
+    )
+    with tarfile.open(dest, mode="r") as tar:
+        names = tar.getnames()
+        member = next(name for name in names if name.endswith("keep.txt"))
+        keep = tar.extractfile(member)
+        assert keep is not None
+        assert keep.read() == b"from-guest"
+    assert (host / "keep.txt").read_text() == "from-guest"
+    assert not (host / ".apipi").exists()
 
 
 def test_tap_setup_nat_without_host_loopback() -> None:
