@@ -4,7 +4,8 @@ The gateway reads settings from environment variables, an optional
 `.env` file, and an optional TOML file. Environment variables win.
 `.env` wins over TOML. Defaults apply when nothing is set. Install the
 process first ([Install](install.md)). Call it with
-[Using the API](using.md).
+[Using the API](using.md). How to size `max_sessions` and guest RAM
+is in [production](production.md).
 
 This is the same model pydantic-settings uses in other Python services.
 systemd `Environment=` / `EnvironmentFile=` and Kubernetes env work
@@ -136,7 +137,8 @@ set `run_mode` to `microvm` and size the rest to the host. Raise
 `microvm_mem_mib` when you enable heavy stdio MCP such as Playwright.
 Do not add browser tiers. On a shared node, set
 `max_sessions_per_tenant` lower than `max_sessions` (for example `8`).
-Size `max_sessions` to host RAM divided by `microvm_mem_mib`. Keep
+Size `max_sessions` to host RAM divided by `microvm_mem_mib`. A worked
+example is in [production](production.md#sizing). Keep
 `max_workspace_bytes` at `1GiB` and `max_artifact_bytes` at `512MiB`
 unless the computer must hold more. Microvm TAP egress is allowlisted
 and capped at `50` Mbit by default. Add extra hosts with

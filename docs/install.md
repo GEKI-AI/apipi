@@ -22,7 +22,8 @@ fallback when KVM cannot run; it needs `bwrap`, `pasta`, and cgroup
 v2. `host` is for local tests. If the selected mode cannot start, the
 process exits before it binds HTTP. There is no silent fallback.
 Packages, systemd, Docker, and when to use each mode are in
-[run modes](run-modes.md).
+[run modes](run-modes.md). Host sizing, scale-out, and drain are in
+[production](production.md).
 
 ## Install
 
@@ -99,7 +100,8 @@ rate-limited by default. Set `APIPI_MICROVM_KERNEL` and
 
 One `apipi serve` is one process. The Pi pool lives in that process.
 Do not run uvicorn workers in front of it. Several processes need
-sticky routing. See [multiple nodes](scale.md).
+sticky routing. See [production](production.md) and
+[multiple nodes](scale.md).
 
 ## systemd
 

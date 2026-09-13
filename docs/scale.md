@@ -1,5 +1,8 @@
 # Multiple nodes
 
+Host sizing, overprovision, and drain are in
+[production](production.md). This page is sticky routing.
+
 One `apipi serve` process owns its live Pi processes, local
 `openai_hosted` directories, artifact bytes, SSE subscribers, and
 `self_hosted` runner sockets. Those are in memory or on that host's

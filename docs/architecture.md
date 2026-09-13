@@ -77,7 +77,8 @@ systemd, Docker, and storage are in [run modes](run-modes.md).
 | `microvm` | KVM guest. Own kernel. Production when a computer is in use. | Implemented when `/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, `iptables`, and `tc` can start, and a throwaway guest boots. Otherwise the process exits. |
 
 Production is systemd on the host. The Compose file starts Postgres
-only. Several `apipi serve` processes need sticky routing because Pi
+only. Host sizing and scale-out are in [production](production.md).
+Several `apipi serve` processes need sticky routing because Pi
 and local files live on one node. See [multiple nodes](scale.md).
 
 ### Default (one server)
