@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated, Any, Self
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,7 @@ from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.otel import set_span, start_span
 from apipi.pi.artifacts import wipe_artifact_store, wipe_workspace
-from apipi.pi.dirs import artifact_blob_path, session_workspace
+from apipi.pi.dirs import session_workspace
 from apipi.pi.pool import PiPool
 from apipi.request_id import request_id_of
 from apipi.runtime import (
@@ -270,12 +270,14 @@ async def create_agent_session(
                 raw_tools = [
                     tool.model_dump(exclude_none=True) for tool in body.agent.tools
                 ]
+        key_id = getattr(request.state, "key_id", "")
         row = await create_session(
             db,
             tenant.id,
             agent_id=agent_id,
             environment=environment,
             metadata=body.metadata,
+            key_id=key_id if isinstance(key_id, str) else "",
         )
         if environment.get("type") == "openai_hosted":
             directory = session_workspace(request.app.state.settings, tenant.id, row.id)
@@ -451,7 +453,9 @@ async def delete_agent_session(
     await pool.kill(session_id)
     if isinstance(directory, str) and directory:
         wipe_workspace(Path(directory))
-    wipe_artifact_store(request.app.state.settings, tenant.id, session_id)
+    await wipe_artifact_store(
+        request.app.state.blobs, tenant.id, row.key_id, session_id
+    )
     request.app.state.mcp_http.pop(session_id, None)
     stdio = request.app.state.mcp_stdio.pop(session_id, None)
     if stdio:
@@ -677,15 +681,17 @@ async def read_session_artifact_content(
     artifact = await get_session_artifact(db, tenant.id, session_id, artifact_id)
     if artifact is None:
         not_found()
-    path = artifact_blob_path(
-        request.app.state.settings, tenant.id, session_id, artifact_id
+    data = await request.app.state.blobs.get(
+        tenant.id, artifact.key_id, session_id, artifact_id
     )
-    if not path.is_file():
+    if data is None:
         gone()
-    return FileResponse(
-        path,
+    return Response(
+        content=data,
         media_type=artifact.content_type,
-        filename=Path(artifact.path).name,
+        headers={
+            "Content-Disposition": f'attachment; filename="{Path(artifact.path).name}"'
+        },
     )
 
 
@@ -703,11 +709,9 @@ async def delete_agent_session_artifact(
     artifact = await get_session_artifact(db, tenant.id, session_id, artifact_id)
     if artifact is None:
         not_found()
-    blob = artifact_blob_path(
-        request.app.state.settings, tenant.id, session_id, artifact_id
+    await request.app.state.blobs.delete(
+        tenant.id, artifact.key_id, session_id, artifact_id
     )
-    if blob.is_file():
-        blob.unlink()
     deleted = await delete_session_artifact(db, tenant.id, session_id, artifact_id)
     if deleted is None:
         not_found()

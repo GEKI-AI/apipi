@@ -98,6 +98,7 @@ class SessionRow(Base):
     required_actions: Mapped[list[Any]] = mapped_column(
         JSONType, default=list, nullable=False
     )
+    key_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -282,6 +283,8 @@ class Artifact(Base):
     turn_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     path: Mapped[str] = mapped_column(String, nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    key_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

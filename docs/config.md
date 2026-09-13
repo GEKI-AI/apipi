@@ -60,7 +60,13 @@ secrets. Do not commit `.env`.
 | `APIPI_DB_POOL_SIZE` | `db_pool_size` | `5` | SQLAlchemy pool size. |
 | `APIPI_MAX_REQUEST_BYTES` | `max_request_bytes` | `1MiB` | Reject larger request bodies with `413` and code `payload_too_large`. |
 | `APIPI_MAX_WORKSPACE_BYTES` | `max_workspace_bytes` | `1GiB` | Size of one `openai_hosted` session directory. An oversized microvm pull is not unpacked. Over the cap, harvest emits `agent.session.error` with code `workspace_too_large`. |
-| `APIPI_MAX_ARTIFACT_BYTES` | `max_artifact_bytes` | `512MiB` | Host artifact store per session. Publishing more is refused with code `artifact_too_large`. |
+| `APIPI_MAX_ARTIFACT_BYTES` | `max_artifact_bytes` | `512MiB` | Published artifact bytes per session. Publishing more is refused with code `artifact_too_large`. |
+| `APIPI_ARTIFACT_STORE` | `artifact_store` | `local` | `local` (files under `APIPI_SESSIONS_DIR/.artifacts`) or `s3` (S3-compatible object storage). |
+| `APIPI_S3_BUCKET` | `s3_bucket` | required if s3 | Bucket. |
+| `APIPI_S3_ENDPOINT` | `s3_endpoint` | unset | Base URL for S3-compatible APIs (Hetzner, MinIO, R2). Unset talks to AWS. |
+| `APIPI_S3_REGION` | `s3_region` | `us-east-1` | Region (`hel1`, `fsn1`, `nbg1` on Hetzner). |
+| `APIPI_S3_PREFIX` | `s3_prefix` | `apipi/artifacts` | Key prefix. Objects are `{prefix}/{tenant_id}/{key_id}/{session_id}/{artifact_id}`. |
+| `APIPI_S3_ADDRESSING` | `s3_addressing` | `auto` | `auto` \| `path` \| `virtual`. `auto` uses path-style when `s3_endpoint` is set. |
 | `OPENAI_BASE_URL` | `model_base_url` | unset | Model host passed to Pi. Not the gateway URL. |
 | `OPENAI_API_KEY` | `model_api_key` | unset | Model key passed to Pi. |
 | `APIPI_METRICS` | `metrics` | off | Prometheus text at `/metrics` when on. No bearer. |
@@ -153,6 +159,27 @@ artifact caps are enforced when the host unpacks or publishes. Host
 and jail files that are already on disk stay until workspace TTL.
 `self_hosted` runner disk is not capped; bytes published onto the
 gateway still count toward `max_artifact_bytes`.
+
+Artifact metadata stays in Postgres. Bytes default to local files.
+Set `artifact_store = "s3"` for any S3-compatible API. Put access keys
+in the process environment (`AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`), not in TOML. Install the extra with
+`uv sync --extra s3`. When an endpoint is set, the client uses
+path-style addressing and S3 checksum headers only when required, so
+Hetzner, MinIO, and R2 work.
+
+```
+APIPI_ARTIFACT_STORE=s3
+APIPI_S3_BUCKET=apipi-artifacts
+APIPI_S3_ENDPOINT=https://hel1.your-objectstorage.com
+APIPI_S3_REGION=hel1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+The live `openai_hosted` workspace stays on the node. Published
+artifact content can be read from any gateway process that shares the
+bucket.
 
 ## TOML example
 

@@ -134,13 +134,15 @@ Item types: `message`, `function_call`, `mcp_call`,
 | `DELETE` | `/v1/agents/sessions/{session_id}/artifacts/{id}` |
 
 When a turn completes, files under `artifacts/` and `outputs/` on the
-computer are copied into the host store. Copies are immutable and
+computer are copied into the artifact store. Copies are immutable and
 include `turn_id`. A later turn that writes the same path publishes
 another artifact. `GET` content works as soon as the turn has
 completed, even if Pi is still alive. Harvest on Pi stop is a safety
 net for files written after the last completed turn. `410` if nothing
-was published. `DELETE` removes the metadata and the stored file. The
-live file on the computer stays. See [run modes](run-modes.md#storage).
+was published. `DELETE` removes the metadata and the stored bytes. The
+live file on the computer stays. Local disk is the default store. S3
+is optional. See [run modes](run-modes.md#storage) and
+[config](config.md).
 
 `GET` turn may include `usage` (prompt, completion, cache read/write,
 total). Tokens only. See [usage](usage.md).

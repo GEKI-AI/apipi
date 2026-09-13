@@ -170,8 +170,9 @@ See [environments](environments.md).
 
 Postgres holds tenants, agents, sessions, turns, items, the event
 log, the turn log (usage tokens and details, never prompt text),
-environment state, and artifact metadata. Artifact bytes sit on the
-gateway host after a turn completes. Not API keys. Prometheus and
+environment state, and artifact metadata. Artifact bytes sit in the
+configured artifact store after a turn completes: local files by
+default, or S3-compatible object storage. Not API keys. Prometheus and
 OpenTelemetry are exports. See [usage](usage.md) and
 [run modes](run-modes.md#storage).
 
@@ -188,9 +189,10 @@ stays. Resume from the event log. Live processes are capped by
 `APIPI_MAX_SESSIONS` and `APIPI_MAX_SESSIONS_PER_TENANT`. Workspace
 and artifact bytes are capped per session. See [config](config.md).
 
-Cross-tenant IDs return `404`, not `403`. Live Pi, the local
-workspace, and artifact bytes stay on the node that created the
-session until that process stops. Postgres is shared across nodes.
+Cross-tenant IDs return `404`, not `403`. Live Pi and the local
+workspace stay on the node that created the session. Published
+artifact bytes follow `APIPI_ARTIFACT_STORE`. Postgres is shared
+across nodes.
 
 
 ## Tools

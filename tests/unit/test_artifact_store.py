@@ -89,6 +89,7 @@ def test_settings_artifact_blob_path(tmp_path: Path) -> None:
     tenant = uuid.uuid4()
     session = uuid.uuid4()
     artifact = uuid.uuid4()
-    path = artifact_blob_path(settings, tenant, session, artifact)
+    path = artifact_blob_path(settings, tenant, session, artifact, key_id="user-a")
     assert path.parent.is_dir()
     assert path.parent.name == str(session)
+    assert path.parent.parent.name == "user-a"

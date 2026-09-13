@@ -20,6 +20,8 @@ from pydantic_settings import (
 
 RunMode = Literal["host", "jail", "microvm"]
 LogLevel = Literal["debug", "info", "warning", "error", "critical"]
+ArtifactStore = Literal["local", "s3"]
+S3Addressing = Literal["auto", "path", "virtual"]
 IMPLEMENTED_RUN_MODES: frozenset[str] = frozenset({"host", "jail", "microvm"})
 
 HOST_MODE_WARNING = "APIPI_RUN_MODE=host is not suited for production"
@@ -298,11 +300,39 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("APIPI_MAX_ARTIFACT_BYTES", "max_artifact_bytes"),
     )
+    artifact_store: ArtifactStore = Field(
+        default="local",
+        validation_alias=AliasChoices("APIPI_ARTIFACT_STORE", "artifact_store"),
+    )
+    s3_bucket: OtelEndpoint = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_S3_BUCKET", "s3_bucket"),
+    )
+    s3_region: str = Field(
+        default="us-east-1",
+        validation_alias=AliasChoices("APIPI_S3_REGION", "s3_region"),
+    )
+    s3_prefix: str = Field(
+        default="apipi/artifacts",
+        validation_alias=AliasChoices("APIPI_S3_PREFIX", "s3_prefix"),
+    )
+    s3_endpoint: OtelEndpoint = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_S3_ENDPOINT", "s3_endpoint"),
+    )
+    s3_addressing: S3Addressing = Field(
+        default="auto",
+        validation_alias=AliasChoices("APIPI_S3_ADDRESSING", "s3_addressing"),
+    )
 
     @model_validator(mode="after")
     def run_mode_known(self) -> Self:
         if self.run_mode not in {"host", "jail", "microvm"}:
             raise ValueError("APIPI_RUN_MODE must be host, jail, or microvm")
+        if self.artifact_store == "s3" and not (
+            self.s3_bucket and self.s3_bucket.strip()
+        ):
+            raise ValueError("APIPI_S3_BUCKET is required")
         return self
 
 
@@ -387,6 +417,9 @@ def load_settings(*, config_path: str | None = None) -> Settings:
 def _settings_message(exc: ValidationError) -> str:
     for error in exc.errors():
         loc = error.get("loc", ())
+        msg = str(error.get("msg", ""))
+        if "APIPI_S3_BUCKET" in msg:
+            return "APIPI_S3_BUCKET is required"
         if "database_url" in loc:
             return "DATABASE_URL is required"
         if "run_mode" in loc:
@@ -429,6 +462,12 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_MICROVM_EGRESS_ALLOWLIST must be on or off"
         if "microvm_egress_mbit" in loc or "APIPI_MICROVM_EGRESS_MBIT" in loc:
             return "APIPI_MICROVM_EGRESS_MBIT must be at least 1"
+        if "artifact_store" in loc:
+            return "APIPI_ARTIFACT_STORE must be local or s3"
+        if "s3_bucket" in loc or "APIPI_S3_BUCKET" in loc:
+            return "APIPI_S3_BUCKET is required"
+        if "s3_addressing" in loc:
+            return "APIPI_S3_ADDRESSING must be auto, path, or virtual"
     return "invalid configuration"
 
 

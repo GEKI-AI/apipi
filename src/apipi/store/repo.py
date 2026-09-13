@@ -123,6 +123,7 @@ async def create_session(
     status: str = "idle",
     environment: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
+    key_id: str = "",
 ) -> SessionRow:
     row = SessionRow(
         tenant_id=tenant_id,
@@ -130,6 +131,7 @@ async def create_session(
         status=status,
         environment=environment if environment is not None else {},
         metadata_json=metadata if metadata is not None else {},
+        key_id=key_id,
     )
     db.add(row)
     await db.flush()
@@ -357,6 +359,8 @@ async def create_artifact(
     path: str,
     content_type: str = "application/octet-stream",
     turn_id: uuid.UUID | None = None,
+    key_id: str = "",
+    byte_size: int = 0,
 ) -> Artifact:
     artifact = Artifact(
         tenant_id=tenant_id,
@@ -364,6 +368,8 @@ async def create_artifact(
         path=path,
         content_type=content_type,
         turn_id=turn_id,
+        key_id=key_id,
+        byte_size=byte_size,
     )
     db.add(artifact)
     await db.flush()
