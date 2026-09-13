@@ -32,6 +32,8 @@ theme:
         icon: material/weather-sunny
         name: Light mode
   features:
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
     - navigation.top
     - toc.follow
@@ -40,7 +42,6 @@ theme:
 
 watch:
   - docs
-  - CONSTITUTION.md
   - AGENTS.md
   - CONTRIBUTING.md
 
@@ -67,30 +68,20 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Install: install.md
-  - Run modes: run-modes.md
-  - Configuration: config.md
-  - Quickstart: quickstart.md
-  - API: api.md
-  - Auth: auth.md
-  - Environments: environments.md
-  - Tools and skills: tools.md
-  - Usage: usage.md
-  - Architecture: architecture.md
+  - Get started:
+      - Install: install.md
+      - Quickstart: quickstart.md
+      - Configuration: config.md
+      - Run modes: run-modes.md
+  - Reference:
+      - API: api.md
+      - Auth: auth.md
+      - Environments: environments.md
+      - Tools and skills: tools.md
+      - Usage: usage.md
+      - How it works: architecture.md
   - Contribute:
-      - How we work: process.md
       - Contributing: contributing.md
-      - Constitution: constitution.md
+      - How we work: process.md
       - Agent rules: agents.md
       - Roadmap: roadmap.md
-      - Decisions:
-          - Index: decisions/index.md
-          - "0001 Python": decisions/0001-python-fastapi.md
-          - "0002 Pi harness": decisions/0002-pi-harness.md
-          - "0003 Postgres": decisions/0003-postgres.md
-          - "0004 One Pi per session": decisions/0004-one-pi-per-session.md
-          - "0005 API is the focus": decisions/0005-api-is-the-focus.md
-          - "0006 Tools, MCP, skills": decisions/0006-tools-mcp-skills.md
-          - "0007 Run modes": decisions/0007-run-modes.md
-          - "0008 Usage": decisions/0008-usage-observability.md
-          - "0009 Pluggable auth": decisions/0009-pluggable-auth.md

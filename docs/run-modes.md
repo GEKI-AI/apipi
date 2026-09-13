@@ -207,14 +207,4 @@ user namespaces, cgroup delegation, TAP devices, and `/dev/kvm` each
 need extra capabilities. A privileged container can be used in a lab.
 It is not equivalent to systemd on the host.
 
-## Tests
-
-GitHub CI installs `bubblewrap` and `passt` and tries cgroup v2
-delegation, then runs `pytest -m "not slow"`. That includes `host` e2e
-and live jail tests when `bwrap`, `pasta`, and cgroup v2 can start.
-If jail still cannot start, those tests skip. That skip is not a
-fallback to `host`. Live microvm boots are local machines with KVM
-only. Those tests skip when `/dev/kvm`, Firecracker, jailer, or guest
-images are missing. Do not add Firecracker to GitHub.
-
 Settings for run mode are in [configuration](config.md).

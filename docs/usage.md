@@ -1,8 +1,7 @@
 # Usage and observability
 
 Tokens now. Dollar cost later. Postgres is the source of truth.
-Prometheus and OpenTelemetry are exports. See
-[0008](decisions/0008-usage-observability.md).
+Prometheus and OpenTelemetry are exports.
 
 Never store prompt or completion text in logs, metrics, or spans. A
 setting that would store those bodies is rejected at startup.
@@ -138,10 +137,3 @@ completion bodies.
 ## Compatibility
 
 `/v1/chat/completions` is not a product surface. We do not serve it.
-
-Compatibility tests are HTTP fixtures against [api.md](api.md). Each
-yes row has a named test. Fast tests do not require the OpenAI SDK. A
-slow SDK smoke against the official OpenAI Python client is local-only
-and skips if the SDK is not installed. That check creates a session
-with an inline agent and `openai_hosted`, the same fields as
-`examples/openai_sdk.py`.

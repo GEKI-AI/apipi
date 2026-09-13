@@ -48,4 +48,4 @@ folder, not OpenAI's cloud.
 `none` turns file tools off. `self_hosted` puts the computer on a
 runner you attach. Remote works with all three run modes.
 
-Operator install, systemd, and storage are in [run modes](../run-modes.md).
+Operator install, systemd, and storage are in [run modes](../../docs/run-modes.md).

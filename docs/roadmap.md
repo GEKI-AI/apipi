@@ -1,10 +1,10 @@
 # Roadmap
 
-Not in the first version. Specs describe what we build now. This file is
-the rest.
+Not in the first version. Product pages under `docs/` describe what we
+build now. This file is the rest.
 
-Do not put "later" sections on the other spec pages. Do not implement
-this file unless the spec for that work has moved.
+Do not put "later" sections on the product pages. Do not implement this
+file unless a product page for that work has moved.
 
 ## Docker sandbox
 

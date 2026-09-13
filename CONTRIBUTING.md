@@ -5,7 +5,7 @@ branch. A pull request without an issue is fine when the work was asked
 directly and is already small.
 
 Read `CONSTITUTION.md`, `docs/process.md`, and `AGENTS.md`. If it is
-not in a spec, it is not in this version.
+not on a product page under `docs/`, it is not in this version.
 
 Agent steps: `.agents/skills/`.
 
@@ -36,8 +36,8 @@ Use as much text as that takes.
 
 | Kind | Include |
 | --- | --- |
-| Request | Goal, what to check when done, spec paths. Known implementation details when you have them. |
-| Bug | What happens, what should happen, spec path, how to reproduce |
+| Request | Goal, what to check when done, product page paths. Known implementation details when you have them. |
+| Bug | What happens, what should happen, product page path, how to reproduce |
 
 Optional: **Details** (how to implement, if already known), **Files**
 (what this change will edit), **Blocked by** (issue that must land
@@ -46,8 +46,8 @@ agents can work at the same time.
 
 Do not list what this is not. Anything not in the goal is out of scope.
 
-Do not file work that lives on `docs/roadmap.md` unless the spec has
-moved.
+Do not file work that lives on `docs/roadmap.md` unless a product page
+has moved.
 
 Keep each change small. One goal, few files. If two changes would edit
 the same file, land shared code first.
