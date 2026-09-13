@@ -46,7 +46,7 @@ which is where Pi itself runs.
 
 | `environment.type` | Files |
 | --- | --- |
-| `openai_hosted` (default) | A local directory next to Pi. OpenAI's field name; not OpenAI's cloud. |
+| `openai_hosted` (default) | A local directory next to Pi. OpenAI's field name; not OpenAI's cloud. `hosted` is the same. |
 | `none` | No filesystem and no shell. |
 | `self_hosted` | An external runner. Tools go over a WebSocket. |
 

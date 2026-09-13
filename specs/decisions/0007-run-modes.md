@@ -5,17 +5,19 @@ Where Pi and stdio MCP run.
 | Mode | Isolation |
 | --- | --- |
 | `host` | None. Child of the gateway. Not for production. |
-| `jail` | Linux namespaces (bubblewrap + cgroup + pasta). Shared kernel. |
-| `microvm` | KVM guest (Firecracker + jailer). Own kernel. |
+| `jail` | Linux namespaces (bubblewrap + cgroup + pasta). Shared kernel. Fallback when microvm cannot run. |
+| `microvm` | KVM guest (Firecracker + jailer). Own kernel. Production when a computer is in use. |
 
-Default: `jail`. Set `APIPI_RUN_MODE`. If the mode cannot start, the
-process exits. No fallback.
+Process default: `jail`. Production SaaS and enterprise set
+`APIPI_RUN_MODE=microvm`. If the mode cannot start, the process exits
+before it binds HTTP. No fallback.
 
 `host`, `jail`, and `microvm` are implemented. `jail` still exits if
-`bwrap`, `pasta`, or cgroup v2 cannot start. `microvm` still exits if
-`/dev/kvm`, `firecracker`, `jailer`, the kernel and rootfs images,
-`ip`, or `iptables` cannot start. Operators without jail tools must
-set `APIPI_RUN_MODE=host`.
+`bwrap`, `pasta`, or cgroup v2 cannot start, or if a throwaway jail
+cannot launch. `microvm` still exits if `/dev/kvm`, `firecracker`,
+`jailer`, the kernel and rootfs images, `ip`, or `iptables` cannot
+start, or if a throwaway guest cannot boot. Operators without jail
+tools must set `APIPI_RUN_MODE=host`.
 
 `jail` uses pasta so Pi can reach the model URL and HTTP MCP with no
 host loopback to Postgres. Other session directories under
@@ -25,11 +27,16 @@ mode falls back to the other.
 
 `host` logs a warning: not suited for production.
 
-`jail` is for self-host and internal multi-tenant use. Tenants must
-not write the host, hit Postgres on loopback, or read each other's
-session directories. The jail still shares the host kernel and the
-gateway UID, so it does not protect the host from a hostile user.
-`microvm` does (hardware virt). Still not a full QEMU PC.
+`jail` is for lab, CI, and hosts that cannot run Firecracker (no KVM,
+nested Docker, an uncontrolled VM). Shared kernel is not enough for
+multi-tenant SaaS or untrusted enterprise workloads. `microvm` is the
+production isolation when a computer is in use. It protects the host
+from a hostile session (hardware virt). Still not a full QEMU PC.
+
+When the computer is local (`openai_hosted` or the `hosted` alias), Pi
+and the session files share one jail or guest. Do not split them. The
+only supported split is `self_hosted`: Pi stays in the run mode, and
+the runner is elsewhere. The customer must sandbox the runner.
 
 Production is systemd on the host. Docker Compose starts Postgres
 only. Nested jail or microvm inside a container is not the production
@@ -43,9 +50,10 @@ store when a turn completes.
 
 ## Same server (default)
 
-The intended same-server default is Pi in `jail`, files in a session
-directory next to Pi. That is `environment.openai_hosted` — a local
-folder, not OpenAI's cloud.
+The intended same-server production path is Pi in `microvm`, files in
+a session directory next to Pi. That is `environment.openai_hosted` —
+a local folder, not OpenAI's cloud. `hosted` is an alias for the same
+folder.
 
 `none` turns file tools off. `self_hosted` puts the computer on a
 runner you attach. Remote works with all three run modes.

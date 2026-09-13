@@ -45,7 +45,8 @@ Pi CLI (`pi --mode rpc`) on `PATH`.
 
 ## Run
 
-The configured default run mode is `jail`. That starts Pi in a Linux
+Production run mode is `microvm`. The process default is `jail` so a
+machine without KVM can still start. `jail` starts Pi in a Linux
 namespace jail when `bwrap`, `pasta`, and cgroup v2 are present:
 
 ```

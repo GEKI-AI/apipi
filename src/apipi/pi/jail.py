@@ -186,6 +186,41 @@ def inner_main(argv: list[str] | None = None) -> None:
     os.execvpe(args[0], args, os.environ)
 
 
+async def probe_jail(settings: Settings) -> None:
+    require_jail()
+    bwrap, pasta = jail_binaries()
+    argv = jail_argv(
+        ["/bin/sleep", "2"],
+        cwd=None,
+        env={"PATH": "/usr/bin:/bin", "HOME": "/tmp"},
+        bwrap=bwrap,
+        pasta=pasta,
+        resolv=str(resolv_conf()),
+    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        raise ConfigError("APIPI_RUN_MODE=jail cannot start") from exc
+    pid = process.pid
+    if pid is None:
+        process.kill()
+        await process.wait()
+        raise ConfigError("APIPI_RUN_MODE=jail cannot start")
+    try:
+        attach_cgroup(pid, settings.jail_memory)
+    except OSError as exc:
+        process.kill()
+        await process.wait()
+        raise ConfigError("APIPI_RUN_MODE=jail cannot start") from exc
+    process.kill()
+    await process.wait()
+
+
 async def spawn_jailed_pi(
     settings: Settings,
     *,

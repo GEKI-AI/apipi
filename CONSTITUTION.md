@@ -15,7 +15,7 @@ file rarely. Edit in place. Do not keep an amendment log.
    none, local directory, or `self_hosted`. Independent of run mode
    (`host` / `jail` / `microvm`). Search and browser are MCP, not built in.
    OpenAI's field `openai_hosted` is a local session directory, not OpenAI's
-   cloud.
+   cloud. `hosted` is the same local directory.
 
 4. **Pi is the harness we ship.**
    Small loop, RPC. A second adapter later must not change the public API.

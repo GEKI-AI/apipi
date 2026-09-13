@@ -35,7 +35,7 @@ secrets. Do not commit `.env`.
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | `database_url` | required | Postgres URL. `postgresql+asyncpg://…` preferred. |
-| `APIPI_RUN_MODE` | `run_mode` | `jail` | `host` \| `jail` \| `microvm`. If the mode cannot start, the process exits. No fallback. |
+| `APIPI_RUN_MODE` | `run_mode` | `jail` | `host` \| `jail` \| `microvm`. Production SaaS/enterprise is `microvm`. `jail` is a fallback when KVM cannot run. `host` is local/dev. `jail` and `microvm` launch a throwaway sandbox before the API listens. If the mode cannot start, the process exits. No fallback. |
 | `APIPI_HOST` | `host` | `0.0.0.0` | Bind address. |
 | `APIPI_PORT` | `port` | `8000` | Bind port. |
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
@@ -65,17 +65,18 @@ Durations are like `15m`, `30s`, `2h`. Sizes are like `512M` or `1MiB`
 
 ## Run mode
 
-Run mode is server config, not an OpenAI field. `jail` is the default.
-Operators without jail tools must set `host`. `host` logs a warning and
-is not suited for production. What to install, systemd, and when to
-use each mode are in [run modes](run-modes.md).
+Run mode is server config, not an OpenAI field. The process default is
+`jail` so a machine without KVM can still start. Production operators
+set `microvm`. Operators without jail tools must set `host`. `host`
+logs a warning and is not suited for production. What to install,
+systemd, and when to use each mode are in [run modes](run-modes.md).
 
 ```toml
-run_mode = "jail"
+run_mode = "microvm"
 ```
 
 ```
-APIPI_RUN_MODE=host apipi serve
+APIPI_RUN_MODE=microvm apipi serve
 ```
 
 ## Auth callback

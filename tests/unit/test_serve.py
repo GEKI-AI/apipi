@@ -24,6 +24,16 @@ def _host_settings() -> Settings:
     )
 
 
+def _noop_probe(_settings: Settings) -> None:
+    return None
+
+
+def test_probe_run_mode_skips_host() -> None:
+    from apipi.pi.probe import probe_run_mode
+
+    probe_run_mode(_host_settings())
+
+
 def test_prepare_serve_warns_on_host(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.WARNING, logger="apipi")
     prepare_serve(_host_settings())
@@ -123,6 +133,7 @@ def test_serve_microvm_starts_when_tools_present(
     monkeypatch.setattr(
         "apipi.pi.microvm.shutil.which", lambda name: f"/usr/bin/{name}"
     )
+    monkeypatch.setattr("apipi.cli.probe_run_mode", _noop_probe)
     caplog.set_level(logging.WARNING)
     called: dict[str, object] = {}
 
@@ -157,6 +168,7 @@ def test_serve_jail_starts_when_tools_present(
     monkeypatch.setenv("APIPI_RUN_MODE", "jail")
     monkeypatch.setattr("apipi.pi.jail.shutil.which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr("apipi.pi.jail.cgroup_v2_available", lambda: True)
+    monkeypatch.setattr("apipi.cli.probe_run_mode", _noop_probe)
     caplog.set_level(logging.WARNING)
     called: dict[str, object] = {}
 
@@ -170,6 +182,50 @@ def test_serve_jail_starts_when_tools_present(
     assert called["host"] == "0.0.0.0"
     assert called["port"] == 8000
     assert HOST_MODE_WARNING not in caplog.text
+
+
+def test_serve_microvm_probe_fail_does_not_listen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    kernel = tmp_path / "vmlinux"
+    rootfs = tmp_path / "rootfs.ext4"
+    kernel.write_bytes(b"k")
+    rootfs.write_bytes(b"r")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
+    monkeypatch.setenv("APIPI_MICROVM_KERNEL", str(kernel))
+    monkeypatch.setenv("APIPI_MICROVM_ROOTFS", str(rootfs))
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr(
+        "apipi.pi.microvm.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+
+    def fail(_settings: Settings) -> None:
+        raise ConfigError("APIPI_RUN_MODE=microvm cannot start")
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("must not start")
+
+    monkeypatch.setattr("apipi.cli.probe_run_mode", fail)
+    monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
+    assert main(["serve"]) == 1
+
+
+def test_serve_jail_probe_fail_does_not_listen(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "jail")
+    monkeypatch.setattr("apipi.pi.jail.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("apipi.pi.jail.cgroup_v2_available", lambda: True)
+
+    def fail(_settings: Settings) -> None:
+        raise ConfigError("APIPI_RUN_MODE=jail cannot start")
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("must not start")
+
+    monkeypatch.setattr("apipi.cli.probe_run_mode", fail)
+    monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
+    assert main(["serve"]) == 1
 
 
 def test_serve_host_starts(

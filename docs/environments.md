@@ -2,26 +2,32 @@
 
 An environment is where file and shell tools run. That choice is
 independent of [run mode](architecture.md), which is where Pi itself
-runs. A remote runner is valid with `host`, `jail`, and `microvm`.
+runs. When the computer is local, Pi and the files share the same
+jail or guest. A remote runner is valid with `host`, `jail`, and
+`microvm`. That is the only supported split.
 
 ## Types
 
 | `environment.type` | When |
 | --- | --- |
 | `openai_hosted` | Default. Session directory next to Pi. |
+| `hosted` | Alias for `openai_hosted`. Stored and returned as `openai_hosted`. |
 | `none` | No filesystem, no shell. |
 | `self_hosted` | External runner. Tools go over a socket. |
 
 `openai_hosted` is OpenAI's field name for a local session directory.
-It is **not** OpenAI's cloud VM. You can override the type per session.
-If you omit `environment` on create, the gateway uses `openai_hosted`.
+It is **not** OpenAI's cloud VM. `hosted` means the same folder. You
+can override the type per session. If you omit `environment` on
+create, the gateway uses `openai_hosted`.
 
 Search and browser are not environments. Attach them as MCP. See
 [tools](tools.md).
 
 ## Local directory (`openai_hosted`)
 
-One directory per session. The path is
+One directory per session. Pi and this folder share the same
+[run mode](run-modes.md) isolation. There is no mode that puts Pi in
+one sandbox and the local files in another. The path is
 `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}`. When
 `APIPI_SESSIONS_DIR` is unset, that root is `.apipi/sessions` under the
 gateway's working directory.
@@ -50,8 +56,10 @@ work. There is no session directory and no shell.
 
 ## `self_hosted`
 
-Pi stays in the run mode (`host`, `jail`, or `microvm`). The
-computer is elsewhere.
+Pi stays in the run mode (`host`, `jail`, or `microvm`). Production
+SaaS and enterprise still run that Pi under `microvm`. The computer
+is elsewhere. You must sandbox the runner. The gateway does not nest
+the remote runner in a microvm.
 
 1. Create the session with `environment.type` `self_hosted`.
 2. The create response includes `environment.id` on the environment

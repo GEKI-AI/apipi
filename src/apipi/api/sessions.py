@@ -181,6 +181,8 @@ def _input_text(value: str | dict[str, Any] | None) -> str:
 
 def _environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
     env_type = spec.type if spec is not None else "openai_hosted"
+    if env_type == "hosted":
+        env_type = "openai_hosted"
     if env_type not in {"none", "openai_hosted", "self_hosted"}:
         not_implemented(env_type)
     payload: dict[str, Any] = {"type": env_type}

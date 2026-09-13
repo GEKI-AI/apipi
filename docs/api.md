@@ -53,7 +53,8 @@ is not saved unless you `POST /v1/agents`.
 Create accepts `agent` or `agent_id`, `environment` (including
 `capability_directories`), `input`, `metadata`, and `stream`. If
 `environment` is omitted, the type is `openai_hosted`: a local session
-directory next to Pi, not OpenAI's cloud. `input` may be a string or an
+directory next to Pi, not OpenAI's cloud. `hosted` is an alias for
+that same directory; the session stores and returns `openai_hosted`. `input` may be a string or an
 object with `content` or `text`. A non-empty input starts the first
 turn before the create response returns. `stream: true` returns SSE
 instead of the session JSON.
@@ -177,6 +178,7 @@ characters). That client value becomes the request id.
 | Type | Behaviour |
 | --- | --- |
 | `openai_hosted` | **Default.** Session directory next to Pi. Not OpenAI's cloud. |
+| `hosted` | Alias for `openai_hosted`. Stored and returned as `openai_hosted`. |
 | `none` | No computer. MCP and chat only. |
 | `self_hosted` | Wait for an external runner. Create returns `environment_id` and a one-time `key`. Runner WebSocket: `/v1/environments/{environment_id}`. |
 
@@ -196,6 +198,7 @@ steps are in [Using the API](using.md).
 | Agents CRUD | yes (subset of fields) |
 | Sessions, stream, follow-up input | yes |
 | `environment.openai_hosted` | yes (local sandbox) |
+| `environment.hosted` | yes (alias of `openai_hosted`) |
 | `environment.none` | yes |
 | `environment.self_hosted` | yes (our protocol) |
 | Function tools | yes |
