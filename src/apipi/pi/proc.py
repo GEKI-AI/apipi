@@ -128,6 +128,8 @@ def pi_command_args(
 ) -> list[str]:
     command = settings.pi_command.split()
     args = [*command, "--mode", "rpc", "--no-session"]
+    if not settings.pi_auto_compact:
+        args.append("--no-auto-compact")
     if not tools:
         args.append("--no-builtin-tools" if mcp_http or mcp_stdio else "--no-tools")
     if skill_dirs is not None:

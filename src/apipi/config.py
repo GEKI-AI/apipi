@@ -1,3 +1,4 @@
+import logging
 import os
 import tomllib
 from datetime import timedelta
@@ -38,6 +39,34 @@ METRICS_ON = "APIPI_METRICS on"
 METRICS_OFF = "APIPI_METRICS off"
 OTEL_SET = "APIPI_OTEL_ENDPOINT set"
 OTEL_UNSET = "APIPI_OTEL_ENDPOINT unset"
+FLAT_TOML_WARNING = "TOML key {key} is deprecated; use {path}"
+
+_log = logging.getLogger("apipi")
+
+_PI_TOML = {"command": "pi_command", "auto_compact": "pi_auto_compact"}
+_SANDBOX_TOML = {
+    "backend": "run_mode",
+    "kernel": "microvm_kernel",
+    "rootfs": "microvm_rootfs",
+}
+_SANDBOX_RESOURCES_TOML = {"mem_mib": "microvm_mem_mib", "vcpus": "microvm_vcpus"}
+_SANDBOX_NETWORK_TOML = {
+    "egress_allowlist": "microvm_egress_allowlist",
+    "egress_hosts": "microvm_egress_hosts",
+    "egress_mbit": "microvm_egress_mbit",
+}
+_LEGACY_FLAT_TOML = {
+    "run_mode": "[sandbox].backend",
+    "pi_command": "[pi].command",
+    "pi_auto_compact": "[pi].auto_compact",
+    "microvm_kernel": "[sandbox].kernel",
+    "microvm_rootfs": "[sandbox].rootfs",
+    "microvm_mem_mib": "[sandbox.resources].mem_mib",
+    "microvm_vcpus": "[sandbox.resources].vcpus",
+    "microvm_egress_allowlist": "[sandbox.network].egress_allowlist",
+    "microvm_egress_hosts": "[sandbox.network].egress_hosts",
+    "microvm_egress_mbit": "[sandbox.network].egress_mbit",
+}
 
 
 def usage_store_log(store: str) -> str:
@@ -272,6 +301,10 @@ class Settings(BaseSettings):
         default="pi",
         validation_alias=AliasChoices("APIPI_PI_COMMAND", "pi_command"),
     )
+    pi_auto_compact: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("APIPI_PI_AUTO_COMPACT", "pi_auto_compact"),
+    )
     sessions_dir: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_SESSIONS_DIR", "sessions_dir"),
@@ -473,6 +506,51 @@ def resolve_config_path(explicit: str | None = None) -> Path | None:
     return None
 
 
+def _require_table(value: object, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ConfigError(f"{name} must be a table")
+    return value
+
+
+def _map_table(
+    table: dict[str, Any], mapping: dict[str, str], prefix: str
+) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in table.items():
+        if key not in mapping or isinstance(value, dict):
+            raise ConfigError(f"unknown setting: {prefix}.{key}")
+        out[mapping[key]] = value
+    return out
+
+
+def _flatten_sandbox(table: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in table.items():
+        if key == "resources":
+            out.update(
+                _map_table(
+                    _require_table(value, "[sandbox.resources]"),
+                    _SANDBOX_RESOURCES_TOML,
+                    "sandbox.resources",
+                )
+            )
+        elif key == "network":
+            out.update(
+                _map_table(
+                    _require_table(value, "[sandbox.network]"),
+                    _SANDBOX_NETWORK_TOML,
+                    "sandbox.network",
+                )
+            )
+        elif key in _SANDBOX_TOML:
+            if isinstance(value, dict):
+                raise ConfigError(f"unknown setting: sandbox.{key}")
+            out[_SANDBOX_TOML[key]] = value
+        else:
+            raise ConfigError(f"unknown setting: sandbox.{key}")
+    return out
+
+
 def _toml_values(path: Path) -> dict[str, Any]:
     try:
         raw = tomllib.loads(path.read_text())
@@ -480,11 +558,23 @@ def _toml_values(path: Path) -> dict[str, Any]:
         raise ConfigError(f"invalid config file: {path}") from exc
     if not isinstance(raw, dict):
         raise ConfigError(f"{path} must be a table")
+    nested: dict[str, Any] = {}
+    if "pi" in raw:
+        nested.update(_map_table(_require_table(raw.pop("pi"), "[pi]"), _PI_TOML, "pi"))
+    if "sandbox" in raw:
+        nested.update(_flatten_sandbox(_require_table(raw.pop("sandbox"), "[sandbox]")))
     known = set(Settings.model_fields)
+    values: dict[str, Any] = {}
     for key, value in raw.items():
+        if key in nested:
+            raise ConfigError(f"cannot set {key} and its [pi] or [sandbox] path")
         if key not in known or isinstance(value, dict):
             raise ConfigError(f"unknown setting: {key}")
-    return raw
+        if key in _LEGACY_FLAT_TOML:
+            _log.warning(FLAT_TOML_WARNING.format(key=key, path=_LEGACY_FLAT_TOML[key]))
+        values[key] = value
+    values.update(nested)
+    return values
 
 
 def load_settings(*, config_path: str | None = None) -> Settings:
@@ -554,6 +644,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_AUTH_CACHE_TTL must be like 15m"
         if "metrics" in loc:
             return "APIPI_METRICS must be on or off"
+        if "pi_auto_compact" in loc or "APIPI_PI_AUTO_COMPACT" in loc:
+            return "APIPI_PI_AUTO_COMPACT must be on or off"
         if "port" in loc:
             return "APIPI_PORT must be 1-65535"
         if "instance_id" in loc or "APIPI_INSTANCE_ID" in loc:

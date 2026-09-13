@@ -229,4 +229,5 @@ user namespaces, TAP devices, and `/dev/kvm` each need extra
 capabilities. A privileged container can be used in a lab. It is not
 equivalent to systemd on the host.
 
-Settings for run mode are in [configuration](config.md).
+Sandbox backend, guest images, RAM, vCPUs, and TAP egress are in
+[configuration](config.md#sandbox).

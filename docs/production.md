@@ -114,7 +114,7 @@ field. Details and defaults are in [configuration](config.md).
 
 | Setting | Why it matters |
 | --- | --- |
-| `APIPI_RUN_MODE` | Set `microvm` for Firecracker production isolation. `none` is not production. |
+| `APIPI_RUN_MODE` | Set `microvm` for Firecracker production isolation. `none` is not production. Nested TOML is `[sandbox].backend`. See [configuration](config.md#sandbox). |
 | `APIPI_MAX_SESSIONS` | Live Pi on this node. Hard cap (`429` `capacity`). |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | Live Pi for one tenant (`429` `capacity_tenant`). |
 | `APIPI_MICROVM_MEM_MIB` / `APIPI_MICROVM_VCPUS` | Guest RAM and vCPUs. Raise RAM for Playwright. Keep 1 vCPU unless the computer is CPU-heavy. |
