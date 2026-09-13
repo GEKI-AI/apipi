@@ -90,6 +90,12 @@ class Metrics:
             ["result"],
             registry=self.registry,
         )
+        self.payload_export = Counter(
+            "apipi_payload_export_total",
+            "Payload export attempts",
+            ["result"],
+            registry=self.registry,
+        )
 
     def observe_request(
         self,
@@ -136,6 +142,9 @@ class Metrics:
 
     def observe_usage_export(self, result: str) -> None:
         self.usage_export.labels(result=result).inc()
+
+    def observe_payload_export(self, result: str) -> None:
+        self.payload_export.labels(result=result).inc()
 
     def scrape(self) -> bytes:
         return generate_latest(self.registry)

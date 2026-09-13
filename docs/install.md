@@ -89,8 +89,8 @@ That binds `0.0.0.0:8000` by default. `--host`, `--port`, and
 of the gateway. The process logs a warning:
 `APIPI_RUN_MODE=host is not suited for production`. `jail` and
 `microvm` do not log that warning. Startup also logs usage store
-depth, retention, whether usage export is on, and whether Prometheus
-metrics and OpenTelemetry traces are on.
+depth, retention, whether usage and payload export are on, and whether
+Prometheus metrics and OpenTelemetry traces are on.
 
 `microvm` reaches the model URL and HTTP MCP through a TAP device.
 There is no host loopback to Postgres. That TAP is allowlisted and

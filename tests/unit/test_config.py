@@ -168,6 +168,10 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.usage_export_token is None
     assert settings.usage_export_timeout == timedelta(seconds=5)
     assert settings.usage_export_retries == 1
+    assert settings.payload_export_url is None
+    assert settings.payload_export_token is None
+    assert settings.payload_export_timeout == timedelta(seconds=5)
+    assert settings.payload_export_retries == 1
     assert "example_ui" not in type(settings).model_fields
 
 
@@ -322,6 +326,17 @@ def test_usage_export_url_invalid(
     monkeypatch.setenv("APIPI_RUN_MODE", "host")
     monkeypatch.setenv("APIPI_USAGE_EXPORT_URL", "not-a-url")
     with pytest.raises(ConfigError, match="APIPI_USAGE_EXPORT_URL must be"):
+        load_settings()
+
+
+def test_payload_export_url_invalid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_PAYLOAD_EXPORT_URL", "not-a-url")
+    with pytest.raises(ConfigError, match="APIPI_PAYLOAD_EXPORT_URL must be"):
         load_settings()
 
 

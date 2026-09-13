@@ -14,6 +14,7 @@ from apipi.env.hub import EnvironmentHub
 from apipi.errors import ApiError
 from apipi.metrics import Metrics, observe_turn
 from apipi.otel import Tracing, set_span, start_span
+from apipi.payload_export import export_payload
 from apipi.pi.artifacts import ensure_openai_workspace, harvest_session
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
@@ -601,6 +602,19 @@ async def _write_turn_log(
         export_usage(settings, metrics, event)
     except Exception:
         log.warning("usage export failed", exc_info=True)
+    try:
+        items = await list_items(db, tenant_id, session_id)
+        export_payload(
+            settings,
+            metrics,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            items=items or [],
+        )
+    except Exception:
+        log.warning("payload export failed", exc_info=True)
 
 
 async def _complete_turn(

@@ -10,6 +10,7 @@ from apipi.config import (
     METRICS_ON,
     OTEL_SET,
     OTEL_UNSET,
+    PAYLOAD_EXPORT_OFF,
     USAGE_EXPORT_OFF,
     USAGE_STORE_TURNS,
     ConfigError,
@@ -50,6 +51,7 @@ def test_prepare_serve_logs_default_observability(
     assert USAGE_STORE_TURNS in messages
     assert "usage retention 15d" in messages
     assert USAGE_EXPORT_OFF in messages
+    assert PAYLOAD_EXPORT_OFF in messages
     assert METRICS_OFF in messages
     assert OTEL_UNSET in messages
     assert METRICS_ON not in messages
