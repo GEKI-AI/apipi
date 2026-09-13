@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from apipi.config import ConfigError, Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
+from apipi.pi.model_host import pi_agent_dir
 from apipi.pi.proc import PiProc, pi_command_args, pi_env
 
 VSOCK_PORT = 52
@@ -229,12 +230,17 @@ def guest_env(
     settings: Settings,
     mcp_http: list[McpHttpServer] | None = None,
     mcp_stdio: list[McpStdioServer] | None = None,
+    *,
+    api_key: str | None = None,
 ) -> dict[str, str]:
-    env = pi_env(settings, mcp_http, mcp_stdio)
+    env = pi_env(settings, mcp_http, mcp_stdio, api_key=api_key)
+    env["PI_CODING_AGENT_DIR"] = "/tmp/workspace/.pi/agent"
     return {
         key: value
         for key, value in env.items()
-        if key.startswith("OPENAI_") or key.startswith("APIPI_")
+        if key.startswith("OPENAI_")
+        or key.startswith("APIPI_")
+        or key == "PI_CODING_AGENT_DIR"
     }
 
 
@@ -846,6 +852,8 @@ async def spawn_microvm_pi(
     mcp_http: list[McpHttpServer] | None = None,
     mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
 ) -> PiProc:
     require_microvm(settings)
     firecracker, jailer = microvm_binaries()
@@ -859,6 +867,7 @@ async def spawn_microvm_pi(
     chroot_dir = work / Path(firecracker).name / vm_id / "root"
     chroot_dir.mkdir(parents=True)
     guest_skills, extra_dirs = guest_skill_dirs(cwd, skill_dirs)
+    extra_dirs = [*(extra_dirs or []), (pi_agent_dir(settings), ".pi/agent")]
     allowlist = settings.microvm_egress_allowlist
     allowed_ips = allowed_egress_ips(settings, mcp_http) if allowlist else []
 
@@ -889,13 +898,14 @@ async def spawn_microvm_pi(
         write_workspace_image(
             chroot_dir / "workspace.tar",
             cwd=cwd,
-            env=guest_env(settings, mcp_http, mcp_stdio),
+            env=guest_env(settings, mcp_http, mcp_stdio, api_key=api_key),
             pi_args=pi_command_args(
                 settings,
                 tools=tools,
                 mcp_http=mcp_http,
                 mcp_stdio=mcp_stdio,
                 skill_dirs=guest_skills,
+                model=model,
             ),
             net=net,
             extra_dirs=extra_dirs,

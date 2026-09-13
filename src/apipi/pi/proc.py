@@ -27,7 +27,7 @@ class PiProc:
         self._on_stop = on_stop
         self.pull_artifacts = pull_artifacts
         self.pull_workspace = pull_workspace
-        self._buf = ""
+        self._buf = b""
 
     @property
     def alive(self) -> bool:
@@ -54,15 +54,21 @@ class PiProc:
     async def _events(self) -> AsyncIterator[dict[str, Any]]:
         if self._stdout is None:
             return
-        while self.alive:
-            line = await self._stdout.readline()
-            if not line:
-                return
-            raw = line.decode().rstrip("\r\n")
-            if not raw:
+        while True:
+            while b"\n" not in self._buf:
+                chunk = await self._stdout.read(65536)
+                if not chunk:
+                    return
+                self._buf += chunk
+            raw, self._buf = self._buf.split(b"\n", 1)
+            try:
+                text = raw.rstrip(b"\r").decode()
+            except UnicodeDecodeError:
+                continue
+            if not text:
                 continue
             try:
-                event = json.loads(raw)
+                event = json.loads(text)
             except json.JSONDecodeError:
                 continue
             if not isinstance(event, dict):
@@ -91,13 +97,21 @@ def pi_env(
     settings: Settings,
     mcp_http: list[McpHttpServer] | None = None,
     mcp_stdio: list[McpStdioServer] | None = None,
+    *,
+    api_key: str | None = None,
 ) -> dict[str, str]:
+    from apipi.pi.model_host import pi_agent_dir
+
     env = os.environ.copy()
     env.pop("DATABASE_URL", None)
-    if settings.model_api_key:
-        env["OPENAI_API_KEY"] = settings.model_api_key
+    key = api_key if api_key else settings.model_api_key_overwrite
+    if key:
+        env["OPENAI_API_KEY"] = key
+    else:
+        env.pop("OPENAI_API_KEY", None)
     if settings.model_base_url:
         env["OPENAI_BASE_URL"] = settings.model_base_url
+    env["PI_CODING_AGENT_DIR"] = str(pi_agent_dir(settings))
     env["APIPI_PINNED_PI"] = PINNED_PI
     if mcp_http:
         env["APIPI_MCP_SERVERS"] = ",".join(server.server_label for server in mcp_http)
@@ -125,9 +139,14 @@ def pi_command_args(
     mcp_http: list[McpHttpServer] | None = None,
     mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
+    model: str | None = None,
 ) -> list[str]:
+    from apipi.pi.model_host import PI_PROVIDER
+
     command = settings.pi_command.split()
     args = [*command, "--mode", "rpc", "--no-session"]
+    if model:
+        args.extend(["--provider", PI_PROVIDER, "--model", model])
     if not settings.pi_auto_compact:
         args.append("--no-auto-compact")
     if not tools:
@@ -147,6 +166,8 @@ async def spawn_pi(
     mcp_http: list[McpHttpServer] | None = None,
     mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
 ) -> PiProc:
     from apipi.pi.isolation import load_isolation
 
@@ -157,4 +178,6 @@ async def spawn_pi(
         mcp_http=mcp_http,
         mcp_stdio=mcp_stdio,
         skill_dirs=skill_dirs,
+        model=model,
+        api_key=api_key,
     )

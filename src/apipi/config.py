@@ -39,6 +39,9 @@ METRICS_ON = "APIPI_METRICS on"
 METRICS_OFF = "APIPI_METRICS off"
 OTEL_SET = "APIPI_OTEL_ENDPOINT set"
 OTEL_UNSET = "APIPI_OTEL_ENDPOINT unset"
+OPENAI_API_KEY_IGNORED = (
+    "OPENAI_API_KEY is ignored; the request bearer is sent to the model host"
+)
 FLAT_TOML_WARNING = "TOML key {key} is deprecated; use {path}"
 
 _log = logging.getLogger("apipi")
@@ -321,9 +324,11 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("OPENAI_BASE_URL", "model_base_url"),
     )
-    model_api_key: str | None = Field(
+    model_api_key_overwrite: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("OPENAI_API_KEY", "model_api_key"),
+        validation_alias=AliasChoices(
+            "OPENAI_API_KEY_OVERWRITE", "model_api_key_overwrite"
+        ),
     )
     microvm_kernel: str | None = Field(
         default=None,

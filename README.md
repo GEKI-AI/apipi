@@ -21,46 +21,37 @@ store. The Pi CLI (`pi --mode rpc`) on `PATH` for live turns.
 
 ```
 uv sync
+npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
 docker compose up -d postgres
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
-apipi migrate
-apipi serve
+export OPENAI_BASE_URL=http://your-model-host/v1
+uv run apipi migrate
+uv run apipi serve
 ```
 
-That binds `0.0.0.0:8000`. The default isolation is `none` (Pi as a
-child process). For Firecracker:
+`uv sync` does not put `apipi` on `PATH`; use `uv run`. That binds
+`0.0.0.0:8000`. The default isolation is `none` (Pi as a child
+process). `OPENAI_BASE_URL` on the gateway is the **model** host, not
+this API. The client bearer is the model key unless you set
+`OPENAI_API_KEY_OVERWRITE`. For Firecracker:
 
 ```
-APIPI_RUN_MODE=microvm apipi serve
+APIPI_RUN_MODE=microvm uv run apipi serve
 ```
 
-Point a client at `http://localhost:8000/v1` with
-`Authorization: Bearer`. Any non-empty bearer becomes a tenant.
+In a second shell, point a client at `http://localhost:8000/v1`.
+`agent.model` must exist on the model host. The `openai` package is not
+an ApiPi dependency:
 
-```python
-from openai import OpenAI
-
-with OpenAI(
-    base_url="http://localhost:8000/v1",
-    api_key="dev-token",
-) as client:
-    with client.beta.agents.sessions.with_streaming_response.create(
-        agent={
-            "model": "gpt-4.1",
-            "instructions": "Write clean code, run it, and report the actual output.",
-        },
-        environment={"type": "openai_hosted"},
-        input="Create tree.py, run it, and show me the output.",
-        stream=True,
-    ) as response:
-        for line in response.iter_lines():
-            if line.startswith("data: "):
-                print(line.removeprefix("data: "), flush=True)
+```
+export OPENAI_API_KEY=dev-token
+export OPENAI_BASE_URL=http://localhost:8000/v1
+uv run --with openai python examples/openai_sdk.py
 ```
 
 A full script is [examples/openai_sdk.py](examples/openai_sdk.py).
-`OPENAI_BASE_URL` / `OPENAI_API_KEY` on the gateway process are the
-**model** host, not this API.
+The stream stays open across idle, so that script stops after the first
+turn outcome.
 
 ## License
 

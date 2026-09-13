@@ -9,13 +9,30 @@ def _tool_item_type(name: object) -> str:
     return "command_execution"
 
 
+def _host_error(raw: object) -> list[tuple[str, dict[str, Any]]]:
+    text = raw if isinstance(raw, str) else ""
+    if "(401)" in text:
+        message = "Model host error (401)"
+    elif "(403)" in text:
+        message = "Model host error (403)"
+    else:
+        message = "Model host error"
+    return [("pi_error", {"message": message})]
+
+
 def map_pi_event(event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     kind = event.get("type")
     if kind == "agent_end":
-        usage = usage_from_messages(event.get("messages"))
-        if usage is None:
-            return []
-        return [("usage", usage)]
+        messages = event.get("messages")
+        mapped: list[tuple[str, dict[str, Any]]] = []
+        usage = usage_from_messages(messages)
+        if usage is not None:
+            mapped.append(("usage", usage))
+        if isinstance(messages, list) and messages:
+            last = messages[-1]
+            if isinstance(last, dict) and last.get("stopReason") == "error":
+                mapped.extend(_host_error(last.get("errorMessage")))
+        return mapped
     if kind == "message_update":
         delta = event.get("assistantMessageEvent")
         if not isinstance(delta, dict):

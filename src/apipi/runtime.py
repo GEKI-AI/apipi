@@ -16,12 +16,18 @@ from apipi.metrics import Metrics, observe_turn
 from apipi.otel import Tracing, set_span, start_span
 from apipi.payload_export import export_payload
 from apipi.pi.artifacts import ensure_openai_workspace, harvest_session
+from apipi.pi.model_host import (
+    listed_models,
+    require_listed_model,
+    require_model,
+    write_pi_models_json,
+)
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
 from apipi.skills import discover_skill_dirs
 from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
-from apipi.store.models import Event, utc_now
+from apipi.store.models import Event, SessionRow, utc_now
 from apipi.store.repo import (
     add_usage_rollup,
     append_turn_log,
@@ -38,6 +44,13 @@ from apipi.usage import add_usage, empty_usage, usage_event, usage_from
 from apipi.usage_export import export_usage
 
 log = logging.getLogger("apipi")
+
+
+class TurnFailed(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
 
 PUBLIC_EVENT_TYPES = frozenset(
     {
@@ -306,13 +319,13 @@ def _skill_dirs(environment: dict[str, Any]) -> list[str]:
 
 
 async def _agent_tools_and_model(
-    db: AsyncSession, tenant_id: uuid.UUID, agent_id: uuid.UUID | None
+    db: AsyncSession, tenant_id: uuid.UUID, row: SessionRow
 ) -> tuple[list[dict[str, Any]], str | None]:
-    if agent_id is None:
-        return [], None
-    agent = await get_agent(db, tenant_id, agent_id)
+    if row.agent_id is None:
+        return [], row.model
+    agent = await get_agent(db, tenant_id, row.agent_id)
     if agent is None:
-        return [], None
+        return [], row.model
     return _function_tools(agent.tools), agent.model
 
 
@@ -362,6 +375,11 @@ async def _consume_generate(
         if etype == "usage":
             usage = add_usage(usage, usage_from(data))
             continue
+        if etype == "pi_error":
+            message = data.get("message")
+            raise TurnFailed(
+                message if isinstance(message, str) and message else "Model host error"
+            )
         payload = dict(data)
         payload.setdefault("turn_id", str(turn_id))
         async with store.session() as db:
@@ -745,6 +763,61 @@ async def _cancel_turn(
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
 
+async def _fail_turn(
+    db: AsyncSession,
+    hub: EventHub,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    message: str,
+    *,
+    request_id: str | None = None,
+    metrics: Metrics | None = None,
+    tracing: Tracing | None = None,
+    settings: Settings | None = None,
+) -> None:
+    turn = await get_session_turn(db, tenant_id, session_id, turn_id)
+    if turn is not None:
+        turn.status = "failed"
+        turn.updated_at = utc_now()
+    await _write_turn_log(
+        db,
+        tenant_id,
+        session_id,
+        turn_id,
+        status="failed",
+        request_id=request_id,
+        metrics=metrics,
+        tracing=tracing,
+        settings=settings,
+    )
+    await persist_event(
+        db,
+        hub,
+        tenant_id,
+        session_id,
+        type="agent.session.turn.failed",
+        data={"turn_id": str(turn_id), "message": message},
+    )
+    await persist_event(
+        db,
+        hub,
+        tenant_id,
+        session_id,
+        type="agent.session.error",
+        data={"message": message, "code": "model_host_error"},
+    )
+    row = await get_session(db, tenant_id, session_id)
+    current = row.required_actions if row is not None else []
+    await update_session(
+        db,
+        tenant_id,
+        session_id,
+        changes={"status": "idle", "required_actions": with_env_actions(current, [])},
+    )
+    await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
+
+
 def request_cancel(
     hub: EventHub, session_id: uuid.UUID, *, status: str
 ) -> asyncio.Event | None:
@@ -823,6 +896,8 @@ async def run_turn(
     env_hub: EnvironmentHub | None = None,
     settings: Settings | None = None,
     pool: PiPool | None = None,
+    api_key: str | None = None,
+    key_id: str | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
     try:
@@ -837,15 +912,18 @@ async def run_turn(
             row = await get_session(db, tenant_id, session_id)
             if row is None:
                 return
+            function_tools, model = await _agent_tools_and_model(db, tenant_id, row)
+            model = require_model(model)
+            if settings is not None and settings.model_base_url:
+                ids = listed_models(settings.model_base_url, api_key)
+                require_listed_model(model, ids)
+                write_pi_models_json(settings, ids)
             ensure_openai_workspace(row.environment)
             cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
             computer = (
                 bind_computer(env_hub, env_id)
                 if env_hub is not None and env_id is not None
                 else None
-            )
-            function_tools, model = await _agent_tools_and_model(
-                db, tenant_id, row.agent_id
             )
             skill_dirs = _skill_dirs(row.environment)
             await update_session(
@@ -915,6 +993,9 @@ async def run_turn(
                     abort=abort,
                     computer=computer,
                     tenant_id=tenant_id,
+                    model=model,
+                    api_key=api_key,
+                    key_id=key_id,
                 )
                 try:
                     if turn_timeout is None:
@@ -940,6 +1021,21 @@ async def run_turn(
                         code=exc.code,
                         status_code=429,
                     ) from exc
+                except TurnFailed as exc:
+                    async with store.session() as db:
+                        await _fail_turn(
+                            db,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            exc.message,
+                            request_id=request_id,
+                            metrics=metrics,
+                            tracing=tracing,
+                            settings=settings,
+                        )
+                    return
                 except TimeoutError:
                     abort.set()
                     await harness.abort(session_id)
@@ -1032,6 +1128,8 @@ async def continue_turn(
     env_hub: EnvironmentHub | None = None,
     settings: Settings | None = None,
     pool: PiPool | None = None,
+    api_key: str | None = None,
+    key_id: str | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -1100,9 +1198,12 @@ async def continue_turn(
             if env_hub is not None and env_id is not None
             else None
         )
-        function_tools, model = await _agent_tools_and_model(
-            db, tenant_id, row.agent_id
-        )
+        function_tools, model = await _agent_tools_and_model(db, tenant_id, row)
+        model = require_model(model)
+        if settings is not None and settings.model_base_url:
+            ids = listed_models(settings.model_base_url, api_key)
+            require_listed_model(model, ids)
+            write_pi_models_json(settings, ids)
         skill_dirs = _skill_dirs(row.environment)
         result = {
             "call_id": call_id,
@@ -1138,6 +1239,9 @@ async def continue_turn(
                 skill_dirs=skill_dirs,
                 computer=computer,
                 tenant_id=tenant_id,
+                model=model,
+                api_key=api_key,
+                key_id=key_id,
             )
             try:
                 if turn_timeout is None:
@@ -1149,6 +1253,21 @@ async def continue_turn(
                         reply, pending, usage = await _consume_generate(
                             store, hub, tenant_id, session_id, turn_id, generate
                         )
+            except TurnFailed as exc:
+                async with store.session() as db:
+                    await _fail_turn(
+                        db,
+                        hub,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        exc.message,
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                        settings=settings,
+                    )
+                return
             except CapacityError as exc:
                 raise ApiError(
                     "invalid_request",

@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 
 import uvicorn
@@ -9,6 +10,7 @@ from apipi.config import (
     METRICS_OFF,
     METRICS_ON,
     NONE_MODE_WARNING,
+    OPENAI_API_KEY_IGNORED,
     OTEL_SET,
     OTEL_UNSET,
     PAYLOAD_EXPORT_OFF,
@@ -25,6 +27,7 @@ from apipi.config import (
     usage_store_log,
 )
 from apipi.pi.isolation import load_isolation
+from apipi.pi.model_host import probe_model_host
 from apipi.pi.probe import probe_run_mode
 from apipi.store.migrate import migrate
 
@@ -39,10 +42,13 @@ def prepare_serve(
     )
     postgres_url(resolved.database_url)
     require_run_mode(resolved.run_mode, resolved)
+    probe_model_host(resolved)
     probe_run_mode(resolved)
     reject_prompt_body_logging()
     logging.getLogger().setLevel(resolved.log_level.upper())
     backend = load_isolation(resolved.run_mode)
+    if os.environ.get("OPENAI_API_KEY"):
+        log.warning(OPENAI_API_KEY_IGNORED)
     if backend.warn_not_production:
         if backend.name == "none":
             log.warning(NONE_MODE_WARNING)

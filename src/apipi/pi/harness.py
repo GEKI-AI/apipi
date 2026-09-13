@@ -29,6 +29,9 @@ class PiHarness:
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         if session_id is None:
             return
+        model = _kwargs.get("model")
+        api_key = _kwargs.get("api_key")
+        key_id = _kwargs.get("key_id")
         proc = await self.pool.get(
             session_id,
             cwd=cwd,
@@ -37,6 +40,9 @@ class PiHarness:
             mcp_stdio=mcp_stdio,
             skill_dirs=skill_dirs,
             tenant_id=tenant_id,
+            model=model if isinstance(model, str) else None,
+            api_key=api_key if isinstance(api_key, str) else None,
+            key_id=key_id if isinstance(key_id, str) else None,
         )
         async for event in proc.prompt(text):
             for public in map_pi_event(event):

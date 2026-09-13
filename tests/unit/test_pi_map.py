@@ -28,6 +28,36 @@ def test_text_end_is_public() -> None:
     assert mapped == [("agent.session.turn.output_text.done", {"text": "hi"})]
 
 
+def test_agent_end_error_is_model_host_failure() -> None:
+    mapped = map_pi_event(
+        {
+            "type": "agent_end",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "stopReason": "error",
+                    "errorMessage": (
+                        "OpenAI API error (401): "
+                        '{"message":"Incorrect API key provided: secret"}'
+                    ),
+                    "usage": {
+                        "input": 0,
+                        "output": 0,
+                        "cacheRead": 0,
+                        "cacheWrite": 0,
+                        "totalTokens": 0,
+                    },
+                }
+            ],
+        }
+    )
+    kinds = [item[0] for item in mapped]
+    assert "pi_error" in kinds
+    error = next(item[1] for item in mapped if item[0] == "pi_error")
+    assert error["message"] == "Model host error (401)"
+    assert "secret" not in error["message"]
+
+
 def test_internal_pi_events_are_dropped() -> None:
     assert map_pi_event({"type": "agent_start"}) == []
     assert map_pi_event({"type": "turn_start"}) == []

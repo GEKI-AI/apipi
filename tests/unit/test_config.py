@@ -31,6 +31,15 @@ def test_migrate_requires_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
     assert main(["migrate"]) == 1
 
 
+def test_model_api_key_overwrite_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("OPENAI_API_KEY_OVERWRITE", "operator-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "ignored")
+    settings = Settings()
+    assert settings.model_api_key_overwrite == "operator-key"
+    assert not hasattr(settings, "model_api_key")
+
+
 def test_run_mode_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "none")

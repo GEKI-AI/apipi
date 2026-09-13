@@ -47,7 +47,7 @@ The gateway must already be running. Isolation `none` is the default.
 bearer the client will send:
 
 ```
-APIPI_RUN_MODE=none apipi serve
+APIPI_RUN_MODE=none uv run apipi serve
 ```
 
 Default auth accepts any non-empty bearer and hashes it into a tenant

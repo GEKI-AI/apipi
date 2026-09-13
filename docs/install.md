@@ -2,7 +2,11 @@
 
 You need Python 3.13, [uv](https://docs.astral.sh/uv/), and Postgres.
 Live turns also need the Pi CLI (`pi --mode rpc`) on `PATH` and a model
-URL. The gateway pins Pi 0.85.1.
+host URL. The gateway pins Pi 0.85.1. Install that exact version:
+
+```
+npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
+```
 
 A Compose file at the repo root starts Postgres 17 (user `apipi`,
 password `apipi`, database `apipi`) on port 5432.
@@ -20,9 +24,9 @@ From a checkout:
 uv sync
 ```
 
-That installs the `apipi` CLI into the project environment. After
-`uv sync` you can run `apipi` from that environment, or prefix commands
-with `uv run`.
+That installs the `apipi` CLI into the project `.venv`. It does not put
+`apipi` on `PATH`. Prefix commands with `uv run`, or activate the
+environment with `source .venv/bin/activate`.
 
 ## Database
 
@@ -31,7 +35,7 @@ Start local Postgres and apply store migrations:
 ```
 docker compose up -d postgres
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
-apipi migrate
+uv run apipi migrate
 ```
 
 `DATABASE_URL` is required. `postgres://` and `postgresql://` URLs are
@@ -40,11 +44,22 @@ rewritten to `postgresql+asyncpg://`. You can put it in `.env` or
 
 ## Model URL
 
-Pi talks to your model with the usual OpenAI environment variables.
-`OPENAI_BASE_URL` is the model host, not this gateway.
-`OPENAI_API_KEY` is the key that host expects. Those values are passed
-into the Pi process. Pi does not receive `DATABASE_URL` or gateway
-secrets.
+`OPENAI_BASE_URL` is required. It is the model host Pi calls, not this
+gateway. On `apipi serve`, the process lists `{OPENAI_BASE_URL}/models`,
+checks that `pi --version` is 0.85.1, and exits before it binds HTTP if
+those checks fail.
+
+The model key is the request `Authorization: Bearer` value. Auth only
+maps that bearer to a tenant. The raw bearer is not stored in Postgres.
+It is passed into the live Pi process as `OPENAI_API_KEY`. Optional
+`OPENAI_API_KEY_OVERWRITE` replaces that key for every session when you
+want one operator key instead of the caller's bearer. A process
+`OPENAI_API_KEY` is ignored.
+
+The `agent.model` on the request must exist on that host. An unknown id
+returns `400` with code `model_not_found`. Pi is started with that id
+and a gateway-owned `models.json`. It does not fall back to Pi's
+built-in OpenAI catalog.
 
 Live turns also need Pi on `PATH`. You can override the binary with
 `APIPI_PI_COMMAND`.
@@ -57,14 +72,14 @@ jailer, guest images, `ip`, `iptables`, and `tc` are present, and after
 a throwaway guest has booted and been torn down:
 
 ```
-APIPI_RUN_MODE=microvm apipi serve
+APIPI_RUN_MODE=microvm uv run apipi serve
 ```
 
 The process default is `none` (Pi as a child of the gateway). It logs
 a warning that this isolation is meant for laptops and CI:
 
 ```
-APIPI_RUN_MODE=none apipi serve
+APIPI_RUN_MODE=none uv run apipi serve
 ```
 
 That binds `0.0.0.0:8000` by default. `--host`, `--port`, and

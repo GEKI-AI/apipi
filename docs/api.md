@@ -39,7 +39,11 @@ Rejected: `multi_agent`, `tool_search`, `programmatic_tool_calling`.
 
 A session may pass `agent_id` or an inline `agent`. You must provide
 exactly one of those. Inline config is used for that session only. It
-is not saved unless you `POST /v1/agents`.
+is not saved unless you `POST /v1/agents`. A live turn needs
+`agent.model`. That id must exist on `OPENAI_BASE_URL`. Missing model
+is `400` with code `model_required`. Unknown model is `400` with code
+`model_not_found`. Inline `model` is kept on the session for follow-up
+turns. Saved agents keep reading the agent row.
 
 ## Sessions
 
@@ -89,11 +93,13 @@ The gateway persists `agent.session.turn.cancelled` then
 `agent.session.idle`.
 
 `GET` returns `{"data": […]}`. `GET ?stream=true` is SSE. The stream
-stays open across `idle` and sends `: ping` keepalives. Reconnect and
-replay from the store with `after_seq`. The public event is written to
-Postgres before it is published on SSE. Behind more than one gateway
-process, the stream and the next turn must hit the node that owns Pi.
-See [multiple nodes](scale.md).
+stays open across `idle` and sends SSE comment keepalives (`: ping`)
+without a blank line, so clients that parse every dispatched event as
+JSON do not see an empty payload. Reconnect and replay from the store
+with `after_seq`. The public event is written to Postgres before it is
+published on SSE. Behind more than one gateway process, the stream and
+the next turn must hit the node that owns Pi. See
+[multiple nodes](scale.md).
 
 Only these event types are public. Anything else from Pi is an internal
 log line.
@@ -109,7 +115,7 @@ log line.
 | `agent.session.turn.created` | Turn id |
 | `agent.session.turn.in_progress` | Work started |
 | `agent.session.turn.completed` | Done; may include `usage` (tokens only) |
-| `agent.session.turn.failed` | Failed |
+| `agent.session.turn.failed` | Failed (including a model host error) |
 | `agent.session.turn.cancelled` | Cancelled |
 | `agent.session.turn.output_text.delta` | Assistant text |
 | `agent.session.turn.output_text.done` | Text finished |

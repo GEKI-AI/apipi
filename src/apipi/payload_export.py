@@ -12,7 +12,7 @@ _BEARER = re.compile(r"(?i)(authorization:\s*bearer\s+)\S+")
 
 def _secrets(settings: Settings) -> tuple[str, ...]:
     values = (
-        settings.model_api_key,
+        settings.model_api_key_overwrite,
         settings.usage_export_token,
         settings.payload_export_token,
     )

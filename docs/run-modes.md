@@ -42,8 +42,9 @@ is a lab setup, not the production path.
 ## What to install
 
 Every mode needs Python 3.13, [uv](https://docs.astral.sh/uv/),
-Postgres, the Pi CLI (`pi --mode rpc`) on `PATH`, and a model URL.
-See [install](install.md). The extra OS packages differ by mode.
+Postgres, the Pi CLI (`pi --mode rpc`) on `PATH` at version 0.85.1, and
+`OPENAI_BASE_URL`. `apipi serve` exits if those are missing. See
+[install](install.md). The extra OS packages differ by mode.
 
 ### `none`
 

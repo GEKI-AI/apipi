@@ -8,6 +8,11 @@ The gateway does not mint or store API keys. Callers reuse the bearer
 they already use with an LLM router. Isolation is by `tenant_id`. An
 id that belongs to another tenant is `404`, not `403`.
 
+The same bearer is the model key unless `OPENAI_API_KEY_OVERWRITE` is
+set. Auth only maps the token to `key_id` and `tenant_id`. The raw
+value is not written to Postgres. A live Pi process receives it as
+`OPENAI_API_KEY` for that session.
+
 ## Callback
 
 Each request:

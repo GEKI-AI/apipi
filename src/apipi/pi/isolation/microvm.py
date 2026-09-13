@@ -26,6 +26,8 @@ class MicrovmIsolation:
         mcp_http: list[McpHttpServer] | None = None,
         mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
     ) -> PiProc:
         return await spawn_microvm_pi(
             settings,
@@ -34,4 +36,6 @@ class MicrovmIsolation:
             mcp_http=mcp_http,
             mcp_stdio=mcp_stdio,
             skill_dirs=skill_dirs,
+            model=model,
+            api_key=api_key,
         )
