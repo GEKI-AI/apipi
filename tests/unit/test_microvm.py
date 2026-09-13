@@ -537,15 +537,6 @@ def test_guest_pi_args_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     assert _pi_args() == ["pi", "--mode", "rpc", "--no-session"]
 
 
-@pytest.mark.slow
-def test_live_microvm_skips_without_tools() -> None:
-    try:
-        require_microvm()
-    except ConfigError:
-        pytest.skip("microvm tools or images missing")
-    pytest.skip("no live guest images in this environment")
-
-
 async def test_piproc_rpc_over_custom_streams() -> None:
     writer = _Writer()
     inner = _Process()

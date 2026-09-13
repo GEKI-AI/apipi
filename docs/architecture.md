@@ -129,9 +129,10 @@ guest rootfs is operator-provided. It should include Node, Pi, and
 That init mounts a tmpfs workspace, unpacks the workspace drive,
 brings up the TAP interface, and bridges vsock port 52 to
 `pi --mode rpc`. The guest needs `python3` or `socat` for that
-bridge. Do not vendor a distro in git. Set `APIPI_MICROVM_KERNEL` and
+bridge. Do not vendor a distro in git. Build a rootfs with
+`scripts/microvm-rootfs`. Set `APIPI_MICROVM_KERNEL` and
 `APIPI_MICROVM_ROOTFS` to the image files. Missing paths are a
-configuration error.
+configuration error. See [run modes](run-modes.md).
 
 Chromium can use its own sandbox inside the guest. Do not put
 Chromium in the gateway.

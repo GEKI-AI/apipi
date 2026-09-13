@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+GUEST_SH="${ROOT}/src/apipi/pi/guest.sh"
+OUT=${1:-"${XDG_CACHE_HOME:-$HOME/.cache}/apipi/microvm"}
+ALPINE_VER=${ALPINE_VER:-3.21.3}
+SIZE_MIB=${SIZE_MIB:-2048}
+ARCH=$(uname -m)
+
+if [[ ! -f "$GUEST_SH" ]]; then
+  echo "missing $GUEST_SH" >&2
+  exit 1
+fi
+
+case "$ARCH" in
+  x86_64) ALPINE_ARCH=x86_64 ;;
+  aarch64) ALPINE_ARCH=aarch64 ;;
+  *)
+    echo "unsupported arch: $ARCH" >&2
+    exit 1
+    ;;
+esac
+
+PIN=$(sed -n 's/^PINNED_PI = "\(.*\)"/\1/p' "${ROOT}/src/apipi/pi/version.py")
+if [[ -z "$PIN" ]]; then
+  echo "could not read PINNED_PI" >&2
+  exit 1
+fi
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "missing $1" >&2
+    exit 1
+  }
+}
+
+need curl
+need tar
+need mkfs.ext4
+need mount
+need umount
+
+as_root() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+mkdir -p "$OUT"
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/apipi-rootfs.XXXXXX")
+cleanup() {
+  if [[ -n "${MNT:-}" && -d "$MNT" ]]; then
+    as_root umount "$MNT/proc" 2>/dev/null || true
+    as_root umount "$MNT/sys" 2>/dev/null || true
+    as_root umount "$MNT/dev" 2>/dev/null || true
+    as_root umount "$MNT" 2>/dev/null || true
+  fi
+  rm -rf "$WORKDIR"
+}
+trap cleanup EXIT
+
+ROOTFS="${OUT}/rootfs.ext4"
+KERNEL="${OUT}/vmlinux"
+ALPINE_TAR="${WORKDIR}/alpine.tar.gz"
+MNT="${WORKDIR}/mnt"
+IMG="${WORKDIR}/rootfs.ext4"
+
+ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/releases/${ALPINE_ARCH}/alpine-minirootfs-${ALPINE_VER}-${ALPINE_ARCH}.tar.gz"
+KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/${ARCH}/kernels/vmlinux.bin"
+
+curl -fsSL "$ALPINE_URL" -o "$ALPINE_TAR"
+truncate -s "${SIZE_MIB}M" "$IMG"
+mkfs.ext4 -F -q "$IMG"
+mkdir -p "$MNT"
+as_root mount -o loop "$IMG" "$MNT"
+as_root tar -xzf "$ALPINE_TAR" -C "$MNT"
+as_root mkdir -p "$MNT/proc" "$MNT/sys" "$MNT/dev" "$MNT/sbin"
+as_root mount -t proc proc "$MNT/proc"
+as_root mount -t sysfs sysfs "$MNT/sys"
+as_root mount --bind /dev "$MNT/dev"
+if [[ -f /etc/resolv.conf ]]; then
+  as_root cp /etc/resolv.conf "$MNT/etc/resolv.conf"
+fi
+as_root cp "$GUEST_SH" "$MNT/sbin/apipi-guest"
+as_root chmod 755 "$MNT/sbin/apipi-guest"
+as_root chroot "$MNT" /bin/sh -c "
+  set -e
+  echo https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/community >> /etc/apk/repositories
+  apk add --no-cache nodejs npm python3 iproute2 socat
+  npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PIN}
+"
+as_root umount "$MNT/dev"
+as_root umount "$MNT/sys"
+as_root umount "$MNT/proc"
+as_root umount "$MNT"
+unset MNT
+cp "$IMG" "$ROOTFS"
+
+if curl -fsSL "$KERNEL_URL" -o "${KERNEL}.part"; then
+  mv "${KERNEL}.part" "$KERNEL"
+else
+  rm -f "${KERNEL}.part"
+  echo "kernel download failed; set APIPI_MICROVM_KERNEL to a vmlinux file" >&2
+fi
+
+echo "rootfs: $ROOTFS"
+if [[ -f "$KERNEL" ]]; then
+  echo "kernel: $KERNEL"
+fi
+echo "export APIPI_MICROVM_ROOTFS=$ROOTFS"
+if [[ -f "$KERNEL" ]]; then
+  echo "export APIPI_MICROVM_KERNEL=$KERNEL"
+fi
