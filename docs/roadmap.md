@@ -41,7 +41,8 @@ Later documentation work, not this version:
   site
 
 Run-mode production docs (packages, systemd, Docker, storage) are in
-[run modes](run-modes.md).
+[run modes](run-modes.md). Host sizing, scale-out, and drain are in
+[production](production.md).
 
 Do not add a custom docs frontend. Do not put MkDocs in the apipi
 package.
