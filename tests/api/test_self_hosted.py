@@ -181,6 +181,166 @@ async def test_fake_runner_connects_and_speaks_protocol(
         ]
 
 
+async def test_self_hosted_connected_runs_computer_tools(
+    settings: Settings, store: Store
+) -> None:
+    harness = FakeHarness()
+    harness.computer_calls = [
+        {
+            "name": "write",
+            "call_id": "w1",
+            "arguments": {"path": "note.txt", "content": "hello"},
+        },
+        {
+            "name": "edit",
+            "call_id": "e1",
+            "arguments": {"path": "note.txt", "old_text": "hello", "new_text": "hi"},
+        },
+        {
+            "name": "bash",
+            "call_id": "b1",
+            "arguments": {"command": "echo hi"},
+        },
+        {
+            "name": "read",
+            "call_id": "r1",
+            "arguments": {"path": "note.txt"},
+        },
+    ]
+    async for app, client in _app_client(settings, store, harness):
+        token = "t"
+        agent_id = await _agent(client, token)
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent_id, "environment": {"type": "self_hosted"}},
+        )
+        body = created.json()
+        session_id = body["id"]
+        async with connect_runner(app, body["environment_id"], body["key"]) as runner:
+            turned = await client.post(
+                f"/v1/agents/sessions/{session_id}/events",
+                headers=_auth(token),
+                json={"type": "agent.session.input.message", "content": "use files"},
+            )
+            assert turned.status_code == 200
+            assert turned.json()["status"] == "idle"
+            assert harness.tools is True
+            assert runner.files["note.txt"] == "hi"
+            events = await client.get(
+                f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            )
+            added = [
+                event
+                for event in events.json()["data"]
+                if event["type"] == "agent.session.turn.item.added"
+                and event["data"].get("item_type") == "command_execution"
+            ]
+            names = [event["data"]["name"] for event in added]
+            assert names == ["write", "edit", "bash", "read"]
+            assert "agent.session.requires_action" not in [
+                event["type"] for event in events.json()["data"]
+            ]
+
+
+async def test_self_hosted_disconnect_turns_tools_off(
+    settings: Settings, store: Store
+) -> None:
+    harness = FakeHarness()
+    async for app, client in _app_client(settings, store, harness):
+        token = "t"
+        agent_id = await _agent(client, token)
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent_id, "environment": {"type": "self_hosted"}},
+        )
+        body = created.json()
+        session_id = body["id"]
+        env_id = body["environment_id"]
+        async with connect_runner(app, env_id, body["key"]):
+            pass
+        harness.computer_calls = [
+            {
+                "name": "write",
+                "call_id": "w1",
+                "arguments": {"path": "gone.txt", "content": "nope"},
+            }
+        ]
+        turned = await client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json={"type": "agent.session.input.message", "content": "after drop"},
+        )
+        assert turned.status_code == 200
+        assert harness.tools is False
+        assert turned.json()["required_actions"] == [
+            {"type": "environment_connection", "environment_id": env_id}
+        ]
+        events = await client.get(
+            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        )
+        assert [
+            event
+            for event in events.json()["data"]
+            if event["data"].get("item_type") == "command_execution"
+        ] == []
+
+
+async def test_self_hosted_tool_use_then_harvest(
+    settings: Settings, store: Store
+) -> None:
+    harness = FakeHarness()
+    harness.computer_calls = [
+        {
+            "name": "write",
+            "call_id": "w1",
+            "arguments": {
+                "path": "artifacts/note.txt",
+                "content": "hello",
+            },
+        }
+    ]
+    async for app, client in _app_client(settings, store, harness):
+        token = "t"
+        agent_id = await _agent(client, token)
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent_id, "environment": {"type": "self_hosted"}},
+        )
+        body = created.json()
+        session_id = body["id"]
+        async with connect_runner(app, body["environment_id"], body["key"]) as runner:
+            turned = await client.post(
+                f"/v1/agents/sessions/{session_id}/events",
+                headers=_auth(token),
+                json={"type": "agent.session.input.message", "content": "write out"},
+            )
+            assert turned.status_code == 200
+            assert runner.files["artifacts/note.txt"] == "hello"
+            from apipi.pi.artifacts import harvest_session
+
+            async with store.session() as db:
+                await harvest_session(
+                    db,
+                    settings,
+                    uuid.UUID(session_id),
+                    None,
+                    app.state.env_hub,
+                )
+        listed = await client.get(
+            f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        )
+        artifact_id = listed.json()["data"][0]["id"]
+        content = await client.get(
+            f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
+            headers=_auth(token),
+        )
+        assert content.status_code == 200
+        assert content.content == b"hello"
+
+
 async def test_self_hosted_artifact_content_via_runner(
     settings: Settings, store: Store
 ) -> None:

@@ -7,6 +7,8 @@ from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apipi.env.computer import Computer, bind_computer, computer_item_events
+from apipi.env.hub import EnvironmentHub
 from apipi.errors import ApiError
 from apipi.metrics import Metrics, observe_turn
 from apipi.otel import Tracing, set_span, start_span
@@ -132,6 +134,7 @@ class FakeHarness:
         self.mcp_stdio: list[Any] | None = None
         self.skill_dirs: list[str] | None = None
         self.tools: bool | None = None
+        self.computer_calls: list[dict[str, Any]] = []
         self.hold = False
         self.usage: dict[str, int] = dict(FAKE_USAGE)
 
@@ -154,6 +157,7 @@ class FakeHarness:
         mcp_stdio: list[Any] | None = None,
         skill_dirs: list[str] | None = None,
         abort: asyncio.Event | None = None,
+        computer: Computer | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         del session_id, cwd
@@ -168,6 +172,21 @@ class FakeHarness:
         self.mcp_http = list(mcp_http) if mcp_http is not None else None
         self.mcp_stdio = list(mcp_stdio) if mcp_stdio is not None else None
         self.skill_dirs = list(skill_dirs) if skill_dirs is not None else None
+        if tools and computer is not None and self.computer_calls:
+            calls = list(self.computer_calls)
+            self.computer_calls = []
+            for call in calls:
+                name = call.get("name")
+                call_id = call.get("call_id")
+                arguments = call.get("arguments")
+                if not isinstance(name, str) or not isinstance(call_id, str):
+                    continue
+                if not isinstance(arguments, dict):
+                    arguments = {}
+                result = await computer(name, arguments)
+                is_error = not bool(result.get("ok"))
+                for event in computer_item_events(call_id, name, is_error=is_error):
+                    yield event
         if tool_result is not None:
             if tool_result.get("success"):
                 output = tool_result.get("output")
@@ -225,13 +244,31 @@ def _function_tools(tools: list[Any] | None) -> list[dict[str, Any]]:
     ]
 
 
-def _cwd_and_tools(environment: dict[str, Any]) -> tuple[str | None, bool]:
+def _environment_id(environment: dict[str, Any]) -> uuid.UUID | None:
+    raw = environment.get("id")
+    if not isinstance(raw, str) or raw == "":
+        return None
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return None
+
+
+def _cwd_and_tools(
+    environment: dict[str, Any], env_hub: EnvironmentHub | None = None
+) -> tuple[str | None, bool, uuid.UUID | None]:
     env_type = environment.get("type")
-    if env_type in {"none", "self_hosted"}:
-        return None, False
+    if env_type == "none":
+        return None, False, None
+    if env_type == "self_hosted":
+        env_id = _environment_id(environment)
+        connected = (
+            env_hub is not None and env_id is not None and env_hub.connected(env_id)
+        )
+        return None, connected, env_id if connected else None
     cwd = environment.get("directory")
     cwd_path = cwd if isinstance(cwd, str) else None
-    return cwd_path, True
+    return cwd_path, True, None
 
 
 def with_env_actions(current: list[Any], actions: list[Any]) -> list[Any]:
@@ -249,7 +286,7 @@ def with_env_actions(current: list[Any], actions: list[Any]) -> list[Any]:
 
 
 def _skill_dirs(environment: dict[str, Any]) -> list[str]:
-    cwd_path, _tools = _cwd_and_tools(environment)
+    cwd_path, _tools, _env_id = _cwd_and_tools(environment)
     workspace = Path(cwd_path) if cwd_path is not None else None
     raw = environment.get("capability_directories")
     directories = None
@@ -677,6 +714,7 @@ async def run_turn(
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
     turn_timeout: timedelta | None = None,
+    env_hub: EnvironmentHub | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
     try:
@@ -686,12 +724,18 @@ async def run_turn(
         function_tools: list[dict[str, Any]]
         skill_dirs: list[str]
         model: str | None
+        computer: Computer | None
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
                 return
             ensure_openai_workspace(row.environment)
-            cwd_path, tools = _cwd_and_tools(row.environment)
+            cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
+            computer = (
+                bind_computer(env_hub, env_id)
+                if env_hub is not None and env_id is not None
+                else None
+            )
             function_tools, model = await _agent_tools_and_model(
                 db, tenant_id, row.agent_id
             )
@@ -761,6 +805,7 @@ async def run_turn(
                     mcp_stdio=mcp_stdio,
                     skill_dirs=skill_dirs,
                     abort=abort,
+                    computer=computer,
                 )
                 try:
                     if turn_timeout is None:
@@ -857,6 +902,7 @@ async def continue_turn(
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
     turn_timeout: timedelta | None = None,
+    env_hub: EnvironmentHub | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -864,6 +910,7 @@ async def continue_turn(
     skill_dirs: list[str]
     result: dict[str, Any]
     model: str | None = None
+    computer: Computer | None
     async with store.session() as db:
         row = await get_session(db, tenant_id, session_id)
         if row is None:
@@ -918,7 +965,12 @@ async def continue_turn(
             )
             return
         ensure_openai_workspace(row.environment)
-        cwd_path, tools = _cwd_and_tools(row.environment)
+        cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
+        computer = (
+            bind_computer(env_hub, env_id)
+            if env_hub is not None and env_id is not None
+            else None
+        )
         function_tools, model = await _agent_tools_and_model(
             db, tenant_id, row.agent_id
         )
@@ -955,6 +1007,7 @@ async def continue_turn(
                 mcp_http=mcp_http,
                 mcp_stdio=mcp_stdio,
                 skill_dirs=skill_dirs,
+                computer=computer,
             )
             try:
                 if turn_timeout is None:

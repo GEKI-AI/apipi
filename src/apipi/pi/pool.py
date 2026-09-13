@@ -18,6 +18,7 @@ class PiPool:
         self._procs: dict[uuid.UUID, PiProc] = {}
         self._stdio: dict[uuid.UUID, list[McpStdioServer]] = {}
         self._last: dict[uuid.UUID, float] = {}
+        self._spawn_tools: dict[uuid.UUID, bool] = {}
         self._lock = asyncio.Lock()
 
     async def get(
@@ -32,6 +33,10 @@ class PiPool:
     ) -> PiProc:
         async with self._lock:
             proc = self._procs.get(session_id)
+            spawned = self._spawn_tools.get(session_id)
+            if proc is not None and proc.alive and spawned != tools:
+                await self.kill(session_id)
+                proc = None
             if proc is None or not proc.alive:
                 if not self.has_capacity(session_id):
                     raise CapacityError("Too many live sessions")
@@ -44,6 +49,7 @@ class PiPool:
                     skill_dirs=skill_dirs,
                 )
                 self._procs[session_id] = proc
+                self._spawn_tools[session_id] = tools
             self._last[session_id] = time.monotonic()
             return proc
 
@@ -71,6 +77,7 @@ class PiPool:
     async def kill(self, session_id: uuid.UUID) -> None:
         proc = self._procs.pop(session_id, None)
         self._last.pop(session_id, None)
+        self._spawn_tools.pop(session_id, None)
         stdio = self._stdio.pop(session_id, None)
         if self.on_kill is not None:
             await self.on_kill(session_id, proc)

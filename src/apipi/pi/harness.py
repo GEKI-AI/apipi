@@ -2,6 +2,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
+from apipi.env.computer import Computer
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.map import map_pi_event
@@ -22,6 +23,7 @@ class PiHarness:
         mcp_http: list[McpHttpServer] | None = None,
         mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
+        computer: Computer | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         if session_id is None:
@@ -29,7 +31,7 @@ class PiHarness:
         proc = await self.pool.get(
             session_id,
             cwd=cwd,
-            tools=tools,
+            tools=False if computer is not None else tools,
             mcp_http=mcp_http,
             mcp_stdio=mcp_stdio,
             skill_dirs=skill_dirs,
