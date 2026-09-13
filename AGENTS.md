@@ -44,13 +44,13 @@ Before code, read the `docs/` page for the part you are changing.
 ## Stack
 
 Python 3.13, FastAPI, Postgres. uv only. Pi via RPC, one process per
-session. Run mode `APIPI_RUN_MODE` (`host` \| `jail` \| `microvm`),
-process default `jail`. Production SaaS/enterprise is `microvm`.
-`jail` is a fallback when KVM cannot run. `host` is local/dev only.
-`host`, `jail`, and `microvm` are implemented. `jail` and `microvm`
-probe a real sandbox before the API listens, then exit if it cannot
-start. No silent fallback. OpenAI-compatible `base_url`. No Node in
-the gateway.
+session. Run mode `APIPI_RUN_MODE` (`none` \| `microvm`, or
+`package.mod:Class`). Process default `none`. Production
+SaaS/enterprise is `microvm`. `none` is local/dev only. `microvm`
+probes a real sandbox before the API listens, then exits if it cannot
+start. Custom backends that set `needs_probe` do the same. No silent
+fallback. `host` and `jail` are not valid. OpenAI-compatible
+`base_url`. No Node in the gateway.
 
 ## Do not
 
@@ -75,7 +75,7 @@ the gateway.
 - Persist the public event before SSE
 - Fail unknown OpenAI fields clearly
 - Pin Pi when touching the adapter
-- Warn at startup when run mode is `host`
+- Warn at startup when run mode is `none`
 - Idle Pi TTL default 15 minutes (`APIPI_IDLE_TTL`)
 - uv for all Python (`uv sync`, `uv run`, `uv lock`)
 - Before commit: `./scripts/check`. Add `--docs` if docs changed.

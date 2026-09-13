@@ -20,6 +20,7 @@ from apipi.metrics import Metrics, mount_metrics
 from apipi.otel import Tracing, current_trace_id
 from apipi.pi.artifacts import harvest_session, reap_workspace_loop
 from apipi.pi.harness import PiHarness
+from apipi.pi.isolation import load_isolation
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
 from apipi.request_id import RequestIdMiddleware
@@ -199,6 +200,7 @@ def create_app(
     app.add_middleware(InstanceMiddleware, instance_id=resolved.instance_id)
     app.add_middleware(MaxBodyMiddleware, max_bytes=resolved.max_request_bytes)
     app.state.settings = resolved
+    app.state.isolation = load_isolation(resolved.run_mode)
     app.state.metrics = Metrics() if resolved.metrics else None
     if tracing is not None:
         app.state.tracing = tracing

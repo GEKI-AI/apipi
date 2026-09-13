@@ -6,7 +6,7 @@ Docker are in [run modes](run-modes.md). Sticky load balancing and
 nginx are in [multiple nodes](scale.md). Every setting is in
 [configuration](config.md).
 
-In this version the API process runs Pi (`host` / `jail` / `microvm`)
+In this version the API process runs Pi (`none` / `microvm`)
 plus a local directory or a `self_hosted` runner. A later [worker
 split](roadmap.md#workers) is not done. Do not treat this page as if
 workers already exist.
@@ -18,9 +18,8 @@ host needs `/dev/kvm` (bare metal, or a VM that exposes KVM). Nested
 Docker or nested KVM is a lab setup. It is not the production path.
 The Compose file in this repo starts Postgres only.
 
-`jail` is a fallback when KVM cannot run. `host` is local and CI.
-If the selected mode cannot start, `apipi serve` exits before it binds
-HTTP. There is no silent fallback.
+`none` is local and CI. If the selected mode cannot start, `apipi serve`
+exits before it binds HTTP. There is no silent fallback.
 
 Size the box from **live** sessions, not from Postgres row counts.
 Each live session is one Pi process or Firecracker guest. Guest RAM is
@@ -90,8 +89,7 @@ node cap (for example 8). A tenant that would pass it gets `429` with
 code `capacity_tenant`.
 
 `self_hosted` still costs a Pi guest on this host. The runner disk is
-elsewhere and is not capped here. `jail` uses `APIPI_JAIL_MEMORY`
-(default 512M) instead of KVM guest RAM.
+elsewhere and is not capped here.
 
 ## Overprovision
 
@@ -114,11 +112,10 @@ field. Details and defaults are in [configuration](config.md).
 
 | Setting | Why it matters |
 | --- | --- |
-| `APIPI_RUN_MODE` | Production is `microvm`. `jail` is a fallback. `host` is not production. |
+| `APIPI_RUN_MODE` | Production is `microvm`. `none` is not production. |
 | `APIPI_MAX_SESSIONS` | Live Pi on this node. Hard cap (`429` `capacity`). |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | Live Pi for one tenant (`429` `capacity_tenant`). |
 | `APIPI_MICROVM_MEM_MIB` / `APIPI_MICROVM_VCPUS` | Guest RAM and vCPUs. Raise RAM for Playwright. Keep 1 vCPU unless the computer is CPU-heavy. |
-| `APIPI_JAIL_MEMORY` | cgroup `memory.max` when the mode is `jail`. |
 | `APIPI_IDLE_TTL` | Kill idle Pi (default 15 minutes) and free a live slot. |
 | `APIPI_WORKSPACE_TTL` | Delete the local directory after Pi is already gone (default 1 hour). |
 | `APIPI_TURN_TIMEOUT` | Cancel a stuck turn (default 10 minutes). |

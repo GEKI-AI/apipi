@@ -80,7 +80,7 @@ def test_create_app_tracing_off(settings: Settings, store: Store) -> None:
 def test_create_app_otlp_when_endpoint_set(tmp_path: Path, store: Store) -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
         otel_endpoint="http://otel:4318",
     )

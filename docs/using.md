@@ -39,9 +39,8 @@ Install it for the client only:
 uv run --with openai python examples/openai_sdk.py
 ```
 
-The gateway must already be running. Jail is the default when `bwrap`,
-`pasta`, and cgroup v2 are present. Operators without those tools
-should serve with `APIPI_RUN_MODE=host`.
+The gateway must already be running. The process default is isolation
+`none`. Production operators serve with `APIPI_RUN_MODE=microvm`.
 
 ## 1. Run a task
 

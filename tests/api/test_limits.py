@@ -23,7 +23,7 @@ class _Alive:
 def limited_settings(tmp_path: Path) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
         max_sessions=1,
         max_request_bytes=1024,
@@ -66,7 +66,7 @@ async def test_capacity_rejects_new_turn(limited_client: AsyncClient) -> None:
 async def test_capacity_rejects_tenant_over_cap(store: Store, tmp_path: Path) -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
         max_sessions=8,
         max_sessions_per_tenant=1,

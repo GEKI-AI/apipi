@@ -1,21 +1,11 @@
 import asyncio
 
 from apipi.config import Settings
-
-
-async def _probe(settings: Settings) -> None:
-    if settings.run_mode == "jail":
-        from apipi.pi.jail import probe_jail
-
-        await probe_jail(settings)
-        return
-    if settings.run_mode == "microvm":
-        from apipi.pi.microvm import probe_microvm
-
-        await probe_microvm(settings)
+from apipi.pi.isolation import load_isolation
 
 
 def probe_run_mode(settings: Settings) -> None:
-    if settings.run_mode == "host":
+    backend = load_isolation(settings.run_mode)
+    if not backend.needs_probe:
         return
-    asyncio.run(_probe(settings))
+    asyncio.run(backend.probe(settings))

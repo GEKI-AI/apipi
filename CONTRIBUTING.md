@@ -123,7 +123,7 @@ change as the code.
 
 Gateway tests mock Pi RPC. Local pytest uses SQLite.
 
-Commands, what each suite contains, and what jail and microvm need
+Commands, what each suite contains, and what microvm needs
 are in `docs/tests.md`.
 
 GitHub CI runs everything that finishes in a couple of seconds:

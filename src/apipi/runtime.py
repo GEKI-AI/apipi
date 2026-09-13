@@ -506,7 +506,12 @@ async def _write_turn_log(
         db, tenant_id, session_id, turn_id, labels
     )
     latency_ms = _latency_ms(turn.created_at)
-    run_mode = settings.run_mode if settings is not None else ""
+    if settings is not None:
+        from apipi.pi.isolation import isolation_name
+
+        run_mode = isolation_name(settings.run_mode)
+    else:
+        run_mode = ""
     instance_id = settings.instance_id if settings is not None else None
     store = settings.usage_store if settings is not None else "turns"
     created = utc_now()

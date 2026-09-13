@@ -17,10 +17,9 @@ Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model URL.
 The gateway pins Pi 0.85.1.
 
 Production run mode is `microvm`. It needs `/dev/kvm`, `firecracker`,
-`jailer`, kernel and rootfs images, `ip`, `iptables`, and `tc`. `jail` is a
-fallback when KVM cannot run; it needs `bwrap`, `pasta`, and cgroup
-v2. `host` is for local tests. If the selected mode cannot start, the
-process exits before it binds HTTP. There is no silent fallback.
+`jailer`, kernel and rootfs images, `ip`, `iptables`, and `tc`. `none`
+is for local tests. If the selected mode cannot start, the process
+exits before it binds HTTP. There is no silent fallback.
 Packages, systemd, Docker, and when to use each mode are in
 [run modes](run-modes.md). Host sizing, scale-out, and drain are in
 [production](production.md).
@@ -76,21 +75,20 @@ down:
 APIPI_RUN_MODE=microvm apipi serve
 ```
 
-The process default is `jail` so a machine without KVM can still
-start. That is a fallback. If jail tools are missing, the process
-exits. Operators without those tools must set `host`:
+The process default is `none` so a machine without KVM can still
+start. That is not production:
 
 ```
-APIPI_RUN_MODE=host apipi serve
+APIPI_RUN_MODE=none apipi serve
 ```
 
 That binds `0.0.0.0:8000` by default. `--host`, `--port`, and
-`--config` change the bind and the TOML file. `host` runs Pi as a child
+`--config` change the bind and the TOML file. `none` runs Pi as a child
 of the gateway. The process logs a warning:
-`APIPI_RUN_MODE=host is not suited for production`. `jail` and
-`microvm` do not log that warning. Startup also logs usage store
-depth, retention, whether usage and payload export are on, and whether
-Prometheus metrics and OpenTelemetry traces are on.
+`APIPI_RUN_MODE=none is not suited for production`. `microvm` does not
+log that warning. Startup also logs usage store depth, retention,
+whether usage and payload export are on, and whether Prometheus
+metrics and OpenTelemetry traces are on.
 
 `microvm` reaches the model URL and HTTP MCP through a TAP device.
 There is no host loopback to Postgres. That TAP is allowlisted and
@@ -108,8 +106,7 @@ sticky routing. See [production](production.md) and
 
 Production is systemd on the host with `APIPI_RUN_MODE=microvm`. Keep
 secrets out of the unit file. Microvm units need `/dev/kvm` and
-permission to create TAP devices. Jail units, when used as a fallback,
-need `Delegate=yes` so cgroup memory works. Full unit examples are in
+permission to create TAP devices. Full unit examples are in
 [run modes](run-modes.md).
 
 ```
@@ -123,8 +120,9 @@ WorkingDirectory=/opt/apipi
 EnvironmentFile=/etc/apipi.env
 ExecStart=/opt/apipi/.venv/bin/apipi serve --config /etc/apipi.toml
 Restart=on-failure
-Delegate=yes
-DelegateControllers=memory pids
+DeviceAllow=/dev/kvm rw
+DeviceAllow=/dev/net/tun rw
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
@@ -132,8 +130,7 @@ WantedBy=multi-user.target
 
 Environment variables in `/etc/apipi.env` override keys in the TOML
 file. Bind, run mode, and the auth callback are the usual ones to set
-there. Do not set `NoNewPrivileges=yes` on a jail unit; bubblewrap
-needs user namespaces.
+there.
 
 ## Auth callback
 

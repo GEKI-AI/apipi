@@ -119,7 +119,7 @@ async def test_incoming_tenant_header_is_not_trusted(client: AsyncClient) -> Non
 async def test_instance_header_when_set(store: Store, tmp_path: Path) -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
         instance_id="node-a",
     )

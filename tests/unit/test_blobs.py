@@ -28,7 +28,7 @@ def _settings(
 ) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
         artifact_store=artifact_store,
         s3_bucket=s3_bucket,
@@ -167,7 +167,7 @@ def test_blob_store_local_default(tmp_path: Path) -> None:
 def test_s3_bucket_required(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_ARTIFACT_STORE", "s3")
     with pytest.raises(ConfigError, match="APIPI_S3_BUCKET is required"):
         load_settings()

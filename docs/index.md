@@ -40,13 +40,11 @@ uv sync
 docker compose up -d postgres
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
 apipi migrate
-APIPI_RUN_MODE=host apipi serve
+APIPI_RUN_MODE=none apipi serve
 ```
 
 That binds `0.0.0.0:8000`. Production is `microvm`. The process
-default is `jail` when `bwrap`, `pasta`, and cgroup v2 can start.
-Operators without those tools must set `host`. Full setup is in
-[Install](install.md).
+default is `none`. Full setup is in [Install](install.md).
 
 Point a client at `http://localhost:8000/v1` with
 `Authorization: Bearer`. Default auth accepts any non-empty bearer and

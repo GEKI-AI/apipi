@@ -5,9 +5,9 @@ import pytest
 
 from apipi.cli import main, prepare_serve
 from apipi.config import (
-    HOST_MODE_WARNING,
     METRICS_OFF,
     METRICS_ON,
+    NONE_MODE_WARNING,
     OTEL_SET,
     OTEL_UNSET,
     PAYLOAD_EXPORT_OFF,
@@ -19,10 +19,10 @@ from apipi.config import (
 )
 
 
-def _host_settings() -> Settings:
+def _none_settings() -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
     )
 
 
@@ -30,23 +30,23 @@ def _noop_probe(_settings: Settings) -> None:
     return None
 
 
-def test_probe_run_mode_skips_host() -> None:
+def test_probe_run_mode_skips_none() -> None:
     from apipi.pi.probe import probe_run_mode
 
-    probe_run_mode(_host_settings())
+    probe_run_mode(_none_settings())
 
 
-def test_prepare_serve_warns_on_host(caplog: pytest.LogCaptureFixture) -> None:
+def test_prepare_serve_warns_on_none(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.WARNING, logger="apipi")
-    prepare_serve(_host_settings())
-    assert HOST_MODE_WARNING in caplog.text
+    prepare_serve(_none_settings())
+    assert NONE_MODE_WARNING in caplog.text
 
 
 def test_prepare_serve_logs_default_observability(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="apipi")
-    prepare_serve(_host_settings())
+    prepare_serve(_none_settings())
     messages = [record.getMessage() for record in caplog.records]
     assert USAGE_STORE_TURNS in messages
     assert "usage retention 15d" in messages
@@ -64,7 +64,7 @@ def test_prepare_serve_logs_enabled_exports(
     caplog.set_level(logging.INFO, logger="apipi")
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
         metrics=True,
         otel_endpoint="http://otel:4318",
     )
@@ -82,7 +82,7 @@ def test_prepare_serve_ignores_legacy_turn_log_flag(
 ) -> None:
     monkeypatch.setenv("APIPI_TURN_LOG", "off")
     caplog.set_level(logging.INFO, logger="apipi")
-    prepare_serve(_host_settings())
+    prepare_serve(_none_settings())
     assert USAGE_STORE_TURNS in caplog.text
 
 
@@ -91,13 +91,13 @@ def test_prepare_serve_rejects_prompt_body_logging(
 ) -> None:
     monkeypatch.setenv("APIPI_LOG_PROMPTS", "1")
     with pytest.raises(ConfigError, match="prompt or completion bodies"):
-        prepare_serve(_host_settings())
+        prepare_serve(_none_settings())
 
 
 def test_prepare_serve_rejects_sqlite() -> None:
     settings = Settings(
         database_url="sqlite+aiosqlite:///:memory:",
-        run_mode="host",
+        run_mode="none",
     )
     with pytest.raises(ConfigError, match="Postgres"):
         prepare_serve(settings)
@@ -151,13 +151,12 @@ def test_serve_microvm_starts_when_tools_present(
     assert main(["serve"]) == 0
     assert called["host"] == "0.0.0.0"
     assert called["port"] == 8000
-    assert HOST_MODE_WARNING not in caplog.text
+    assert NONE_MODE_WARNING not in caplog.text
 
 
-def test_serve_jail_does_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serve_host_does_not_start(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "jail")
-    monkeypatch.setattr("apipi.pi.jail.shutil.which", lambda _name: None)
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
 
     def boom(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("must not start")
@@ -166,27 +165,15 @@ def test_serve_jail_does_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert main(["serve"]) == 1
 
 
-def test_serve_jail_starts_when_tools_present(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_serve_jail_does_not_start(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "jail")
-    monkeypatch.setattr("apipi.pi.jail.shutil.which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr("apipi.pi.jail.cgroup_v2_available", lambda: True)
-    monkeypatch.setattr("apipi.cli.probe_run_mode", _noop_probe)
-    caplog.set_level(logging.WARNING)
-    called: dict[str, object] = {}
 
-    def fake_run(app: object, *, host: str, port: int, **_kwargs: object) -> None:
-        called["host"] = host
-        called["port"] = port
-        called["app"] = app
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("must not start")
 
-    monkeypatch.setattr("apipi.cli.uvicorn.run", fake_run)
-    assert main(["serve"]) == 0
-    assert called["host"] == "0.0.0.0"
-    assert called["port"] == 8000
-    assert HOST_MODE_WARNING not in caplog.text
+    monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
+    assert main(["serve"]) == 1
 
 
 def test_serve_microvm_probe_fail_does_not_listen(
@@ -216,28 +203,11 @@ def test_serve_microvm_probe_fail_does_not_listen(
     assert main(["serve"]) == 1
 
 
-def test_serve_jail_probe_fail_does_not_listen(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "jail")
-    monkeypatch.setattr("apipi.pi.jail.shutil.which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr("apipi.pi.jail.cgroup_v2_available", lambda: True)
-
-    def fail(_settings: Settings) -> None:
-        raise ConfigError("APIPI_RUN_MODE=jail cannot start")
-
-    def boom(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("must not start")
-
-    monkeypatch.setattr("apipi.cli.probe_run_mode", fail)
-    monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
-    assert main(["serve"]) == 1
-
-
-def test_serve_host_starts(
+def test_serve_none_starts(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     caplog.set_level(logging.WARNING)
     called: dict[str, object] = {}
 
@@ -250,10 +220,10 @@ def test_serve_host_starts(
     assert main(["serve"]) == 0
     assert called["host"] == "0.0.0.0"
     assert called["port"] == 8000
-    assert HOST_MODE_WARNING in caplog.text
+    assert NONE_MODE_WARNING in caplog.text
 
 
 def test_serve_requires_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
     assert main(["serve"]) == 1

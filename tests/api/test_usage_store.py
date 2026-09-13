@@ -154,7 +154,7 @@ async def test_usage_export_receives_event(
     assert event["session_id"] == session_id
     assert event["status"] == "completed"
     assert event["environment_type"] == "none"
-    assert event["run_mode"] == "host"
+    assert event["run_mode"] == "none"
 
 
 async def test_usage_export_failure_does_not_break_turn(

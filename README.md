@@ -45,28 +45,26 @@ Pi CLI (`pi --mode rpc`) on `PATH`.
 
 ## Run
 
-Production run mode is `microvm`. The process default is `jail` so a
-machine without KVM can still start. `jail` starts Pi in a Linux
-namespace jail when `bwrap`, `pasta`, and cgroup v2 are present:
+Production run mode is `microvm`. The process default is `none` so a
+machine without KVM can still start. `none` runs Pi as a child of the
+gateway and logs a warning: it is not suited for production.
 
 ```
 apipi serve
 ```
 
-If those tools are missing, the process exits. Operators without jail
-tools must set `host`. `microvm` starts Pi in a Firecracker guest when
-`/dev/kvm`, `firecracker`, `jailer`, guest images, `ip`, and
-`iptables` are present. Otherwise that mode exits too:
+`microvm` starts Pi in a Firecracker guest when `/dev/kvm`,
+`firecracker`, `jailer`, guest images, `ip`, and `iptables` are
+present. Otherwise that mode exits. There is no silent fallback to
+another mode:
 
 ```
-APIPI_RUN_MODE=host apipi serve
+APIPI_RUN_MODE=microvm apipi serve
 ```
 
-That binds `0.0.0.0:8000` by default. `host` runs Pi as a child of the
-gateway. The process logs a warning: it is not suited for production.
-There is no silent fallback to another mode. Settings load from
-environment variables, optional `.env`, and optional `apipi.toml`.
-See the install and configuration pages in the docs.
+That binds `0.0.0.0:8000` by default. Settings load from environment
+variables, optional `.env`, and optional `apipi.toml`. See the install
+and configuration pages in the docs.
 
 ## Use
 

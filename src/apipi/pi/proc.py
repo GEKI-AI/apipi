@@ -4,7 +4,7 @@ import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from apipi.config import ConfigError, Settings
+from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.version import PINNED_PI
@@ -146,43 +146,13 @@ async def spawn_pi(
     mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
 ) -> PiProc:
-    if settings.run_mode == "jail":
-        from apipi.pi.jail import spawn_jailed_pi
+    from apipi.pi.isolation import load_isolation
 
-        return await spawn_jailed_pi(
-            settings,
-            cwd=cwd,
-            tools=tools,
-            mcp_http=mcp_http,
-            mcp_stdio=mcp_stdio,
-            skill_dirs=skill_dirs,
-        )
-    if settings.run_mode == "microvm":
-        from apipi.pi.microvm import spawn_microvm_pi
-
-        return await spawn_microvm_pi(
-            settings,
-            cwd=cwd,
-            tools=tools,
-            mcp_http=mcp_http,
-            mcp_stdio=mcp_stdio,
-            skill_dirs=skill_dirs,
-        )
-    if settings.run_mode != "host":
-        raise ConfigError(f"APIPI_RUN_MODE={settings.run_mode} is not available")
-    args = pi_command_args(
+    return await load_isolation(settings.run_mode).spawn(
         settings,
+        cwd=cwd,
         tools=tools,
         mcp_http=mcp_http,
         mcp_stdio=mcp_stdio,
         skill_dirs=skill_dirs,
     )
-    process = await asyncio.create_subprocess_exec(
-        *args,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=cwd,
-        env=pi_env(settings, mcp_http, mcp_stdio),
-    )
-    return PiProc(process)

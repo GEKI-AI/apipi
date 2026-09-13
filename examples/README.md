@@ -12,6 +12,7 @@ from the environment, not from these files.
 | [apipi.toml](apipi.toml) | Gateway settings file |
 | [env.example](env.example) | Dotenv template; copy to `.env` |
 | [auth_callback.py](auth_callback.py) | Auth callback (`APIPI_AUTH`) |
+| [isolation.py](isolation.py) | Custom isolation backend (`APIPI_RUN_MODE`) |
 | [tavily.yaml](tavily.yaml) | Web search (Tavily hosted MCP) |
 | [playwright.yaml](playwright.yaml) | Browser (Playwright MCP, headless) |
 
@@ -40,14 +41,13 @@ script only:
 uv run --with openai python examples/openai_sdk.py
 ```
 
-The gateway must already be running. Jail is the default when `bwrap`,
-`pasta`, and cgroup v2 are present. Operators without those tools
-should serve with host mode. `microvm` starts when `/dev/kvm`,
-Firecracker, jailer, guest images, `ip`, and `iptables` are present;
-otherwise serve exits. Send a bearer the client will send:
+The gateway must already be running. Isolation `none` is the default.
+`microvm` starts when `/dev/kvm`, Firecracker, jailer, guest images,
+`ip`, and `iptables` are present; otherwise that mode exits. Send a
+bearer the client will send:
 
 ```
-APIPI_RUN_MODE=host apipi serve
+APIPI_RUN_MODE=none apipi serve
 ```
 
 Default auth accepts any non-empty bearer and hashes it into a tenant

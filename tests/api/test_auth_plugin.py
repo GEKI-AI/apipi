@@ -21,7 +21,7 @@ def _auth(token: str) -> dict[str, str]:
 def _settings(tmp_path: Path, plugin: str, ttl: timedelta) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="host",
+        run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
         auth=plugin,
         auth_cache_ttl=ttl,

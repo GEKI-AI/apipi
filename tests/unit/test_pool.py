@@ -14,7 +14,7 @@ def test_has_capacity_counts_live_procs() -> None:
     pool = PiPool(
         Settings(
             database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-            run_mode="host",
+            run_mode="none",
             max_sessions=1,
         )
     )
@@ -32,7 +32,7 @@ def test_has_capacity_per_tenant() -> None:
     pool = PiPool(
         Settings(
             database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-            run_mode="host",
+            run_mode="none",
             max_sessions=8,
             max_sessions_per_tenant=1,
         )
