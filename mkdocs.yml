@@ -70,9 +70,11 @@ nav:
   - Home: index.md
   - Get started:
       - Install: install.md
-      - Quickstart: quickstart.md
       - Configuration: config.md
       - Run modes: run-modes.md
+      - Using the API: using.md
+  - Concepts:
+      - Agents, sessions, and storage: concepts.md
   - Reference:
       - API: api.md
       - Auth: auth.md

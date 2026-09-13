@@ -87,7 +87,7 @@ OpenAI Python client (`beta.agents`) is local only and skips if the SDK
 is not installed. That check creates a session with an inline agent and
 `openai_hosted`, the same fields as `examples/openai_sdk.py`. The
 runnable script streams against a live gateway; see
-[quickstart](quickstart.md).
+[Using the API](using.md).
 
 GitHub CI installs `bubblewrap` and `passt` and tries cgroup v2
 delegation so live jail tests can run. If jail still cannot start,

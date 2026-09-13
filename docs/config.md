@@ -2,7 +2,9 @@
 
 The gateway reads settings from environment variables, an optional
 `.env` file, and an optional TOML file. Environment variables win.
-`.env` wins over TOML. Defaults apply when nothing is set.
+`.env` wins over TOML. Defaults apply when nothing is set. Install the
+process first ([Install](install.md)). Call it with
+[Using the API](using.md).
 
 This is the same model pydantic-settings uses in other Python services.
 systemd `Environment=` / `EnvironmentFile=` and Kubernetes env work

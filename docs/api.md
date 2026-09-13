@@ -186,7 +186,7 @@ See [environments](environments.md).
 
 Official clients work for the subset we implement. The OpenAI Python
 client example is `examples/openai_sdk.py`. The same create-and-stream
-steps are in [quickstart](quickstart.md).
+steps are in [Using the API](using.md).
 
 | Surface | Status |
 | --- | --- |
