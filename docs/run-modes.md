@@ -66,8 +66,29 @@ tools, and point at operator-provided guest images:
 | Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4). Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/pi/guest.sh`. |
 | TAP / NAT | Permission to create a TAP device, set `ip_forward`, and add iptables rules. Root or `CAP_NET_ADMIN` is the usual setup. |
 
-Do not vendor a distro in git. Missing `/dev/kvm`, binaries, images,
-`ip`, or `iptables` exits the process.
+Do not vendor a distro in git. Build a rootfs on the operator machine:
+
+```
+./scripts/microvm-rootfs
+```
+
+That writes `rootfs.ext4` and, when the download works, a Firecracker
+`vmlinux` under `$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`).
+Pass a directory argument to choose another location. The script needs
+`curl`, `tar`, `mkfs.ext4`, `mount`, and root (or `sudo`) for the
+loop mount and chroot. It installs Alpine, Node, the pinned Pi CLI,
+Python 3, `ip`, `socat`, and copies `src/apipi/pi/guest.sh` to
+`/sbin/apipi-guest`.
+
+```
+export APIPI_MICROVM_ROOTFS="$HOME/.cache/apipi/microvm/rootfs.ext4"
+export APIPI_MICROVM_KERNEL="$HOME/.cache/apipi/microvm/vmlinux"
+```
+
+If the kernel download fails, get a Firecracker-compatible `vmlinux`
+from the [Firecracker getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)
+guide and point `APIPI_MICROVM_KERNEL` at it. Missing `/dev/kvm`,
+binaries, images, `ip`, or `iptables` exits the process.
 
 ## Storage
 
@@ -193,6 +214,7 @@ delegation, then runs `pytest -m "not slow"`. That includes `host` e2e
 and live jail tests when `bwrap`, `pasta`, and cgroup v2 can start.
 If jail still cannot start, those tests skip. That skip is not a
 fallback to `host`. Live microvm boots are local machines with KVM
-only. Do not add Firecracker to GitHub.
+only. Those tests skip when `/dev/kvm`, Firecracker, jailer, or guest
+images are missing. Do not add Firecracker to GitHub.
 
 Settings for run mode are in [configuration](config.md).
