@@ -88,8 +88,9 @@ That binds `0.0.0.0:8000` by default. `--host`, `--port`, and
 `--config` change the bind and the TOML file. `host` runs Pi as a child
 of the gateway. The process logs a warning:
 `APIPI_RUN_MODE=host is not suited for production`. `jail` and
-`microvm` do not log that warning. Startup also logs that the turn log
-is on, and whether Prometheus metrics and OpenTelemetry export are on.
+`microvm` do not log that warning. Startup also logs usage store
+depth, retention, whether usage export is on, and whether Prometheus
+metrics and OpenTelemetry traces are on.
 
 `microvm` reaches the model URL and HTTP MCP through a TAP device.
 There is no host loopback to Postgres. That TAP is allowlisted and

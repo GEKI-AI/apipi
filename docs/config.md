@@ -70,11 +70,17 @@ secrets. Do not commit `.env`.
 | `APIPI_S3_ADDRESSING` | `s3_addressing` | `auto` | `auto` \| `path` \| `virtual`. `auto` uses path-style when `s3_endpoint` is set. |
 | `OPENAI_BASE_URL` | `model_base_url` | unset | Model host passed to Pi. Not the gateway URL. |
 | `OPENAI_API_KEY` | `model_api_key` | unset | Model key passed to Pi. |
+| `APIPI_USAGE_STORE` | `usage_store` | `turns` | How much agent usage hits Postgres: `off` \| `rollups` \| `turns`. See [usage](usage.md). |
+| `APIPI_USAGE_RETENTION` | `usage_retention` | `15d` | Delete turn log rows older than this. Empty means no purge. Rollups stay. |
+| `APIPI_USAGE_EXPORT_URL` | `usage_export_url` | unset | HTTPS POST of one non-text agent usage event per turn. Off when unset. |
+| `APIPI_USAGE_EXPORT_TOKEN` | `usage_export_token` | unset | Bearer for the usage export URL. Put this in the process environment. |
+| `APIPI_USAGE_EXPORT_TIMEOUT` | `usage_export_timeout` | `5s` | Timeout for each export attempt. |
+| `APIPI_USAGE_EXPORT_RETRIES` | `usage_export_retries` | `1` | Extra tries after the first, then drop. A failed export does not break the turn. |
 | `APIPI_METRICS` | `metrics` | off | Prometheus text at `/metrics` when on. No bearer. |
 | `APIPI_OTEL_ENDPOINT` | `otel_endpoint` | unset | OTLP/HTTP traces when set. `/v1/traces` is appended if missing. |
 | `APIPI_CONFIG` | — | unset | Path to a TOML file. Ignored when `apipi serve --config` is set. |
 
-Durations are like `15m`, `30s`, `2h`. Sizes are like `512M` or `1MiB`
+Durations are like `15m`, `30s`, `2h`, `15d`. Sizes are like `512M` or `1MiB`
 (1024-based).
 
 ## Run mode
@@ -205,6 +211,8 @@ max_request_bytes = "1MiB"
 max_workspace_bytes = "1GiB"
 max_artifact_bytes = "512MiB"
 db_pool_size = 5
+usage_store = "turns"
+usage_retention = "15d"
 metrics = false
 ```
 

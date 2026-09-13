@@ -1,0 +1,63 @@
+import json
+
+import httpx
+import pytest
+
+from apipi.config import Settings
+from apipi.usage_export import UsageExporter
+
+_OriginalClient = httpx.AsyncClient
+
+
+def _settings(*, retries: int = 1) -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="host",
+        usage_export_url="http://export.test/usage",
+        usage_export_retries=retries,
+    )
+
+
+class _Client:
+    def __init__(self, transport: httpx.MockTransport) -> None:
+        self._client = _OriginalClient(transport=transport)
+
+    async def __aenter__(self) -> httpx.AsyncClient:
+        return self._client
+
+    async def __aexit__(self, *_args: object) -> None:
+        await self._client.aclose()
+
+
+async def test_usage_export_posts_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(204)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "apipi.usage_export.httpx.AsyncClient",
+        lambda **_kwargs: _Client(transport),
+    )
+    await UsageExporter(_settings())._post({"tenant_id": "t", "status": "completed"})
+    assert len(captured) == 1
+    assert json.loads(captured[0].content) == {
+        "tenant_id": "t",
+        "status": "completed",
+    }
+
+
+async def test_usage_export_drop_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=request)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "apipi.usage_export.httpx.AsyncClient",
+        lambda **_kwargs: _Client(transport),
+    )
+    await UsageExporter(_settings(retries=0))._post({"turn_id": "x"})

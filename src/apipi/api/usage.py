@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.auth import get_db, not_found, require_tenant
 from apipi.errors import ApiError
 from apipi.store.models import Tenant
-from apipi.store.repo import get_session, get_turn_log, usage_totals
+from apipi.store.repo import (
+    get_session,
+    get_turn,
+    get_turn_log,
+    usage_day,
+    usage_totals,
+)
 
 router = APIRouter()
 
@@ -32,9 +38,19 @@ async def get_usage(
             not_found()
         return await usage_totals(db, tenant.id, session_id=session_id)
     if turn_id is not None:
+        turn = await get_turn(db, tenant.id, turn_id)
+        if turn is None:
+            not_found()
         row = await get_turn_log(db, tenant.id, turn_id)
         if row is None:
-            not_found()
+            return {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "total_tokens": 0,
+                "turns": 0,
+            }
         return {
             "prompt_tokens": row.prompt_tokens,
             "completion_tokens": row.completion_tokens,
@@ -44,10 +60,7 @@ async def get_usage(
             "turns": 1,
         }
     if day is not None:
-        start = datetime(day.year, day.month, day.day, tzinfo=UTC)
-        return await usage_totals(
-            db, tenant.id, since=start, until=start + timedelta(days=1)
-        )
+        return await usage_day(db, tenant.id, day)
     raise ApiError(
         "invalid_request",
         "Provide one of session_id, turn_id, or day",

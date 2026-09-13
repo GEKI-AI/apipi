@@ -87,6 +87,9 @@ async def test_completed_turn_writes_log_without_message_text(
     assert row.tool_counts == {}
     assert row.mcp_names == []
     assert row.mcp_counts == {}
+    assert row.environment_type == "none"
+    assert row.run_mode == "host"
+    assert row.artifact_bytes == 0
     blob = _blob(row)
     assert "hello" not in blob
     assert "secret-prompt" not in blob

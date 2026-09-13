@@ -7,7 +7,7 @@ events, send a follow-up, and delete the session when you are done. The
 create-and-stream call matches
 [OpenAI's Agents API quickstart](https://developers.openai.com/api/docs/guides/agents-api/quickstart?lang=python).
 The HTTP surface is in [API](api.md). How agents, sessions, and files
-last is in [Concepts](concepts.md). Token totals and the turn log are
+last is in [Concepts](concepts.md). Token totals and usage are
 in [Usage](usage.md), not here.
 
 `environment.type` `openai_hosted` is OpenAI's field name for a **local

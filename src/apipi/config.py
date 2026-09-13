@@ -22,14 +22,43 @@ RunMode = Literal["host", "jail", "microvm"]
 LogLevel = Literal["debug", "info", "warning", "error", "critical"]
 ArtifactStore = Literal["local", "s3"]
 S3Addressing = Literal["auto", "path", "virtual"]
+UsageStore = Literal["off", "rollups", "turns"]
 IMPLEMENTED_RUN_MODES: frozenset[str] = frozenset({"host", "jail", "microvm"})
 
 HOST_MODE_WARNING = "APIPI_RUN_MODE=host is not suited for production"
-TURN_LOG_ON = "turn log on"
+USAGE_STORE_OFF = "usage store off"
+USAGE_STORE_ROLLUPS = "usage store rollups"
+USAGE_STORE_TURNS = "usage store turns"
+USAGE_EXPORT_ON = "usage export on"
+USAGE_EXPORT_OFF = "usage export off"
 METRICS_ON = "APIPI_METRICS on"
 METRICS_OFF = "APIPI_METRICS off"
 OTEL_SET = "APIPI_OTEL_ENDPOINT set"
 OTEL_UNSET = "APIPI_OTEL_ENDPOINT unset"
+
+
+def usage_store_log(store: str) -> str:
+    if store == "off":
+        return USAGE_STORE_OFF
+    if store == "rollups":
+        return USAGE_STORE_ROLLUPS
+    return USAGE_STORE_TURNS
+
+
+def usage_retention_log(value: timedelta | None) -> str:
+    if value is None:
+        return "usage retention unset"
+    days = value.total_seconds() / 86400
+    if days == int(days) and days >= 1:
+        return f"usage retention {int(days)}d"
+    hours = value.total_seconds() / 3600
+    if hours == int(hours) and hours >= 1:
+        return f"usage retention {int(hours)}h"
+    minutes = value.total_seconds() / 60
+    if minutes == int(minutes) and minutes >= 1:
+        return f"usage retention {int(minutes)}m"
+    return f"usage retention {int(value.total_seconds())}s"
+
 
 _PROMPT_BODY_ENV = frozenset(
     {
@@ -79,6 +108,8 @@ def parse_ttl(value: object) -> object:
     raw = value.strip().lower()
     if raw.endswith("ms"):
         return timedelta(milliseconds=int(raw[:-2]))
+    if raw.endswith("d"):
+        return timedelta(days=int(raw[:-1]))
     if raw.endswith("h"):
         return timedelta(hours=int(raw[:-1]))
     if raw.endswith("m"):
@@ -86,6 +117,26 @@ def parse_ttl(value: object) -> object:
     if raw.endswith("s"):
         return timedelta(seconds=int(raw[:-1]))
     raise ValueError("TTL must be like 15m")
+
+
+def parse_optional_ttl(value: object) -> object:
+    if value is None:
+        return None
+    if isinstance(value, timedelta):
+        return value
+    if isinstance(value, str) and not value.strip():
+        return None
+    return parse_ttl(value)
+
+
+def parse_export_url(value: object) -> object:
+    parsed = parse_optional_endpoint(value)
+    if parsed is None or not isinstance(parsed, str):
+        return parsed
+    raw = parsed.strip()
+    if not raw.startswith(("http://", "https://")):
+        raise ValueError("APIPI_USAGE_EXPORT_URL must be an http URL")
+    return raw
 
 
 def parse_bytes(value: object) -> object:
@@ -129,8 +180,10 @@ def parse_hosts(value: object) -> object:
 
 
 IdleTtl = Annotated[timedelta, BeforeValidator(parse_ttl)]
+OptionalTtl = Annotated[timedelta | None, BeforeValidator(parse_optional_ttl)]
 ByteSize = Annotated[int, BeforeValidator(parse_bytes)]
 OtelEndpoint = Annotated[str | None, BeforeValidator(parse_optional_endpoint)]
+ExportUrl = Annotated[str | None, BeforeValidator(parse_export_url)]
 HostList = Annotated[str, BeforeValidator(parse_hosts)]
 InstanceId = Annotated[str | None, BeforeValidator(parse_instance_id)]
 
@@ -324,6 +377,35 @@ class Settings(BaseSettings):
         default="auto",
         validation_alias=AliasChoices("APIPI_S3_ADDRESSING", "s3_addressing"),
     )
+    usage_store: UsageStore = Field(
+        default="turns",
+        validation_alias=AliasChoices("APIPI_USAGE_STORE", "usage_store"),
+    )
+    usage_retention: OptionalTtl = Field(
+        default=timedelta(days=15),
+        validation_alias=AliasChoices("APIPI_USAGE_RETENTION", "usage_retention"),
+    )
+    usage_export_url: ExportUrl = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_USAGE_EXPORT_URL", "usage_export_url"),
+    )
+    usage_export_token: OtelEndpoint = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_USAGE_EXPORT_TOKEN", "usage_export_token"),
+    )
+    usage_export_timeout: IdleTtl = Field(
+        default=timedelta(seconds=5),
+        validation_alias=AliasChoices(
+            "APIPI_USAGE_EXPORT_TIMEOUT", "usage_export_timeout"
+        ),
+    )
+    usage_export_retries: int = Field(
+        default=1,
+        ge=0,
+        validation_alias=AliasChoices(
+            "APIPI_USAGE_EXPORT_RETRIES", "usage_export_retries"
+        ),
+    )
 
     @model_validator(mode="after")
     def run_mode_known(self) -> Self:
@@ -468,6 +550,16 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_S3_BUCKET is required"
         if "s3_addressing" in loc:
             return "APIPI_S3_ADDRESSING must be auto, path, or virtual"
+        if "usage_store" in loc or "APIPI_USAGE_STORE" in loc:
+            return "APIPI_USAGE_STORE must be off, rollups, or turns"
+        if "usage_retention" in loc or "APIPI_USAGE_RETENTION" in loc:
+            return "APIPI_USAGE_RETENTION must be like 15d"
+        if "usage_export_url" in loc or "APIPI_USAGE_EXPORT_URL" in loc:
+            return "APIPI_USAGE_EXPORT_URL must be an http URL"
+        if "usage_export_timeout" in loc or "APIPI_USAGE_EXPORT_TIMEOUT" in loc:
+            return "APIPI_USAGE_EXPORT_TIMEOUT must be like 15m"
+        if "usage_export_retries" in loc or "APIPI_USAGE_EXPORT_RETRIES" in loc:
+            return "APIPI_USAGE_EXPORT_RETRIES must be at least 0"
     return "invalid configuration"
 
 

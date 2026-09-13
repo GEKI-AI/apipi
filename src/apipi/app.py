@@ -25,6 +25,8 @@ from apipi.pi.proc import PiProc
 from apipi.request_id import RequestIdMiddleware
 from apipi.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store, create_engine
+from apipi.store.models import utc_now
+from apipi.store.repo import purge_turn_logs
 
 _SKIP_CONTEXT = frozenset({"/health", "/metrics"})
 _CONTEXT_HEADERS = frozenset(
@@ -142,6 +144,16 @@ class MaxBodyMiddleware:
         await self.app(scope, receive, send)
 
 
+async def _purge_usage_loop(settings: Settings, store: Store) -> None:
+    while True:
+        await asyncio.sleep(3600)
+        if settings.usage_retention is None:
+            continue
+        cutoff = utc_now() - settings.usage_retention
+        async with store.session() as db:
+            await purge_turn_logs(db, cutoff)
+
+
 def create_app(
     settings: Settings | None = None,
     store: Store | None = None,
@@ -168,11 +180,13 @@ def create_app(
         workspace_reap = asyncio.create_task(
             reap_workspace_loop(resolved, app.state.store, resolved_pool)
         )
+        usage_reap = asyncio.create_task(_purge_usage_loop(resolved, app.state.store))
         try:
             yield
         finally:
             reap.cancel()
             workspace_reap.cancel()
+            usage_reap.cancel()
             await resolved_pool.close()
             current = getattr(app.state, "tracing", None)
             if isinstance(current, Tracing):

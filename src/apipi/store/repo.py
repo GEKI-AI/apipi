@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.store.errors import NotFoundError
@@ -16,6 +16,7 @@ from apipi.store.models import (
     Tenant,
     Turn,
     TurnLog,
+    UsageRollup,
     utc_now,
 )
 
@@ -497,6 +498,11 @@ async def append_turn_log(
     tool_counts: dict[str, int] | None = None,
     mcp_names: list[str] | None = None,
     mcp_counts: dict[str, int] | None = None,
+    key_id: str = "",
+    environment_type: str = "",
+    run_mode: str = "",
+    instance_id: str | None = None,
+    artifact_bytes: int = 0,
 ) -> TurnLog:
     row = TurnLog(
         tenant_id=tenant_id,
@@ -517,6 +523,11 @@ async def append_turn_log(
         tool_counts=dict(tool_counts) if tool_counts is not None else {},
         mcp_names=list(mcp_names) if mcp_names is not None else [],
         mcp_counts=dict(mcp_counts) if mcp_counts is not None else {},
+        key_id=key_id,
+        environment_type=environment_type,
+        run_mode=run_mode,
+        instance_id=instance_id,
+        artifact_bytes=artifact_bytes,
     )
     db.add(row)
     await db.flush()
@@ -580,3 +591,87 @@ async def usage_totals(
         "total_tokens": int(row[4]),
         "turns": int(row[5]),
     }
+
+
+async def add_usage_rollup(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    day: date,
+    *,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    total_tokens: int = 0,
+    turns: int = 1,
+    artifact_bytes: int = 0,
+) -> UsageRollup:
+    row = await db.scalar(
+        select(UsageRollup).where(
+            UsageRollup.tenant_id == tenant_id, UsageRollup.day == day
+        )
+    )
+    if row is None:
+        row = UsageRollup(
+            tenant_id=tenant_id,
+            day=day,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            total_tokens=total_tokens,
+            turns=turns,
+            artifact_bytes=artifact_bytes,
+        )
+        db.add(row)
+        await db.flush()
+        return row
+    row.prompt_tokens += prompt_tokens
+    row.completion_tokens += completion_tokens
+    row.cache_read_tokens += cache_read_tokens
+    row.cache_write_tokens += cache_write_tokens
+    row.total_tokens += total_tokens
+    row.turns += turns
+    row.artifact_bytes += artifact_bytes
+    await db.flush()
+    return row
+
+
+async def usage_day(
+    db: AsyncSession, tenant_id: uuid.UUID, day: date
+) -> dict[str, int]:
+    row = await db.scalar(
+        select(UsageRollup).where(
+            UsageRollup.tenant_id == tenant_id, UsageRollup.day == day
+        )
+    )
+    if row is not None:
+        return {
+            "prompt_tokens": row.prompt_tokens,
+            "completion_tokens": row.completion_tokens,
+            "cache_read_tokens": row.cache_read_tokens,
+            "cache_write_tokens": row.cache_write_tokens,
+            "total_tokens": row.total_tokens,
+            "turns": row.turns,
+        }
+    start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+    return await usage_totals(
+        db, tenant_id, since=start, until=start + timedelta(days=1)
+    )
+
+
+async def artifact_bytes_for_turn(
+    db: AsyncSession, tenant_id: uuid.UUID, turn_id: uuid.UUID
+) -> int:
+    value = await db.scalar(
+        select(func.coalesce(func.sum(Artifact.byte_size), 0)).where(
+            Artifact.tenant_id == tenant_id, Artifact.turn_id == turn_id
+        )
+    )
+    return int(value or 0)
+
+
+async def purge_turn_logs(db: AsyncSession, older_than: datetime) -> int:
+    result = await db.execute(delete(TurnLog).where(TurnLog.created_at < older_than))
+    await db.flush()
+    return int(getattr(result, "rowcount", 0) or 0)

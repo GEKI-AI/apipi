@@ -7,9 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.store import turn_logs
 from apipi.store.repo import (
+    add_usage_rollup,
     create_session,
     create_tenant,
     create_turn,
+    purge_turn_logs,
+    usage_day,
 )
 from apipi.store.turn_logs import (
     append_turn_log,
@@ -151,3 +154,42 @@ async def test_usage_totals_by_day(db: AsyncSession) -> None:
         "total_tokens": 7,
         "turns": 2,
     }
+
+
+async def test_usage_rollup_and_purge(db: AsyncSession) -> None:
+    tenant = await create_tenant(db, name="a")
+    session_row = await create_session(db, tenant.id)
+    turn = await create_turn(db, tenant.id, session_row.id, status="completed")
+    row = await append_turn_log(
+        db,
+        tenant.id,
+        session_row.id,
+        turn.id,
+        status="completed",
+        prompt_tokens=4,
+        total_tokens=4,
+        artifact_bytes=12,
+    )
+    row.created_at = datetime(2020, 1, 2, 12, 0, tzinfo=UTC)
+    await add_usage_rollup(
+        db,
+        tenant.id,
+        datetime(2020, 1, 2, tzinfo=UTC).date(),
+        prompt_tokens=4,
+        total_tokens=4,
+        artifact_bytes=12,
+    )
+    await db.flush()
+    day = datetime(2020, 1, 2, tzinfo=UTC).date()
+    assert await usage_day(db, tenant.id, day) == {
+        "prompt_tokens": 4,
+        "completion_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 4,
+        "turns": 1,
+    }
+    deleted = await purge_turn_logs(db, datetime(2021, 1, 1, tzinfo=UTC))
+    assert deleted == 1
+    assert await get_turn_log(db, tenant.id, turn.id) is None
+    assert (await usage_day(db, tenant.id, day))["turns"] == 1

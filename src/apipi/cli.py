@@ -11,13 +11,16 @@ from apipi.config import (
     METRICS_ON,
     OTEL_SET,
     OTEL_UNSET,
-    TURN_LOG_ON,
+    USAGE_EXPORT_OFF,
+    USAGE_EXPORT_ON,
     ConfigError,
     Settings,
     load_settings,
     postgres_url,
     reject_prompt_body_logging,
     require_run_mode,
+    usage_retention_log,
+    usage_store_log,
 )
 from apipi.pi.probe import probe_run_mode
 from apipi.store.migrate import migrate
@@ -38,7 +41,9 @@ def prepare_serve(
     logging.getLogger().setLevel(resolved.log_level.upper())
     if resolved.run_mode == "host":
         log.warning(HOST_MODE_WARNING)
-    log.info(TURN_LOG_ON)
+    log.info(usage_store_log(resolved.usage_store))
+    log.info(usage_retention_log(resolved.usage_retention))
+    log.info(USAGE_EXPORT_ON if resolved.usage_export_url else USAGE_EXPORT_OFF)
     log.info(METRICS_ON if resolved.metrics else METRICS_OFF)
     log.info(OTEL_SET if resolved.otel_endpoint else OTEL_UNSET)
     return resolved
