@@ -13,9 +13,7 @@ theme:
   language: en
   logo: assets/pi.svg
   favicon: assets/pi.svg
-  font:
-    text: Source Sans 3
-    code: IBM Plex Mono
+  font: false
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
