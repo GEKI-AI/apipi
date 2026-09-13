@@ -1,19 +1,14 @@
 # Multiple nodes
 
-Host sizing, overprovision, and drain are in
-[production](production.md). This page is sticky routing.
-
 One `apipi serve` process owns its live Pi processes, local
 `openai_hosted` directories, artifact bytes, SSE subscribers, and
-`self_hosted` runner sockets. Those are in memory or on that host's
-disk. Postgres is the shared transcript. There is no handoff of a live
-session to another node.
+`self_hosted` runner sockets. Those stay in memory or on that host's
+disk. Postgres is the shared transcript. A live session has no handoff
+to another node.
 
-You can run more than one process behind a load balancer. Requests for
-a live session must hit the node that owns it. That is sticky (session
-affinity). Do not add uvicorn workers inside one process; scale by
-adding systemd units instead. Docker-in-Docker is not the production
-path. A later worker split is not this version.
+Several processes behind a load balancer work if follow-up requests
+return to the node that owns the session (sticky affinity). Scale by
+adding systemd units rather than uvicorn workers inside one process.
 
 ## Topology
 

@@ -25,19 +25,17 @@ Two independent choices:
 | **Environment** | Where file/shell tools run |
 
 They combine. A remote environment does not replace Pi isolation. The
-gateway always stays on the host. It is never placed inside a guest.
+gateway stays on the host.
 
 ## Status
 
 `apipi serve` starts the gateway. Built-in run modes are `none` and
-`microvm`. A custom backend is an import path. There is no fallback
-from one mode to another. `host` and `jail` are not valid.
+`microvm`. A custom backend is an import path. If the selected mode
+cannot start, the process exits. `host` and `jail` are not valid.
 
-SaaS and enterprise production use `microvm`: [Firecracker](https://firecracker-microvm.github.io/)
-gives each session its own kernel so a hostile computer cannot share
-the host with the gateway. The process default is `none` so a machine
-without KVM can still start; that is not the production posture.
-`none` logs a warning and is not suited for production.
+Production uses `microvm`: [Firecracker](https://firecracker-microvm.github.io/)
+gives each session its own kernel. The process default is `none` so a
+machine without KVM can start; it logs a warning.
 
 `microvm` starts Pi (and stdio MCP) in a Firecracker guest when
 `/dev/kvm`, `firecracker`, `jailer`, the kernel and rootfs images, and
@@ -119,13 +117,12 @@ guest rootfs is operator-provided. It should include Node, Pi, and
 That init mounts a tmpfs workspace, unpacks the workspace drive,
 brings up the TAP interface, and bridges vsock port 52 to
 `pi --mode rpc`. The guest needs `python3` or `socat` for that
-bridge. Do not vendor a distro in git. Build a rootfs with
-`scripts/microvm-rootfs`. Set `APIPI_MICROVM_KERNEL` and
-`APIPI_MICROVM_ROOTFS` to the image files. Missing paths are a
-configuration error. See [run modes](run-modes.md).
+bridge. Build a rootfs with `scripts/microvm-rootfs`. Set
+`APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` to the image files.
+Missing paths are a configuration error.
 
-Chromium can use its own sandbox inside the guest. Do not put
-Chromium in the gateway.
+Chromium can use its own sandbox inside the guest, which is where
+browsers belong in this stack.
 
 VMM overhead is small (~5 MiB). Real cost is guest RAM (Pi alone is
 modest; Playwright needs hundreds of MiB).

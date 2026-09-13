@@ -1,10 +1,8 @@
 # Run modes
 
-Run mode is where Pi and stdio MCP run. It is server config
-(`APIPI_RUN_MODE`), not an OpenAI field. Environment is a separate
-choice: where file and shell tools run. See
-[environments](environments.md). A remote runner does not replace Pi
-isolation. The gateway always stays on the host.
+Run mode is where Pi and stdio MCP run (`APIPI_RUN_MODE`). Environment
+is a separate choice: where file and shell tools run. A remote runner
+does not replace Pi isolation. The gateway always stays on the host.
 
 Production isolation is a Firecracker microVM: each session gets its
 own kernel so a hostile tenant cannot share the host kernel with the
@@ -32,11 +30,10 @@ not the same setting.
 | `microvm` | SaaS and enterprise production when a computer is in use | KVM guest with its own kernel. Protects the host from a hostile session. |
 | `package.mod:Class` | An operator-provided backend | Whatever that class implements. Missing import fails at startup. |
 
-The process default is `none` so `apipi serve` can start on a machine
-without KVM. That is not the production posture. Production operators
-set `APIPI_RUN_MODE=microvm`. If the microVM cannot launch, the process
-exits; it does not fall back to `none`. `none` logs a warning.
-`host` and `jail` are not valid run modes.
+The process default is `none` so `apipi serve` can start without KVM.
+Production operators set `APIPI_RUN_MODE=microvm`. If the microVM cannot
+launch, the process exits rather than switching mode. `none` logs a
+warning. `host` and `jail` are not valid run modes.
 
 Run production under systemd on the host, next to Pi. Docker Compose
 in this repo starts Postgres only. Nested microVM inside a container
@@ -67,7 +64,7 @@ tools, and point at operator-provided guest images:
 | Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4). Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/pi/guest.sh`. |
 | TAP / NAT | Permission to create a TAP device, set `ip_forward`, and add iptables rules. Root or `CAP_NET_ADMIN` is the usual setup. |
 
-Do not vendor a distro in git. Build a rootfs on the operator machine:
+Build a rootfs on the operator machine:
 
 ```
 ./scripts/microvm-rootfs
@@ -156,8 +153,7 @@ rate-limited with `tc` (`APIPI_MICROVM_EGRESS_MBIT`, default 50). See
 
 This is the mode that protects the host from a hostile session. Guest
 RAM is the real cost (`APIPI_MICROVM_MEM_MIB`, default 512). Chromium
-can use its own sandbox inside the guest. Do not put Chromium in the
-gateway.
+can use its own sandbox inside the guest.
 
 ## Custom isolation
 

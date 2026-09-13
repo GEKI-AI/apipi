@@ -17,8 +17,7 @@ the bearer to `key_id` and `tenant_id`, or rejects with a status,
 quota. See [auth](auth.md). Every query is tenant-scoped. An id that
 belongs to another tenant returns `404`, not `403`.
 
-There is no first-party chat UI. Clients send a bearer and talk to
-`/v1`.
+Clients send a bearer and talk to `/v1`.
 
 ## Agents
 

@@ -6,8 +6,8 @@ when the session has a computer (`openai_hosted` or a connected
 `none`. Everything else is attached per agent: function tools, MCP
 servers, and skills.
 
-Copy-paste configs live in `examples/` at the repo root. Those files
-are MCP examples (Tavily, Playwright), not a first-party UI.
+Copy-paste configs live in `examples/` at the repo root (Tavily,
+Playwright).
 
 ## Function tools
 
@@ -66,8 +66,7 @@ browser option. `--headless` is the usual server flag. See
 `examples/playwright.yaml`.
 
 The browser follows Pi (`none` or `microvm`). Inside a `microvm`,
-Chromium can use its own sandbox in the guest. Do not put Chromium in
-the gateway.
+Chromium can use its own sandbox in the guest.
 
 ## Skills
 

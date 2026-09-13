@@ -1,15 +1,8 @@
 # Production
 
-This page is how to choose hosts, scale out, and size an ApiPi
-process for SaaS or enterprise self-host. Packages, systemd units, and
-Docker are in [run modes](run-modes.md). Sticky load balancing and
-nginx are in [multiple nodes](scale.md). Every setting is in
-[configuration](config.md).
-
-In this version the API process runs Pi (`none` or `microvm`) plus a
-local directory or a `self_hosted` runner. A later [worker
-split](roadmap.md#workers) is not done. Do not treat this page as if
-workers already exist.
+How to choose hosts, scale out, and size an ApiPi process. The API
+process runs Pi (`none` or `microvm`) plus a local directory or a
+`self_hosted` runner.
 
 ## Host selection
 
@@ -36,9 +29,8 @@ capped at `APIPI_MAX_WORKSPACE_BYTES` (default 1 GiB) and lasts until
 bytes add up to `APIPI_MAX_ARTIFACT_BYTES` (default 512 MiB) per
 session unless you set `APIPI_ARTIFACT_STORE=s3`.
 
-Do not colocate Postgres on the gateway host if you want most of the
-RAM for guests. One `apipi serve` per host. Do not add uvicorn
-workers.
+Keeping Postgres off the gateway host leaves more RAM for guests. One
+`apipi serve` per host; extra uvicorn workers do not share the Pi pool.
 
 ## Scale-out
 
@@ -47,7 +39,6 @@ workers.
 | One host | You fit in `max_sessions` on one box | Pi, SSE, WebSockets, `openai_hosted` directories, local artifacts | Postgres |
 | Several hosts, sticky load balancer | More live sessions than one box | Same as one host, plus each process has its own `APIPI_SESSIONS_DIR` | Postgres, auth callback. Artifact bytes too when `APIPI_ARTIFACT_STORE=s3` |
 | External artifact store | Clients read artifacts from any node, or you do not want artifact files on the gateway disk | Live workspace still on the node | Postgres, S3-compatible bucket |
-| Workers | Not this version | — | See [roadmap](roadmap.md#workers) |
 
 `POST /v1/agents/sessions` may land on any node. Follow-up REST and
 SSE must return to the node that owns Pi. There is no live handoff.
