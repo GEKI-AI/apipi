@@ -85,5 +85,6 @@ nav:
   - Contribute:
       - Contributing: contributing.md
       - How we work: process.md
+      - Tests: tests.md
       - Agent rules: agents.md
       - Roadmap: roadmap.md
