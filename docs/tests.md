@@ -89,7 +89,7 @@ Need:
 | --- | --- |
 | `/dev/kvm` readable and writable | member of group `kvm`; `ls -l /dev/kvm` |
 | `firecracker` and `jailer` on `PATH` | `firecracker --version` |
-| `ip` and `iptables` | `command -v ip iptables` |
+| `ip`, `iptables`, and `tc` | `command -v ip iptables tc` |
 | Guest kernel | `APIPI_MICROVM_KERNEL` (a `vmlinux` file) |
 | Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4 with Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest`) |
 | TAP | Permission to create a TAP device (`CAP_NET_ADMIN` or root) |

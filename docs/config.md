@@ -53,6 +53,9 @@ secrets. Do not commit `.env`.
 | `APIPI_MICROVM_ROOTFS` | `microvm_rootfs` | unset | Guest rootfs image. Required when `run_mode` is `microvm`. Do not vendor a distro in git. |
 | `APIPI_MICROVM_MEM_MIB` | `microvm_mem_mib` | `512` | Guest RAM in MiB. |
 | `APIPI_MICROVM_VCPUS` | `microvm_vcpus` | `1` | Guest vCPUs. |
+| `APIPI_MICROVM_EGRESS_ALLOWLIST` | `microvm_egress_allowlist` | on | When `run_mode` is `microvm`, guest TAP egress may reach only the model host, this session's HTTP MCP hosts, `microvm_egress_hosts`, and DNS. Unlisted TCP is rejected. Off keeps open TAP egress (lab). |
+| `APIPI_MICROVM_EGRESS_HOSTS` | `microvm_egress_hosts` | empty | Extra hostnames the guest may reach, comma-separated. |
+| `APIPI_MICROVM_EGRESS_MBIT` | `microvm_egress_mbit` | `50` | `tc` rate on each guest TAP, both directions. |
 | `APIPI_DB_POOL_SIZE` | `db_pool_size` | `5` | SQLAlchemy pool size. |
 | `APIPI_MAX_REQUEST_BYTES` | `max_request_bytes` | `1MiB` | Reject larger request bodies with `413` and code `payload_too_large`. |
 | `APIPI_MAX_WORKSPACE_BYTES` | `max_workspace_bytes` | `1GiB` | Size of one `openai_hosted` session directory. An oversized microvm pull is not unpacked. Over the cap, harvest emits `agent.session.error` with code `workspace_too_large`. |
@@ -127,7 +130,12 @@ Do not add browser tiers. On a shared node, set
 `max_sessions_per_tenant` lower than `max_sessions` (for example `8`).
 Size `max_sessions` to host RAM divided by `microvm_mem_mib`. Keep
 `max_workspace_bytes` at `1GiB` and `max_artifact_bytes` at `512MiB`
-unless the computer must hold more.
+unless the computer must hold more. Microvm TAP egress is allowlisted
+and capped at `50` Mbit by default. Add extra hosts with
+`microvm_egress_hosts`. The gateway's own HTTP MCP probe stays on the
+host; Pi still dials those URLs from the guest, so those hosts are
+added to the TAP allowlist when the session starts. Jail/pasta egress
+is not filtered by these settings. Change a setting and restart.
 
 | Failure | HTTP or event | Code |
 | --- | --- | --- |
@@ -159,6 +167,9 @@ max_sessions_per_tenant = 32
 turn_timeout = "10m"
 auth_cache_ttl = "30s"
 jail_memory = "512M"
+microvm_egress_allowlist = true
+microvm_egress_hosts = ""
+microvm_egress_mbit = 50
 max_request_bytes = "1MiB"
 max_workspace_bytes = "1GiB"
 max_artifact_bytes = "512MiB"

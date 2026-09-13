@@ -71,7 +71,7 @@ tools, and point at operator-provided guest images:
 | Need | Typical package or setting |
 | --- | --- |
 | Firecracker and jailer | Binaries from the [Firecracker release](https://github.com/firecracker-microvm/firecracker/releases) on `PATH` |
-| `ip` | `iproute2` |
+| `ip` and `tc` | `iproute2` |
 | `iptables` | `iptables` |
 | Guest kernel | `APIPI_MICROVM_KERNEL` (a `vmlinux` file) |
 | Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4). Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/pi/guest.sh`. |
@@ -99,7 +99,7 @@ export APIPI_MICROVM_KERNEL="$HOME/.cache/apipi/microvm/vmlinux"
 If the kernel download fails, get a Firecracker-compatible `vmlinux`
 from the [Firecracker getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)
 guide and point `APIPI_MICROVM_KERNEL` at it. Missing `/dev/kvm`,
-binaries, images, `ip`, or `iptables` exits the process. How to run
+binaries, images, `ip`, `iptables`, or `tc` exits the process. How to run
 the live microvm tests is in [tests](tests.md).
 
 ## Storage
@@ -170,7 +170,15 @@ next pack still has those files. Skill paths from that workspace are
 rewritten to `/tmp/workspace`.
 
 RPC is JSON lines over vsock. Egress uses a TAP device and NAT. There
-is no host loopback to Postgres.
+is no host loopback to Postgres. By default that TAP is fail-closed:
+the guest may reach the model host from `OPENAI_BASE_URL`, HTTP MCP
+hosts for that session, extra hosts in `APIPI_MICROVM_EGRESS_HOSTS`,
+and DNS (`1.1.1.1` and `8.8.8.8`). Other TCP is rejected. The gateway
+connects HTTP MCP from the host first; Pi still dials the same URLs
+from the guest, so those hosts must be allowed. Set
+`APIPI_MICROVM_EGRESS_ALLOWLIST=off` only in a lab. Each TAP is also
+rate-limited with `tc` (`APIPI_MICROVM_EGRESS_MBIT`, default 50). See
+[config](config.md).
 
 This is the mode that protects the host from a hostile user. Guest RAM
 is the real cost (`APIPI_MICROVM_MEM_MIB`, default 512). Chromium can

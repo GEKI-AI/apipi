@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import tarfile
 import tempfile
@@ -12,6 +13,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import urlparse
 
 from apipi.config import ConfigError, Settings
 from apipi.mcp.http import McpHttpServer
@@ -64,14 +66,17 @@ def microvm_binaries() -> tuple[str, str]:
     return firecracker, jailer
 
 
-def microvm_net_binaries() -> tuple[str, str]:
+def microvm_net_binaries() -> tuple[str, str, str]:
     ip = shutil.which("ip")
     if ip is None:
         raise ConfigError("APIPI_RUN_MODE=microvm requires ip")
     iptables = shutil.which("iptables")
     if iptables is None:
         raise ConfigError("APIPI_RUN_MODE=microvm requires iptables")
-    return ip, iptables
+    tc = shutil.which("tc")
+    if tc is None:
+        raise ConfigError("APIPI_RUN_MODE=microvm requires tc")
+    return ip, iptables, tc
 
 
 def microvm_images(settings: Settings | None = None) -> tuple[str, str]:
@@ -117,6 +122,86 @@ def _ipv4(value: int) -> str:
     c = (value >> 8) & 255
     d = value & 255
     return f"{a}.{b}.{c}.{d}"
+
+
+def egress_host(value: str) -> str | None:
+    raw = value.strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "https://" + raw
+    host = urlparse(raw).hostname
+    if host is None or host == "":
+        return None
+    return host
+
+
+def microvm_egress_hosts(
+    settings: Settings,
+    mcp_http: list[McpHttpServer] | None = None,
+) -> list[str]:
+    found: list[str] = []
+    if settings.model_base_url:
+        host = egress_host(settings.model_base_url)
+        if host is None:
+            raise ConfigError("OPENAI_BASE_URL must include a host")
+        found.append(host)
+    for raw in settings.microvm_egress_hosts.split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        host = egress_host(item)
+        if host is None:
+            raise ConfigError("APIPI_MICROVM_EGRESS_HOSTS must be hostnames")
+        found.append(host)
+    if mcp_http:
+        for server in mcp_http:
+            host = egress_host(server.server_url)
+            if host is None:
+                raise ConfigError("MCP server_url must include a host")
+            found.append(host)
+    seen: set[str] = set()
+    hosts: list[str] = []
+    for host in found:
+        key = host.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        hosts.append(host)
+    return hosts
+
+
+def resolve_host_ips(host: str) -> list[str]:
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ConfigError(f"APIPI_RUN_MODE=microvm cannot resolve {host}") from exc
+    ips: list[str] = []
+    seen: set[str] = set()
+    for info in infos:
+        ip = info[4][0]
+        if not isinstance(ip, str) or ip in seen:
+            continue
+        seen.add(ip)
+        ips.append(ip)
+    if not ips:
+        raise ConfigError(f"APIPI_RUN_MODE=microvm cannot resolve {host}")
+    return ips
+
+
+def allowed_egress_ips(
+    settings: Settings,
+    mcp_http: list[McpHttpServer] | None = None,
+) -> list[str]:
+    ips: list[str] = []
+    seen: set[str] = set()
+    for host in microvm_egress_hosts(settings, mcp_http):
+        for ip in resolve_host_ips(host):
+            if ip in seen:
+                continue
+            seen.add(ip)
+            ips.append(ip)
+    return ips
 
 
 def tap_net(vm_id: str) -> TapNet:
@@ -320,6 +405,10 @@ def jailer_argv(
     ]
 
 
+def _tap_chain(net: TapNet) -> str:
+    return f"{net.name}eg"
+
+
 def tap_setup_argv(
     net: TapNet,
     *,
@@ -327,9 +416,14 @@ def tap_setup_argv(
     iptables: str,
     uid: int,
     gid: int,
+    tc: str | None = None,
+    allowlist: bool = True,
+    allowed_ips: list[str] | None = None,
+    egress_mbit: int = 50,
 ) -> list[list[str]]:
     comment = f"apipi-{net.name}"
-    return [
+    chain = _tap_chain(net)
+    cmds: list[list[str]] = [
         [
             ip,
             "tuntap",
@@ -370,21 +464,6 @@ def tap_setup_argv(
             "-I",
             "FORWARD",
             "1",
-            "-i",
-            net.name,
-            "-m",
-            "comment",
-            "--comment",
-            comment,
-            "-j",
-            "ACCEPT",
-        ],
-        [
-            iptables,
-            "-w",
-            "-I",
-            "FORWARD",
-            "1",
             "-o",
             net.name,
             "-m",
@@ -399,6 +478,159 @@ def tap_setup_argv(
             "ACCEPT",
         ],
     ]
+    if allowlist:
+        cmds.append([iptables, "-w", "-N", chain])
+        for dns in GUEST_DNS:
+            cmds.append(
+                [
+                    iptables,
+                    "-w",
+                    "-A",
+                    chain,
+                    "-p",
+                    "udp",
+                    "-d",
+                    dns,
+                    "--dport",
+                    "53",
+                    "-j",
+                    "ACCEPT",
+                ]
+            )
+            cmds.append(
+                [
+                    iptables,
+                    "-w",
+                    "-A",
+                    chain,
+                    "-p",
+                    "tcp",
+                    "-d",
+                    dns,
+                    "--dport",
+                    "53",
+                    "-j",
+                    "ACCEPT",
+                ]
+            )
+        for dest in allowed_ips or []:
+            cmds.append(
+                [
+                    iptables,
+                    "-w",
+                    "-A",
+                    chain,
+                    "-p",
+                    "tcp",
+                    "-d",
+                    dest,
+                    "-j",
+                    "ACCEPT",
+                ]
+            )
+        cmds.append(
+            [
+                iptables,
+                "-w",
+                "-A",
+                chain,
+                "-j",
+                "REJECT",
+                "--reject-with",
+                "icmp-port-unreachable",
+            ]
+        )
+        cmds.append(
+            [
+                iptables,
+                "-w",
+                "-I",
+                "FORWARD",
+                "1",
+                "-i",
+                net.name,
+                "-m",
+                "comment",
+                "--comment",
+                comment,
+                "-j",
+                chain,
+            ]
+        )
+    else:
+        cmds.append(
+            [
+                iptables,
+                "-w",
+                "-I",
+                "FORWARD",
+                "1",
+                "-i",
+                net.name,
+                "-m",
+                "comment",
+                "--comment",
+                comment,
+                "-j",
+                "ACCEPT",
+            ]
+        )
+    if tc is not None:
+        rate = f"{egress_mbit}mbit"
+        cmds.extend(
+            [
+                [
+                    tc,
+                    "qdisc",
+                    "replace",
+                    "dev",
+                    net.name,
+                    "root",
+                    "tbf",
+                    "rate",
+                    rate,
+                    "burst",
+                    "64kb",
+                    "latency",
+                    "50ms",
+                ],
+                [
+                    tc,
+                    "qdisc",
+                    "replace",
+                    "dev",
+                    net.name,
+                    "handle",
+                    "ffff:",
+                    "ingress",
+                ],
+                [
+                    tc,
+                    "filter",
+                    "replace",
+                    "dev",
+                    net.name,
+                    "parent",
+                    "ffff:",
+                    "protocol",
+                    "all",
+                    "prio",
+                    "1",
+                    "u32",
+                    "match",
+                    "u32",
+                    "0",
+                    "0",
+                    "police",
+                    "rate",
+                    rate,
+                    "burst",
+                    "64kb",
+                    "drop",
+                ],
+            ]
+        )
+    return cmds
 
 
 def tap_teardown_argv(
@@ -406,62 +638,96 @@ def tap_teardown_argv(
     *,
     ip: str,
     iptables: str,
+    tc: str | None = None,
+    allowlist: bool = True,
 ) -> list[list[str]]:
     comment = f"apipi-{net.name}"
-    return [
+    chain = _tap_chain(net)
+    cmds: list[list[str]] = []
+    if tc is not None:
+        cmds.append([tc, "qdisc", "del", "dev", net.name, "ingress"])
+        cmds.append([tc, "qdisc", "del", "dev", net.name, "root"])
+    if allowlist:
+        cmds.extend(
+            [
+                [
+                    iptables,
+                    "-w",
+                    "-D",
+                    "FORWARD",
+                    "-i",
+                    net.name,
+                    "-m",
+                    "comment",
+                    "--comment",
+                    comment,
+                    "-j",
+                    chain,
+                ],
+                [iptables, "-w", "-F", chain],
+                [iptables, "-w", "-X", chain],
+            ]
+        )
+    else:
+        cmds.append(
+            [
+                iptables,
+                "-w",
+                "-D",
+                "FORWARD",
+                "-i",
+                net.name,
+                "-m",
+                "comment",
+                "--comment",
+                comment,
+                "-j",
+                "ACCEPT",
+            ]
+        )
+    cmds.extend(
         [
-            iptables,
-            "-w",
-            "-t",
-            "nat",
-            "-D",
-            "POSTROUTING",
-            "-s",
-            f"{net.guest_ip}/32",
-            "!",
-            "-d",
-            net.subnet,
-            "-j",
-            "MASQUERADE",
-            "-m",
-            "comment",
-            "--comment",
-            comment,
-        ],
-        [
-            iptables,
-            "-w",
-            "-D",
-            "FORWARD",
-            "-i",
-            net.name,
-            "-m",
-            "comment",
-            "--comment",
-            comment,
-            "-j",
-            "ACCEPT",
-        ],
-        [
-            iptables,
-            "-w",
-            "-D",
-            "FORWARD",
-            "-o",
-            net.name,
-            "-m",
-            "conntrack",
-            "--ctstate",
-            "RELATED,ESTABLISHED",
-            "-m",
-            "comment",
-            "--comment",
-            comment,
-            "-j",
-            "ACCEPT",
-        ],
-        [ip, "link", "delete", "dev", net.name],
-    ]
+            [
+                iptables,
+                "-w",
+                "-D",
+                "FORWARD",
+                "-o",
+                net.name,
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "RELATED,ESTABLISHED",
+                "-m",
+                "comment",
+                "--comment",
+                comment,
+                "-j",
+                "ACCEPT",
+            ],
+            [
+                iptables,
+                "-w",
+                "-t",
+                "nat",
+                "-D",
+                "POSTROUTING",
+                "-s",
+                f"{net.guest_ip}/32",
+                "!",
+                "-d",
+                net.subnet,
+                "-j",
+                "MASQUERADE",
+                "-m",
+                "comment",
+                "--comment",
+                comment,
+            ],
+            [ip, "link", "delete", "dev", net.name],
+        ]
+    )
+    return cmds
 
 
 def _enable_forward() -> None:
@@ -488,14 +754,37 @@ def setup_tap(
     iptables: str,
     uid: int,
     gid: int,
+    tc: str | None = None,
+    allowlist: bool = True,
+    allowed_ips: list[str] | None = None,
+    egress_mbit: int = 50,
 ) -> None:
     _enable_forward()
-    for argv in tap_setup_argv(net, ip=ip, iptables=iptables, uid=uid, gid=gid):
+    for argv in tap_setup_argv(
+        net,
+        ip=ip,
+        iptables=iptables,
+        uid=uid,
+        gid=gid,
+        tc=tc,
+        allowlist=allowlist,
+        allowed_ips=allowed_ips,
+        egress_mbit=egress_mbit,
+    ):
         _run(argv)
 
 
-def teardown_tap(net: TapNet, *, ip: str, iptables: str) -> None:
-    for argv in tap_teardown_argv(net, ip=ip, iptables=iptables):
+def teardown_tap(
+    net: TapNet,
+    *,
+    ip: str,
+    iptables: str,
+    tc: str | None = None,
+    allowlist: bool = True,
+) -> None:
+    for argv in tap_teardown_argv(
+        net, ip=ip, iptables=iptables, tc=tc, allowlist=allowlist
+    ):
         with contextlib.suppress(OSError):
             subprocess.run(argv, check=False, capture_output=True)
 
@@ -560,7 +849,7 @@ async def spawn_microvm_pi(
 ) -> PiProc:
     require_microvm(settings)
     firecracker, jailer = microvm_binaries()
-    ip_bin, iptables_bin = microvm_net_binaries()
+    ip_bin, iptables_bin, tc_bin = microvm_net_binaries()
     kernel, rootfs = microvm_images(settings)
     vm_id = str(uuid.uuid4())
     net = tap_net(vm_id)
@@ -570,13 +859,31 @@ async def spawn_microvm_pi(
     chroot_dir = work / Path(firecracker).name / vm_id / "root"
     chroot_dir.mkdir(parents=True)
     guest_skills, extra_dirs = guest_skill_dirs(cwd, skill_dirs)
+    allowlist = settings.microvm_egress_allowlist
+    allowed_ips = allowed_egress_ips(settings, mcp_http) if allowlist else []
 
     def cleanup() -> None:
-        teardown_tap(net, ip=ip_bin, iptables=iptables_bin)
+        teardown_tap(
+            net,
+            ip=ip_bin,
+            iptables=iptables_bin,
+            tc=tc_bin,
+            allowlist=allowlist,
+        )
         shutil.rmtree(work, ignore_errors=True)
 
     try:
-        setup_tap(net, ip=ip_bin, iptables=iptables_bin, uid=uid, gid=gid)
+        setup_tap(
+            net,
+            ip=ip_bin,
+            iptables=iptables_bin,
+            uid=uid,
+            gid=gid,
+            tc=tc_bin,
+            allowlist=allowlist,
+            allowed_ips=allowed_ips,
+            egress_mbit=settings.microvm_egress_mbit,
+        )
         _link_or_copy(Path(kernel), chroot_dir / "vmlinux")
         _link_or_copy(Path(rootfs), chroot_dir / "rootfs.ext4")
         write_workspace_image(
