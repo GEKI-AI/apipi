@@ -26,9 +26,9 @@ Branch `issue-<n>-<slug>` from `origin/main`, or a short name if there
 is no issue. Never commit on `main`. For a second change at the same
 time, use another folder (see `.agents/skills/plan/SKILL.md`).
 
-Before code: `CONSTITUTION.md` and the spec for this part. What the
-issue said to check is the scope. If it is not in a spec, update the
-spec in this change or stop.
+Before code: `CONSTITUTION.md` and the `docs/` page for this part. What
+the issue said to check is the scope. If it is not on a product page,
+update that page in this change or stop.
 
 ## Checks and PR
 

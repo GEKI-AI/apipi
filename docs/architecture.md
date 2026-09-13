@@ -1,4 +1,4 @@
-# Architecture
+# How it works
 
 ```
   OpenAI SDK / your app

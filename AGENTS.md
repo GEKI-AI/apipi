@@ -1,8 +1,9 @@
 # Agent rules
 
-Laws: `CONSTITUTION.md`. Specs: `docs/`. How we work: `CONTRIBUTING.md`.
-If it is not in a spec, update the spec in this change or stop. Do not
-build `docs/roadmap.md` unless the spec has moved.
+Laws: `CONSTITUTION.md`. Product: `docs/`. How we work:
+`CONTRIBUTING.md`. If it is not on a product page, update that page in
+this change or stop. Do not build `docs/roadmap.md` unless a product
+page has moved.
 
 When the constitution changes, update this file in the same change.
 
@@ -11,8 +12,8 @@ When the constitution changes, update this file in the same change.
 Use simple technical English and common words. Do not invent names for
 things that already have names. Do not invent features.
 
-Docs, specs, README, and the MkDocs site use complete sentences and
-enough explanation that a new reader can set up and use the API without
+Docs, README, and the MkDocs site use complete sentences and enough
+explanation that a new reader can set up and use the API without
 guessing. Short choppy fragments are wrong for docs. Tables are still
 good for endpoints, env vars, and fields.
 
@@ -31,14 +32,14 @@ Code comments stay omitted unless asked.
 | `src/apipi/store/` | Postgres |
 | `src/apipi/pi/` | Harness adapter |
 | `src/apipi/auth.py` | Auth callback |
-| `docs/run-modes.md` | host / jail / microvm |
+| `docs/` | Product and operator docs. Read the page for the part you are changing. |
+| `specs/decisions/` | ADRs. Read when the architecture changes. |
 | `tests/api/` | Public HTTP |
 | `tests/unit/` | Internals, mocks |
 | `tests/e2e/` | Live Pi |
 | `tests/support/` | FakeHarness, fakes |
 
-Before code, read the spec for the part you are changing.
-Read `docs/decisions/` only if the architecture changes.
+Before code, read the `docs/` page for the part you are changing.
 
 ## Stack
 

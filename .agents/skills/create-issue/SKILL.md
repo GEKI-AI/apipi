@@ -53,6 +53,6 @@ Bug: Observed, Expected, Specs, Reproduce instead of Goal / Acceptance.
 Details, Files, and Blocked by are optional.
 
 Do not list what this is not. Do not file `docs/roadmap.md` work unless
-the spec has moved. If it is not in a spec, say so.
+a product page has moved. If it is not on a product page, say so.
 
 Return the issue URL. Do not start implementing.

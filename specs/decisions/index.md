@@ -8,6 +8,7 @@ changes.
 Name, license, docs tools, git, and tooling are not decision files.
 They live in `README.md`, `LICENSE`, `mkdocs.yml`,
 `requirements-docs.txt`, `CONTRIBUTING.md`, and `pyproject.toml`.
+These files are not on the MkDocs site.
 
 | # | Title |
 | --- | --- |

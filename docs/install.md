@@ -14,8 +14,7 @@ Postgres 17 server with user `apipi`, password `apipi`, and database
 `apipi`, published on host port 5432.
 
 Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model URL.
-The gateway pins Pi 0.85.1. Tests use a FakeHarness and do not need a
-live model.
+The gateway pins Pi 0.85.1.
 
 Run mode `jail` needs `bwrap`, `pasta`, and cgroup v2. Run mode
 `microvm` needs `/dev/kvm`, `firecracker`, `jailer`, kernel and rootfs

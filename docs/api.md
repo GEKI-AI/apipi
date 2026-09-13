@@ -184,32 +184,29 @@ See [environments](environments.md).
 
 ## Compatibility
 
-Each **yes** row has a named test in `tests/api/test_compat.py`. Fast
-tests do not use the OpenAI SDK. Event types, the error envelope, and
-tenant `404` are `test_compat_event_types`,
-`test_compat_error_envelope`, and `test_compat_tenant_404`. The official
-OpenAI Python client example is `examples/openai_sdk.py`. The same
-create-and-stream steps are in [quickstart](quickstart.md).
+Official clients work for the subset we implement. The OpenAI Python
+client example is `examples/openai_sdk.py`. The same create-and-stream
+steps are in [quickstart](quickstart.md).
 
-| Surface | Status | Test |
-| --- | --- | --- |
-| Agents CRUD | yes (subset of fields) | `test_compat_agents_crud` |
-| Sessions, stream, follow-up input | yes | `test_compat_sessions_stream_follow_up` |
-| `environment.openai_hosted` | yes (local sandbox) | `test_compat_environment_openai_hosted` |
-| `environment.none` | yes | `test_compat_environment_none` |
-| `environment.self_hosted` | yes (our protocol) | `test_compat_environment_self_hosted` |
-| Function tools | yes | `test_compat_function_tools` |
-| MCP | yes | `test_compat_mcp` |
-| Skills (`capability_directories`, `SKILL.md`) | yes | `test_compat_skills` |
-| Artifacts | yes | `test_compat_artifacts` |
-| Usage tokens on turns | yes | `test_compat_usage_on_turns` |
-| Session export | yes | `test_compat_session_export` |
-| `/v1/chat/completions` | no | |
-| `web_search` first-party | no (MCP; example: Tavily) | |
-| Browser | no first-party (MCP; example: Playwright) | |
-| `/v1/skills` hosted store | no (files on the computer) | |
-| Vaults, multi-agent, tool search | no | |
-| ChatKit | no | |
+| Surface | Status |
+| --- | --- |
+| Agents CRUD | yes (subset of fields) |
+| Sessions, stream, follow-up input | yes |
+| `environment.openai_hosted` | yes (local sandbox) |
+| `environment.none` | yes |
+| `environment.self_hosted` | yes (our protocol) |
+| Function tools | yes |
+| MCP | yes |
+| Skills (`capability_directories`, `SKILL.md`) | yes |
+| Artifacts | yes |
+| Usage tokens on turns | yes |
+| Session export | yes |
+| `/v1/chat/completions` | no |
+| `web_search` first-party | no (MCP; example: Tavily) |
+| Browser | no first-party (MCP; example: Playwright) |
+| `/v1/skills` hosted store | no (files on the computer) |
+| Vaults, multi-agent, tool search | no |
+| ChatKit | no |
 
 ## Errors
 

@@ -10,32 +10,27 @@ or a runner you attach. Pi runs the agent loop behind the HTTP API. You
 bring any OpenAI-compatible model endpoint. The package and CLI are
 `apipi`. A hosted deploy lives at [geki.ai](https://geki.ai).
 
-This page is the product home: what the gateway is, how to start it,
-and how to point a client at `/v1`. [Install](install.md) and
-[configuration](config.md) are the operator pages. The
-[quickstart](quickstart.md) is the client tutorial. The pages after
-those are the HTTP specs. Contributing, the constitution, and
-architecture decisions live under Contribute.
+## What this is
 
-## Status
+Official OpenAI clients work for the subset we implement. Unknown
+fields and unimplemented features return an error (`invalid_request` or
+`not_implemented`). They are not stored and they are not ignored.
 
-`apipi serve` starts the FastAPI gateway. Run mode `host` works: Pi is a
-child process (`pi --mode rpc`), one process per session. Run mode
-`jail` starts Pi (and stdio MCP) in a Linux namespace jail when
-`bwrap`, `pasta`, and cgroup v2 can start. If those tools are missing,
-the process exits. Run mode `microvm` starts Pi (and stdio MCP) in a
-Firecracker guest when `/dev/kvm`, `firecracker`, `jailer`, the
-kernel and rootfs images, `ip`, and `iptables` are present. If those
-are missing, the process exits. There is no silent fallback.
+`environment.type` `openai_hosted` is OpenAI's field name for a **local
+session directory** next to Pi. It is not OpenAI's cloud VM.
 
-The configured default for `APIPI_RUN_MODE` is `jail`. Operators
-without jail tools must set `APIPI_RUN_MODE=host`. `host` logs a
-warning at startup and is not suited for production.
+ApiPi is not a workflow builder, a model host, or a search engine. It
+is not a copy of every OpenAI Agents object. There is no first-party
+chat UI, ChatKit, or `/v1/chat/completions`. Search and browser attach
+as MCP, not as built-in tools.
 
-Postgres is required. Live turns need Pi on `PATH` and a model URL.
-Tests use a FakeHarness and do not need a live model.
+| You get | You bring |
+| --- | --- |
+| Agents, sessions, events, artifacts | An OpenAI-compatible model URL |
+| Function tools, MCP, skills | A bearer the gateway does not store |
+| A local directory or a `self_hosted` runner | Pi on `PATH` for live turns |
 
-## Install and run
+## Start
 
 Python 3.13+ and [uv](https://docs.astral.sh/uv/) only. Postgres is
 required. From a checkout:
@@ -50,18 +45,11 @@ APIPI_RUN_MODE=host apipi serve
 
 That binds `0.0.0.0:8000`. `jail` is the configured default when
 `bwrap`, `pasta`, and cgroup v2 can start. Operators without those
-tools must set `host`. The full install notes are in [Install](install.md). Packages,
-systemd, and when to use `host`, `jail`, or `microvm` are in
-[run modes](run-modes.md). Every setting is in
-[Configuration](config.md).
+tools must set `host`. Full setup is in [Install](install.md).
 
-## Use
-
-Point an OpenAI-compatible client at `http://localhost:8000/v1`. Send
-`Authorization: Bearer` on every request except `/health` and
-`/metrics`. Default auth accepts any non-empty bearer and hashes it
-into a tenant id. The same key always maps to the same tenant. See
-[auth](auth.md).
+Point a client at `http://localhost:8000/v1` with
+`Authorization: Bearer`. Default auth accepts any non-empty bearer and
+hashes it into a tenant id.
 
 ```python
 from openai import OpenAI
@@ -84,29 +72,6 @@ with OpenAI(
                 print(line.removeprefix("data: "), flush=True)
 ```
 
-Official clients work for the subset we implement. Unknown fields and
-unimplemented features return an error (`invalid_request` or
-`not_implemented`). They are not stored and they are not ignored. A
-runnable script is `examples/openai_sdk.py`. The same steps as OpenAI's
-Agents API quickstart are in [Quickstart](quickstart.md). The HTTP
-surface is in [API](api.md).
-
-## Read next
-
-Use the API:
-
-1. [Install](install.md)
-2. [Run modes](run-modes.md)
-3. [Configuration](config.md)
-4. [Quickstart](quickstart.md)
-5. [API](api.md)
-6. [Auth](auth.md)
-7. [Environments](environments.md)
-8. [Tools and skills](tools.md)
-9. [Usage](usage.md)
-10. [Architecture](architecture.md)
-
-If you are changing the code, start from [How we work](process.md) and
-[Contributing](contributing.md). Project rules are in the
-[constitution](constitution.md). What is not in this version is on the
-[roadmap](roadmap.md).
+A runnable script is `examples/openai_sdk.py`. The same steps as
+OpenAI's Agents API quickstart are in [Quickstart](quickstart.md). The
+HTTP surface is in [API](api.md).
