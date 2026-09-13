@@ -77,23 +77,9 @@ under Contribute. Architecture decisions live in `specs/decisions/`.
 
 Pytest. Product pages say what is true. Tests check the public API and
 the constitution, not Pi internals. Mock Pi RPC. Same change as the
-code. Checks before commit are policy, not git hooks. See
+code. Checks before commit are policy, not git hooks. Commands, suites,
+and what jail and microvm need are in [tests](tests.md). See
 `CONTRIBUTING.md`.
-
-Compatibility: HTTP tests in `tests/api/test_compat.py` against
-[api.md](api.md). Each yes row on that page has a named test. Fast e2e
-runs in CI (`pytest -m "not slow"`). A slow check against the official
-OpenAI Python client (`beta.agents`) is local only and skips if the SDK
-is not installed. That check creates a session with an inline agent and
-`openai_hosted`, the same fields as `examples/openai_sdk.py`. The
-runnable script streams against a live gateway; see
-[Using the API](using.md).
-
-GitHub CI installs `bubblewrap` and `passt` and tries cgroup v2
-delegation so live jail tests can run. If jail still cannot start,
-those tests skip. That skip is not a fallback to `host`. Live microvm
-boots are local machines with KVM only. Do not add Firecracker to
-GitHub.
 
 ## Contribute
 

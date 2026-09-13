@@ -16,7 +16,7 @@ from apipi.config import ConfigError, Settings
 from apipi.pi.microvm import require_microvm
 from apipi.store.engine import Store
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.microvm]
 
 _FAKE_PI = Path(__file__).resolve().parents[1] / "support" / "fake_pi.py"
 _GUEST_FAKE_PI = "/tmp/workspace/fake_pi.py"

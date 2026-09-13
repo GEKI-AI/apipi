@@ -14,7 +14,7 @@ from apipi.config import ConfigError, Settings
 from apipi.pi.jail import jail_argv, jail_binaries, require_jail, resolv_conf
 from apipi.store.engine import Store
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.jail]
 
 _FAKE_PI = Path(__file__).resolve().parents[1] / "support" / "fake_pi.py"
 

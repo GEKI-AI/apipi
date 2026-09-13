@@ -99,7 +99,8 @@ export APIPI_MICROVM_KERNEL="$HOME/.cache/apipi/microvm/vmlinux"
 If the kernel download fails, get a Firecracker-compatible `vmlinux`
 from the [Firecracker getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)
 guide and point `APIPI_MICROVM_KERNEL` at it. Missing `/dev/kvm`,
-binaries, images, `ip`, or `iptables` exits the process.
+binaries, images, `ip`, or `iptables` exits the process. How to run
+the live microvm tests is in [tests](tests.md).
 
 ## Storage
 
