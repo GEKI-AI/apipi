@@ -18,4 +18,6 @@ max_request_bytes = "1MiB"
 max_workspace_bytes = "1GiB"
 max_artifact_bytes = "512MiB"
 db_pool_size = 5
+usage_store = "turns"
+usage_retention = "15d"
 metrics = false

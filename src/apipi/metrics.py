@@ -84,6 +84,12 @@ class Metrics:
             ["tenant", "code"],
             registry=self.registry,
         )
+        self.usage_export = Counter(
+            "apipi_usage_export_total",
+            "Usage export attempts",
+            ["result"],
+            registry=self.registry,
+        )
 
     def observe_request(
         self,
@@ -127,6 +133,9 @@ class Metrics:
             self.tokens.labels(tenant=tenant, kind=kind).inc(counts[field])
         if error_code:
             self.errors.labels(tenant=tenant, code=error_code).inc()
+
+    def observe_usage_export(self, result: str) -> None:
+        self.usage_export.labels(result=result).inc()
 
     def scrape(self) -> bytes:
         return generate_latest(self.registry)

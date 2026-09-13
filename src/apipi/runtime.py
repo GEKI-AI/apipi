@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,9 @@ from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
 from apipi.store.models import Event, utc_now
 from apipi.store.repo import (
+    add_usage_rollup,
+    append_turn_log,
+    artifact_bytes_for_turn,
     create_item,
     create_turn,
     get_agent,
@@ -29,8 +33,10 @@ from apipi.store.repo import (
     list_items,
     update_session,
 )
-from apipi.store.turn_logs import append_turn_log
-from apipi.usage import add_usage, empty_usage, usage_from
+from apipi.usage import add_usage, empty_usage, usage_event, usage_from
+from apipi.usage_export import export_usage
+
+log = logging.getLogger("apipi")
 
 PUBLIC_EVENT_TYPES = frozenset(
     {
@@ -473,12 +479,20 @@ async def _write_turn_log(
     request_id: str | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
+    settings: Settings | None = None,
+    artifact_bytes: int = 0,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is None:
         return
     row = await get_session(db, tenant_id, session_id)
     agent_id = row.agent_id if row is not None else None
+    key_id = row.key_id if row is not None else ""
+    environment_type = ""
+    if row is not None and isinstance(row.environment, dict):
+        raw_type = row.environment.get("type")
+        if isinstance(raw_type, str):
+            environment_type = raw_type
     model: str | None = None
     labels: list[str] = []
     if agent_id is not None:
@@ -491,27 +505,72 @@ async def _write_turn_log(
         db, tenant_id, session_id, turn_id, labels
     )
     latency_ms = _latency_ms(turn.created_at)
-    await append_turn_log(
-        db,
-        tenant_id,
-        session_id,
-        turn_id,
-        status=status,
+    run_mode = settings.run_mode if settings is not None else ""
+    instance_id = settings.instance_id if settings is not None else None
+    store = settings.usage_store if settings is not None else "turns"
+    created = utc_now()
+    event = usage_event(
+        tenant_id=tenant_id,
+        key_id=key_id,
+        session_id=session_id,
+        turn_id=turn_id,
         agent_id=agent_id,
         model=model,
+        status=status,
         latency_ms=latency_ms,
-        prompt_tokens=stored["prompt_tokens"],
-        completion_tokens=stored["completion_tokens"],
-        cache_read_tokens=stored["cache_read_tokens"],
-        cache_write_tokens=stored["cache_write_tokens"],
-        total_tokens=stored["total_tokens"],
-        error_code=error_code,
-        request_id=request_id,
+        usage=stored,
         tool_names=tool_names,
         tool_counts=tool_counts,
         mcp_names=mcp_names,
         mcp_counts=mcp_counts,
+        environment_type=environment_type,
+        run_mode=run_mode,
+        instance_id=instance_id,
+        artifact_bytes=artifact_bytes,
+        request_id=request_id,
+        error_code=error_code,
+        created_at=created,
     )
+    if store == "turns":
+        await append_turn_log(
+            db,
+            tenant_id,
+            session_id,
+            turn_id,
+            status=status,
+            agent_id=agent_id,
+            model=model,
+            latency_ms=latency_ms,
+            prompt_tokens=stored["prompt_tokens"],
+            completion_tokens=stored["completion_tokens"],
+            cache_read_tokens=stored["cache_read_tokens"],
+            cache_write_tokens=stored["cache_write_tokens"],
+            total_tokens=stored["total_tokens"],
+            error_code=error_code,
+            request_id=request_id,
+            tool_names=tool_names,
+            tool_counts=tool_counts,
+            mcp_names=mcp_names,
+            mcp_counts=mcp_counts,
+            key_id=key_id,
+            environment_type=environment_type,
+            run_mode=run_mode,
+            instance_id=instance_id,
+            artifact_bytes=artifact_bytes,
+        )
+    if store in {"turns", "rollups"}:
+        await add_usage_rollup(
+            db,
+            tenant_id,
+            created.date(),
+            prompt_tokens=stored["prompt_tokens"],
+            completion_tokens=stored["completion_tokens"],
+            cache_read_tokens=stored["cache_read_tokens"],
+            cache_write_tokens=stored["cache_write_tokens"],
+            total_tokens=stored["total_tokens"],
+            turns=1,
+            artifact_bytes=artifact_bytes,
+        )
     observe_turn(
         metrics,
         tenant_id=tenant_id,
@@ -538,6 +597,10 @@ async def _write_turn_log(
         total_tokens=stored["total_tokens"],
         tool_names=tool_names,
     )
+    try:
+        export_usage(settings, metrics, event)
+    except Exception:
+        log.warning("usage export failed", exc_info=True)
 
 
 async def _complete_turn(
@@ -571,17 +634,6 @@ async def _complete_turn(
         turn.status = "completed"
         turn.usage = stored
         turn.updated_at = utc_now()
-    await _write_turn_log(
-        db,
-        tenant_id,
-        session_id,
-        turn_id,
-        status="completed",
-        usage=stored,
-        request_id=request_id,
-        metrics=metrics,
-        tracing=tracing,
-    )
     if settings is not None:
         _row, limit_error = await harvest_session(
             db, settings, session_id, proc, env_hub, turn_id=turn_id
@@ -595,6 +647,20 @@ async def _complete_turn(
                 type="agent.session.error",
                 data={"message": str(limit_error), "code": limit_error.code},
             )
+    published = await artifact_bytes_for_turn(db, tenant_id, turn_id)
+    await _write_turn_log(
+        db,
+        tenant_id,
+        session_id,
+        turn_id,
+        status="completed",
+        usage=stored,
+        request_id=request_id,
+        metrics=metrics,
+        tracing=tracing,
+        settings=settings,
+        artifact_bytes=published,
+    )
     await persist_event(
         db,
         hub,
@@ -624,6 +690,7 @@ async def _cancel_turn(
     request_id: str | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
+    settings: Settings | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is not None:
@@ -638,6 +705,7 @@ async def _cancel_turn(
         request_id=request_id,
         metrics=metrics,
         tracing=tracing,
+        settings=settings,
     )
     await persist_event(
         db,
@@ -880,6 +948,7 @@ async def run_turn(
                         request_id=request_id,
                         metrics=metrics,
                         tracing=tracing,
+                        settings=settings,
                     )
                     return
                 if pending:
@@ -1080,6 +1149,7 @@ async def continue_turn(
                         request_id=request_id,
                         metrics=metrics,
                         tracing=tracing,
+                        settings=settings,
                     )
                 return
             set_span(

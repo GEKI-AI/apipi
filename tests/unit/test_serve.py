@@ -10,7 +10,8 @@ from apipi.config import (
     METRICS_ON,
     OTEL_SET,
     OTEL_UNSET,
-    TURN_LOG_ON,
+    USAGE_EXPORT_OFF,
+    USAGE_STORE_TURNS,
     ConfigError,
     Settings,
     require_run_mode,
@@ -46,7 +47,9 @@ def test_prepare_serve_logs_default_observability(
     caplog.set_level(logging.INFO, logger="apipi")
     prepare_serve(_host_settings())
     messages = [record.getMessage() for record in caplog.records]
-    assert TURN_LOG_ON in messages
+    assert USAGE_STORE_TURNS in messages
+    assert "usage retention 15d" in messages
+    assert USAGE_EXPORT_OFF in messages
     assert METRICS_OFF in messages
     assert OTEL_UNSET in messages
     assert METRICS_ON not in messages
@@ -65,20 +68,20 @@ def test_prepare_serve_logs_enabled_exports(
     )
     prepare_serve(settings)
     messages = [record.getMessage() for record in caplog.records]
-    assert TURN_LOG_ON in messages
+    assert USAGE_STORE_TURNS in messages
     assert METRICS_ON in messages
     assert OTEL_SET in messages
     assert METRICS_OFF not in messages
     assert OTEL_UNSET not in messages
 
 
-def test_prepare_serve_turn_log_stays_on(
+def test_prepare_serve_ignores_legacy_turn_log_flag(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv("APIPI_TURN_LOG", "off")
     caplog.set_level(logging.INFO, logger="apipi")
     prepare_serve(_host_settings())
-    assert TURN_LOG_ON in caplog.text
+    assert USAGE_STORE_TURNS in caplog.text
 
 
 def test_prepare_serve_rejects_prompt_body_logging(

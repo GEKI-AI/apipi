@@ -170,10 +170,11 @@ See [environments](environments.md).
 ## Store
 
 Postgres holds tenants, agents, sessions, turns, items, the event
-log, the turn log (usage tokens and details, never prompt text),
+log, hot usage (turn log and/or daily rollups, never prompt text),
 environment state, and artifact metadata. Artifact bytes sit in the
 configured artifact store after a turn completes: local files by
-default, or S3-compatible object storage. Not API keys. Prometheus and
+default, or S3-compatible object storage. Not API keys. Long-term
+usage analytics use the optional HTTPS export. Prometheus and
 OpenTelemetry are exports. See [usage](usage.md) and
 [run modes](run-modes.md#storage).
 

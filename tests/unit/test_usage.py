@@ -1,4 +1,13 @@
-from apipi.usage import add_usage, empty_usage, usage_from, usage_from_messages
+import uuid
+from datetime import UTC, datetime
+
+from apipi.usage import (
+    add_usage,
+    empty_usage,
+    usage_event,
+    usage_from,
+    usage_from_messages,
+)
 
 
 def test_usage_from_maps_pi_and_drops_extras() -> None:
@@ -74,3 +83,39 @@ def test_add_usage() -> None:
     other = empty_usage()
     other["prompt_tokens"] = 1
     assert add_usage(empty_usage(), other)["prompt_tokens"] == 1
+
+
+def test_usage_event_has_no_message_text() -> None:
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    turn_id = uuid.uuid4()
+    event = usage_event(
+        tenant_id=tenant_id,
+        key_id="key-1",
+        session_id=session_id,
+        turn_id=turn_id,
+        agent_id=None,
+        model="test",
+        status="completed",
+        latency_ms=12,
+        usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        tool_names=["echo"],
+        tool_counts={"echo": 1},
+        mcp_names=[],
+        mcp_counts={},
+        environment_type="none",
+        run_mode="host",
+        instance_id="node-a",
+        artifact_bytes=0,
+        request_id="req-1",
+        error_code=None,
+        created_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    blob = str(event)
+    assert "hello" not in blob
+    assert "secret" not in blob
+    assert event["tenant_id"] == str(tenant_id)
+    assert event["prompt_tokens"] == 1
+    assert event["environment_type"] == "none"
+    assert "content" not in event
+    assert "prompt" not in event

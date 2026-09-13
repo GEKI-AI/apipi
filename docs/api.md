@@ -164,9 +164,9 @@ thread if the gateway disappears.
 | --- | --- |
 | `GET` | `/v1/usage` |
 
-Tenant-scoped totals from the turn log. Filter by exactly one of
-`session_id`, `turn_id`, or `day`. Tokens and turn counts, not USD.
-See [usage](usage.md).
+Tenant-scoped totals from hot usage data (turn log and/or daily
+rollups). Filter by exactly one of `session_id`, `turn_id`, or `day`.
+Tokens and turn counts, not USD. See [usage](usage.md).
 
 ## Request ids
 

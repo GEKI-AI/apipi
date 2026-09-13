@@ -162,6 +162,12 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.microvm_egress_hosts == ""
     assert settings.microvm_egress_mbit == 50
     assert settings.workspace_ttl == timedelta(hours=1)
+    assert settings.usage_store == "turns"
+    assert settings.usage_retention == timedelta(days=15)
+    assert settings.usage_export_url is None
+    assert settings.usage_export_token is None
+    assert settings.usage_export_timeout == timedelta(seconds=5)
+    assert settings.usage_export_retries == 1
     assert "example_ui" not in type(settings).model_fields
 
 
@@ -274,6 +280,49 @@ def test_config_path_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ConfigError, match="config file not found"):
         load_settings(config_path=str(tmp_path / "missing.toml"))
+
+
+def test_usage_store_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_USAGE_STORE", "rollups")
+    monkeypatch.setenv("APIPI_USAGE_RETENTION", "90d")
+    monkeypatch.setenv("APIPI_USAGE_EXPORT_URL", "https://example.test/usage")
+    monkeypatch.setenv("APIPI_USAGE_EXPORT_RETRIES", "0")
+    settings = Settings()
+    assert settings.usage_store == "rollups"
+    assert settings.usage_retention == timedelta(days=90)
+    assert settings.usage_export_url == "https://example.test/usage"
+    assert settings.usage_export_retries == 0
+
+
+def test_usage_retention_empty_is_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_USAGE_RETENTION", "")
+    assert load_settings().usage_retention is None
+
+
+def test_usage_store_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_USAGE_STORE", "warehouse")
+    with pytest.raises(ConfigError, match="APIPI_USAGE_STORE must be"):
+        load_settings()
+
+
+def test_usage_export_url_invalid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+    monkeypatch.setenv("APIPI_USAGE_EXPORT_URL", "not-a-url")
+    with pytest.raises(ConfigError, match="APIPI_USAGE_EXPORT_URL must be"):
+        load_settings()
 
 
 def test_explicit_config_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
