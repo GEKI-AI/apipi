@@ -10,9 +10,10 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apipi.blobs import ArtifactBlobs, blob_store
 from apipi.config import ConfigError, DiskLimitError, Settings
 from apipi.env.hub import EnvDisconnected, EnvironmentHub
-from apipi.pi.dirs import artifact_blob_dir, artifact_blob_path, sessions_root
+from apipi.pi.dirs import sessions_root
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
 from apipi.skills import copy_capability_directories
@@ -134,12 +135,13 @@ def wipe_workspace(workspace: Path) -> None:
         shutil.rmtree(workspace)
 
 
-def wipe_artifact_store(
-    settings: Settings, tenant_id: uuid.UUID, session_id: uuid.UUID
+async def wipe_artifact_store(
+    blobs: ArtifactBlobs,
+    tenant_id: uuid.UUID,
+    key_id: str,
+    session_id: uuid.UUID,
 ) -> None:
-    path = sessions_root(settings) / ".artifacts" / str(tenant_id) / str(session_id)
-    if path.is_dir():
-        shutil.rmtree(path)
+    await blobs.delete_session(tenant_id, key_id, session_id)
 
 
 def ensure_openai_workspace(environment: dict[str, Any]) -> None:
@@ -167,14 +169,18 @@ async def _persist_files(
     files: list[tuple[str, bytes]],
     *,
     turn_id: uuid.UUID | None = None,
+    key_id: str = "",
+    blobs: ArtifactBlobs | None = None,
 ) -> None:
+    store = blobs if blobs is not None else blob_store(settings)
     existing = await list_artifacts(db, tenant_id, session_id)
     latest: dict[str, bytes] = {}
     if existing:
         for artifact in existing:
-            blob = artifact_blob_path(settings, tenant_id, session_id, artifact.id)
-            if blob.is_file():
-                latest[artifact.path] = blob.read_bytes()
+            user = artifact.key_id or key_id
+            data = await store.get(tenant_id, user, session_id, artifact.id)
+            if data is not None:
+                latest[artifact.path] = data
     to_write: list[tuple[str, bytes]] = []
     incoming = 0
     for rel, data in files:
@@ -182,7 +188,7 @@ async def _persist_files(
             continue
         to_write.append((rel, data))
         incoming += len(data)
-    used = dir_bytes(artifact_blob_dir(settings, tenant_id, session_id))
+    used = await store.used_bytes(tenant_id, key_id, session_id)
     if to_write and used + incoming > settings.max_artifact_bytes:
         raise DiskLimitError("Artifact store too large", code="artifact_too_large")
     for rel, data in to_write:
@@ -193,9 +199,10 @@ async def _persist_files(
             path=rel,
             content_type=_content_type(rel),
             turn_id=turn_id,
+            key_id=key_id,
+            byte_size=len(data),
         )
-        dest = artifact_blob_path(settings, tenant_id, session_id, artifact.id)
-        dest.write_bytes(data)
+        await store.put(tenant_id, key_id, session_id, artifact.id, data)
         latest[rel] = data
 
 
@@ -280,6 +287,7 @@ async def harvest_session(
     *,
     turn_id: uuid.UUID | None = None,
     sync_workspace: bool = False,
+    blobs: ArtifactBlobs | None = None,
 ) -> tuple[SessionRow | None, DiskLimitError | None]:
     row = await get_session_by_id(db, session_id)
     if row is None:
@@ -304,7 +312,14 @@ async def harvest_session(
     if files:
         try:
             await _persist_files(
-                db, settings, row.tenant_id, row.id, files, turn_id=turn_id
+                db,
+                settings,
+                row.tenant_id,
+                row.id,
+                files,
+                turn_id=turn_id,
+                key_id=row.key_id,
+                blobs=blobs,
             )
         except DiskLimitError as exc:
             persist_error = exc

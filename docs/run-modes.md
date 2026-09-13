@@ -110,7 +110,7 @@ Three stores. Do not mix them up.
 | --- | --- | --- | --- |
 | **Session** | Transcript: events, turns, items, artifact metadata | Postgres | Until the session is deleted. A session [export](api.md#export) is the thread. |
 | **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. `self_hosted`: the runner. `none`: no files. | `openai_hosted` lasts across Pi stop until `APIPI_WORKSPACE_TTL` (default 1 hour) with no session activity, or until the session is deleted. Runner files stay on the runner. |
-| **Artifacts** | Named outputs the API can fetch | Metadata in Postgres. Bytes on the gateway host under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{session_id}/{id}`. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
+| **Artifacts** | Named outputs the API can fetch | Metadata in Postgres. Bytes in `APIPI_ARTIFACT_STORE`: local files under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`, or an S3-compatible bucket with the same key layout. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
 
 `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB) caps one `openai_hosted`
 directory. An oversized microvm pull is not unpacked onto the host.

@@ -150,6 +150,11 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.max_request_bytes == 1024 * 1024
     assert settings.max_workspace_bytes == 1024 * 1024 * 1024
     assert settings.max_artifact_bytes == 512 * 1024 * 1024
+    assert settings.artifact_store == "local"
+    assert settings.s3_bucket is None
+    assert settings.s3_region == "us-east-1"
+    assert settings.s3_prefix == "apipi/artifacts"
+    assert settings.s3_addressing == "auto"
     assert settings.db_pool_size == 5
     assert settings.microvm_mem_mib == 512
     assert settings.microvm_vcpus == 1

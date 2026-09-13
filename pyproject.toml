@@ -26,6 +26,9 @@ dependencies = [
     "uvicorn[standard]>=0.32,<1",
 ]
 
+[project.optional-dependencies]
+s3 = ["boto3>=1.35,<2"]
+
 [project.urls]
 Homepage = "https://github.com/GEKI-AI/apipi"
 Repository = "https://github.com/GEKI-AI/apipi"
@@ -34,6 +37,7 @@ Issues = "https://github.com/GEKI-AI/apipi/issues"
 [dependency-groups]
 dev = [
     "aiosqlite>=0.21,<1",
+    "boto3>=1.35,<2",
     "httpx>=0.28,<1",
     "pytest>=9,<10",
     "pytest-asyncio>=1.0,<2",

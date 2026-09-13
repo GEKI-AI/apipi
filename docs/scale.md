@@ -121,10 +121,10 @@ tenant to the pool outside the gateway (DNS, balancer rule, or which
 bearers the auth callback accepts on that pool). The public Agents API
 does not change.
 
-Shared: Postgres. Isolated: Pi, `APIPI_SESSIONS_DIR`, artifact bytes
-on that pool's disks. Sticky rules above still apply inside the pool.
-Until artifacts live in external object storage, do not share a
-sessions directory across nodes.
+Shared: Postgres, and artifact bytes when `APIPI_ARTIFACT_STORE=s3`.
+Isolated: Pi and `APIPI_SESSIONS_DIR` (the live workspace). Sticky
+rules above still apply inside the pool for live sessions. With local
+artifact files, do not share a sessions directory across nodes.
 
 ## Out of scope
 

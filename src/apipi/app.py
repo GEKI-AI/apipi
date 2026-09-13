@@ -12,6 +12,7 @@ from apipi.api.environments import router as environments_router
 from apipi.api.sessions import router as sessions_router
 from apipi.api.usage import router as usage_router
 from apipi.auth import AuthCache, load_authenticate
+from apipi.blobs import ArtifactBlobs, blob_store
 from apipi.config import Settings, load_settings, postgres_url
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import error_body, register_exception_handlers
@@ -147,6 +148,7 @@ def create_app(
     harness: FakeHarness | PiHarness | None = None,
     pool: PiPool | None = None,
     tracing: Tracing | None = None,
+    blobs: ArtifactBlobs | None = None,
 ) -> FastAPI:
     resolved = settings if settings is not None else load_settings()
     resolved_pool = pool if pool is not None else PiPool(resolved)
@@ -199,6 +201,7 @@ def create_app(
     app.state.env_hub = EnvironmentHub()
     app.state.pi_pool = resolved_pool
     app.state.harness = harness if harness is not None else PiHarness(resolved_pool)
+    app.state.blobs = blobs if blobs is not None else blob_store(resolved)
 
     async def harvest_killed(session_id: uuid.UUID, proc: PiProc | None) -> None:
         current = app.state.store
@@ -212,6 +215,7 @@ def create_app(
                 proc,
                 app.state.env_hub,
                 sync_workspace=True,
+                blobs=app.state.blobs,
             )
 
     if resolved_pool.on_kill is None:
