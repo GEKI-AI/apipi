@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import io
 import mimetypes
 import shutil
@@ -11,9 +10,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apipi.config import ConfigError, Settings
+from apipi.config import ConfigError, DiskLimitError, Settings
 from apipi.env.hub import EnvDisconnected, EnvironmentHub
-from apipi.pi.dirs import artifact_blob_path, sessions_root
+from apipi.pi.dirs import artifact_blob_dir, artifact_blob_path, sessions_root
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
 from apipi.skills import copy_capability_directories
@@ -73,11 +72,27 @@ def unpack_artifact_tar(data: bytes) -> list[tuple[str, bytes]]:
     return files
 
 
-def unpack_workspace_tar(data: bytes, dest: Path) -> None:
+def dir_bytes(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    total = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            total += item.stat().st_size
+    return total
+
+
+def unpack_workspace_tar(
+    data: bytes, dest: Path, *, max_bytes: int | None = None
+) -> None:
     if not data:
         return
+    if max_bytes is not None and dir_bytes(dest) > max_bytes:
+        raise DiskLimitError("Workspace too large", code="workspace_too_large")
     dest.mkdir(parents=True, exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(data), mode="r") as tar:
+        members: list[tuple[tarfile.TarInfo, str]] = []
+        total = 0
         for info in tar.getmembers():
             if not info.isfile():
                 continue
@@ -87,6 +102,11 @@ def unpack_workspace_tar(data: bytes, dest: Path) -> None:
             parts = Path(name).parts
             if not parts or ".." in parts or parts[0] == ".apipi":
                 continue
+            members.append((info, name))
+            total += info.size
+        if max_bytes is not None and total > max_bytes:
+            raise DiskLimitError("Workspace too large", code="workspace_too_large")
+        for info, name in members:
             handle = tar.extractfile(info)
             if handle is None:
                 continue
@@ -155,9 +175,17 @@ async def _persist_files(
             blob = artifact_blob_path(settings, tenant_id, session_id, artifact.id)
             if blob.is_file():
                 latest[artifact.path] = blob.read_bytes()
+    to_write: list[tuple[str, bytes]] = []
+    incoming = 0
     for rel, data in files:
         if latest.get(rel) == data:
             continue
+        to_write.append((rel, data))
+        incoming += len(data)
+    used = dir_bytes(artifact_blob_dir(settings, tenant_id, session_id))
+    if to_write and used + incoming > settings.max_artifact_bytes:
+        raise DiskLimitError("Artifact store too large", code="artifact_too_large")
+    for rel, data in to_write:
         artifact = await create_artifact(
             db,
             tenant_id,
@@ -206,25 +234,41 @@ async def _hosted_files(
     dest: Path | None,
     *,
     sync_workspace: bool,
-) -> list[tuple[str, bytes]]:
+    max_workspace_bytes: int | None = None,
+) -> tuple[list[tuple[str, bytes]], DiskLimitError | None]:
+    workspace_error: DiskLimitError | None = None
     if (
         sync_workspace
         and proc is not None
         and proc.pull_workspace is not None
         and dest is not None
     ):
-        with contextlib.suppress(OSError, TimeoutError, ConfigError):
-            unpack_workspace_tar(await proc.pull_workspace(), dest)
+        try:
+            unpack_workspace_tar(
+                await proc.pull_workspace(), dest, max_bytes=max_workspace_bytes
+            )
+        except DiskLimitError as exc:
+            workspace_error = exc
+        except (OSError, TimeoutError, ConfigError):
+            pass
+    files: list[tuple[str, bytes]] = []
     if proc is not None and proc.pull_artifacts is not None:
         try:
-            return unpack_artifact_tar(await proc.pull_artifacts())
+            files = unpack_artifact_tar(await proc.pull_artifacts())
         except (OSError, TimeoutError, ConfigError):
-            if dest is None:
-                return []
-            return read_workspace_artifacts(dest)
-    if dest is None:
-        return []
-    return read_workspace_artifacts(dest)
+            if dest is not None:
+                files = read_workspace_artifacts(dest)
+    elif dest is not None:
+        files = read_workspace_artifacts(dest)
+    if (
+        dest is not None
+        and max_workspace_bytes is not None
+        and dir_bytes(dest) > max_workspace_bytes
+    ):
+        workspace_error = workspace_error or DiskLimitError(
+            "Workspace too large", code="workspace_too_large"
+        )
+    return files, workspace_error
 
 
 async def harvest_session(
@@ -236,12 +280,13 @@ async def harvest_session(
     *,
     turn_id: uuid.UUID | None = None,
     sync_workspace: bool = False,
-) -> SessionRow | None:
+) -> tuple[SessionRow | None, DiskLimitError | None]:
     row = await get_session_by_id(db, session_id)
     if row is None:
-        return None
+        return None, None
     env_type = row.environment.get("type")
     files: list[tuple[str, bytes]] = []
+    workspace_error: DiskLimitError | None = None
     if env_type == "self_hosted" and env_hub is not None:
         env_id_raw = row.environment.get("id")
         if isinstance(env_id_raw, str):
@@ -249,12 +294,21 @@ async def harvest_session(
     elif env_type == "openai_hosted":
         directory = row.environment.get("directory")
         dest = Path(directory) if isinstance(directory, str) and directory else None
-        files = await _hosted_files(proc, dest, sync_workspace=sync_workspace)
-    if files:
-        await _persist_files(
-            db, settings, row.tenant_id, row.id, files, turn_id=turn_id
+        files, workspace_error = await _hosted_files(
+            proc,
+            dest,
+            sync_workspace=sync_workspace,
+            max_workspace_bytes=settings.max_workspace_bytes,
         )
-    return row
+    persist_error: DiskLimitError | None = None
+    if files:
+        try:
+            await _persist_files(
+                db, settings, row.tenant_id, row.id, files, turn_id=turn_id
+            )
+        except DiskLimitError as exc:
+            persist_error = exc
+    return row, persist_error or workspace_error
 
 
 async def reap_workspaces(

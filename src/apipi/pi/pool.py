@@ -16,6 +16,7 @@ class PiPool:
         self.settings = settings
         self.on_kill = on_kill
         self._procs: dict[uuid.UUID, PiProc] = {}
+        self._tenants: dict[uuid.UUID, uuid.UUID] = {}
         self._stdio: dict[uuid.UUID, list[McpStdioServer]] = {}
         self._last: dict[uuid.UUID, float] = {}
         self._spawn_tools: dict[uuid.UUID, bool] = {}
@@ -30,6 +31,7 @@ class PiPool:
         mcp_http: list[McpHttpServer] | None = None,
         mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
+        tenant_id: uuid.UUID | None = None,
     ) -> PiProc:
         async with self._lock:
             proc = self._procs.get(session_id)
@@ -38,8 +40,14 @@ class PiPool:
                 await self.kill(session_id)
                 proc = None
             if proc is None or not proc.alive:
-                if not self.has_capacity(session_id):
-                    raise CapacityError("Too many live sessions")
+                code = self.capacity_code(session_id, tenant_id)
+                if code is not None:
+                    message = (
+                        "Too many live sessions for this tenant"
+                        if code == "capacity_tenant"
+                        else "Too many live sessions"
+                    )
+                    raise CapacityError(message, code=code)
                 proc = await spawn_pi(
                     self.settings,
                     cwd=cwd,
@@ -50,17 +58,40 @@ class PiPool:
                 )
                 self._procs[session_id] = proc
                 self._spawn_tools[session_id] = tools
+                if tenant_id is not None:
+                    self._tenants[session_id] = tenant_id
             self._last[session_id] = time.monotonic()
             return proc
 
     def live(self) -> int:
         return sum(1 for proc in self._procs.values() if proc.alive)
 
-    def has_capacity(self, session_id: uuid.UUID) -> bool:
+    def live_for(self, tenant_id: uuid.UUID) -> int:
+        return sum(
+            1
+            for sid, proc in self._procs.items()
+            if proc.alive and self._tenants.get(sid) == tenant_id
+        )
+
+    def capacity_code(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID | None = None
+    ) -> str | None:
         proc = self._procs.get(session_id)
         if proc is not None and proc.alive:
-            return True
-        return self.live() < self.settings.max_sessions
+            return None
+        if (
+            tenant_id is not None
+            and self.live_for(tenant_id) >= self.settings.max_sessions_per_tenant
+        ):
+            return "capacity_tenant"
+        if self.live() >= self.settings.max_sessions:
+            return "capacity"
+        return None
+
+    def has_capacity(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID | None = None
+    ) -> bool:
+        return self.capacity_code(session_id, tenant_id) is None
 
     def peek(self, session_id: uuid.UUID) -> PiProc | None:
         proc = self._procs.get(session_id)
@@ -78,6 +109,7 @@ class PiPool:
         proc = self._procs.pop(session_id, None)
         self._last.pop(session_id, None)
         self._spawn_tools.pop(session_id, None)
+        self._tenants.pop(session_id, None)
         stdio = self._stdio.pop(session_id, None)
         if self.on_kill is not None:
             await self.on_kill(session_id, proc)

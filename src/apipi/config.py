@@ -60,7 +60,15 @@ class ConfigError(Exception):
 
 
 class CapacityError(Exception):
-    pass
+    def __init__(self, message: str, *, code: str = "capacity") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class DiskLimitError(Exception):
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def parse_ttl(value: object) -> object:
@@ -158,6 +166,13 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("APIPI_MAX_SESSIONS", "max_sessions"),
     )
+    max_sessions_per_tenant: int = Field(
+        default=32,
+        ge=1,
+        validation_alias=AliasChoices(
+            "APIPI_MAX_SESSIONS_PER_TENANT", "max_sessions_per_tenant"
+        ),
+    )
     turn_timeout: IdleTtl = Field(
         default=timedelta(minutes=10),
         validation_alias=AliasChoices("APIPI_TURN_TIMEOUT", "turn_timeout"),
@@ -226,6 +241,18 @@ class Settings(BaseSettings):
         default=1024 * 1024,
         ge=1,
         validation_alias=AliasChoices("APIPI_MAX_REQUEST_BYTES", "max_request_bytes"),
+    )
+    max_workspace_bytes: ByteSize = Field(
+        default=1024 * 1024 * 1024,
+        ge=1,
+        validation_alias=AliasChoices(
+            "APIPI_MAX_WORKSPACE_BYTES", "max_workspace_bytes"
+        ),
+    )
+    max_artifact_bytes: ByteSize = Field(
+        default=512 * 1024 * 1024,
+        ge=1,
+        validation_alias=AliasChoices("APIPI_MAX_ARTIFACT_BYTES", "max_artifact_bytes"),
     )
 
     @model_validator(mode="after")
@@ -332,12 +359,18 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_METRICS must be on or off"
         if "port" in loc:
             return "APIPI_PORT must be 1-65535"
+        if "max_sessions_per_tenant" in loc or "APIPI_MAX_SESSIONS_PER_TENANT" in loc:
+            return "APIPI_MAX_SESSIONS_PER_TENANT must be at least 1"
         if "max_sessions" in loc:
             return "APIPI_MAX_SESSIONS must be at least 1"
         if "jail_memory" in loc:
             return "APIPI_JAIL_MEMORY must be like 512M"
         if "max_request_bytes" in loc:
             return "APIPI_MAX_REQUEST_BYTES must be like 1MiB"
+        if "max_workspace_bytes" in loc:
+            return "APIPI_MAX_WORKSPACE_BYTES must be like 1GiB"
+        if "max_artifact_bytes" in loc:
+            return "APIPI_MAX_ARTIFACT_BYTES must be like 512MiB"
         if "log_level" in loc:
             return "APIPI_LOG_LEVEL must be debug, info, warning, error, or critical"
         if "db_pool_size" in loc:

@@ -24,6 +24,7 @@ class PiHarness:
         mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
         computer: Computer | None = None,
+        tenant_id: uuid.UUID | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         if session_id is None:
@@ -35,6 +36,7 @@ class PiHarness:
             mcp_http=mcp_http,
             mcp_stdio=mcp_stdio,
             skill_dirs=skill_dirs,
+            tenant_id=tenant_id,
         )
         async for event in proc.prompt(text):
             for public in map_pi_event(event):

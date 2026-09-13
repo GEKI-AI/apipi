@@ -41,7 +41,8 @@ secrets. Do not commit `.env`.
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
 | `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process to free RAM. The session row and `openai_hosted` directory stay. Resume from the event log. |
 | `APIPI_WORKSPACE_TTL` | `workspace_ttl` | `1h` | Delete an `openai_hosted` directory after this long with no session activity, and only if Pi is already gone. Transcript and published artifacts stay. |
-| `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. |
+| `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. |
+| `APIPI_MAX_SESSIONS_PER_TENANT` | `max_sessions_per_tenant` | `32` | Live Pi processes for one tenant. A new turn that would pass the cap returns `429` with code `capacity_tenant`. The node cap still applies. |
 | `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Cancel a stuck turn. |
 | `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. |
 | `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache the callback result by SHA-256 of the bearer, never the raw key. |
@@ -54,6 +55,8 @@ secrets. Do not commit `.env`.
 | `APIPI_MICROVM_VCPUS` | `microvm_vcpus` | `1` | Guest vCPUs. |
 | `APIPI_DB_POOL_SIZE` | `db_pool_size` | `5` | SQLAlchemy pool size. |
 | `APIPI_MAX_REQUEST_BYTES` | `max_request_bytes` | `1MiB` | Reject larger request bodies with `413` and code `payload_too_large`. |
+| `APIPI_MAX_WORKSPACE_BYTES` | `max_workspace_bytes` | `1GiB` | Size of one `openai_hosted` session directory. An oversized microvm pull is not unpacked. Over the cap, harvest emits `agent.session.error` with code `workspace_too_large`. |
+| `APIPI_MAX_ARTIFACT_BYTES` | `max_artifact_bytes` | `512MiB` | Host artifact store per session. Publishing more is refused with code `artifact_too_large`. |
 | `OPENAI_BASE_URL` | `model_base_url` | unset | Model host passed to Pi. Not the gateway URL. |
 | `OPENAI_API_KEY` | `model_api_key` | unset | Model key passed to Pi. |
 | `APIPI_METRICS` | `metrics` | off | Prometheus text at `/metrics` when on. No bearer. |
@@ -98,19 +101,48 @@ See [auth](auth.md) and `examples/auth_callback.py`.
 
 ## Limits
 
+These are operator settings, not customer tiers. There is no plan or
+SKU field. One `apipi serve` process has one profile. Change a setting
+and restart the process. Do not add uvicorn workers; the pool is in
+memory in that process.
+
 Each live session is one Pi process (or guest). Without a cap, a burst
 of sessions can exhaust RAM and PIDs. `max_sessions` counts those live
-processes. The session row in Postgres can outlive the process; idle
-TTL kills the process and frees a slot.
+processes on the node. `max_sessions_per_tenant` counts them for one
+tenant. The session row in Postgres can outlive the process; idle TTL
+kills the process and frees a slot.
 
 `turn_timeout` stops a generate that never returns. `workspace_ttl`
 deletes the local computer directory after idle Pi has already been
 killed. `jail_memory` and the microvm memory/vCPU settings bound each
-worker. `max_request_bytes` bounds HTTP bodies. `db_pool_size` bounds
-connections to Postgres.
+worker. `max_request_bytes` bounds HTTP bodies. `max_workspace_bytes`
+bounds one `openai_hosted` directory. `max_artifact_bytes` bounds the
+published host store for one session. `db_pool_size` bounds connections
+to Postgres.
 
-One `apipi serve` is one process. Do not add uvicorn workers; the pool
-is in memory in that process.
+Code defaults are conservative. Production SaaS and enterprise should
+set `run_mode` to `microvm` and size the rest to the host. Raise
+`microvm_mem_mib` when you enable heavy stdio MCP such as Playwright.
+Do not add browser tiers. On a shared node, set
+`max_sessions_per_tenant` lower than `max_sessions` (for example `8`).
+Size `max_sessions` to host RAM divided by `microvm_mem_mib`. Keep
+`max_workspace_bytes` at `1GiB` and `max_artifact_bytes` at `512MiB`
+unless the computer must hold more.
+
+| Failure | HTTP or event | Code |
+| --- | --- | --- |
+| Node live-session cap | `429` | `capacity` |
+| Per-tenant live-session cap | `429` | `capacity_tenant` |
+| Request body too large | `413` | `payload_too_large` |
+| Workspace directory too large | `agent.session.error` | `workspace_too_large` |
+| Artifact store too large | `agent.session.error` | `artifact_too_large` |
+
+The gateway does not intercept every write inside a jail or guest.
+Guest tmpfs is already bounded by `microvm_mem_mib`. Workspace and
+artifact caps are enforced when the host unpacks or publishes. Host
+and jail files that are already on disk stay until workspace TTL.
+`self_hosted` runner disk is not capped; bytes published onto the
+gateway still count toward `max_artifact_bytes`.
 
 ## TOML example
 
@@ -123,10 +155,13 @@ log_level = "info"
 idle_ttl = "15m"
 workspace_ttl = "1h"
 max_sessions = 32
+max_sessions_per_tenant = 32
 turn_timeout = "10m"
 auth_cache_ttl = "30s"
 jail_memory = "512M"
 max_request_bytes = "1MiB"
+max_workspace_bytes = "1GiB"
+max_artifact_bytes = "512MiB"
 db_pool_size = 5
 metrics = false
 ```

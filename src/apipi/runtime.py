@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apipi.config import Settings
+from apipi.config import CapacityError, Settings
 from apipi.env.computer import Computer, bind_computer, computer_item_events
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import ApiError
@@ -583,7 +583,18 @@ async def _complete_turn(
         tracing=tracing,
     )
     if settings is not None:
-        await harvest_session(db, settings, session_id, proc, env_hub, turn_id=turn_id)
+        _row, limit_error = await harvest_session(
+            db, settings, session_id, proc, env_hub, turn_id=turn_id
+        )
+        if limit_error is not None:
+            await persist_event(
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                type="agent.session.error",
+                data={"message": str(limit_error), "code": limit_error.code},
+            )
     await persist_event(
         db,
         hub,
@@ -816,6 +827,7 @@ async def run_turn(
                     skill_dirs=skill_dirs,
                     abort=abort,
                     computer=computer,
+                    tenant_id=tenant_id,
                 )
                 try:
                     if turn_timeout is None:
@@ -827,6 +839,20 @@ async def run_turn(
                             reply, pending, usage = await _consume_generate(
                                 store, hub, tenant_id, session_id, turn_id, generate
                             )
+                except CapacityError as exc:
+                    async with store.session() as db:
+                        await update_session(
+                            db,
+                            tenant_id,
+                            session_id,
+                            changes={"status": "idle"},
+                        )
+                    raise ApiError(
+                        "invalid_request",
+                        str(exc),
+                        code=exc.code,
+                        status_code=429,
+                    ) from exc
                 except TimeoutError:
                     abort.set()
                     await harness.abort(session_id)
@@ -1023,6 +1049,7 @@ async def continue_turn(
                 mcp_stdio=mcp_stdio,
                 skill_dirs=skill_dirs,
                 computer=computer,
+                tenant_id=tenant_id,
             )
             try:
                 if turn_timeout is None:
@@ -1034,6 +1061,13 @@ async def continue_turn(
                         reply, pending, usage = await _consume_generate(
                             store, hub, tenant_id, session_id, turn_id, generate
                         )
+            except CapacityError as exc:
+                raise ApiError(
+                    "invalid_request",
+                    str(exc),
+                    code=exc.code,
+                    status_code=429,
+                ) from exc
             except TimeoutError:
                 await harness.abort(session_id)
                 async with store.session() as db:

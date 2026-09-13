@@ -56,8 +56,10 @@ bash run against that folder. Killing idle Pi does not delete it. The
 next spawn uses the same directory. After `APIPI_WORKSPACE_TTL`
 (default 1 hour) with no session activity, and only if Pi is already
 gone, the gateway deletes that directory. The transcript and published
-artifacts stay. Skills listed in `capability_directories` are copied
-in again on the next spawn into a fresh workspace.
+artifacts stay. That directory is bounded by
+`APIPI_MAX_WORKSPACE_BYTES` (default 1GiB). Skills listed in
+`capability_directories` are copied in again on the next spawn into a
+fresh workspace.
 
 On `self_hosted`, files stay on the runner. The gateway also copies
 `artifacts/` and `outputs/` from the runner on turn complete and on Pi
@@ -75,7 +77,10 @@ was published at turn complete. Bytes live on the gateway host under
 `GET .../artifacts/{id}/content` reads that store in every run mode.
 `410` if nothing was published. `DELETE` removes the metadata and the
 file. The live file on the computer is unchanged. Artifacts last until
-you delete the artifact or the session.
+you delete the artifact or the session. The host store for one session
+is bounded by `APIPI_MAX_ARTIFACT_BYTES` (default 512MiB). Publishing
+over that cap emits `agent.session.error` with code
+`artifact_too_large` and does not write the extra bytes.
 
 Ask the agent to write under `artifacts/` or `outputs/` if you need
 the file after the workspace expires. Copies are immutable. A later
