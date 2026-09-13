@@ -1,5 +1,4 @@
 database_url = "postgresql+asyncpg://apipi:apipi@localhost:5432/apipi"
-run_mode = "none"
 host = "0.0.0.0"
 port = 8000
 log_level = "info"
@@ -9,10 +8,6 @@ max_sessions = 32
 max_sessions_per_tenant = 32
 turn_timeout = "10m"
 auth_cache_ttl = "30s"
-pi_command = "pi"
-microvm_egress_allowlist = true
-microvm_egress_hosts = ""
-microvm_egress_mbit = 50
 max_request_bytes = "1MiB"
 max_workspace_bytes = "1GiB"
 max_artifact_bytes = "512MiB"
@@ -20,3 +15,19 @@ db_pool_size = 5
 usage_store = "turns"
 usage_retention = "15d"
 metrics = false
+
+[pi]
+command = "pi"
+auto_compact = true
+
+[sandbox]
+backend = "none"
+
+[sandbox.resources]
+mem_mib = 512
+vcpus = 1
+
+[sandbox.network]
+egress_allowlist = true
+egress_hosts = []
+egress_mbit = 50

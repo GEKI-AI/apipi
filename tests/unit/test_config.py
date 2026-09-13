@@ -5,12 +5,14 @@ import pytest
 
 from apipi.cli import main
 from apipi.config import (
+    FLAT_TOML_WARNING,
     ConfigError,
     Settings,
     load_settings,
     parse_bytes,
     postgres_url,
 )
+from apipi.pi.proc import pi_command_args
 
 
 def test_postgres_url_accepts_postgresql() -> None:
@@ -207,6 +209,7 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.payload_export_retries == 1
     assert settings.usage_sinks == ""
     assert settings.payload_sinks == ""
+    assert settings.pi_auto_compact is True
     assert "example_ui" not in type(settings).model_fields
 
 
@@ -385,3 +388,120 @@ def test_explicit_config_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     )
     settings = load_settings(config_path=str(path))
     assert settings.log_level == "debug"
+
+
+def test_nested_toml_sandbox_and_pi(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "max_sessions = 8\n"
+        "[pi]\n"
+        'command = "pi-dev"\n'
+        "auto_compact = false\n"
+        "[sandbox]\n"
+        'backend = "microvm"\n'
+        'kernel = "/tmp/vmlinux"\n'
+        'rootfs = "/tmp/rootfs.ext4"\n'
+        "[sandbox.resources]\n"
+        "mem_mib = 1024\n"
+        "vcpus = 2\n"
+        "[sandbox.network]\n"
+        "egress_allowlist = false\n"
+        'egress_hosts = "mcp.example.com"\n'
+        "egress_mbit = 25\n"
+    )
+    settings = load_settings()
+    assert settings.max_sessions == 8
+    assert settings.pi_command == "pi-dev"
+    assert settings.pi_auto_compact is False
+    assert settings.run_mode == "microvm"
+    assert settings.microvm_kernel == "/tmp/vmlinux"
+    assert settings.microvm_rootfs == "/tmp/rootfs.ext4"
+    assert settings.microvm_mem_mib == 1024
+    assert settings.microvm_vcpus == 2
+    assert settings.microvm_egress_allowlist is False
+    assert settings.microvm_egress_hosts == "mcp.example.com"
+    assert settings.microvm_egress_mbit == 25
+
+
+def test_legacy_flat_toml_warns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        'run_mode = "none"\n'
+    )
+    caplog.set_level("WARNING", logger="apipi")
+    settings = load_settings()
+    assert settings.run_mode == "none"
+    assert FLAT_TOML_WARNING.format(key="run_mode", path="[sandbox].backend") in (
+        caplog.text
+    )
+
+
+def test_nested_and_flat_conflict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        'run_mode = "none"\n'
+        "[sandbox]\n"
+        'backend = "microvm"\n'
+    )
+    with pytest.raises(ConfigError, match="cannot set run_mode"):
+        load_settings()
+
+
+def test_unknown_nested_toml_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "[sandbox]\n"
+        "jail = true\n"
+    )
+    with pytest.raises(ConfigError, match=r"unknown setting: sandbox\.jail"):
+        load_settings()
+
+
+def test_env_overrides_nested_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "[sandbox]\n"
+        'backend = "microvm"\n'
+    )
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    assert load_settings().run_mode == "none"
+
+
+def test_pi_auto_compact_false_adds_flag() -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        pi_auto_compact=False,
+    )
+    args = pi_command_args(settings, tools=False)
+    assert "--no-auto-compact" in args
+
+
+def test_pi_auto_compact_default_omits_flag() -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+    )
+    args = pi_command_args(settings, tools=False)
+    assert "--no-auto-compact" not in args
