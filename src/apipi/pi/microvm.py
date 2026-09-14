@@ -853,6 +853,7 @@ async def spawn_microvm_pi(
     mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
     model: str | None = None,
+    instructions: str | None = None,
     api_key: str | None = None,
 ) -> PiProc:
     require_microvm(settings)
@@ -906,6 +907,7 @@ async def spawn_microvm_pi(
                 mcp_stdio=mcp_stdio,
                 skill_dirs=guest_skills,
                 model=model,
+                instructions=instructions,
             ),
             net=net,
             extra_dirs=extra_dirs,

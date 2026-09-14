@@ -32,6 +32,12 @@ class PiHarness:
         model = _kwargs.get("model")
         api_key = _kwargs.get("api_key")
         key_id = _kwargs.get("key_id")
+        raw_instructions = _kwargs.get("instructions")
+        instructions = (
+            raw_instructions
+            if isinstance(raw_instructions, str) and raw_instructions
+            else None
+        )
         proc = await self.pool.get(
             session_id,
             cwd=cwd,
@@ -41,6 +47,7 @@ class PiHarness:
             skill_dirs=skill_dirs,
             tenant_id=tenant_id,
             model=model if isinstance(model, str) else None,
+            instructions=instructions,
             api_key=api_key if isinstance(api_key, str) else None,
             key_id=key_id if isinstance(key_id, str) else None,
         )

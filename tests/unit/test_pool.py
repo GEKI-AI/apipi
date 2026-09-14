@@ -1,5 +1,7 @@
 import uuid
-from typing import cast
+from typing import Any, cast
+
+import pytest
 
 from apipi.config import Settings
 from apipi.pi.pool import PiPool
@@ -50,3 +52,53 @@ def test_has_capacity_per_tenant() -> None:
     assert pool.has_capacity(other, tenant_b)
     assert pool.live_for(tenant_a) == 1
     assert pool.live_for(tenant_b) == 0
+
+
+def _settings() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+    )
+
+
+class _Proc:
+    def __init__(self) -> None:
+        self.alive = True
+
+    async def terminate(self) -> None:
+        self.alive = False
+
+
+async def test_pool_respawns_when_instructions_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spawned: list[str | None] = []
+
+    async def fake_spawn(*_args: object, **kwargs: Any) -> _Proc:
+        spawned.append(kwargs.get("instructions"))
+        return _Proc()
+
+    monkeypatch.setattr("apipi.pi.pool.spawn_pi", fake_spawn)
+    pool = PiPool(_settings())
+    session_id = uuid.uuid4()
+    await pool.get(session_id, cwd=None, tools=True, instructions="a")
+    await pool.get(session_id, cwd=None, tools=True, instructions="a")
+    await pool.get(session_id, cwd=None, tools=True, instructions="b")
+    assert spawned == ["a", "b"]
+
+
+async def test_pool_treats_empty_instructions_as_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spawned: list[str | None] = []
+
+    async def fake_spawn(*_args: object, **kwargs: Any) -> _Proc:
+        spawned.append(kwargs.get("instructions"))
+        return _Proc()
+
+    monkeypatch.setattr("apipi.pi.pool.spawn_pi", fake_spawn)
+    pool = PiPool(_settings())
+    session_id = uuid.uuid4()
+    await pool.get(session_id, cwd=None, tools=True, instructions=None)
+    await pool.get(session_id, cwd=None, tools=True, instructions="")
+    assert spawned == [None]

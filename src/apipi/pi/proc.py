@@ -140,6 +140,7 @@ def pi_command_args(
     mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
     model: str | None = None,
+    instructions: str | None = None,
 ) -> list[str]:
     from apipi.pi.model_host import PI_PROVIDER
 
@@ -147,6 +148,8 @@ def pi_command_args(
     args = [*command, "--mode", "rpc", "--no-session"]
     if model:
         args.extend(["--provider", PI_PROVIDER, "--model", model])
+    if instructions:
+        args.extend(["--append-system-prompt", instructions])
     if not settings.pi_auto_compact:
         args.append("--no-auto-compact")
     if not tools:
@@ -167,6 +170,7 @@ async def spawn_pi(
     mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
     model: str | None = None,
+    instructions: str | None = None,
     api_key: str | None = None,
 ) -> PiProc:
     from apipi.pi.isolation import load_isolation
@@ -179,5 +183,6 @@ async def spawn_pi(
         mcp_stdio=mcp_stdio,
         skill_dirs=skill_dirs,
         model=model,
+        instructions=instructions,
         api_key=api_key,
     )

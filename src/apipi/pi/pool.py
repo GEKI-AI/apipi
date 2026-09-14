@@ -21,6 +21,7 @@ class PiPool:
         self._last: dict[uuid.UUID, float] = {}
         self._spawn_tools: dict[uuid.UUID, bool] = {}
         self._models: dict[uuid.UUID, str | None] = {}
+        self._instructions: dict[uuid.UUID, str | None] = {}
         self._key_ids: dict[uuid.UUID, str | None] = {}
         self._lock = asyncio.Lock()
 
@@ -35,13 +36,16 @@ class PiPool:
         skill_dirs: list[str] | None = None,
         tenant_id: uuid.UUID | None = None,
         model: str | None = None,
+        instructions: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
     ) -> PiProc:
+        instructions = instructions if instructions else None
         async with self._lock:
             proc = self._procs.get(session_id)
             spawned = self._spawn_tools.get(session_id)
             same = spawned == tools and self._models.get(session_id) == model
+            same = same and self._instructions.get(session_id) == instructions
             same = same and self._key_ids.get(session_id) == key_id
             if proc is not None and proc.alive and not same:
                 await self.kill(session_id)
@@ -63,11 +67,13 @@ class PiPool:
                     mcp_stdio=mcp_stdio,
                     skill_dirs=skill_dirs,
                     model=model,
+                    instructions=instructions,
                     api_key=api_key,
                 )
                 self._procs[session_id] = proc
                 self._spawn_tools[session_id] = tools
                 self._models[session_id] = model
+                self._instructions[session_id] = instructions
                 self._key_ids[session_id] = key_id
                 if tenant_id is not None:
                     self._tenants[session_id] = tenant_id
@@ -121,6 +127,7 @@ class PiPool:
         self._last.pop(session_id, None)
         self._spawn_tools.pop(session_id, None)
         self._models.pop(session_id, None)
+        self._instructions.pop(session_id, None)
         self._key_ids.pop(session_id, None)
         self._tenants.pop(session_id, None)
         stdio = self._stdio.pop(session_id, None)

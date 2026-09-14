@@ -28,6 +28,7 @@ class NoneIsolation:
         mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
         model: str | None = None,
+        instructions: str | None = None,
         api_key: str | None = None,
     ) -> PiProc:
         args = pi_command_args(
@@ -37,6 +38,7 @@ class NoneIsolation:
             mcp_stdio=mcp_stdio,
             skill_dirs=skill_dirs,
             model=model,
+            instructions=instructions,
         )
         process = await asyncio.create_subprocess_exec(
             *args,

@@ -11,7 +11,12 @@ metadata. You create them; a fresh database has none.
 You create agents with `POST /v1/agents`. They live in Postgres until
 you delete them. A session may pass `agent_id` or an inline `agent`.
 Inline config is used for that session only. It is not saved unless
-you `POST /v1/agents`.
+you `POST /v1/agents`. Inline model and instructions are kept on the
+session for follow-up turns. Saved agents keep reading the agent row.
+
+When instructions are set, the gateway appends them to Pi's system
+prompt so the model follows them. Empty or omitted instructions leave
+Pi's default prompt unchanged.
 
 Changing a saved agent later does not rewrite history on existing
 sessions.

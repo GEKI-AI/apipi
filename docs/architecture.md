@@ -53,7 +53,9 @@ Pi's environment gets `OPENAI_BASE_URL`, the model key (the request
 bearer, or `OPENAI_API_KEY_OVERWRITE` when set), and that session's MCP
 secrets. It does not get `DATABASE_URL` or gateway keys. Pi is started
 with the request `agent.model` against that host. It does not use Pi's
-built-in default model.
+built-in default model. When `agent.instructions` are set, they are
+appended to Pi's system prompt. Empty or omitted instructions leave
+that default prompt unchanged.
 
 Auth is a callback on the bearer. Default hashes the key. We do not
 store secrets. See [auth](auth.md).
