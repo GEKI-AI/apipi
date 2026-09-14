@@ -34,7 +34,6 @@ def _noop_probe(_settings: Settings) -> None:
 @pytest.fixture(autouse=True)
 def _skip_model_host(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("apipi.cli.probe_model_host", _noop_probe)
-    monkeypatch.setattr("apipi.cli.upgrade_head", lambda _url: None)
 
 
 def test_probe_run_mode_skips_none() -> None:

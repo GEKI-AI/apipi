@@ -23,6 +23,7 @@ on `PATH` for live turns.
 pip install geki-apipi
 apipi install
 export OPENAI_BASE_URL=http://your-model-host/v1
+apipi migrate
 apipi serve
 ```
 
