@@ -62,7 +62,7 @@ tools, and point at operator-provided guest images:
 | `ip` and `tc` | `iproute2` |
 | `iptables` | `iptables` |
 | Guest kernel | `APIPI_MICROVM_KERNEL` (a `vmlinux` file) |
-| Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4). Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/pi/guest.sh`. |
+| Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4) for `APIPI_MICROVM_IMAGE=default`. Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/pi/guest.sh`. Optional `APIPI_MICROVM_ROOTFS_BROWSER` when `image` is `browser`. |
 | TAP / NAT | Permission to create a TAP device, set `ip_forward`, and add iptables rules. Root or `CAP_NET_ADMIN` is the usual setup. |
 
 Build a rootfs on the operator machine:
@@ -83,6 +83,14 @@ Python 3, `ip`, `socat`, and copies `src/apipi/pi/guest.sh` to
 export APIPI_MICROVM_ROOTFS="$HOME/.cache/apipi/microvm/rootfs.ext4"
 export APIPI_MICROVM_KERNEL="$HOME/.cache/apipi/microvm/vmlinux"
 ```
+
+`APIPI_MICROVM_IMAGE` (`default` or `browser`) selects which rootfs
+the process boots. `default` uses `APIPI_MICROVM_ROOTFS`. `browser`
+uses `APIPI_MICROVM_ROOTFS_BROWSER` and fails at startup if that file
+is missing. The choice is process-wide, not per session. Build those
+files with `./scripts/microvm-rootfs` (a browser flavor is a separate
+recipe). Session `packages` and `setup_commands` still run on whichever
+image you booted.
 
 If the kernel download fails, get a Firecracker-compatible `vmlinux`
 from the [Firecracker getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)

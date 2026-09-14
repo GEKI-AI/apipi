@@ -25,7 +25,9 @@ LogFormat = Literal["json", "text"]
 ArtifactStore = Literal["local", "s3"]
 S3Addressing = Literal["auto", "path", "virtual"]
 UsageStore = Literal["off", "rollups", "turns"]
+MicrovmImage = Literal["default", "browser"]
 BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "microvm"})
+MICROVM_IMAGE_HELP = "APIPI_MICROVM_IMAGE must be default or browser"
 
 NONE_MODE_WARNING = "APIPI_RUN_MODE=none is not suited for production"
 SQLITE_WARNING = (
@@ -55,6 +57,8 @@ _SANDBOX_TOML = {
     "backend": "run_mode",
     "kernel": "microvm_kernel",
     "rootfs": "microvm_rootfs",
+    "rootfs_browser": "microvm_rootfs_browser",
+    "image": "microvm_image",
 }
 _SANDBOX_RESOURCES_TOML = {"mem_mib": "microvm_mem_mib", "vcpus": "microvm_vcpus"}
 _SANDBOX_NETWORK_TOML = {
@@ -251,6 +255,16 @@ def parse_hosts(value: object) -> object:
     return value
 
 
+def parse_microvm_image(value: object) -> object:
+    if value is None:
+        return "default"
+    if isinstance(value, str) and not value.strip():
+        return "default"
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
 IdleTtl = Annotated[timedelta, BeforeValidator(parse_ttl)]
 OptionalTtl = Annotated[timedelta | None, BeforeValidator(parse_optional_ttl)]
 ByteSize = Annotated[int, BeforeValidator(parse_bytes)]
@@ -258,6 +272,7 @@ OtelEndpoint = Annotated[str | None, BeforeValidator(parse_optional_endpoint)]
 ExportUrl = Annotated[str | None, BeforeValidator(parse_export_url)]
 HostList = Annotated[str, BeforeValidator(parse_hosts)]
 InstanceId = Annotated[str | None, BeforeValidator(parse_instance_id)]
+MicrovmImageName = Annotated[MicrovmImage, BeforeValidator(parse_microvm_image)]
 
 
 class MappingSource(PydanticBaseSettingsSource):
@@ -385,6 +400,16 @@ class Settings(BaseSettings):
     microvm_rootfs: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_MICROVM_ROOTFS", "microvm_rootfs"),
+    )
+    microvm_rootfs_browser: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "APIPI_MICROVM_ROOTFS_BROWSER", "microvm_rootfs_browser"
+        ),
+    )
+    microvm_image: MicrovmImageName = Field(
+        default="default",
+        validation_alias=AliasChoices("APIPI_MICROVM_IMAGE", "microvm_image"),
     )
     microvm_mem_mib: int = Field(
         default=512,
@@ -725,6 +750,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_LOG_FORMAT must be json or text"
         if "db_pool_size" in loc:
             return "APIPI_DB_POOL_SIZE must be at least 1"
+        if "microvm_image" in loc or "APIPI_MICROVM_IMAGE" in loc:
+            return MICROVM_IMAGE_HELP
         if "microvm_mem_mib" in loc:
             return "APIPI_MICROVM_MEM_MIB must be at least 1"
         if "microvm_vcpus" in loc:
