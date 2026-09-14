@@ -163,6 +163,20 @@ def test_metrics_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().metrics is False
 
 
+def test_forward_models_default_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.delenv("APIPI_FORWARD_MODELS", raising=False)
+    assert Settings().forward_models is True
+
+
+def test_forward_models_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_FORWARD_MODELS", "off")
+    assert Settings().forward_models is False
+    monkeypatch.setenv("APIPI_FORWARD_MODELS", "on")
+    assert Settings().forward_models is True
+
+
 def test_otel_endpoint_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_OTEL_ENDPOINT", "http://otel:4318")

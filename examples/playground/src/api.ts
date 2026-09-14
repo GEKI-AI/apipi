@@ -46,11 +46,6 @@ const client = new OpenAI({
 
 type List<T> = { data: T[] };
 
-export const INLINE_AGENT = {
-  model: "gpt-4.1",
-  instructions: "Write clean code, run it, and report the actual output.",
-};
-
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${window.location.origin}/v1${path}`, init);
   if (!response.ok) {
@@ -65,20 +60,44 @@ export async function listAgents(): Promise<Agent[]> {
   return body.data ?? [];
 }
 
+export async function listModels(): Promise<string[]> {
+  const body = await api<List<{ id?: string }>>("/models");
+  return (body.data ?? [])
+    .map((row) => row.id)
+    .filter((id): id is string => typeof id === "string" && id !== "");
+}
+
+export async function createAgent(input: {
+  name?: string;
+  model: string;
+  instructions: string;
+}): Promise<Agent> {
+  const body: { model: string; instructions: string; name?: string } = {
+    model: input.model,
+    instructions: input.instructions,
+  };
+  if (input.name) {
+    body.name = input.name;
+  }
+  return api<Agent>("/agents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function listSessions(): Promise<Session[]> {
   const body = await api<List<Session>>("/agents/sessions");
   return body.data ?? [];
 }
 
-export async function createSession(agentId: string | null): Promise<Session> {
-  const body =
-    agentId === null
-      ? { agent: INLINE_AGENT, environment: { type: "openai_hosted" as const } }
-      : {
-          agent_id: agentId,
-          environment: { type: "openai_hosted" as const },
-        };
-  return client.post("/agents/sessions", { body }) as unknown as Promise<Session>;
+export async function createSession(agentId: string): Promise<Session> {
+  return client.post("/agents/sessions", {
+    body: {
+      agent_id: agentId,
+      environment: { type: "openai_hosted" as const },
+    },
+  }) as unknown as Promise<Session>;
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {

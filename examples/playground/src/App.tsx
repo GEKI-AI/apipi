@@ -6,6 +6,7 @@ import {
   type PublicEvent,
   type Session,
   artifactUrl,
+  createAgent,
   createSession,
   deleteSession,
   getSession,
@@ -13,6 +14,7 @@ import {
   listArtifacts,
   listEvents,
   listItems,
+  listModels,
   listSessions,
   readEventStream,
   sendMessage,
@@ -65,8 +67,12 @@ function eventLine(event: PublicEvent): ChatLine | null {
 
 export function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [models, setModels] = useState<string[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [agentId, setAgentId] = useState("");
+  const [agentName, setAgentName] = useState("");
+  const [agentModel, setAgentModel] = useState("");
+  const [agentInstructions, setAgentInstructions] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState("idle");
   const [lines, setLines] = useState<ChatLine[]>([]);
@@ -103,15 +109,23 @@ export function App() {
     let ignore = false;
     void (async () => {
       try {
-        const [saved, existing] = await Promise.all([
+        const [saved, existing, ids] = await Promise.all([
           listAgents(),
           listSessions(),
+          listModels(),
         ]);
         if (ignore) {
           return;
         }
         setAgents(saved);
         setSessions(existing);
+        setModels(ids);
+        if (saved.length > 0) {
+          setAgentId(saved[0].id);
+        }
+        if (ids.length > 0) {
+          setAgentModel(ids[0]);
+        }
       } catch (err) {
         if (!ignore) {
           setError(err instanceof Error ? err.message : String(err));
@@ -191,11 +205,39 @@ export function App() {
     logRef.current?.scrollTo(0, logRef.current.scrollHeight);
   }, [lines, streamText]);
 
-  async function onNewSession(): Promise<void> {
+  async function onCreateAgent(): Promise<void> {
+    if (agentModel === "") {
+      setError("Pick a model before creating an agent.");
+      return;
+    }
     setError(null);
     setBusy(true);
     try {
-      const session = await createSession(agentId === "" ? null : agentId);
+      const name = agentName.trim();
+      const agent = await createAgent({
+        name: name === "" ? undefined : name,
+        model: agentModel,
+        instructions: agentInstructions,
+      });
+      const saved = await listAgents();
+      setAgents(saved);
+      setAgentId(agent.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onNewSession(): Promise<void> {
+    if (agentId === "") {
+      setError("Create an agent before starting a session.");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      const session = await createSession(agentId);
       await refreshSessions();
       setSelectedId(session.id);
     } catch (err) {
@@ -252,8 +294,8 @@ export function App() {
       <header className="top">
         <h1>ApiPi playground</h1>
         <p className="hint">
-          Local demo. The Vite proxy sends <code>OPENAI_API_KEY</code> to the
-          gateway. The browser never sees it.
+          Local demo. The Vite proxy sends <code>API_KEY</code> to the gateway.
+          The browser never sees it.
         </p>
       </header>
       {error !== null ? (
@@ -269,11 +311,65 @@ export function App() {
               type="button"
               data-testid="new-session"
               onClick={() => void onNewSession()}
-              disabled={busy}
+              disabled={busy || agentId === ""}
             >
               New
             </button>
           </div>
+          <form
+            className="agent-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void onCreateAgent();
+            }}
+          >
+            <label className="field">
+              Name
+              <input
+                data-testid="agent-name"
+                value={agentName}
+                onChange={(event) => setAgentName(event.target.value)}
+                placeholder="optional"
+              />
+            </label>
+            <label className="field">
+              Model
+              <select
+                data-testid="model-select"
+                value={agentModel}
+                onChange={(event) => setAgentModel(event.target.value)}
+                disabled={models.length === 0}
+              >
+                {models.length === 0 ? (
+                  <option value="">No models</option>
+                ) : null}
+                {models.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              Instructions
+              <textarea
+                data-testid="agent-instructions"
+                value={agentInstructions}
+                onChange={(event) => setAgentInstructions(event.target.value)}
+                rows={3}
+                placeholder="How the agent should work"
+              />
+            </label>
+            <div className="field">
+              <button
+                type="submit"
+                data-testid="create-agent"
+                disabled={busy || agentModel === ""}
+              >
+                Create agent
+              </button>
+            </div>
+          </form>
           <label className="field">
             Agent
             <select
@@ -281,7 +377,7 @@ export function App() {
               value={agentId}
               onChange={(event) => setAgentId(event.target.value)}
             >
-              <option value="">Inline (gpt-4.1)</option>
+              <option value="">Select an agent</option>
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>
                   {agent.name ?? shortId(agent.id)}

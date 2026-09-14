@@ -8,7 +8,7 @@ from the environment, not from these files.
 | --- | --- |
 | [openai_sdk.py](openai_sdk.py) | Official OpenAI Python client against this API |
 | [self_hosted_runner.py](self_hosted_runner.py) | Local directory as a `self_hosted` computer |
-| [playground/](playground/) | Vite React playground (sessions, turns, artifacts) |
+| [playground/](playground/) | Vite React playground (agents, sessions, turns, artifacts) |
 | [apipi.toml](apipi.toml) | Gateway settings file |
 | [env.example](env.example) | Dotenv template; copy to `.env` |
 | [auth_callback.py](auth_callback.py) | Auth callback (`APIPI_AUTH`) |
@@ -95,29 +95,35 @@ connected.
 ## Playground
 
 [playground/](playground/) is a local React app that talks to this API
-through a Vite proxy. It lists sessions, creates a session with a saved
-agent or an inline agent, streams turns, shows tool and command
-activity, deletes a session, and downloads artifacts. It is an example
-client, not a first-party UI. GitHub CI does not run it.
+through a Vite proxy. It lists models, creates a saved agent with a
+model and instructions, lists sessions, creates a session with a saved
+agent, streams turns, shows tool and command activity, deletes a
+session, and downloads artifacts. It is an example client, not a
+first-party UI. GitHub CI does not run it.
 
-The proxy injects `Authorization: Bearer` from `OPENAI_API_KEY`. That
-value is the gateway bearer (a local token, or a Geki tenant key), not
-the model host key that Pi uses. The browser never sees it. Default
-auth accepts any non-empty bearer. `OPENAI_BASE_URL` is the ApiPi
-gateway, the same meaning as in [openai_sdk.py](openai_sdk.py).
+The proxy injects `Authorization: Bearer` from `API_KEY`. That value is
+the gateway bearer (a local token, or a Geki tenant key), not the model
+host key that Pi uses. The browser never sees it. Default auth accepts
+any non-empty bearer. `API_BASE_URL` is the ApiPi gateway. Those names
+are not `OPENAI_API_KEY` / `OPENAI_BASE_URL`, which on the gateway
+process mean the model host.
 
-The gateway must already be running. From `examples/playground`:
+The gateway must already be running. From `examples/playground`, copy
+`.env.example` to `.env` or export the same variables:
 
 ```
-export OPENAI_API_KEY=dev-token
-export OPENAI_BASE_URL=http://localhost:8000/v1
+export API_KEY=dev-token
+export API_BASE_URL=http://localhost:8000/v1
 npm install
 npm run dev
 ```
 
-That binds `0.0.0.0:8100` and proxies `/v1` to the gateway. Open
-http://localhost:8100 . If `OPENAI_API_KEY` is unset, the proxy sends
-`dev-token`.
+Vite loads `.env` when the playground server starts. That binds
+`0.0.0.0:8100` and proxies `/v1` to the gateway. Open
+http://localhost:8100 . If `API_KEY` is unset, the proxy sends
+`dev-token`. Create an agent from the model list before you start a
+session. `GET /v1/models` on the gateway must be enabled
+(`APIPI_FORWARD_MODELS`, on by default).
 
 Artifact bytes exist after a turn completes. Files under `artifacts/`
 and `outputs/` are copied into the host store then. Idle Pi TTL is

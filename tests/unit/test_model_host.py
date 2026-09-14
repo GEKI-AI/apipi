@@ -8,6 +8,7 @@ from apipi.errors import ApiError
 from apipi.pi.model_host import (
     PI_PROVIDER,
     fetch_model_ids,
+    fetch_models_json,
     listed_models,
     models_url,
     parse_model_ids,
@@ -123,6 +124,20 @@ def test_listed_models_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ApiError) as exc:
         listed_models("http://model.test/v1", "k")
     assert exc.value.code == "model_host_unauthorized"
+
+
+def test_fetch_models_json_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {"object": "list", "data": [{"id": "m1", "object": "model"}]}
+
+    def fake_get(url: str, **kwargs: object) -> httpx.Response:
+        assert url.endswith("/models")
+        headers = kwargs.get("headers")
+        assert isinstance(headers, dict)
+        assert headers["Authorization"] == "Bearer k"
+        return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr("apipi.pi.model_host.httpx.get", fake_get)
+    assert fetch_models_json("http://model.test/v1", "k") == payload
 
 
 def test_probe_model_host_requires_base_url(tmp_path: Path) -> None:
