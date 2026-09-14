@@ -21,6 +21,7 @@ Python 3.13. From PyPI:
 pip install geki-apipi
 apipi install
 export OPENAI_BASE_URL=http://your-model-host/v1
+apipi migrate
 apipi serve
 ```
 
@@ -29,8 +30,8 @@ project. S3-compatible artifact storage is an extra:
 `pip install "geki-apipi[s3]"`.
 
 Unset `DATABASE_URL` uses SQLite at `.apipi/apipi.db` in the current
-working directory, next to `.apipi/sessions`. `apipi serve` applies
-migrations before it binds HTTP. Isolation defaults to `none` and logs
+working directory, next to `.apipi/sessions`. `apipi migrate` applies
+schema. `apipi serve` does not. Isolation defaults to `none` and logs
 a warning. That binds `0.0.0.0:8000`. `OPENAI_BASE_URL` is the **model**
 host, not this API.
 

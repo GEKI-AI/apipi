@@ -32,7 +32,7 @@ from apipi.pi.isolation import load_isolation
 from apipi.pi.model_host import probe_model_host
 from apipi.pi.probe import probe_run_mode
 from apipi.ready import check_ready
-from apipi.store.migrate import migrate, upgrade_head
+from apipi.store.migrate import migrate
 
 log = logging.getLogger("apipi")
 
@@ -71,7 +71,6 @@ def serve(
     *, host: str | None, port: int | None, config_path: str | None = None
 ) -> None:
     settings = prepare_serve(config_path=config_path)
-    upgrade_head(settings.database_url)
     uvicorn.run(
         create_app(settings),
         host=host if host is not None else settings.host,
