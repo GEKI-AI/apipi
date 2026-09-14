@@ -65,32 +65,46 @@ tools, and point at operator-provided guest images:
 | Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4) for `APIPI_MICROVM_IMAGE=default`. Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/pi/guest.sh`. Optional `APIPI_MICROVM_ROOTFS_BROWSER` when `image` is `browser`. |
 | TAP / NAT | Permission to create a TAP device, set `ip_forward`, and add iptables rules. Root or `CAP_NET_ADMIN` is the usual setup. |
 
-Build a rootfs on the operator machine:
+Build a rootfs on the operator machine. Two flavors:
+
+| Flavor | Command | Output |
+| --- | --- | --- |
+| `default` | `./scripts/microvm-rootfs` | `rootfs.ext4` |
+| `browser` | `./scripts/microvm-rootfs --flavor browser` | `rootfs-browser.ext4` |
+
+Both write a Firecracker `vmlinux` (when the download works) under
+`$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). Pass a
+directory argument to choose another location. The files do not
+overwrite each other. The script needs `curl`, `tar`, `mkfs.ext4`,
+`mount`, and root (or `sudo`) for the loop mount and chroot.
+
+`default` installs Alpine, Node, the pinned Pi CLI, Python 3, `ip`,
+`socat`, and copies `src/apipi/pi/guest.sh` to `/sbin/apipi-guest`.
+`browser` is that image plus Alpine Chromium and font/NSS packages so
+stdio MCP such as Playwright can drive a **system** browser
+(`/usr/bin/chromium-browser`). Playwright's own glibc browser builds
+do not run on this musl guest. The image is 4 GiB unless you set
+`SIZE_MIB`. Raise `APIPI_MICROVM_MEM_MIB` to 1024–2048 for browser
+guests. See [production sizing](production.md#sizing).
 
 ```
 ./scripts/microvm-rootfs
-```
-
-That writes `rootfs.ext4` and, when the download works, a Firecracker
-`vmlinux` under `$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`).
-Pass a directory argument to choose another location. The script needs
-`curl`, `tar`, `mkfs.ext4`, `mount`, and root (or `sudo`) for the
-loop mount and chroot. It installs Alpine, Node, the pinned Pi CLI,
-Python 3, `ip`, `socat`, and copies `src/apipi/pi/guest.sh` to
-`/sbin/apipi-guest`.
-
-```
 export APIPI_MICROVM_ROOTFS="$HOME/.cache/apipi/microvm/rootfs.ext4"
 export APIPI_MICROVM_KERNEL="$HOME/.cache/apipi/microvm/vmlinux"
 ```
 
+```
+./scripts/microvm-rootfs --flavor browser
+export APIPI_MICROVM_ROOTFS_BROWSER="$HOME/.cache/apipi/microvm/rootfs-browser.ext4"
+export APIPI_MICROVM_IMAGE=browser
+export APIPI_MICROVM_KERNEL="$HOME/.cache/apipi/microvm/vmlinux"
+```
+
 `APIPI_MICROVM_IMAGE` (`default` or `browser`) selects which rootfs
-the process boots. `default` uses `APIPI_MICROVM_ROOTFS`. `browser`
-uses `APIPI_MICROVM_ROOTFS_BROWSER` and fails at startup if that file
-is missing. The choice is process-wide, not per session. Build those
-files with `./scripts/microvm-rootfs` (a browser flavor is a separate
-recipe). Session `packages` and `setup_commands` still run on whichever
-image you booted.
+the process boots. The choice is process-wide, not per session.
+Missing path for the selected image exits at startup. Session
+`packages` and `setup_commands` still run on whichever image you
+booted; flavors are the heavy, stable base.
 
 If the kernel download fails, get a Firecracker-compatible `vmlinux`
 from the [Firecracker getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)

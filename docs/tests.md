@@ -99,8 +99,10 @@ uv run pytest -m microvm
 
 `./scripts/microvm-rootfs` needs `curl`, `tar`, `mkfs.ext4`, `mount`,
 and root (or `sudo`) for the loop mount. Pass a directory argument to
-write the images somewhere else. How to install Firecracker and what
-the rootfs must contain are in [run modes](run-modes.md).
+write the images somewhere else. `--flavor browser` writes
+`rootfs-browser.ext4` next to the default image. How to install
+Firecracker and what the rootfs must contain are in
+[run modes](run-modes.md).
 
 If kernel, rootfs, KVM, or TAP cannot start, the tests skip. That is
 not a fallback to `none`.
