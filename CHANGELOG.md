@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `apipi install` installs the pinned Pi CLI. `apipi check` verifies
+  requirements without binding HTTP.
+
 ## [0.1.0] - 2026-09-14
 
 First public release. Install from PyPI as `geki-apipi`. The import

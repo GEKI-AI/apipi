@@ -148,11 +148,14 @@ def pi_binary(settings: Settings) -> str:
     return command[0]
 
 
-def require_pinned_pi(settings: Settings) -> None:
-    binary = pi_binary(settings)
+def installed_pi_version(settings: Settings) -> str | None:
+    command = settings.pi_command.split()
+    if not command:
+        return None
+    binary = command[0]
     path = binary if "/" in binary else shutil.which(binary)
     if path is None:
-        raise ConfigError("pi is not on PATH")
+        return None
     try:
         output = subprocess.check_output(
             [path, "--version"],
@@ -160,9 +163,16 @@ def require_pinned_pi(settings: Settings) -> None:
             timeout=10,
             stderr=subprocess.STDOUT,
         )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise ConfigError("pi is not on PATH") from exc
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
     version = output.strip().splitlines()[-1].strip() if output.strip() else ""
+    return version or None
+
+
+def require_pinned_pi(settings: Settings) -> None:
+    version = installed_pi_version(settings)
+    if version is None:
+        raise ConfigError("pi is not on PATH")
     if version != PINNED_PI:
         raise ConfigError(f"pi version must be {PINNED_PI}")
 

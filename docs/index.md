@@ -31,10 +31,11 @@ then Postgres and Pi:
 ```
 pip install geki-apipi
 # or: uv add geki-apipi
-npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
+apipi install
 docker compose up -d postgres
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
 export OPENAI_BASE_URL=http://your-model-host/v1
+apipi check
 apipi migrate
 apipi serve
 ```
