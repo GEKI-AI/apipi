@@ -30,7 +30,7 @@ Durations are like `15m`, `30s`, `2h`, `15d`. Sizes are like `512M` or
 
 ## Gateway
 
-The gateway is the HTTP product: bind address, Postgres, auth, live
+The gateway is the HTTP product: bind address, store, auth, live
 session caps, artifact store, usage export, and TTLs. It is not the
 Firecracker guest and not Pi's CLI flags.
 
@@ -45,7 +45,7 @@ handlers, and `artifact_store` for local or S3 artifact bytes.
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | `database_url` | required | Postgres URL. `postgresql+asyncpg://…` preferred. |
+| `DATABASE_URL` | `database_url` | `.apipi/apipi.db` (SQLite) | Store URL. Unset uses SQLite in the current directory. Production: `postgresql+asyncpg://…`. |
 | `APIPI_HOST` | `host` | `0.0.0.0` | Bind address. |
 | `APIPI_PORT` | `port` | `8000` | Bind port. |
 | `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |

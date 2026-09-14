@@ -20,3 +20,4 @@ build/
 !.env.example
 node_modules/
 .playwright-cli/
+.apipi/

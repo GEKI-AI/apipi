@@ -1,16 +1,49 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import StaticPool
+
+from apipi.config import is_sqlite_url, store_url
+
+
+def _ensure_sqlite_dir(url: str) -> None:
+    if not is_sqlite_url(url) or ":memory:" in url:
+        return
+    raw = url.split("sqlite+aiosqlite:///", 1)[-1]
+    if not raw:
+        return
+    path = Path(raw)
+    if path.parent.as_posix() not in {"", "."}:
+        path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def create_engine(url: str, *, pool_size: int = 5) -> AsyncEngine:
-    return create_async_engine(url, pool_pre_ping=True, pool_size=pool_size)
+    resolved = store_url(url)
+    if is_sqlite_url(resolved):
+        _ensure_sqlite_dir(resolved)
+        engine = create_async_engine(
+            resolved,
+            poolclass=StaticPool,
+            connect_args={"check_same_thread": False},
+        )
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _fk(dbapi_connection: Any, _connection_record: Any) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        return engine
+    return create_async_engine(resolved, pool_pre_ping=True, pool_size=pool_size)
 
 
 class Store:

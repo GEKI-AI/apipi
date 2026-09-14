@@ -11,6 +11,7 @@ from apipi.config import (
     OTEL_SET,
     OTEL_UNSET,
     PAYLOAD_EXPORT_OFF,
+    SQLITE_WARNING,
     USAGE_EXPORT_OFF,
     USAGE_STORE_TURNS,
     ConfigError,
@@ -33,6 +34,7 @@ def _noop_probe(_settings: Settings) -> None:
 @pytest.fixture(autouse=True)
 def _skip_model_host(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("apipi.cli.probe_model_host", _noop_probe)
+    monkeypatch.setattr("apipi.cli.upgrade_head", lambda _url: None)
 
 
 def test_probe_run_mode_skips_none() -> None:
@@ -99,13 +101,14 @@ def test_prepare_serve_rejects_prompt_body_logging(
         prepare_serve(_none_settings())
 
 
-def test_prepare_serve_rejects_sqlite() -> None:
+def test_prepare_serve_warns_on_sqlite(caplog: pytest.LogCaptureFixture) -> None:
     settings = Settings(
         database_url="sqlite+aiosqlite:///:memory:",
         run_mode="none",
     )
-    with pytest.raises(ConfigError, match="Postgres"):
-        prepare_serve(settings)
+    caplog.set_level(logging.WARNING, logger="apipi")
+    prepare_serve(settings)
+    assert SQLITE_WARNING in caplog.text
 
 
 def test_microvm_run_mode_exits_without_kvm(
@@ -228,7 +231,15 @@ def test_serve_none_starts(
     assert NONE_MODE_WARNING in caplog.text
 
 
-def test_serve_requires_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serve_defaults_to_sqlite(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("APIPI_RUN_MODE", "none")
-    assert main(["serve"]) == 1
+    caplog.set_level(logging.WARNING, logger="apipi")
+    monkeypatch.setattr("apipi.cli.uvicorn.run", lambda *_a, **_k: None)
+    assert main(["serve"]) == 0
+    assert SQLITE_WARNING in caplog.text

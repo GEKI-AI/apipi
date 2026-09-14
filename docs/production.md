@@ -31,6 +31,7 @@ session unless you set `APIPI_ARTIFACT_STORE=s3`.
 
 Keeping Postgres off the gateway host leaves more RAM for guests. One
 `apipi serve` per host; extra uvicorn workers do not share the Pi pool.
+Do not run production on SQLite. It is a local single-process store.
 
 ## Scale-out
 

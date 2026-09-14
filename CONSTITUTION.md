@@ -8,8 +8,10 @@ file rarely. Edit in place. Do not keep an amendment log.
 1. **The gateway is the product. Pi is a worker.**
    Public HTTP types never leak Pi types. Replacing Pi does not change the API.
 
-2. **Postgres is the source of truth.**
+2. **The durable store is the source of truth.**
    The event log is the transcript. Pi's files are a cache.
+   Postgres is the production store. SQLite is allowed for local
+   single-process use.
 
 3. **The computer is replaceable.**
     none, local directory, or `self_hosted`. Independent of run mode

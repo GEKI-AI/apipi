@@ -13,7 +13,7 @@ from apipi.api.sessions import router as sessions_router
 from apipi.api.usage import router as usage_router
 from apipi.auth import AuthCache, load_authenticate
 from apipi.blobs import ArtifactBlobs, blob_store
-from apipi.config import Settings, load_settings, postgres_url
+from apipi.config import Settings, load_settings
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import error_body, register_exception_handlers
 from apipi.metrics import Metrics, mount_metrics
@@ -174,7 +174,7 @@ def create_app(
         if getattr(app.state, "store", None) is None:
             app.state.store = Store(
                 create_engine(
-                    postgres_url(resolved.database_url),
+                    resolved.database_url,
                     pool_size=resolved.db_pool_size,
                 )
             )

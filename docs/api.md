@@ -99,7 +99,7 @@ The gateway persists `agent.session.turn.cancelled` then
 stays open across `idle` and sends SSE comment keepalives (`: ping`)
 without a blank line, so clients that parse every dispatched event as
 JSON do not see an empty payload. Reconnect and replay from the store
-with `after_seq`. The public event is written to Postgres before it is
+with `after_seq`. The public event is written to the store before it is
 published on SSE. Behind more than one gateway process, the stream and
 the next turn must hit the node that owns Pi. See
 [multiple nodes](scale.md).
@@ -163,7 +163,7 @@ total). Tokens only. See [usage](usage.md).
 | --- | --- |
 | `GET` | `/v1/agents/sessions/{session_id}/export` |
 
-JSON of the transcript from Postgres: public events, turns, and items.
+JSON of the transcript from the store: public events, turns, and items.
 Same shapes as the list endpoints. Does not read Pi files. Wrong tenant
 is `404`. A session export is enough to leave: the customer keeps the
 thread if the gateway disappears.

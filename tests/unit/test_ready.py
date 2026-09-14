@@ -25,7 +25,7 @@ def _settings(
 def test_run_checks_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("apipi.ready.require_pinned_pi", lambda _s: None)
     monkeypatch.setattr("apipi.ready.installed_pi_version", lambda _s: PINNED_PI)
-    monkeypatch.setattr("apipi.ready.ping_postgres", lambda _url: None)
+    monkeypatch.setattr("apipi.ready.ping_store", lambda _url: None)
     monkeypatch.setattr("apipi.ready.fetch_model_ids", lambda *_a, **_k: ["m1"])
     rows = run_checks(_settings())
     by_name = {row.name: row for row in rows}
@@ -44,7 +44,7 @@ def test_run_checks_pi_fail(monkeypatch: pytest.MonkeyPatch) -> None:
         raise ConfigError("pi is not on PATH")
 
     monkeypatch.setattr("apipi.ready.require_pinned_pi", boom)
-    monkeypatch.setattr("apipi.ready.ping_postgres", lambda _url: None)
+    monkeypatch.setattr("apipi.ready.ping_store", lambda _url: None)
     monkeypatch.setattr("apipi.ready.fetch_model_ids", lambda *_a, **_k: [])
     rows = run_checks(_settings())
     pi = next(row for row in rows if row.name == "pi")
@@ -70,7 +70,7 @@ def test_run_checks_fast_skips_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("apipi.ready.require_pinned_pi", lambda _s: None)
     monkeypatch.setattr("apipi.ready.installed_pi_version", lambda _s: PINNED_PI)
-    monkeypatch.setattr("apipi.ready.ping_postgres", lambda _url: None)
+    monkeypatch.setattr("apipi.ready.ping_store", lambda _url: None)
     monkeypatch.setattr("apipi.ready.fetch_model_ids", lambda *_a, **_k: [])
     monkeypatch.setattr("apipi.ready.probe_run_mode", fake_probe)
     monkeypatch.setattr("apipi.ready.require_run_mode", lambda *_a, **_k: None)

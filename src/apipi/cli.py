@@ -15,12 +15,13 @@ from apipi.config import (
     OTEL_UNSET,
     PAYLOAD_EXPORT_OFF,
     PAYLOAD_EXPORT_ON,
+    SQLITE_WARNING,
     USAGE_EXPORT_OFF,
     USAGE_EXPORT_ON,
     ConfigError,
     Settings,
+    is_sqlite_url,
     load_settings,
-    postgres_url,
     reject_prompt_body_logging,
     require_run_mode,
     usage_retention_log,
@@ -31,7 +32,7 @@ from apipi.pi.isolation import load_isolation
 from apipi.pi.model_host import probe_model_host
 from apipi.pi.probe import probe_run_mode
 from apipi.ready import check_ready
-from apipi.store.migrate import migrate
+from apipi.store.migrate import migrate, upgrade_head
 
 log = logging.getLogger("apipi")
 
@@ -42,8 +43,9 @@ def prepare_serve(
     resolved = (
         settings if settings is not None else load_settings(config_path=config_path)
     )
-    postgres_url(resolved.database_url)
     require_run_mode(resolved.run_mode, resolved)
+    if is_sqlite_url(resolved.database_url):
+        log.warning(SQLITE_WARNING)
     probe_model_host(resolved)
     probe_run_mode(resolved)
     reject_prompt_body_logging()
@@ -69,6 +71,7 @@ def serve(
     *, host: str | None, port: int | None, config_path: str | None = None
 ) -> None:
     settings = prepare_serve(config_path=config_path)
+    upgrade_head(settings.database_url)
     uvicorn.run(
         create_app(settings),
         host=host if host is not None else settings.host,
@@ -95,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     check_parser = sub.add_parser("check", help="Verify requirements without serving")
     check_parser.add_argument("--config", default=None, help="TOML config file")
-    check_parser.add_argument("--skip-db", action="store_true", help="Skip Postgres")
+    check_parser.add_argument("--skip-db", action="store_true", help="Skip the store")
     check_parser.add_argument(
         "--skip-model", action="store_true", help="Skip the model host"
     )
@@ -114,16 +117,7 @@ def main(argv: list[str] | None = None) -> int:
             migrate(config_path=args.config)
             return 0
         if args.command == "install":
-            try:
-                settings = load_settings(config_path=args.config)
-            except ConfigError as exc:
-                if str(exc) != "DATABASE_URL is required":
-                    raise
-                os.environ.setdefault(
-                    "DATABASE_URL",
-                    "postgresql+asyncpg://apipi:apipi@127.0.0.1:1/apipi",
-                )
-                settings = load_settings(config_path=args.config)
+            settings = load_settings(config_path=args.config)
             return install_pi(settings, force=args.force, dry_run=args.dry_run)
         if args.command == "check":
             return check_ready(
