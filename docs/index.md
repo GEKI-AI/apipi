@@ -29,8 +29,8 @@ Python 3.13 and [uv](https://docs.astral.sh/uv/). Install from PyPI,
 then Postgres and Pi:
 
 ```
-pip install apipi
-# or: uv add apipi
+pip install geki-apipi
+# or: uv add geki-apipi
 npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
 docker compose up -d postgres
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi

@@ -21,11 +21,12 @@ start, `apipi serve` exits before it binds HTTP.
 From PyPI:
 
 ```
-pip install apipi
+pip install geki-apipi
 ```
 
-`uv add apipi` works in a project. S3-compatible artifact storage is
-an extra: `pip install "apipi[s3]"` or `uv add "apipi[s3]"`.
+The import package and CLI stay `apipi`. `uv add geki-apipi` works in a
+project. S3-compatible artifact storage is an extra:
+`pip install "geki-apipi[s3]"` or `uv add "geki-apipi[s3]"`.
 
 From a checkout (contributors):
 

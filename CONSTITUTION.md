@@ -48,7 +48,8 @@ file rarely. Edit in place. Do not keep an amendment log.
 ApiPi is a drop-in OpenAI Agents API. Point official clients at this
 gateway and bring your own model URL.
 
-The package and CLI are `apipi`. Hosted at geki.ai.
+The import package and CLI are `apipi`. The PyPI distribution is
+`geki-apipi`. Hosted at geki.ai.
 
 ## What this is not
 

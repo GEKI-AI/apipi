@@ -10,7 +10,7 @@ def test_version_is_first_public_release() -> None:
 
 def test_pyproject_ships_cli_and_s3_extra() -> None:
     project = tomllib.loads(Path("pyproject.toml").read_text())["project"]
-    assert project["name"] == "apipi"
+    assert project["name"] == "geki-apipi"
     assert project["scripts"]["apipi"] == "apipi.cli:main"
     assert "s3" in project["optional-dependencies"]
     assert project["urls"]["Documentation"] == "https://geki-ai.github.io/apipi/"

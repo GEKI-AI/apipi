@@ -23,18 +23,18 @@ def main() -> None:
         meta_name = next(
             name
             for name in names
-            if name.endswith(".dist-info/METADATA") and name.startswith("apipi-")
+            if name.endswith(".dist-info/METADATA") and name.startswith("geki_apipi-")
         )
         text = archive.read(meta_name).decode()
-        if "Name: apipi" not in text:
-            raise SystemExit("METADATA missing Name: apipi")
+        if "Name: geki-apipi" not in text:
+            raise SystemExit("METADATA missing Name: geki-apipi")
         if "Provides-Extra: s3" not in text:
             raise SystemExit("METADATA missing Provides-Extra: s3")
         entry_name = next(
             name
             for name in names
             if name.endswith(".dist-info/entry_points.txt")
-            and name.startswith("apipi-")
+            and name.startswith("geki_apipi-")
         )
         entries = archive.read(entry_name).decode()
         if "apipi = apipi.cli:main" not in entries:

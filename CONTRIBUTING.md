@@ -164,10 +164,11 @@ not bump on every merge.
    workflow with `workflow_dispatch` and repository `testpypi`.
 
 Before the first upload, an owner must create the PyPI project (name
-`apipi`) and a Trusted Publisher: GitHub org `GEKI-AI`, repository
+`geki-apipi`) and a Trusted Publisher: GitHub org `GEKI-AI`, repository
 `apipi`, workflow `publish.yml`, environment `pypi`. Create that GitHub
 environment too. For TestPyPI, add a second publisher with the TestPyPI
-project and the same workflow.
+project and the same workflow. The wheel name is `geki-apipi`; `import
+apipi` and the `apipi` CLI do not change.
 
 `0.1.0` squashed Alembic to one baseline. Later schema changes are
 normal forward migrations. Do not squash again unless you mean to reset
