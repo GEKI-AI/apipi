@@ -142,11 +142,33 @@ def _serve_rpc(args: list[str], port: int) -> None:
     proc.wait()
 
 
+def _run_setup() -> None:
+    root = Path(os.environ.get("HOME", "/tmp/workspace"))
+    script = root / ".apipi" / "setup.sh"
+    done = root / ".apipi" / "setup.done"
+    if not script.is_file() or done.is_file():
+        return
+    result = subprocess.run(
+        ["/bin/sh", str(script)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    log = root / ".apipi" / "setup.log"
+    log.write_text((result.stdout or "") + (result.stderr or ""))
+    if result.returncode != 0:
+        sys.stderr.write(log.read_text())
+        raise SystemExit("environment setup failed")
+    done.write_text("ok\n")
+
+
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     port = 52
     if args:
         port = int(args[0])
+    _run_setup()
     _start_mcp()
     threading.Thread(
         target=_serve_artifacts, args=(ARTIFACT_PORT,), daemon=True

@@ -49,6 +49,32 @@ when a turn completes, up to `APIPI_MAX_ARTIFACT_BYTES` (default
 There is no runner socket. The directory is created when the session is
 created. File tools (read, write, edit, bash) run against that folder.
 
+### Packages and setup commands
+
+Session create may include `environment.packages` and
+`environment.setup_commands` on `openai_hosted`. Those fields are
+stored on the session. Prep runs before the first agent turn that needs
+the computer:
+
+1. Install `packages.python`, then `packages.system`, then
+   `packages.npm`.
+2. Run `setup_commands` in order. Each item is an object with
+   `command` and optional `cwd`. `cwd` defaults to the session
+   directory. Absolute OpenAI paths `/workspace` and `/tmp/workspace`
+   map to that directory. Other absolute paths are rejected.
+
+Isolation `none` runs that script in the session directory on the host
+(`uv pip` or `python3 -m pip`, `apk` or `apt-get` if present, `npm`).
+Missing tools fail the session. Isolation `microvm` packs the same
+script into the guest and runs it after unpack, before Pi, in the same
+guest. Install hosts (PyPI, npm, Alpine) are added to that session's
+TAP allowlist when the matching package list is set.
+
+A nonzero exit emits `agent.session.environment.failed` and
+`agent.session.failed`. Pi does not start. Successful prep is visible
+in the workspace before the turn. `none` and `self_hosted` environment
+types reject these fields.
+
 ## `none`
 
 No computer. Pi still runs the loop. Function tools and MCP still
