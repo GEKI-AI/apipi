@@ -1,8 +1,10 @@
 import asyncio
 import json
+import logging
 import uuid
 from pathlib import Path
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
@@ -68,6 +70,48 @@ async def _create_agent(client: AsyncClient, token: str) -> str:
     )
     assert response.status_code == 200
     return str(response.json()["id"])
+
+
+async def test_health_is_not_request_logged(
+    client: AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.http")
+    response = await client.get("/health")
+    assert response.status_code == 200
+    assert not any(record.name == "apipi.http" for record in caplog.records)
+
+
+async def test_request_and_turn_are_logged(
+    client: AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    token = _token()
+    agent_id = await _create_agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {"type": "none"},
+            "input": "hello",
+        },
+    )
+    assert created.status_code == 200
+    http = [record for record in caplog.records if record.name == "apipi.http"]
+    assert http
+    last = http[-1]
+    assert last.getMessage() == "request"
+    assert last.__dict__["method"] == "POST"
+    assert last.__dict__["status"] == 200
+    assert last.__dict__.get("request_id")
+    turns = [
+        record
+        for record in caplog.records
+        if record.name == "apipi" and record.getMessage() == "turn"
+    ]
+    assert turns
+    assert turns[-1].__dict__["status"] == "completed"
+    assert int(turns[-1].__dict__["latency_ms"]) >= 0
 
 
 async def test_session_crud_environment_none(client: AsyncClient) -> None:

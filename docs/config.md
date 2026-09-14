@@ -50,6 +50,7 @@ handlers, and `artifact_store` for local or S3 artifact bytes.
 | `APIPI_PORT` | `port` | `8000` | Bind port. |
 | `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
+| `APIPI_LOG_FORMAT` | `log_format` | `json` | `json` (one object per line on stderr) or `text` (laptop). |
 | `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process to free RAM. The session row and `openai_hosted` directory stay. Resume from the event log. |
 | `APIPI_WORKSPACE_TTL` | `workspace_ttl` | `1h` | Delete an `openai_hosted` directory after this long with no session activity, and only if Pi is already gone. Transcript and published artifacts stay. |
 | `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. |
@@ -91,6 +92,7 @@ database_url = "postgresql+asyncpg://apipi:apipi@localhost:5432/apipi"
 host = "0.0.0.0"
 port = 8000
 log_level = "info"
+log_format = "json"
 idle_ttl = "15m"
 workspace_ttl = "1h"
 max_sessions = 32
@@ -110,6 +112,15 @@ metrics = false
 auth = "mycompany.apipi_auth:authenticate"
 auth_cache_ttl = "30s"
 ```
+
+Logs are JSON lines on stderr. Collectors should scrape that stream.
+Each line has `timestamp`, `level`, `logger`, `message`, and
+`service` (`apipi`). Context fields (`request_id`, `tenant_id`,
+`session_id`, `turn_id`, `instance_id`, `run_mode`) are present when
+known. Default level is `info`: process start, one HTTP request line
+(not `/health` or `/metrics`), and turn completed or failed. `debug`
+is optional. Prompt and completion bodies are never logged.
+`APIPI_LOG_FORMAT=text` restores the old one-line format.
 
 One `apipi serve` process has one profile. Change a setting and restart.
 The Pi pool is in memory in that process, so extra uvicorn workers do

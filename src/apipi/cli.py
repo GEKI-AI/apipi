@@ -5,6 +5,7 @@ import sys
 
 import uvicorn
 
+from apipi import __version__
 from apipi.app import create_app
 from apipi.config import (
     METRICS_OFF,
@@ -27,6 +28,7 @@ from apipi.config import (
     usage_retention_log,
     usage_store_log,
 )
+from apipi.logutil import configure_logging, uvicorn_log_config
 from apipi.pi.install import install_pi
 from apipi.pi.isolation import load_isolation
 from apipi.pi.model_host import probe_model_host
@@ -49,7 +51,7 @@ def prepare_serve(
     probe_model_host(resolved)
     probe_run_mode(resolved)
     reject_prompt_body_logging()
-    logging.getLogger().setLevel(resolved.log_level.upper())
+    configure_logging(level=resolved.log_level, format=resolved.log_format)
     backend = load_isolation(resolved.run_mode)
     if os.environ.get("OPENAI_API_KEY"):
         log.warning(OPENAI_API_KEY_IGNORED)
@@ -71,18 +73,38 @@ def serve(
     *, host: str | None, port: int | None, config_path: str | None = None
 ) -> None:
     settings = prepare_serve(config_path=config_path)
+    host = host if host is not None else settings.host
+    port = port if port is not None else settings.port
+    extra: dict[str, object] = {
+        "version": __version__,
+        "host": host,
+        "port": port,
+        "run_mode": settings.run_mode,
+        "store": "sqlite" if is_sqlite_url(settings.database_url) else "postgres",
+    }
+    if settings.instance_id:
+        extra["instance_id"] = settings.instance_id
+    log.info("serve", extra=extra)
     uvicorn.run(
         create_app(settings),
-        host=host if host is not None else settings.host,
-        port=port if port is not None else settings.port,
+        host=host,
+        port=port,
         log_level=settings.log_level,
+        access_log=False,
+        log_config=uvicorn_log_config(
+            level=settings.log_level, format=settings.log_format
+        ),
     )
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(
-        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
-    )
+    level = os.environ.get("APIPI_LOG_LEVEL", "info").lower()
+    fmt = os.environ.get("APIPI_LOG_FORMAT", "json").lower()
+    if level not in {"debug", "info", "warning", "error", "critical"}:
+        level = "info"
+    if fmt not in {"json", "text"}:
+        fmt = "json"
+    configure_logging(level=level, format=fmt)
     parser = argparse.ArgumentParser(prog="apipi")
     sub = parser.add_subparsers(dest="command", required=True)
     migrate_parser = sub.add_parser("migrate", help="Apply store migrations")
@@ -117,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "install":
             settings = load_settings(config_path=args.config)
+            configure_logging(level=settings.log_level, format=settings.log_format)
             return install_pi(settings, force=args.force, dry_run=args.dry_run)
         if args.command == "check":
             return check_ready(

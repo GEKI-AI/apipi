@@ -16,6 +16,7 @@ from apipi.blobs import ArtifactBlobs, blob_store
 from apipi.config import Settings, load_settings
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import error_body, register_exception_handlers
+from apipi.logutil import RequestLogMiddleware
 from apipi.metrics import Metrics, mount_metrics
 from apipi.otel import Tracing, current_trace_id
 from apipi.payload_export import load_payload_sinks
@@ -201,6 +202,7 @@ def create_app(
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(InstanceMiddleware, instance_id=resolved.instance_id)
     app.add_middleware(MaxBodyMiddleware, max_bytes=resolved.max_request_bytes)
+    app.add_middleware(RequestLogMiddleware)
     app.state.settings = resolved
     app.state.isolation = load_isolation(resolved.run_mode)
     app.state.metrics = Metrics() if resolved.metrics else None

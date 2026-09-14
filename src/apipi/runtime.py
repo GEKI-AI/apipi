@@ -622,6 +622,17 @@ async def _write_turn_log(
             turns=1,
             artifact_bytes=artifact_bytes,
         )
+    log.info(
+        "turn",
+        extra={
+            "tenant_id": str(tenant_id),
+            "session_id": str(session_id),
+            "turn_id": str(turn_id),
+            "status": status,
+            "latency_ms": latency_ms,
+            **({"request_id": request_id} if request_id else {}),
+        },
+    )
     observe_turn(
         metrics,
         tenant_id=tenant_id,

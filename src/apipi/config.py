@@ -21,6 +21,7 @@ from pydantic_settings import (
 
 RunMode = str
 LogLevel = Literal["debug", "info", "warning", "error", "critical"]
+LogFormat = Literal["json", "text"]
 ArtifactStore = Literal["local", "s3"]
 S3Addressing = Literal["auto", "path", "virtual"]
 UsageStore = Literal["off", "rollups", "turns"]
@@ -306,6 +307,10 @@ class Settings(BaseSettings):
     log_level: LogLevel = Field(
         default="info",
         validation_alias=AliasChoices("APIPI_LOG_LEVEL", "log_level"),
+    )
+    log_format: LogFormat = Field(
+        default="json",
+        validation_alias=AliasChoices("APIPI_LOG_FORMAT", "log_format"),
     )
     idle_ttl: IdleTtl = Field(
         default=timedelta(minutes=15),
@@ -710,6 +715,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_MAX_ARTIFACT_BYTES must be like 512MiB"
         if "log_level" in loc:
             return "APIPI_LOG_LEVEL must be debug, info, warning, error, or critical"
+        if "log_format" in loc or "APIPI_LOG_FORMAT" in loc:
+            return "APIPI_LOG_FORMAT must be json or text"
         if "db_pool_size" in loc:
             return "APIPI_DB_POOL_SIZE must be at least 1"
         if "microvm_mem_mib" in loc:
