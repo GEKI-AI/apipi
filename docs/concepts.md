@@ -121,5 +121,7 @@ Session conversation state is similar: both keep turns and items so
 you can continue later. OpenAI stores that on their side. ApiPi stores
 it in your store. Export is how you take the thread with you.
 
-OpenAI-only environment fields such as `packages`, `network`, or
-`files` on create return an error (unknown field).
+`packages` and `setup_commands` on `openai_hosted` install dependencies
+and run prep commands before the first turn. Other OpenAI environment
+fields such as `files`, `env`, or `network` return an error
+(`not_implemented`).

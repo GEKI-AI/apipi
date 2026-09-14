@@ -147,7 +147,7 @@ log line.
 | `agent.session.environment.pending` | Waiting for a computer |
 | `agent.session.environment.connected` | Computer ready |
 | `agent.session.environment.disconnected` | Computer gone |
-| `agent.session.environment.failed` | Could not attach |
+| `agent.session.environment.failed` | Could not attach, or hosted setup failed |
 
 Item types: `message`, `function_call`, `mcp_call`,
 `command_execution`.
@@ -225,6 +225,18 @@ these. See [multiple nodes](scale.md).
 `environment.capability_directories`: paths on the computer that contain
 `SKILL.md` trees. See [tools](tools.md).
 
+On `openai_hosted` (and the `hosted` alias), create also accepts
+`packages` and `setup_commands`. `packages` is an object with optional
+`python`, `system`, and `npm` lists of package names (pin versions when
+you need to, such as `pandas==2.2.3`). `setup_commands` is an ordered
+list of `{ "command": "…", "cwd": "…" }` objects. `cwd` is optional and
+defaults to the session workspace. Packages are installed first, then
+setup commands run, before the first agent turn. A nonzero install or
+setup exit emits `agent.session.environment.failed` and fails the
+session; Pi does not start. Those fields on `none` or `self_hosted`
+return `400`. `files`, `env`, `network`, `environment_template_id`,
+`skills`, and `plugins` return `400` with type `not_implemented`.
+
 See [environments](environments.md).
 
 ## Compatibility
@@ -245,6 +257,8 @@ steps are in [Using the API](using.md).
 | Function tools | yes |
 | MCP | yes |
 | Skills (`capability_directories`, `SKILL.md`) | yes |
+| `environment.packages`, `setup_commands` | yes (`openai_hosted` only) |
+| `environment.files`, `env`, `network` | no |
 | Artifacts | yes |
 | Usage tokens on turns | yes |
 | Session export | yes |

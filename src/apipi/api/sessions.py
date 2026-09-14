@@ -16,7 +16,9 @@ from apipi.api.agents import AgentWrite
 from apipi.api.deps import model_key
 from apipi.auth import get_db, not_found, require_tenant
 from apipi.env.hub import EnvironmentHub
-from apipi.errors import ApiError, gone, not_implemented
+from apipi.env.setup import SetupError, prepare_workspace
+from apipi.env.spec import EnvironmentSpec, environment_payload
+from apipi.errors import ApiError, gone
 from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.otel import set_span, start_span
@@ -80,11 +82,6 @@ def _require_capacity(
         code=code,
         status_code=429,
     )
-
-
-class EnvironmentSpec(StrictModel):
-    type: str
-    capability_directories: list[str] | None = None
 
 
 class SessionCreate(StrictModel):
@@ -196,18 +193,6 @@ def _input_text(value: str | dict[str, Any] | None) -> str:
     return ""
 
 
-def _environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
-    env_type = spec.type if spec is not None else "openai_hosted"
-    if env_type == "hosted":
-        env_type = "openai_hosted"
-    if env_type not in {"none", "openai_hosted", "self_hosted"}:
-        not_implemented(env_type)
-    payload: dict[str, Any] = {"type": env_type}
-    if spec is not None and spec.capability_directories is not None:
-        payload["capability_directories"] = spec.capability_directories
-    return payload
-
-
 def _sse(event: dict[str, Any]) -> str:
     prefix = f"id: {event['seq']}\n" if "seq" in event else ""
     return f"{prefix}event: {event['type']}\ndata: {json.dumps(event)}\n\n"
@@ -266,7 +251,7 @@ async def create_agent_session(
     store: Store = request.app.state.store
     hub: EventHub = request.app.state.event_hub
     harness: Harness = request.app.state.harness
-    environment = _environment_payload(body.environment)
+    environment = environment_payload(body.environment)
     raw_tools: list[Any] = []
     env_key: str | None = None
     env_id: uuid.UUID | None = None
@@ -304,6 +289,14 @@ async def create_agent_session(
                 copy_capability_directories(
                     directory, [item for item in caps if isinstance(item, str)]
                 )
+            try:
+                prepare_workspace(directory, environment)
+            except SetupError as exc:
+                raise ApiError(
+                    "invalid_request",
+                    exc.message,
+                    code="invalid_request",
+                ) from exc
             environment = {**environment, "directory": str(directory)}
             row.environment = environment
             await db.flush()

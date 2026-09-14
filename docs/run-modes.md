@@ -145,7 +145,8 @@ RPC is JSON lines over vsock. Egress uses a TAP device and NAT. There
 is no host loopback to Postgres. By default that TAP is fail-closed:
 the guest may reach the model host from `OPENAI_BASE_URL`, HTTP MCP
 hosts for that session, extra hosts in `APIPI_MICROVM_EGRESS_HOSTS`,
-and DNS (`1.1.1.1` and `8.8.8.8`). Other TCP is rejected. The gateway
+package registries when `environment.packages` is set (PyPI, npm,
+Alpine), and DNS (`1.1.1.1` and `8.8.8.8`). Other TCP is rejected. The gateway
 connects HTTP MCP from the host first; Pi still dials the same URLs
 from the guest, so those hosts must be allowed. Set
 `APIPI_MICROVM_EGRESS_ALLOWLIST=off` only in a lab. Each TAP is also

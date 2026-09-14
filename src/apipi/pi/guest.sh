@@ -33,6 +33,14 @@ if [ -f /tmp/workspace/.apipi/env ]; then
   set +a
 fi
 export HOME=/tmp/workspace
+if [ -f /tmp/workspace/.apipi/setup.sh ] && [ ! -f /tmp/workspace/.apipi/setup.done ]; then
+  if ! /bin/sh /tmp/workspace/.apipi/setup.sh > /tmp/workspace/.apipi/setup.log 2>&1; then
+    echo "environment setup failed" >&2
+    cat /tmp/workspace/.apipi/setup.log >&2
+    exit 1
+  fi
+  echo ok > /tmp/workspace/.apipi/setup.done
+fi
 if [ -f /tmp/workspace/.apipi/guest.py ] && command -v python3 >/dev/null 2>&1; then
   exec python3 /tmp/workspace/.apipi/guest.py
 fi

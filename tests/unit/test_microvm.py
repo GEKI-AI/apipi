@@ -247,6 +247,27 @@ def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
     assert "127.0.0.1" not in net_text
 
 
+def test_workspace_image_includes_setup_script(tmp_path: Path) -> None:
+    cwd = tmp_path / "session"
+    cwd.mkdir()
+    apipi = cwd / ".apipi"
+    apipi.mkdir()
+    (apipi / "setup.sh").write_text("#!/bin/sh\necho ok\n")
+    dest = tmp_path / "workspace.tar"
+    write_workspace_image(
+        dest,
+        cwd=str(cwd),
+        env={},
+        pi_args=["pi", "--mode", "rpc", "--no-session"],
+    )
+    with tarfile.open(dest, mode="r") as tar:
+        names = tar.getnames()
+        setup = next(name for name in names if name.endswith("setup.sh"))
+        member = tar.extractfile(setup)
+        assert member is not None
+        assert b"echo ok" in member.read()
+
+
 def test_guest_workspace_pull_is_source_for_next_pack(tmp_path: Path) -> None:
     guest = tmp_path / "guest"
     guest.mkdir()
@@ -342,6 +363,10 @@ def test_egress_host_and_session_hosts(tmp_path: Path) -> None:
     ]
     hosts = microvm_egress_hosts(settings, mcp)
     assert hosts == ["api.openai.com", "mcp.tavily.com", "mcp.example.com"]
+    with_packages = microvm_egress_hosts(
+        settings, mcp, extra_hosts=["pypi.org", "registry.npmjs.org"]
+    )
+    assert with_packages[-2:] == ["pypi.org", "registry.npmjs.org"]
 
 
 def test_resolve_host_ips(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -16,6 +16,7 @@ from typing import NamedTuple
 from urllib.parse import urlparse
 
 from apipi.config import ConfigError, Settings
+from apipi.env.setup import workspace_egress_hosts
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.model_host import pi_agent_dir
@@ -140,6 +141,7 @@ def egress_host(value: str) -> str | None:
 def microvm_egress_hosts(
     settings: Settings,
     mcp_http: list[McpHttpServer] | None = None,
+    extra_hosts: list[str] | None = None,
 ) -> list[str]:
     found: list[str] = []
     if settings.model_base_url:
@@ -160,6 +162,12 @@ def microvm_egress_hosts(
             host = egress_host(server.server_url)
             if host is None:
                 raise ConfigError("MCP server_url must include a host")
+            found.append(host)
+    if extra_hosts:
+        for item in extra_hosts:
+            host = egress_host(item)
+            if host is None:
+                raise ConfigError("APIPI_MICROVM_EGRESS_HOSTS must be hostnames")
             found.append(host)
     seen: set[str] = set()
     hosts: list[str] = []
@@ -193,10 +201,11 @@ def resolve_host_ips(host: str) -> list[str]:
 def allowed_egress_ips(
     settings: Settings,
     mcp_http: list[McpHttpServer] | None = None,
+    extra_hosts: list[str] | None = None,
 ) -> list[str]:
     ips: list[str] = []
     seen: set[str] = set()
-    for host in microvm_egress_hosts(settings, mcp_http):
+    for host in microvm_egress_hosts(settings, mcp_http, extra_hosts=extra_hosts):
         for ip in resolve_host_ips(host):
             if ip in seen:
                 continue
@@ -870,7 +879,12 @@ async def spawn_microvm_pi(
     guest_skills, extra_dirs = guest_skill_dirs(cwd, skill_dirs)
     extra_dirs = [*(extra_dirs or []), (pi_agent_dir(settings), ".pi/agent")]
     allowlist = settings.microvm_egress_allowlist
-    allowed_ips = allowed_egress_ips(settings, mcp_http) if allowlist else []
+    extra_hosts = workspace_egress_hosts(cwd)
+    allowed_ips = (
+        allowed_egress_ips(settings, mcp_http, extra_hosts=extra_hosts)
+        if allowlist
+        else []
+    )
 
     def cleanup() -> None:
         teardown_tap(

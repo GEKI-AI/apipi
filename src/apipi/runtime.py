@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.config import CapacityError, Settings
 from apipi.env.computer import Computer, bind_computer, computer_item_events
 from apipi.env.hub import EnvironmentHub
+from apipi.env.setup import SetupError, provision_hosted
 from apipi.errors import ApiError
 from apipi.metrics import Metrics, observe_turn
 from apipi.otel import Tracing, set_span, start_span
@@ -893,6 +894,24 @@ async def fail_session(
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.failed")
 
 
+async def fail_environment(
+    db: AsyncSession,
+    hub: EventHub,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    message: str,
+) -> None:
+    await persist_event(
+        db,
+        hub,
+        tenant_id,
+        session_id,
+        type="agent.session.environment.failed",
+        data={"error": message},
+    )
+    await fail_session(db, hub, tenant_id, session_id, message)
+
+
 def _model_span_attrs(
     *,
     request_id: str | None,
@@ -960,6 +979,14 @@ async def run_turn(
                 require_listed_model(model, ids)
                 write_pi_models_json(settings, ids)
             ensure_openai_workspace(row.environment)
+            try:
+                provision_hosted(
+                    row.environment,
+                    run_mode=settings.run_mode if settings is not None else "none",
+                )
+            except SetupError as exc:
+                await fail_environment(db, hub, tenant_id, session_id, exc.message)
+                return
             cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
             computer = (
                 bind_computer(env_hub, env_id)
