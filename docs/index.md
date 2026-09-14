@@ -38,8 +38,8 @@ apipi serve
 That uses SQLite at `.apipi/apipi.db` and binds `0.0.0.0:8000`.
 `OPENAI_BASE_URL` is the model host, not this API. The client bearer is
 the model key unless you set `OPENAI_API_KEY_OVERWRITE`. Default
-isolation is `none`. Production uses Postgres and
-`APIPI_RUN_MODE=microvm`. Details are on [Install](install.md).
+isolation is `none`. One process can keep SQLite. Production isolation
+is `APIPI_RUN_MODE=microvm`. Details are on [Install](install.md).
 
 Point a client at `http://localhost:8000/v1` with
 `Authorization: Bearer`. Any non-empty bearer becomes a tenant.

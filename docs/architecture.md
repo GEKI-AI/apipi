@@ -47,7 +47,8 @@ process exits. It does not fall back to `none`.
 
 The gateway is Python 3.13 and FastAPI. It authenticates callers,
 owns sessions, appends the event log, and streams SSE. It talks to
-the durable store (SQLite locally, Postgres in production). It spawns
+the durable store (SQLite for one process, Postgres when the store is
+shared). It spawns
 Pi (`pi --mode rpc`).
 
 Pi's environment gets `OPENAI_BASE_URL`, the model key (the request
@@ -174,7 +175,7 @@ and artifact bytes are capped per session. See [config](config.md).
 Cross-tenant IDs return `404`, not `403`. Live Pi and the local
 workspace stay on the node that created the session. Published
 artifact bytes follow `APIPI_ARTIFACT_STORE`. Postgres is shared
-across nodes. SQLite is local single-process only.
+across nodes. SQLite is one process only.
 
 
 ## Tools

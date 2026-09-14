@@ -37,9 +37,12 @@ def create_engine(url: str, *, pool_size: int = 5) -> AsyncEngine:
         )
 
         @event.listens_for(engine.sync_engine, "connect")
-        def _fk(dbapi_connection: Any, _connection_record: Any) -> None:
+        def _sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
+            if ":memory:" not in resolved:
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.fetchall()
             cursor.close()
 
         return engine

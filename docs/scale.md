@@ -3,9 +3,9 @@
 One `apipi serve` process owns its live Pi processes, local
 `openai_hosted` directories, artifact bytes, SSE subscribers, and
 `self_hosted` runner sockets. Those stay in memory or on that host's
-disk. Postgres is the shared transcript. Do not share SQLite across
-nodes. A live session has no handoff
-to another node.
+disk. Postgres is the shared transcript when more than one process
+needs the same store. Do not share SQLite across nodes. A live
+session has no handoff to another node.
 
 Several processes behind a load balancer work if follow-up requests
 return to the node that owns the session (sticky affinity). Scale by
@@ -38,7 +38,7 @@ Official OpenAI clients put `session_id` in
 default. Hash that path segment.
 
 `GET /v1/agents/sessions/{id}/events?stream=true` uses the same path.
-If SSE drops, reconnect with `after_seq` to replay from Postgres. The
+If SSE drops, reconnect with `after_seq` to replay from the store. The
 next turn still needs the node that holds Pi.
 
 `/v1/environments/{environment_id}` is the `self_hosted` runner

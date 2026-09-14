@@ -29,15 +29,24 @@ capped at `APIPI_MAX_WORKSPACE_BYTES` (default 1 GiB) and lasts until
 bytes add up to `APIPI_MAX_ARTIFACT_BYTES` (default 512 MiB) per
 session unless you set `APIPI_ARTIFACT_STORE=s3`.
 
-Keeping Postgres off the gateway host leaves more RAM for guests. One
-`apipi serve` per host; extra uvicorn workers do not share the Pi pool.
-Do not run production on SQLite. It is a local single-process store.
+Keeping the store off the gateway host leaves more RAM for guests when
+you use Postgres. One `apipi serve` per host; extra uvicorn workers do
+not share the Pi pool. One process can use SQLite, including with
+`microvm`. Do not share the file.
+
+## Store
+
+| Need | Why Postgres |
+| --- | --- |
+| Several gateway processes or nodes | SQLite is not a shared multi-writer |
+| Many concurrent writers on one DB | Single writer / lock |
+| HA, backups, pooling at scale | Operator story |
 
 ## Scale-out
 
 | Shape | When | What stays on the node | What is shared |
 | --- | --- | --- | --- |
-| One host | You fit in `max_sessions` on one box | Pi, SSE, WebSockets, `openai_hosted` directories, local artifacts | Postgres |
+| One host, one process | You fit in `max_sessions` on one box | Pi, SSE, WebSockets, `openai_hosted` directories, local artifacts | SQLite or Postgres |
 | Several hosts, sticky load balancer | More live sessions than one box | Same as one host, plus each process has its own `APIPI_SESSIONS_DIR` | Postgres, auth callback. Artifact bytes too when `APIPI_ARTIFACT_STORE=s3` |
 | External artifact store | Clients read artifacts from any node, or you do not want artifact files on the gateway disk | Live workspace still on the node | Postgres, S3-compatible bucket |
 
@@ -142,7 +151,7 @@ turns finish or idle TTL has killed Pi, then stop the systemd unit.
 Do not fail health in the middle of a turn. There is no live handoff
 to another node.
 
-If SSE drops, reconnect with `after_seq` to replay from Postgres. The
+If SSE drops, reconnect with `after_seq` to replay from the store. The
 next turn still needs the node that holds Pi.
 
 A full node returns `429` with code `capacity`. A tenant at its cap
