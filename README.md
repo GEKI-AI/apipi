@@ -20,9 +20,9 @@ Python 3.13 and [uv](https://docs.astral.sh/uv/). Postgres for the
 store. The Pi CLI (`pi --mode rpc`) on `PATH` for live turns.
 
 ```
-pip install apipi
-# or: uv add apipi
-# S3 artifacts: pip install "apipi[s3]"
+pip install geki-apipi
+# or: uv add geki-apipi
+# S3 artifacts: pip install "geki-apipi[s3]"
 npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
 docker compose up -d postgres
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi

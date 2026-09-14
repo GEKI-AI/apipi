@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2026-09-14
 
-First public release of the `apipi` package.
+First public release. Install from PyPI as `geki-apipi`. The import
+package and CLI stay `apipi`.
 
 ### Added
 
@@ -19,7 +20,7 @@ First public release of the `apipi` package.
   (Firecracker). Production uses `microvm`.
 - Agents, sessions, events, turns, items, artifacts, and export.
 - Tenant-scoped auth via a callback. The gateway does not store keys.
-- Optional S3-compatible artifact storage (`apipi[s3]`).
+- Optional S3-compatible artifact storage (`geki-apipi[s3]`).
 
 ### Changed
 
