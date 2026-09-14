@@ -4,6 +4,7 @@ from alembic import command
 from alembic.config import Config
 
 from apipi.config import load_settings, store_url
+from apipi.logutil import configure_logging
 
 
 def alembic_config(url: str) -> Config:
@@ -20,4 +21,5 @@ def upgrade_head(url: str) -> None:
 
 def migrate(*, config_path: str | None = None) -> None:
     settings = load_settings(config_path=config_path)
+    configure_logging(level=settings.log_level, format=settings.log_format)
     upgrade_head(settings.database_url)

@@ -108,6 +108,21 @@ On the 64 GiB example, 48 × 512 MiB ≈ 24 GiB guests on about 56 GiB
 usable is not RAM overprovision. Packing toward 110 live would leave
 no headroom.
 
+## Logs
+
+Ship stderr. There is no log file shipper in the gateway. `apipi serve`
+writes one JSON object per line. Default level is `info`. Use
+`APIPI_LOG_FORMAT=text` only on a laptop.
+
+Info covers process start (version, bind, run mode, store), one line
+per HTTP request except `/health` and `/metrics`, and turn completed
+or failed. Failed turns and unexpected exceptions are `error`.
+Warnings are degraded-but-running (SQLite one-process, `run_mode=none`,
+export drop). Debug is optional diagnosis.
+
+Same id fields as traces when known (`request_id`, `session_id`,
+`turn_id`). Do not log secrets or prompt bodies.
+
 ## Tuning
 
 Change a setting and restart the process. There is no plan or SKU

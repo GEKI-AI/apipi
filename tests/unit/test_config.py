@@ -212,6 +212,7 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.port == 8000
     assert settings.instance_id is None
     assert settings.log_level == "info"
+    assert settings.log_format == "json"
     assert settings.max_request_bytes == 1024 * 1024
     assert settings.max_workspace_bytes == 1024 * 1024 * 1024
     assert settings.max_artifact_bytes == 512 * 1024 * 1024
@@ -375,6 +376,15 @@ def test_usage_retention_empty_is_none(
     monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_USAGE_RETENTION", "")
     assert load_settings().usage_retention is None
+
+
+def test_log_format_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_LOG_FORMAT", "yaml")
+    with pytest.raises(ConfigError, match="APIPI_LOG_FORMAT must be"):
+        load_settings()
 
 
 def test_usage_store_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ from apipi.config import (
     postgres_url,
     require_run_mode,
 )
+from apipi.logutil import configure_logging
 from apipi.pi.isolation import load_isolation
 from apipi.pi.model_host import fetch_model_ids, installed_pi_version, require_pinned_pi
 from apipi.pi.probe import probe_run_mode
@@ -145,6 +146,7 @@ def check_ready(
     stream: TextIO = sys.stdout if out is None else out
     try:
         settings = load_settings(config_path=config_path)
+        configure_logging(level=settings.log_level, format=settings.log_format)
     except ConfigError as exc:
         print(_line(Check("fail", "config", str(exc))), file=stream)
         return 1
