@@ -76,6 +76,8 @@ PUBLIC_EVENT_TYPES = frozenset(
     }
 )
 
+LIVE_EVENT_TYPES = frozenset({"agent.session.turn.output_text.delta"})
+
 
 def event_body(event: Event) -> dict[str, Any]:
     return {
@@ -85,6 +87,16 @@ def event_body(event: Event) -> dict[str, Any]:
         "session_id": str(event.session_id),
         "created_at": event.created_at.isoformat(),
         "data": event.data,
+    }
+
+
+def live_event_body(
+    session_id: uuid.UUID, *, type: str, data: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    return {
+        "type": type,
+        "session_id": str(session_id),
+        "data": data if data is not None else {},
     }
 
 
@@ -259,6 +271,9 @@ async def persist_event(
 ) -> Event | None:
     if type not in PUBLIC_EVENT_TYPES:
         return None
+    if type in LIVE_EVENT_TYPES:
+        hub.publish(session_id, live_event_body(session_id, type=type, data=data))
+        return None
     event = await append_event(db, tenant_id, session_id, type=type, data=data)
     hub.publish(session_id, event_body(event))
     return event
@@ -389,6 +404,11 @@ async def _consume_generate(
             )
         payload = dict(data)
         payload.setdefault("turn_id", str(turn_id))
+        if etype in LIVE_EVENT_TYPES:
+            hub.publish(
+                session_id, live_event_body(session_id, type=etype, data=payload)
+            )
+            continue
         async with store.session() as db:
             if etype == "function_call":
                 call_id = payload.get("call_id")

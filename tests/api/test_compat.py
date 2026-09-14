@@ -435,7 +435,7 @@ async def test_compat_event_types(client: AsyncClient) -> None:
     assert "agent.session.created" in types
     assert "agent.session.turn.created" in types
     assert "agent.session.turn.completed" in types
-    assert "agent.session.turn.output_text.delta" in types
+    assert "agent.session.turn.output_text.delta" not in types
     assert "agent.session.turn.output_text.done" in types
     assert types[-1] == "agent.session.idle"
 

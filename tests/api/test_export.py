@@ -42,6 +42,7 @@ async def test_export_after_a_turn(client: AsyncClient) -> None:
     assert types[0] == "agent.session.created"
     assert types[-1] == "agent.session.idle"
     assert set(types) <= PUBLIC_EVENT_TYPES
+    assert "agent.session.turn.output_text.delta" not in types
     done = [
         event
         for event in body["events"]

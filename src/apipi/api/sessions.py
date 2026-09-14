@@ -223,7 +223,8 @@ def _environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
 
 
 def _sse(event: dict[str, Any]) -> str:
-    return f"id: {event['seq']}\nevent: {event['type']}\ndata: {json.dumps(event)}\n\n"
+    prefix = f"id: {event['seq']}\n" if "seq" in event else ""
+    return f"{prefix}event: {event['type']}\ndata: {json.dumps(event)}\n\n"
 
 
 SSE_PING = ": ping\n"
@@ -250,7 +251,11 @@ async def _event_stream(
             except TimeoutError:
                 yield SSE_PING
                 continue
-            seq = int(payload["seq"])
+            seq = payload.get("seq")
+            if seq is None:
+                yield _sse(payload)
+                continue
+            seq = int(seq)
             if seq <= last:
                 continue
             last = seq

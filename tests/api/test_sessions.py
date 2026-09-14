@@ -1,14 +1,19 @@
+import asyncio
 import json
 import uuid
 from pathlib import Path
 
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from apipi.api.sessions import _event_stream
-from apipi.runtime import PUBLIC_EVENT_TYPES, EventHub
+from apipi.app import create_app
+from apipi.config import Settings
+from apipi.runtime import PUBLIC_EVENT_TYPES, EventHub, FakeHarness, persist_event
 from apipi.store.engine import Store
+from apipi.store.events import list_events
 from apipi.store.models import SessionRow
+from apipi.store.repo import create_session, create_tenant
 
 
 def _token(name: str = "t") -> str:
@@ -194,6 +199,7 @@ async def test_fake_harness_determined_events(client: AsyncClient) -> None:
     assert types[0] == "agent.session.created"
     assert types[-1] == "agent.session.idle"
     assert set(types) <= PUBLIC_EVENT_TYPES
+    assert "agent.session.turn.output_text.delta" not in types
     done = [
         event
         for event in events.json()["data"]
@@ -256,6 +262,109 @@ async def test_sse_replays_persisted_events(store: Store, client: AsyncClient) -
     )
     assert replay[0]["seq"] == last_seq
     assert replay[0]["type"] == "agent.session.idle"
+
+
+async def test_output_text_delta_is_live_only(store: Store) -> None:
+    hub = EventHub()
+    async with store.session() as db:
+        tenant = await create_tenant(db, name="a")
+        session_row = await create_session(db, tenant.id)
+        tenant_id = tenant.id
+        session_id = session_row.id
+
+    parsed: list[dict[str, object]] = []
+    finished = asyncio.Event()
+
+    async def consume() -> None:
+        agen = _event_stream(store, hub, tenant_id, session_id, None)
+        try:
+            async for chunk in agen:
+                if chunk.startswith(":"):
+                    continue
+                parsed.extend(_parse_sse(chunk))
+                types = [event["type"] for event in parsed]
+                if "agent.session.turn.output_text.done" in types:
+                    finished.set()
+                    return
+        finally:
+            await agen.aclose()
+
+    task = asyncio.create_task(consume())
+    for _ in range(100):
+        if session_id in hub._subs:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        task.cancel()
+        raise AssertionError("stream did not subscribe")
+    async with store.session() as db:
+        live = await persist_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.turn.output_text.delta",
+            data={"delta": "hi"},
+        )
+        done = await persist_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.turn.output_text.done",
+            data={"text": "hi"},
+        )
+    assert live is None
+    assert done is not None
+    assert done.seq == 1
+    await asyncio.wait_for(finished.wait(), timeout=2)
+    await task
+    types = [event["type"] for event in parsed]
+    assert types == [
+        "agent.session.turn.output_text.delta",
+        "agent.session.turn.output_text.done",
+    ]
+    assert "seq" not in parsed[0]
+    assert parsed[1]["seq"] == 1
+    async with store.session() as db:
+        stored = await list_events(db, tenant_id, session_id)
+    assert [event.type for event in stored] == ["agent.session.turn.output_text.done"]
+    assert stored[0].seq == 1
+
+
+async def test_turn_publishes_live_delta(settings: Settings, store: Store) -> None:
+    app = create_app(settings, store=store, harness=FakeHarness())
+    hub: EventHub = app.state.event_hub
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = _token()
+        agent_id = await _create_agent(client, token)
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent_id, "environment": {"type": "none"}},
+        )
+        session_id = uuid.UUID(created.json()["id"])
+        queue = hub.subscribe(session_id)
+        posted = await client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json={"type": "agent.session.input.message", "content": "hello"},
+        )
+        assert posted.status_code == 200
+    live_types = []
+    while not queue.empty():
+        live_types.append(queue.get_nowait()["type"])
+    assert "agent.session.turn.output_text.delta" in live_types
+    async with store.session() as db:
+        row = await db.scalar(select(SessionRow).where(SessionRow.id == session_id))
+        assert row is not None
+        stored = await list_events(db, row.tenant_id, session_id)
+    assert "agent.session.turn.output_text.delta" not in [
+        event.type for event in stored
+    ]
+    assert "agent.session.turn.output_text.done" in [event.type for event in stored]
 
 
 async def test_cross_tenant_session_is_404(client: AsyncClient) -> None:

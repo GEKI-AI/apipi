@@ -99,10 +99,12 @@ The gateway persists `agent.session.turn.cancelled` then
 stays open across `idle` and sends SSE comment keepalives (`: ping`)
 without a blank line, so clients that parse every dispatched event as
 JSON do not see an empty payload. Reconnect and replay from the store
-with `after_seq`. The public event is written to the store before it is
-published on SSE. Behind more than one gateway process, the stream and
-the next turn must hit the node that owns Pi. See
-[multiple nodes](scale.md).
+with `after_seq`. Stored public events are written before SSE.
+`output_text.delta` is live SSE only and is not stored; reconnect and
+export skip those fragments. Full assistant text is on
+`output_text.done` and the assistant item. Behind more than one
+gateway process, the stream and the next turn must hit the node that
+owns Pi. See [multiple nodes](scale.md).
 
 Only these event types are public. Anything else from Pi is an internal
 log line.
@@ -120,7 +122,7 @@ log line.
 | `agent.session.turn.completed` | Done; may include `usage` (tokens only) |
 | `agent.session.turn.failed` | Failed (including a model host error) |
 | `agent.session.turn.cancelled` | Cancelled |
-| `agent.session.turn.output_text.delta` | Assistant text |
+| `agent.session.turn.output_text.delta` | Assistant text fragment (live SSE only; not stored) |
 | `agent.session.turn.output_text.done` | Text finished |
 | `agent.session.turn.item.added` | New item |
 | `agent.session.turn.item.done` | Item finished |
