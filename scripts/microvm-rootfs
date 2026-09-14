@@ -3,10 +3,71 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 GUEST_SH="${ROOT}/src/apipi/pi/guest.sh"
-OUT=${1:-"${XDG_CACHE_HOME:-$HOME/.cache}/apipi/microvm"}
 ALPINE_VER=${ALPINE_VER:-3.21.3}
-SIZE_MIB=${SIZE_MIB:-2048}
 ARCH=$(uname -m)
+FLAVOR=default
+OUT=""
+
+usage() {
+  cat <<EOF
+Usage: $0 [--flavor default|browser] [OUT_DIR]
+
+default writes rootfs.ext4. browser writes rootfs-browser.ext4.
+Both share vmlinux in OUT_DIR.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --flavor)
+      if [[ $# -lt 2 ]]; then
+        echo "--flavor needs default or browser" >&2
+        exit 1
+      fi
+      FLAVOR=$2
+      shift 2
+      ;;
+    --flavor=*)
+      FLAVOR=${1#*=}
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+    *)
+      if [[ -n "$OUT" ]]; then
+        echo "unexpected argument: $1" >&2
+        usage >&2
+        exit 1
+      fi
+      OUT=$1
+      shift
+      ;;
+  esac
+done
+
+case "$FLAVOR" in
+  default | browser) ;;
+  *)
+    echo "flavor must be default or browser" >&2
+    exit 1
+    ;;
+esac
+
+OUT=${OUT:-"${XDG_CACHE_HOME:-$HOME/.cache}/apipi/microvm"}
+if [[ -z "${SIZE_MIB:-}" ]]; then
+  if [[ "$FLAVOR" == browser ]]; then
+    SIZE_MIB=4096
+  else
+    SIZE_MIB=2048
+  fi
+fi
 
 if [[ ! -f "$GUEST_SH" ]]; then
   echo "missing $GUEST_SH" >&2
@@ -62,7 +123,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ROOTFS="${OUT}/rootfs.ext4"
+if [[ "$FLAVOR" == browser ]]; then
+  ROOTFS="${OUT}/rootfs-browser.ext4"
+  EXTRA_PKGS="chromium nss freetype harfbuzz ca-certificates font-dejavu dbus"
+else
+  ROOTFS="${OUT}/rootfs.ext4"
+  EXTRA_PKGS=""
+fi
 KERNEL="${OUT}/vmlinux"
 ALPINE_TAR="${WORKDIR}/alpine.tar.gz"
 MNT="${WORKDIR}/mnt"
@@ -89,7 +156,7 @@ as_root chmod 755 "$MNT/sbin/apipi-guest"
 as_root chroot "$MNT" /bin/sh -c "
   set -e
   echo https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/community >> /etc/apk/repositories
-  apk add --no-cache nodejs npm python3 iproute2 socat
+  apk add --no-cache nodejs npm python3 iproute2 socat ${EXTRA_PKGS}
   npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PIN}
 "
 as_root umount "$MNT/dev"
@@ -110,7 +177,12 @@ echo "rootfs: $ROOTFS"
 if [[ -f "$KERNEL" ]]; then
   echo "kernel: $KERNEL"
 fi
-echo "export APIPI_MICROVM_ROOTFS=$ROOTFS"
+if [[ "$FLAVOR" == browser ]]; then
+  echo "export APIPI_MICROVM_ROOTFS_BROWSER=$ROOTFS"
+  echo "export APIPI_MICROVM_IMAGE=browser"
+else
+  echo "export APIPI_MICROVM_ROOTFS=$ROOTFS"
+fi
 if [[ -f "$KERNEL" ]]; then
   echo "export APIPI_MICROVM_KERNEL=$KERNEL"
 fi

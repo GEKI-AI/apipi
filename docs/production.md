@@ -82,7 +82,7 @@ Postgres on another host. `APIPI_RUN_MODE=microvm`. Default guest RAM
 | Default 32 live | 32 × 512 MiB ≈ **16 GiB** guests plus ~0.2 GiB VMM. Fits easily. |
 | Starting cap | **`max_sessions=48`** (24 GiB guests) or keep **32**. Raise after you watch host RSS and `429` `capacity`. |
 | Ceiling | (64 − 8) / 0.5 ≈ **110** live at 512 MiB. That is the wall, not a starting point. |
-| Playwright / Chromium | Raise `APIPI_MICROVM_MEM_MIB` to **1024–2048**. Then about **24–48** live on this box. 512 MiB is for Pi and light tools. |
+| Playwright / Chromium | Boot the **browser** rootfs (`APIPI_MICROVM_IMAGE=browser`) and raise `APIPI_MICROVM_MEM_MIB` to **1024–2048**. Then about **24–48** live on this box. 512 MiB is for Pi and light tools. |
 | CPU | 48 × 1 vCPU on 12 cores is normal while turns wait on the model URL. Keep `APIPI_MICROVM_VCPUS=1` unless the computer is CPU-heavy. |
 | Disk | Workspaces persist after Pi stop until `workspace_ttl` (default 1 hour), capped at 1 GiB each. Local artifacts 512 MiB per session unless S3. Worst case is cap × live-and-idle directories, not typical use. |
 | NIC | Each guest TAP is 50 Mbit. 48 guests all saturated ≈ 2.4 Gbit. That is the ceiling, not the plan. |
