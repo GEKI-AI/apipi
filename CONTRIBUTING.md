@@ -160,7 +160,7 @@ not bump on every merge.
    hand. The Publish workflow builds the sdist and wheel, uploads them
    to PyPI with Trusted Publishing (OIDC), then opens the GitHub
    Release for that tag and attaches the artifacts. There is no PyPI
-   password in GitHub secrets.
+   password in GitHub secrets. Agent skill: `release`.
 4. Ordinary PRs do not publish. Optional TestPyPI: run the Publish
    workflow with `workflow_dispatch` and repository `testpypi` (no
    GitHub Release).

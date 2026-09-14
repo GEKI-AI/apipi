@@ -84,7 +84,7 @@ fallback. `host` and `jail` are not valid. OpenAI-compatible
 
 ## Workflows
 
-How to plan, file issues, implement, and review lives in
+How to plan, file issues, implement, review, and release lives in
 `.agents/skills/`. Read those files. Do not copy them here.
 
 | Skill | When |
@@ -93,6 +93,7 @@ How to plan, file issues, implement, and review lives in
 | `create-issue` | File one GitHub issue |
 | `work-issue` | Do one change and open a PR |
 | `review` | Review a PR |
+| `release` | Tag `origin/main` for PyPI and a GitHub Release |
 
 An issue is common, not required. One checkout is one branch.
 Parallel work is best effort when files do not overlap. Use another
