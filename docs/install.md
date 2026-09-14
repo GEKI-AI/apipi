@@ -2,7 +2,9 @@
 
 You need Python 3.13 and Postgres. Live turns also need the Pi CLI
 (`pi --mode rpc`) on `PATH` and a model host URL. The gateway pins Pi
-0.85.1. Install that exact version:
+0.85.1. `apipi install` installs that exact version with npm into a
+user-local prefix. Put that binary on `PATH`, or set
+`APIPI_PI_COMMAND`. The manual one-liner is still valid:
 
 ```
 npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
@@ -27,6 +29,21 @@ pip install geki-apipi
 The import package and CLI stay `apipi`. `uv add geki-apipi` works in a
 project. S3-compatible artifact storage is an extra:
 `pip install "geki-apipi[s3]"` or `uv add "geki-apipi[s3]"`.
+
+Then install the pinned Pi CLI and confirm the machine is ready:
+
+```
+apipi install
+# configure DATABASE_URL, OPENAI_BASE_URL, and run mode
+apipi check
+apipi migrate
+apipi serve
+```
+
+`apipi check` does not bind HTTP. It exits non-zero when a required
+check fails. `--skip-db` and `--skip-model` skip Postgres and the model
+host. `--fast` skips the throwaway sandbox probe for `microvm`.
+`apipi install` is idempotent; `--force` reinstalls Pi.
 
 From a checkout (contributors):
 

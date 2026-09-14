@@ -26,9 +26,11 @@ from apipi.config import (
     usage_retention_log,
     usage_store_log,
 )
+from apipi.pi.install import install_pi
 from apipi.pi.isolation import load_isolation
 from apipi.pi.model_host import probe_model_host
 from apipi.pi.probe import probe_run_mode
+from apipi.ready import check_ready
 from apipi.store.migrate import migrate
 
 log = logging.getLogger("apipi")
@@ -83,6 +85,25 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     migrate_parser = sub.add_parser("migrate", help="Apply store migrations")
     migrate_parser.add_argument("--config", default=None, help="TOML config file")
+    install_parser = sub.add_parser("install", help="Install pinned Pi")
+    install_parser.add_argument("--config", default=None, help="TOML config file")
+    install_parser.add_argument(
+        "--force", action="store_true", help="Reinstall even if Pi already matches"
+    )
+    install_parser.add_argument(
+        "--dry-run", action="store_true", help="Print the npm command and exit"
+    )
+    check_parser = sub.add_parser("check", help="Verify requirements without serving")
+    check_parser.add_argument("--config", default=None, help="TOML config file")
+    check_parser.add_argument("--skip-db", action="store_true", help="Skip Postgres")
+    check_parser.add_argument(
+        "--skip-model", action="store_true", help="Skip the model host"
+    )
+    check_parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Skip the throwaway sandbox probe",
+    )
     serve_parser = sub.add_parser("serve", help="Start the API")
     serve_parser.add_argument("--host", default=None, help="Bind address")
     serve_parser.add_argument("--port", default=None, type=int, help="Bind port")
@@ -92,6 +113,25 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "migrate":
             migrate(config_path=args.config)
             return 0
+        if args.command == "install":
+            try:
+                settings = load_settings(config_path=args.config)
+            except ConfigError as exc:
+                if str(exc) != "DATABASE_URL is required":
+                    raise
+                os.environ.setdefault(
+                    "DATABASE_URL",
+                    "postgresql+asyncpg://apipi:apipi@127.0.0.1:1/apipi",
+                )
+                settings = load_settings(config_path=args.config)
+            return install_pi(settings, force=args.force, dry_run=args.dry_run)
+        if args.command == "check":
+            return check_ready(
+                config_path=args.config,
+                skip_db=args.skip_db,
+                skip_model=args.skip_model,
+                fast=args.fast,
+            )
         if args.command == "serve":
             serve(host=args.host, port=args.port, config_path=args.config)
             return 0
