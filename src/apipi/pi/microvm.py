@@ -81,20 +81,37 @@ def microvm_net_binaries() -> tuple[str, str, str]:
     return ip, iptables, tc
 
 
+def microvm_image_name(settings: Settings | None = None) -> str:
+    if settings is not None:
+        return settings.microvm_image
+    raw = os.environ.get("APIPI_MICROVM_IMAGE", "default")
+    image = raw.strip() or "default"
+    if image not in {"default", "browser"}:
+        raise ConfigError("APIPI_MICROVM_IMAGE must be default or browser")
+    return image
+
+
 def microvm_images(settings: Settings | None = None) -> tuple[str, str]:
-    kernel = None
-    rootfs = None
     if settings is not None:
         kernel = settings.microvm_kernel
-        rootfs = settings.microvm_rootfs
+        default_rootfs = settings.microvm_rootfs
+        browser_rootfs = settings.microvm_rootfs_browser
     else:
         kernel = os.environ.get("APIPI_MICROVM_KERNEL")
-        rootfs = os.environ.get("APIPI_MICROVM_ROOTFS")
+        default_rootfs = os.environ.get("APIPI_MICROVM_ROOTFS")
+        browser_rootfs = os.environ.get("APIPI_MICROVM_ROOTFS_BROWSER")
     if not kernel or not Path(kernel).is_file():
         raise ConfigError("APIPI_RUN_MODE=microvm requires APIPI_MICROVM_KERNEL")
-    if not rootfs or not Path(rootfs).is_file():
+    image = microvm_image_name(settings)
+    if image == "browser":
+        if not browser_rootfs or not Path(browser_rootfs).is_file():
+            raise ConfigError(
+                "APIPI_RUN_MODE=microvm requires APIPI_MICROVM_ROOTFS_BROWSER"
+            )
+        return kernel, browser_rootfs
+    if not default_rootfs or not Path(default_rootfs).is_file():
         raise ConfigError("APIPI_RUN_MODE=microvm requires APIPI_MICROVM_ROOTFS")
-    return kernel, rootfs
+    return kernel, default_rootfs
 
 
 def require_microvm(settings: Settings | None = None) -> None:

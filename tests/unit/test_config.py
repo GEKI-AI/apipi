@@ -177,6 +177,33 @@ def test_forward_models_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().forward_models is True
 
 
+def test_microvm_image_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.delenv("APIPI_MICROVM_IMAGE", raising=False)
+    assert Settings().microvm_image == "default"
+    assert Settings().microvm_rootfs_browser is None
+
+
+def test_microvm_image_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_MICROVM_IMAGE", "browser")
+    monkeypatch.setenv("APIPI_MICROVM_ROOTFS_BROWSER", "/tmp/rootfs-browser.ext4")
+    settings = Settings()
+    assert settings.microvm_image == "browser"
+    assert settings.microvm_rootfs_browser == "/tmp/rootfs-browser.ext4"
+
+
+def test_microvm_image_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_MICROVM_IMAGE", "gpu")
+    with pytest.raises(
+        ConfigError, match="APIPI_MICROVM_IMAGE must be default or browser"
+    ):
+        load_settings()
+
+
 def test_otel_endpoint_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_OTEL_ENDPOINT", "http://otel:4318")
@@ -460,6 +487,8 @@ def test_nested_toml_sandbox_and_pi(
         'backend = "microvm"\n'
         'kernel = "/tmp/vmlinux"\n'
         'rootfs = "/tmp/rootfs.ext4"\n'
+        'rootfs_browser = "/tmp/rootfs-browser.ext4"\n'
+        'image = "browser"\n'
         "[sandbox.resources]\n"
         "mem_mib = 1024\n"
         "vcpus = 2\n"
@@ -475,6 +504,8 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.run_mode == "microvm"
     assert settings.microvm_kernel == "/tmp/vmlinux"
     assert settings.microvm_rootfs == "/tmp/rootfs.ext4"
+    assert settings.microvm_rootfs_browser == "/tmp/rootfs-browser.ext4"
+    assert settings.microvm_image == "browser"
     assert settings.microvm_mem_mib == 1024
     assert settings.microvm_vcpus == 2
     assert settings.microvm_egress_allowlist is False

@@ -2,7 +2,7 @@ import asyncio
 import json
 import tarfile
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -28,6 +28,7 @@ from apipi.pi.microvm import (
     jailer_argv,
     microvm_config,
     microvm_egress_hosts,
+    microvm_images,
     require_microvm,
     resolve_host_ips,
     setup_tap,
@@ -46,6 +47,8 @@ def _settings(
     run_mode: str = "microvm",
     kernel: str | None = None,
     rootfs: str | None = None,
+    rootfs_browser: str | None = None,
+    image: Literal["default", "browser"] = "default",
 ) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
@@ -53,6 +56,8 @@ def _settings(
         pi_command="pi",
         microvm_kernel=kernel or str(tmp_path / "vmlinux"),
         microvm_rootfs=rootfs or str(tmp_path / "rootfs.ext4"),
+        microvm_rootfs_browser=rootfs_browser,
+        microvm_image=image,
     )
 
 
@@ -131,6 +136,33 @@ def test_require_microvm_missing_rootfs(
         require_microvm(
             _settings(tmp_path, kernel=str(kernel), rootfs=str(tmp_path / "missing"))
         )
+
+
+def test_microvm_images_default_uses_rootfs(tmp_path: Path) -> None:
+    kernel, rootfs = _images(tmp_path)
+    resolved = microvm_images(_settings(tmp_path))
+    assert resolved == (str(kernel), str(rootfs))
+
+
+def test_microvm_images_browser_uses_browser_rootfs(tmp_path: Path) -> None:
+    kernel, rootfs = _images(tmp_path)
+    browser = tmp_path / "rootfs-browser.ext4"
+    browser.write_bytes(b"b")
+    resolved = microvm_images(
+        _settings(tmp_path, rootfs_browser=str(browser), image="browser")
+    )
+    assert resolved == (str(kernel), str(browser))
+    assert resolved[1] != str(rootfs)
+
+
+def test_microvm_images_browser_missing_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _images(tmp_path)
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
+    with pytest.raises(ConfigError, match="APIPI_MICROVM_ROOTFS_BROWSER"):
+        require_microvm(_settings(tmp_path, image="browser"))
 
 
 def test_require_microvm_missing_ip(

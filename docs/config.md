@@ -202,13 +202,17 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | --- | --- | --- | --- |
 | `APIPI_RUN_MODE` | `[sandbox].backend` | `none` | `none` \| `microvm` \| `package.mod:Class`. |
 | `APIPI_MICROVM_KERNEL` | `[sandbox].kernel` | unset | Guest kernel image. Required when the backend is `microvm`. |
-| `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | unset | Guest rootfs image. Required when the backend is `microvm`. Do not vendor a distro in git. |
+| `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | unset | Guest rootfs for `image = "default"`. Required when the backend is `microvm`. Do not vendor a distro in git. |
+| `APIPI_MICROVM_ROOTFS_BROWSER` | `[sandbox].rootfs_browser` | unset | Guest rootfs for `image = "browser"`. Required when that image is selected. |
+| `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser`. Which rootfs `microvm` boots. Process-wide. Missing path for the selected image exits at startup. |
 
 ```toml
 [sandbox]
 backend = "microvm"
 kernel = "/var/lib/apipi/vmlinux"
 rootfs = "/var/lib/apipi/rootfs.ext4"
+rootfs_browser = "/var/lib/apipi/rootfs-browser.ext4"
+image = "default"
 ```
 
 ```
@@ -300,6 +304,8 @@ auto_compact = true
 backend = "microvm"
 kernel = "/var/lib/apipi/vmlinux"
 rootfs = "/var/lib/apipi/rootfs.ext4"
+rootfs_browser = "/var/lib/apipi/rootfs-browser.ext4"
+image = "default"
 
 [sandbox.resources]
 mem_mib = 512
