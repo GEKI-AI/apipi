@@ -38,7 +38,7 @@ def _start_mcp() -> None:
 
 
 def _pi_args() -> list[str]:
-    root = Path(os.environ.get("HOME", "/tmp/workspace"))
+    root = Path(os.environ.get("HOME", "/workspace"))
     path = root / ".apipi" / "pi-args"
     if path.is_file():
         raw = json.loads(path.read_text())
@@ -79,7 +79,7 @@ def _serve_tar(port: int, build: Callable[[Path], bytes]) -> None:
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((socket.VMADDR_CID_ANY, port))
     sock.listen(8)
-    root = Path(os.environ.get("HOME", "/tmp/workspace"))
+    root = Path(os.environ.get("HOME", "/workspace"))
     while True:
         conn, _ = sock.accept()
         try:
@@ -143,7 +143,7 @@ def _serve_rpc(args: list[str], port: int) -> None:
 
 
 def _run_setup() -> None:
-    root = Path(os.environ.get("HOME", "/tmp/workspace"))
+    root = Path(os.environ.get("HOME", "/workspace"))
     script = root / ".apipi" / "setup.sh"
     done = root / ".apipi" / "setup.done"
     if not script.is_file() or done.is_file():

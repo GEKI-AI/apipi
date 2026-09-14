@@ -4,17 +4,24 @@ mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 mount -t tmpfs tmpfs /tmp
+WS=/workspace
+if [ -d "$WS" ]; then
+  mount -t tmpfs tmpfs "$WS"
+else
+  WS=/tmp/workspace
+  mkdir -p "$WS"
+fi
 if command -v ip >/dev/null 2>&1; then
   ip link set lo up 2>/dev/null || true
 elif command -v ifconfig >/dev/null 2>&1; then
   ifconfig lo up 2>/dev/null || true
 fi
-mkdir -p /tmp/workspace
+mkdir -p "$WS"
 if [ -b /dev/vdb ]; then
-  tar -xf /dev/vdb -C /tmp/workspace
+  tar -xf /dev/vdb -C "$WS"
 fi
-if [ -f /tmp/workspace/.apipi/net ]; then
-  . /tmp/workspace/.apipi/net
+if [ -f "$WS/.apipi/net" ]; then
+  . "$WS/.apipi/net"
   if command -v ip >/dev/null 2>&1; then
     ip link set eth0 up 2>/dev/null || true
     ip addr add "${GUEST_IP}/${GUEST_PREFIX}" dev eth0 2>/dev/null || true
@@ -26,28 +33,28 @@ if [ -f /tmp/workspace/.apipi/net ]; then
   printf "nameserver %s\nnameserver %s\n" "${GUEST_DNS:-1.1.1.1}" "${GUEST_DNS2:-8.8.8.8}" > /tmp/resolv.conf
   cp /tmp/resolv.conf /etc/resolv.conf 2>/dev/null || mount --bind /tmp/resolv.conf /etc/resolv.conf 2>/dev/null || true
 fi
-cd /tmp/workspace
-if [ -f /tmp/workspace/.apipi/env ]; then
+cd "$WS"
+if [ -f "$WS/.apipi/env" ]; then
   set -a
-  . /tmp/workspace/.apipi/env
+  . "$WS/.apipi/env"
   set +a
 fi
-export HOME=/tmp/workspace
-if [ -f /tmp/workspace/.apipi/setup.sh ] && [ ! -f /tmp/workspace/.apipi/setup.done ]; then
-  if ! /bin/sh /tmp/workspace/.apipi/setup.sh > /tmp/workspace/.apipi/setup.log 2>&1; then
+export HOME="$WS"
+if [ -f "$WS/.apipi/setup.sh" ] && [ ! -f "$WS/.apipi/setup.done" ]; then
+  if ! /bin/sh "$WS/.apipi/setup.sh" > "$WS/.apipi/setup.log" 2>&1; then
     echo "environment setup failed" >&2
-    cat /tmp/workspace/.apipi/setup.log >&2
+    cat "$WS/.apipi/setup.log" >&2
     exit 1
   fi
-  echo ok > /tmp/workspace/.apipi/setup.done
+  echo ok > "$WS/.apipi/setup.done"
 fi
-if [ -f /tmp/workspace/.apipi/guest.py ] && command -v python3 >/dev/null 2>&1; then
-  exec python3 /tmp/workspace/.apipi/guest.py
+if [ -f "$WS/.apipi/guest.py" ] && command -v python3 >/dev/null 2>&1; then
+  exec python3 "$WS/.apipi/guest.py"
 fi
 if command -v socat >/dev/null 2>&1; then
   cmd="pi --mode rpc --no-session"
-  if [ -f /tmp/workspace/.apipi/pi-cmd ]; then
-    cmd=$(cat /tmp/workspace/.apipi/pi-cmd)
+  if [ -f "$WS/.apipi/pi-cmd" ]; then
+    cmd=$(cat "$WS/.apipi/pi-cmd")
   fi
   exec socat VSOCK-LISTEN:52,reuseaddr EXEC:"$cmd",stderr
 fi

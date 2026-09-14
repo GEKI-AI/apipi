@@ -966,6 +966,7 @@ async def run_turn(
         model: str | None
         instructions: str | None
         computer: Computer | None
+        env_type: str | None
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
@@ -994,6 +995,7 @@ async def run_turn(
                 else None
             )
             skill_dirs = _skill_dirs(row.environment)
+            env_type = row.environment.get("type")
             await update_session(
                 db,
                 tenant_id,
@@ -1065,6 +1067,7 @@ async def run_turn(
                     instructions=instructions,
                     api_key=api_key,
                     key_id=key_id,
+                    env_type=env_type,
                 )
                 try:
                     if turn_timeout is None:
@@ -1208,6 +1211,7 @@ async def continue_turn(
     model: str | None = None
     instructions: str | None = None
     computer: Computer | None
+    env_type: str | None
     async with store.session() as db:
         row = await get_session(db, tenant_id, session_id)
         if row is None:
@@ -1277,6 +1281,7 @@ async def continue_turn(
             require_listed_model(model, ids)
             write_pi_models_json(settings, ids)
         skill_dirs = _skill_dirs(row.environment)
+        env_type = row.environment.get("type")
         result = {
             "call_id": call_id,
             "success": success,
@@ -1315,6 +1320,7 @@ async def continue_turn(
                 instructions=instructions,
                 api_key=api_key,
                 key_id=key_id,
+                env_type=env_type,
             )
             try:
                 if turn_timeout is None:

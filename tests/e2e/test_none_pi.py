@@ -160,7 +160,7 @@ async def test_idle_ttl_kills_pi_session_stays(
     session_id = uuid.UUID(created.json()["id"])
     pool = none_app.state.pi_pool
     assert pool.alive(session_id)
-    pool.settings.idle_ttl = timedelta(seconds=0)
+    pool.settings.workspace_ttl = timedelta(seconds=0)
     await pool.reap()
     assert not pool.alive(session_id)
     got = await none_client.get(

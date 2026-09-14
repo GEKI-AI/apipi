@@ -19,7 +19,7 @@ from apipi.store.engine import Store
 pytestmark = [pytest.mark.e2e, pytest.mark.microvm]
 
 _FAKE_PI = Path(__file__).resolve().parents[1] / "support" / "fake_pi.py"
-_GUEST_FAKE_PI = "/tmp/workspace/fake_pi.py"
+_GUEST_FAKE_PI = "/workspace/fake_pi.py"
 
 
 def _auth(token: str) -> dict[str, str]:

@@ -1,9 +1,17 @@
+from datetime import timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
 
+from apipi.config import Settings
 from apipi.env.setup import SetupError
+from apipi.pi.artifacts import reap_workspaces
+from apipi.pi.pool import PiPool
+from apipi.store.engine import Store
+from apipi.store.models import utc_now
+from apipi.store.repo import get_session_by_id
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -154,3 +162,47 @@ async def test_unimplemented_env_fields(client: AsyncClient) -> None:
         error = response.json()["error"]
         assert error["type"] == "not_implemented"
         assert error["code"] == field
+
+
+async def test_sandbox_ttl_wipes_scratch_and_rehydrates(
+    client: AsyncClient,
+    store: Store,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(workspace: Path) -> None:
+        (workspace / "ready.txt").write_text("ok")
+
+    monkeypatch.setattr("apipi.env.setup.run_host_setup", fake_run)
+    token = "sandbox-ttl"
+    agent_id = await _agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {
+                "type": "openai_hosted",
+                "setup_commands": [{"command": "mkdir -p reports"}],
+            },
+        },
+    )
+    assert created.status_code == 200
+    session_id = created.json()["id"]
+    directory = Path(created.json()["environment"]["directory"])
+    (directory / "scratch.txt").write_text("gone")
+    async with store.session() as db:
+        row = await get_session_by_id(db, UUID(session_id))
+        assert row is not None
+        row.updated_at = utc_now() - timedelta(hours=2)
+    await reap_workspaces(settings, store, PiPool(settings))
+    assert not directory.exists()
+    follow = await client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(token),
+        json={"type": "agent.session.input.message", "text": "hello"},
+    )
+    assert follow.status_code == 200
+    assert not (directory / "scratch.txt").exists()
+    assert (directory / "ready.txt").read_text() == "ok"
+    assert (directory / ".apipi" / "setup.sh").is_file()

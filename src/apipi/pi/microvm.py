@@ -30,7 +30,7 @@ MEM_MIB = 512
 VCPU_COUNT = 1
 CONNECT_TIMEOUT = 30.0
 BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/apipi-guest"
-GUEST_WORKSPACE = "/tmp/workspace"
+GUEST_WORKSPACE = "/workspace"
 GUEST_DNS = ("1.1.1.1", "8.8.8.8")
 TAP_NET_BASE = 0xAC100000
 TAP_NET_SLOTS = 16384
@@ -260,7 +260,7 @@ def guest_env(
     api_key: str | None = None,
 ) -> dict[str, str]:
     env = pi_env(settings, mcp_http, mcp_stdio, api_key=api_key)
-    env["PI_CODING_AGENT_DIR"] = "/tmp/workspace/.pi/agent"
+    env["PI_CODING_AGENT_DIR"] = f"{GUEST_WORKSPACE}/.pi/agent"
     return {
         key: value
         for key, value in env.items()

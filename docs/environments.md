@@ -34,17 +34,19 @@ gateway's working directory.
 
 In isolation `none` this is a folder on the host. It is not a security
 boundary. In `microvm`, that folder is packed into a workspace drive
-at boot, unpacked onto a guest tmpfs, and is the guest cwd. Before the
-guest exits, those writes are pulled back to the host folder.
+at boot and unpacked onto a guest tmpfs at `/workspace`. Published
+artifacts are harvested when a turn completes. Scratch files do not
+survive sandbox stop.
 
-Session rows live in the store. Environment files are the computer.
-The `openai_hosted` directory lasts across Pi stop until
-`APIPI_WORKSPACE_TTL` or session delete. That directory is also
-bounded by `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB). Artifact
-metadata is in the store; artifact bytes are copied to the gateway host
-when a turn completes, up to `APIPI_MAX_ARTIFACT_BYTES` (default
-512MiB) per session. See [run modes](run-modes.md#storage) and
-[config](config.md).
+Session rows live in the store. The `openai_hosted` workspace is
+ephemeral: after `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour)
+with no activity, Pi stops and the directory is deleted. Transcript
+and published artifacts stay. The next turn creates an empty
+`/workspace` and re-applies skills, packages, and setup commands. The
+directory is bounded by `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB).
+Artifact bytes are copied to the gateway host when a turn completes,
+up to `APIPI_MAX_ARTIFACT_BYTES` (default 512MiB) per session. See
+[run modes](run-modes.md#storage) and [config](config.md).
 
 There is no runner socket. The directory is created when the session is
 created. File tools (read, write, edit, bash) run against that folder.

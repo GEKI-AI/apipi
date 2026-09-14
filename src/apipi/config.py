@@ -66,6 +66,10 @@ _SANDBOX_NETWORK_TOML = {
     "egress_hosts": "microvm_egress_hosts",
     "egress_mbit": "microvm_egress_mbit",
 }
+_SANDBOX_TTL_TOML = {
+    "openai_hosted": "workspace_ttl",
+    "self_hosted": "sandbox_ttl_self_hosted",
+}
 _LEGACY_FLAT_TOML = {
     "run_mode": "[sandbox].backend",
     "pi_command": "[pi].command",
@@ -199,9 +203,13 @@ def parse_optional_ttl(value: object) -> object:
     if value is None:
         return None
     if isinstance(value, timedelta):
+        if value.total_seconds() <= 0:
+            return None
         return value
-    if isinstance(value, str) and not value.strip():
-        return None
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"", "0", "off", "false", "no"}:
+            return None
     return parse_ttl(value)
 
 
@@ -331,9 +339,20 @@ class Settings(BaseSettings):
         default=timedelta(minutes=15),
         validation_alias=AliasChoices("APIPI_IDLE_TTL", "idle_ttl"),
     )
-    workspace_ttl: IdleTtl = Field(
+    workspace_ttl: OptionalTtl = Field(
         default=timedelta(hours=1),
-        validation_alias=AliasChoices("APIPI_WORKSPACE_TTL", "workspace_ttl"),
+        validation_alias=AliasChoices(
+            "APIPI_SANDBOX_TTL_OPENAI_HOSTED",
+            "sandbox_ttl_openai_hosted",
+            "APIPI_WORKSPACE_TTL",
+            "workspace_ttl",
+        ),
+    )
+    sandbox_ttl_self_hosted: OptionalTtl = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "APIPI_SANDBOX_TTL_SELF_HOSTED", "sandbox_ttl_self_hosted"
+        ),
     )
     max_sessions: int = Field(
         default=32,
@@ -564,6 +583,18 @@ class Settings(BaseSettings):
             raise ValueError(str(exc)) from exc
         return self
 
+    def sandbox_ttl_for(self, env_type: str | None) -> timedelta | None:
+        if env_type in {"openai_hosted", "hosted"}:
+            return self.workspace_ttl
+        if env_type == "self_hosted":
+            return self.sandbox_ttl_self_hosted
+        return None
+
+    def pi_idle_ttl_for(self, env_type: str | None) -> timedelta | None:
+        if env_type in {"openai_hosted", "hosted"}:
+            return self.workspace_ttl
+        return self.idle_ttl
+
 
 def _flag_on(value: str) -> bool:
     return value.strip().lower() not in _FLAG_OFF
@@ -622,6 +653,14 @@ def _flatten_sandbox(table: dict[str, Any]) -> dict[str, Any]:
                     _require_table(value, "[sandbox.network]"),
                     _SANDBOX_NETWORK_TOML,
                     "sandbox.network",
+                )
+            )
+        elif key == "ttl":
+            out.update(
+                _map_table(
+                    _require_table(value, "[sandbox.ttl]"),
+                    _SANDBOX_TTL_TOML,
+                    "sandbox.ttl",
                 )
             )
         elif key in _SANDBOX_TOML:
@@ -718,8 +757,15 @@ def _settings_message(exc: ValidationError) -> str:
             return RUN_MODE_HELP
         if "idle_ttl" in loc or "APIPI_IDLE_TTL" in loc:
             return "APIPI_IDLE_TTL must be like 15m"
-        if "workspace_ttl" in loc or "APIPI_WORKSPACE_TTL" in loc:
-            return "APIPI_WORKSPACE_TTL must be like 15m"
+        if (
+            "workspace_ttl" in loc
+            or "APIPI_WORKSPACE_TTL" in loc
+            or "sandbox_ttl_openai_hosted" in loc
+            or "APIPI_SANDBOX_TTL_OPENAI_HOSTED" in loc
+        ):
+            return "APIPI_SANDBOX_TTL_OPENAI_HOSTED must be like 15m or 0"
+        if "sandbox_ttl_self_hosted" in loc or "APIPI_SANDBOX_TTL_SELF_HOSTED" in loc:
+            return "APIPI_SANDBOX_TTL_SELF_HOSTED must be like 15m or 0"
         if "turn_timeout" in loc:
             return "APIPI_TURN_TIMEOUT must be like 15m"
         if "auth_cache_ttl" in loc:

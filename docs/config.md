@@ -20,7 +20,7 @@ The example file in this repo is `examples/apipi.toml`. Copy
 
 Environment variables win. `.env` wins over TOML. Unknown TOML keys
 fail at startup. Nested tables are `[pi]`, `[sandbox]`,
-`[sandbox.resources]`, and `[sandbox.network]`. A setting that would
+`[sandbox.resources]`, `[sandbox.network]`, and `[sandbox.ttl]`. A setting that would
 store prompt or completion bodies is rejected at startup.
 
 `--host` and `--port` on `apipi serve` override the bind from config.
@@ -51,8 +51,9 @@ handlers, and `artifact_store` for local or S3 artifact bytes.
 | `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
 | `APIPI_LOG_FORMAT` | `log_format` | `json` | `json` (one object per line on stderr) or `text` (laptop). |
-| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process to free RAM. The session row and `openai_hosted` directory stay. Resume from the event log. |
-| `APIPI_WORKSPACE_TTL` | `workspace_ttl` | `1h` | Delete an `openai_hosted` directory after this long with no session activity, and only if Pi is already gone. Transcript and published artifacts stay. |
+| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process for `none` and `self_hosted` sessions to free RAM. Hosted computers use the sandbox TTL instead. |
+| `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | `[sandbox.ttl].openai_hosted` | `1h` | Stop Pi and delete the `openai_hosted` workspace after this idle. Transcript and published artifacts stay. `0` turns the timer off. `APIPI_WORKSPACE_TTL` / `workspace_ttl` is an alias. |
+| `APIPI_SANDBOX_TTL_SELF_HOSTED` | `[sandbox.ttl].self_hosted` | `0` (off) | Idle policy for `self_hosted`. The gateway cannot delete files on the runner. `0` means off. |
 | `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | `max_sessions_per_tenant` | `32` | Live Pi processes for one tenant. A new turn that would pass the cap returns `429` with code `capacity_tenant`. The node cap still applies. |
 | `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Cancel a stuck turn. |
@@ -95,7 +96,6 @@ port = 8000
 log_level = "info"
 log_format = "json"
 idle_ttl = "15m"
-workspace_ttl = "1h"
 max_sessions = 32
 max_sessions_per_tenant = 32
 turn_timeout = "10m"
@@ -259,6 +259,14 @@ egress_hosts = ["mcp.tavily.com"]
 egress_mbit = 50
 ```
 
+### Lifetime
+
+```toml
+[sandbox.ttl]
+openai_hosted = "1h"
+self_hosted = "0"
+```
+
 ## Dev and production files
 
 A local checkout can use TOML for structure and `.env` for secrets:
@@ -314,6 +322,10 @@ vcpus = 1
 [sandbox.network]
 egress_allowlist = true
 egress_mbit = 50
+
+[sandbox.ttl]
+openai_hosted = "1h"
+self_hosted = "0"
 ```
 
 ## Compatibility

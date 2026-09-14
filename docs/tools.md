@@ -84,7 +84,7 @@ ApiPi does the same. Pi already loads this format. On
 `openai_hosted`, listed directories that sit outside the workspace are
 copied into it when the session is created. In `microvm`, skill
 directories from that workspace are packed into the guest and
-`--skill` paths are rewritten to `/tmp/workspace`.
+`--skill` paths are rewritten to `/workspace`.
 
 Also discovered, if present on the workspace:
 

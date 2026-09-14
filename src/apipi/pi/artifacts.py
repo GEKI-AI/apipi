@@ -4,7 +4,7 @@ import mimetypes
 import shutil
 import tarfile
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -334,7 +334,7 @@ async def reap_workspaces(
     now: datetime | None = None,
 ) -> None:
     current = _utc(now or utc_now())
-    ttl: timedelta = settings.workspace_ttl
+    ttl = settings.workspace_ttl
     root = sessions_root(settings)
     for tenant_dir in root.iterdir():
         if not tenant_dir.is_dir() or tenant_dir.name.startswith("."):
@@ -357,12 +357,19 @@ async def reap_workspaces(
             if row is None:
                 wipe_workspace(session_dir)
                 continue
+            env_type = row.environment.get("type")
+            if env_type != "openai_hosted":
+                continue
+            if ttl is None:
+                continue
             if current - _utc(row.updated_at) >= ttl:
                 wipe_workspace(session_dir)
 
 
 async def reap_workspace_loop(settings: Settings, store: Store, pool: PiPool) -> None:
-    interval = min(1.0, max(0.02, settings.workspace_ttl.total_seconds() / 5))
+    ttl = settings.workspace_ttl
+    seconds = ttl.total_seconds() if ttl is not None else 15.0
+    interval = min(1.0, max(0.02, seconds / 5))
     while True:
         await asyncio.sleep(interval)
         await reap_workspaces(settings, store, pool)

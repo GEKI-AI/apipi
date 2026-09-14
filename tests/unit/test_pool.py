@@ -1,4 +1,6 @@
+import time
 import uuid
+from datetime import timedelta
 from typing import Any, cast
 
 import pytest
@@ -102,3 +104,42 @@ async def test_pool_treats_empty_instructions_as_none(
     await pool.get(session_id, cwd=None, tools=True, instructions=None)
     await pool.get(session_id, cwd=None, tools=True, instructions="")
     assert spawned == [None]
+
+
+async def test_hosted_reap_uses_sandbox_ttl() -> None:
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+            idle_ttl=timedelta(seconds=1),
+            workspace_ttl=timedelta(hours=1),
+        )
+    )
+    hosted = uuid.uuid4()
+    other = uuid.uuid4()
+    pool._procs[hosted] = cast(PiProc, _Proc())
+    pool._procs[other] = cast(PiProc, _Proc())
+    pool._env_types[hosted] = "openai_hosted"
+    pool._env_types[other] = "none"
+    pool._last[hosted] = time.monotonic() - 30
+    pool._last[other] = time.monotonic() - 30
+    await pool.reap()
+    assert hosted in pool._procs
+    assert other not in pool._procs
+
+
+async def test_hosted_reap_kills_after_sandbox_ttl() -> None:
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+            idle_ttl=timedelta(hours=24),
+            workspace_ttl=timedelta(seconds=1),
+        )
+    )
+    hosted = uuid.uuid4()
+    pool._procs[hosted] = cast(PiProc, _Proc())
+    pool._env_types[hosted] = "openai_hosted"
+    pool._last[hosted] = time.monotonic() - 30
+    await pool.reap()
+    assert hosted not in pool._procs

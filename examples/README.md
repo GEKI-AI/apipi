@@ -126,6 +126,6 @@ session. `GET /v1/models` on the gateway must be enabled
 (`APIPI_FORWARD_MODELS`, on by default).
 
 Artifact bytes exist after a turn completes. Files under `artifacts/`
-and `outputs/` are copied into the host store then. Idle Pi TTL is
-`APIPI_IDLE_TTL` (default 15 minutes). The workspace lasts until
-`APIPI_WORKSPACE_TTL` (default 1 hour).
+and `outputs/` are copied into the host store then. Idle Pi TTL for `none` and `self_hosted` is `APIPI_IDLE_TTL`
+(default 15 minutes). A hosted workspace lasts until
+`APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour).
