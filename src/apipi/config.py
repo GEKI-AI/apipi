@@ -27,7 +27,9 @@ UsageStore = Literal["off", "rollups", "turns"]
 BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "microvm"})
 
 NONE_MODE_WARNING = "APIPI_RUN_MODE=none is not suited for production"
-SQLITE_WARNING = "SQLite is for local single-process use. Use Postgres in production."
+SQLITE_WARNING = (
+    "SQLite is for one process. Do not share the file across processes or nodes."
+)
 RUN_MODE_HELP = "APIPI_RUN_MODE must be none, microvm, or package.mod:Class"
 USAGE_STORE_OFF = "usage store off"
 USAGE_STORE_ROLLUPS = "usage store rollups"

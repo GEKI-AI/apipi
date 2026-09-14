@@ -2,7 +2,7 @@
 
 Agents, sessions, the computer, and artifacts are the pieces the
 gateway keeps in the durable store (and, for files, on disk or object
-storage). Local tries use SQLite. Production uses Postgres.
+storage). One process uses SQLite. Several processes share Postgres.
 
 ## Agents
 

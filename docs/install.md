@@ -1,8 +1,9 @@
 # Install and run
 
 There are two paths. **Try it** is a laptop: SQLite in the current
-directory, isolation `none`, no Docker. **Production** is Postgres,
-`APIPI_RUN_MODE=microvm`, and the rest of this page.
+directory, isolation `none`, no Docker. **Production** isolation is
+`APIPI_RUN_MODE=microvm`. One process can keep SQLite. Several
+processes share Postgres.
 
 Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model
 host URL. The gateway pins Pi 0.85.1. `apipi install` installs that
@@ -45,9 +46,10 @@ From a checkout (contributors): `uv sync`, then prefix commands with
 
 ## Production store
 
-Production uses Postgres. A Compose file at the repo root starts
-Postgres 17 (user `apipi`, password `apipi`, database `apipi`) on port
-5432:
+One `apipi serve` can keep SQLite. File SQLite uses WAL and foreign
+keys. Several processes, or HA, use Postgres. A Compose file at the
+repo root starts Postgres 17 (user `apipi`, password `apipi`, database
+`apipi`) on port 5432:
 
 ```
 docker compose up -d postgres

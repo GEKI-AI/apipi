@@ -30,8 +30,9 @@ apipi serve
 That uses SQLite at `.apipi/apipi.db` and binds `0.0.0.0:8000`. Isolation
 defaults to `none` (Pi as a child process). `OPENAI_BASE_URL` on the
 gateway is the **model** host, not this API. The client bearer is the
-model key unless you set `OPENAI_API_KEY_OVERWRITE`. Production uses
-Postgres and Firecracker:
+model key unless you set `OPENAI_API_KEY_OVERWRITE`. Production
+isolation is Firecracker. One process can keep SQLite; several
+processes share Postgres:
 
 ```
 APIPI_RUN_MODE=microvm apipi serve

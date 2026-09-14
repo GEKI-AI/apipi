@@ -37,11 +37,11 @@ boundary. In `microvm`, that folder is packed into a workspace drive
 at boot, unpacked onto a guest tmpfs, and is the guest cwd. Before the
 guest exits, those writes are pulled back to the host folder.
 
-Session rows live in Postgres. Environment files are the computer.
+Session rows live in the store. Environment files are the computer.
 The `openai_hosted` directory lasts across Pi stop until
 `APIPI_WORKSPACE_TTL` or session delete. That directory is also
 bounded by `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB). Artifact
-metadata is in Postgres; artifact bytes are copied to the gateway host
+metadata is in the store; artifact bytes are copied to the gateway host
 when a turn completes, up to `APIPI_MAX_ARTIFACT_BYTES` (default
 512MiB) per session. See [run modes](run-modes.md#storage) and
 [config](config.md).

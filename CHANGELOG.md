@@ -11,14 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `apipi install` installs the pinned Pi CLI. `apipi check` verifies
   requirements without binding HTTP.
-- Unset `DATABASE_URL` uses SQLite at `.apipi/apipi.db`. Postgres
-  remains the production store. `apipi migrate` applies schema;
-  `apipi serve` does not.
+- Unset `DATABASE_URL` uses SQLite at `.apipi/apipi.db`. SQLite is
+  enough for one process. Postgres when the store is shared.
+  `apipi migrate` applies schema; `apipi serve` does not.
 
 ### Changed
 
 - `output_text.delta` is live SSE only. It is not stored. Reconnect
   and export use `output_text.done` and items.
+- File SQLite uses WAL. Production docs list when Postgres is
+  required.
 
 ## [0.1.0] - 2026-09-14
 

@@ -29,7 +29,7 @@ Code comments stay omitted unless asked.
 | --- | --- |
 | `src/apipi/api/` | HTTP routes |
 | `src/apipi/schemas.py` | Public types |
-| `src/apipi/store/` | Postgres |
+| `src/apipi/store/` | Durable store |
 | `src/apipi/pi/` | Harness adapter |
 | `src/apipi/auth.py` | Auth callback |
 | `docs/` | Product and operator docs. Read the page for the part you are changing. |
@@ -43,7 +43,8 @@ Before code, read the `docs/` page for the part you are changing.
 
 ## Stack
 
-Python 3.13, FastAPI, Postgres (production) or SQLite (local). uv
+Python 3.13, FastAPI, SQLite (one process) or Postgres (shared
+store). uv
 only. PyPI name `geki-apipi`;
 import and CLI `apipi`. Pi via RPC, one process per
 session. Run mode `APIPI_RUN_MODE` (`none` \| `microvm`, or

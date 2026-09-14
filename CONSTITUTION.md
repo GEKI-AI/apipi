@@ -10,8 +10,8 @@ file rarely. Edit in place. Do not keep an amendment log.
 
 2. **The durable store is the source of truth.**
    The event log is the transcript. Pi's files are a cache.
-   Postgres is the production store. SQLite is allowed for local
-   single-process use.
+   SQLite is enough for one process. Postgres when more than one
+   process shares the store, or you need HA or pooling.
 
 3. **The computer is replaceable.**
     none, local directory, or `self_hosted`. Independent of run mode
