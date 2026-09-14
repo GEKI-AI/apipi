@@ -99,11 +99,10 @@ enough for untrusted multi-tenant computers; hardware virt is. The
 gateway never enters the guest. Pi, stdio MCP, and local file tools
 boot inside it. The session directory
 (`environment.openai_hosted`) is packed into a workspace drive at
-boot, unpacked onto a guest tmpfs, and is the guest cwd. Before the
-guest exits, those writes are pulled back to the host folder.
-Skill directories from that workspace are packed with it, and
-`--skill` paths are rewritten to `/tmp/workspace` so Pi inside the
-guest can load them.
+boot, unpacked onto a guest tmpfs at `/workspace`, and is the guest
+cwd. Scratch files do not survive sandbox stop. Skill directories from
+that workspace are packed with it, and `--skill` paths are rewritten
+to `/workspace` so Pi inside the guest can load them.
 
 RPC is JSON lines over vsock. The gateway does not pipe host stdin
 into the guest process tree. The Pi adapter still sends the same
@@ -160,17 +159,18 @@ OpenTelemetry are exports. See [usage](usage.md) and
 [run modes](run-modes.md#storage).
 
 Pi JSONL is a cache. Do not read it to serve the API. The
-`openai_hosted` workspace lasts across Pi stop until
-`APIPI_WORKSPACE_TTL` (default 1 hour) with no session activity, or
-until the session is deleted.
+`openai_hosted` workspace is ephemeral: after
+`APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour) with no activity,
+Pi stops and the directory is deleted, or the session is deleted.
 
-One Pi process or guest per session. After the idle TTL
-(`APIPI_IDLE_TTL`, default 15 minutes), kill the process. That does
-not delete the workspace. Files under `artifacts/` and `outputs/` are
+One Pi process or guest per session. Hosted computers use the sandbox
+TTL. `none` and `self_hosted` sessions use `APIPI_IDLE_TTL` (default
+15 minutes) to free RAM. Files under `artifacts/` and `outputs/` are
 copied to the host store when a turn completes. The session row
-stays. Resume from the event log. Live processes are capped by
-`APIPI_MAX_SESSIONS` and `APIPI_MAX_SESSIONS_PER_TENANT`. Workspace
-and artifact bytes are capped per session. See [config](config.md).
+stays. Resume from the event log; hosted scratch files do not. Live
+processes are capped by `APIPI_MAX_SESSIONS` and
+`APIPI_MAX_SESSIONS_PER_TENANT`. Workspace and artifact bytes are
+capped per session. See [config](config.md).
 
 Cross-tenant IDs return `404`, not `403`. Live Pi and the local
 workspace stay on the node that created the session. Published

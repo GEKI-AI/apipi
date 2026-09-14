@@ -4,7 +4,6 @@ port = 8000
 log_level = "info"
 log_format = "json"
 idle_ttl = "15m"
-workspace_ttl = "1h"
 max_sessions = 32
 max_sessions_per_tenant = 32
 turn_timeout = "10m"
@@ -33,3 +32,7 @@ vcpus = 1
 egress_allowlist = true
 egress_hosts = []
 egress_mbit = 50
+
+[sandbox.ttl]
+openai_hosted = "1h"
+self_hosted = "0"

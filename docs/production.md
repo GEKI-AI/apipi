@@ -25,7 +25,7 @@ guest RAM rather than packing more 512 MiB guests.
 
 Leave disk for `APIPI_SESSIONS_DIR`: each `openai_hosted` directory is
 capped at `APIPI_MAX_WORKSPACE_BYTES` (default 1 GiB) and lasts until
-`APIPI_WORKSPACE_TTL` after Pi has already stopped. Local artifact
+sandbox TTL. Local artifact
 bytes add up to `APIPI_MAX_ARTIFACT_BYTES` (default 512 MiB) per
 session unless you set `APIPI_ARTIFACT_STORE=s3`.
 
@@ -84,7 +84,7 @@ Postgres on another host. `APIPI_RUN_MODE=microvm`. Default guest RAM
 | Ceiling | (64 − 8) / 0.5 ≈ **110** live at 512 MiB. That is the wall, not a starting point. |
 | Playwright / Chromium | Boot the **browser** rootfs (`APIPI_MICROVM_IMAGE=browser`) and raise `APIPI_MICROVM_MEM_MIB` to **1024–2048**. Then about **24–48** live on this box. 512 MiB is for Pi and light tools. |
 | CPU | 48 × 1 vCPU on 12 cores is normal while turns wait on the model URL. Keep `APIPI_MICROVM_VCPUS=1` unless the computer is CPU-heavy. |
-| Disk | Workspaces persist after Pi stop until `workspace_ttl` (default 1 hour), capped at 1 GiB each. Local artifacts 512 MiB per session unless S3. Worst case is cap × live-and-idle directories, not typical use. |
+| Disk | Hosted workspaces last until sandbox TTL (default 1 hour), capped at 1 GiB each. Local artifacts 512 MiB per session unless S3. Worst case is cap × live-and-idle directories, not typical use. |
 | NIC | Each guest TAP is 50 Mbit. 48 guests all saturated ≈ 2.4 Gbit. That is the ceiling, not the plan. |
 
 On a shared node set `APIPI_MAX_SESSIONS_PER_TENANT` lower than the
@@ -100,7 +100,7 @@ elsewhere and is not capped here.
 | --- | --- | --- |
 | Guest RAM | **No.** Size `max_sessions` so `max_sessions × microvm_mem_mib` plus the host reserve fits. | Each live session is a Firecracker guest with that RAM. There is no balloon device. The guest kernel usually touches the memory. `max_sessions` is a hard cap, not a hint. |
 | CPU | **Yes.** Default 1 vCPU per guest. | Turns mostly wait on the model URL. Watch host load, not the vCPU count. Raise `microvm_vcpus` only if the computer is CPU-heavy (builds, Playwright). |
-| Disk | Caps are maxima, not reservations. | `max_workspace_bytes` and `max_artifact_bytes` are per session. Summing them is worst case. Idle workspaces last until `workspace_ttl`. Provision for typical use and alert before the disk fills; a burst can still hit the caps. S3 moves artifact bytes off the node. |
+| Disk | Caps are maxima, not reservations. | `max_workspace_bytes` and `max_artifact_bytes` are per session. Summing them is worst case. Hosted workspaces last until sandbox TTL. Provision for typical use and alert before the disk fills; a burst can still hit the caps. S3 moves artifact bytes off the node. |
 | NIC | Same as disk. | Each TAP is capped at 50 Mbit. All guests saturating at once is unlikely. |
 | Stored sessions | **Yes, by design.** | Postgres rows are not live Pi. Idle TTL frees RAM; the thread stays. Many stored sessions on one 64 GiB box is fine. Only live guests count. |
 
@@ -134,8 +134,8 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_MAX_SESSIONS` | Live Pi on this node. Hard cap (`429` `capacity`). |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | Live Pi for one tenant (`429` `capacity_tenant`). |
 | `APIPI_MICROVM_MEM_MIB` / `APIPI_MICROVM_VCPUS` | Guest RAM and vCPUs. Raise RAM for Playwright. Keep 1 vCPU unless the computer is CPU-heavy. |
-| `APIPI_IDLE_TTL` | Kill idle Pi (default 15 minutes) and free a live slot. |
-| `APIPI_WORKSPACE_TTL` | Delete the local directory after Pi is already gone (default 1 hour). |
+| `APIPI_IDLE_TTL` | Kill idle Pi for `none` and `self_hosted` (default 15 minutes) and free a live slot. Hosted computers use sandbox TTL. |
+| `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | Stop hosted Pi and delete the workspace (default 1 hour). |
 | `APIPI_TURN_TIMEOUT` | Cancel a stuck turn (default 10 minutes). |
 | `APIPI_DB_POOL_SIZE` | Postgres connections from this process (default 5). |
 | `APIPI_MAX_REQUEST_BYTES` | HTTP body cap (`413` `payload_too_large`). |

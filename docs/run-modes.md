@@ -121,7 +121,7 @@ machine.
 | Store | What | Where it lives | Lifetime |
 | --- | --- | --- | --- |
 | **Session** | Transcript: events, turns, items, artifact metadata | SQLite for one process; Postgres when the store is shared | Until the session is deleted. A session [export](api.md#export) is the thread. |
-| **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. `self_hosted`: the runner. `none`: no files. | `openai_hosted` lasts across Pi stop until `APIPI_WORKSPACE_TTL` (default 1 hour) with no session activity, or until the session is deleted. Runner files stay on the runner. |
+| **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. Guest cwd is `/workspace`. `self_hosted`: the runner. `none`: no files. | `openai_hosted` is ephemeral: sandbox TTL (default 1 hour) stops Pi and deletes scratch files, or the session is deleted. Runner files stay on the runner. |
 | **Artifacts** | Named outputs the API can fetch | Metadata in the store. Bytes in `APIPI_ARTIFACT_STORE`: local files under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`, or an S3-compatible bucket with the same key layout. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
 
 `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB) caps one `openai_hosted`
@@ -134,14 +134,15 @@ store for one session. Over those caps, harvest emits
 When a turn completes, the gateway copies files under `artifacts/` and
 `outputs/` on that computer into the host store. Copies are immutable.
 `GET` content works before Pi stops. Harvest on Pi stop is a safety
-net for files written after the last completed turn. Killing idle Pi
-does not delete the `openai_hosted` directory. After workspace TTL
-with no activity, that directory is deleted and a later spawn recopies
-skills into a fresh workspace. Isolation `none` reads the session
-directory on the host. `microvm` pulls a workspace tar over vsock
-before the guest exits so the next pack is not empty. `self_hosted`
-reads `artifacts/` and `outputs/` from the runner if it is connected.
-A crash before publish can lose unpublished files.
+net for files written after the last completed turn. After
+`APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour) with no activity,
+Pi stops and the `openai_hosted` directory is deleted. A later turn
+rehydrates skills, packages, and setup commands into a fresh
+`/workspace`. Isolation `none` reads the session directory on the
+host. `microvm` unpacks onto guest `/workspace`. `self_hosted` reads
+`artifacts/` and `outputs/` from the runner if it is connected. A
+crash before publish can lose unpublished files. The gateway cannot
+delete files on a remote runner.
 
 ## `none`
 
@@ -158,10 +159,9 @@ its own kernel, the gateway never enters that guest, and Pi, stdio
 MCP, and local file tools boot inside it.
 
 The session directory is packed into a workspace drive at boot,
-unpacked onto a guest tmpfs, and is the guest cwd. Before the guest
-exits, the gateway pulls the workspace back to the host folder so the
-next pack still has those files. Skill paths from that workspace are
-rewritten to `/tmp/workspace`.
+unpacked onto a guest tmpfs at `/workspace`, and is the guest cwd.
+Scratch files do not survive sandbox stop. Skill paths from that
+workspace are rewritten to `/workspace`.
 
 RPC is JSON lines over vsock. Egress uses a TAP device and NAT. There
 is no host loopback to Postgres. By default that TAP is fail-closed:

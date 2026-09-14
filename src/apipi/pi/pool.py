@@ -23,6 +23,7 @@ class PiPool:
         self._models: dict[uuid.UUID, str | None] = {}
         self._instructions: dict[uuid.UUID, str | None] = {}
         self._key_ids: dict[uuid.UUID, str | None] = {}
+        self._env_types: dict[uuid.UUID, str | None] = {}
         self._lock = asyncio.Lock()
 
     async def get(
@@ -39,6 +40,7 @@ class PiPool:
         instructions: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
+        env_type: str | None = None,
     ) -> PiProc:
         instructions = instructions if instructions else None
         async with self._lock:
@@ -75,8 +77,11 @@ class PiPool:
                 self._models[session_id] = model
                 self._instructions[session_id] = instructions
                 self._key_ids[session_id] = key_id
+                self._env_types[session_id] = env_type
                 if tenant_id is not None:
                     self._tenants[session_id] = tenant_id
+            elif env_type is not None:
+                self._env_types[session_id] = env_type
             self._last[session_id] = time.monotonic()
             return proc
 
@@ -129,6 +134,7 @@ class PiPool:
         self._models.pop(session_id, None)
         self._instructions.pop(session_id, None)
         self._key_ids.pop(session_id, None)
+        self._env_types.pop(session_id, None)
         self._tenants.pop(session_id, None)
         stdio = self._stdio.pop(session_id, None)
         if self.on_kill is not None:
@@ -142,15 +148,30 @@ class PiPool:
         proc = self._procs.get(session_id)
         return proc is not None and proc.alive
 
+    def _ttl_seconds(self, session_id: uuid.UUID) -> float | None:
+        ttl = self.settings.pi_idle_ttl_for(self._env_types.get(session_id))
+        if ttl is None:
+            return None
+        return ttl.total_seconds()
+
     async def reap(self) -> None:
-        ttl = self.settings.idle_ttl.total_seconds()
         now = time.monotonic()
-        idle = [sid for sid, last in self._last.items() if now - last >= ttl]
+        idle = [
+            sid
+            for sid, last in self._last.items()
+            if (ttl := self._ttl_seconds(sid)) is not None and now - last >= ttl
+        ]
         for sid in idle:
             await self.kill(sid)
 
     async def reap_loop(self) -> None:
-        interval = min(1.0, max(0.02, self.settings.idle_ttl.total_seconds() / 5))
+        seconds = [
+            ttl.total_seconds()
+            for ttl in (self.settings.idle_ttl, self.settings.workspace_ttl)
+            if ttl is not None
+        ]
+        base = min(seconds) if seconds else 15.0
+        interval = min(1.0, max(0.02, base / 5))
         while True:
             await asyncio.sleep(interval)
             await self.reap()

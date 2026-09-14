@@ -237,7 +237,7 @@ def create_app(
                 session_id,
                 proc,
                 app.state.env_hub,
-                sync_workspace=True,
+                sync_workspace=False,
                 blobs=app.state.blobs,
             )
 

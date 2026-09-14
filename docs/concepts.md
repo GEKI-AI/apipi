@@ -34,9 +34,13 @@ starts the first turn. Follow-up messages go to
 `POST /v1/agents/sessions/{session_id}/events`. Status is `idle`,
 `in_progress`, `requires_action`, or `failed`.
 
-When Pi is idle for `APIPI_IDLE_TTL` (default 15 minutes), the gateway
-kills that process to free RAM. The session row stays. The next
-message starts Pi again and continues from the event log.
+When a `none` or `self_hosted` session is idle for `APIPI_IDLE_TTL`
+(default 15 minutes), the gateway kills that Pi process to free RAM.
+An `openai_hosted` computer lasts until
+`APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour): Pi stops and the
+workspace is deleted. The session row stays. The next message starts
+Pi again, rebuilds `/workspace` from stored config (skills, packages,
+setup commands), and continues from the event log.
 `GET /v1/agents/sessions/{id}/export` returns the transcript as JSON.
 A session export is enough to leave.
 
@@ -55,15 +59,13 @@ which is where Pi itself runs.
 | `self_hosted` | An external runner. Tools go over a WebSocket. |
 
 On `openai_hosted`, the path is
-`{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}`. Read, write, edit, and
-bash run against that folder. Killing idle Pi does not delete it. The
-next spawn uses the same directory. After `APIPI_WORKSPACE_TTL`
-(default 1 hour) with no session activity, and only if Pi is already
-gone, the gateway deletes that directory. The transcript and published
-artifacts stay. That directory is bounded by
-`APIPI_MAX_WORKSPACE_BYTES` (default 1GiB). Skills listed in
-`capability_directories` are copied in again on the next spawn into a
-fresh workspace.
+`{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}`. In a microVM the guest
+cwd is `/workspace`. Read, write, edit, and bash run against that
+folder. After `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour) with
+no activity, Pi stops and the directory is deleted. The transcript and
+published artifacts stay. The next turn rebuilds `/workspace` from
+stored config. That directory is bounded by
+`APIPI_MAX_WORKSPACE_BYTES` (default 1GiB).
 
 On `self_hosted`, files stay on the runner. The gateway also copies
 `artifacts/` and `outputs/` from the runner on turn complete and on Pi
@@ -105,12 +107,15 @@ until the sandbox goes idle for about an hour. Files under
 `/workspace/outputs` are published as immutable artifacts when a turn
 completes. Those copies remain downloadable after the sandbox expires.
 
-On ApiPi, `openai_hosted` is a folder on your machine next to Pi. Files
-last across turns after Pi stops, until `APIPI_WORKSPACE_TTL` (default
-1 hour) with no session activity. `APIPI_IDLE_TTL` (default 15 minutes)
-only kills the process. When a turn completes, files under
+On ApiPi, `openai_hosted` is a folder on your machine next to Pi. The
+working directory in a microVM guest is `/workspace`. Files last
+across turns until the sandbox is idle for
+`APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour). Then Pi stops and
+scratch files are deleted. When a turn completes, files under
 `artifacts/` and `outputs/` are published as immutable artifacts.
-Those copies remain downloadable after the workspace expires.
+Those copies remain downloadable after the sandbox expires. The next
+turn recopies skills and re-runs packages and setup commands into a
+fresh workspace.
 
 OpenAI's `self_hosted` files stay with your provider and are not
 published through their Artifacts API. Ours stay on the runner the
