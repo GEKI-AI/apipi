@@ -374,6 +374,10 @@ class Settings(BaseSettings):
             "OPENAI_API_KEY_OVERWRITE", "model_api_key_overwrite"
         ),
     )
+    forward_models: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("APIPI_FORWARD_MODELS", "forward_models"),
+    )
     microvm_kernel: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_MICROVM_KERNEL", "microvm_kernel"),
@@ -697,6 +701,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_AUTH_CACHE_TTL must be like 15m"
         if "metrics" in loc:
             return "APIPI_METRICS must be on or off"
+        if "forward_models" in loc or "APIPI_FORWARD_MODELS" in loc:
+            return "APIPI_FORWARD_MODELS must be on or off"
         if "pi_auto_compact" in loc or "APIPI_PI_AUTO_COMPACT" in loc:
             return "APIPI_PI_AUTO_COMPACT must be on or off"
         if "port" in loc:

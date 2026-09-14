@@ -27,6 +27,7 @@ body,
 }
 
 button,
+input,
 select,
 textarea {
   font: inherit;
@@ -149,11 +150,22 @@ pre {
   font-size: 0.8rem;
 }
 
-.field select {
+.field input,
+.field select,
+.field textarea {
   background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 0.35rem;
+}
+
+.field textarea {
+  resize: vertical;
+  min-height: 4rem;
+}
+
+.agent-form {
+  border-bottom: 1px solid var(--line);
 }
 
 .sessions ul,

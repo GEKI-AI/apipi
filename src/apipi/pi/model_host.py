@@ -57,7 +57,7 @@ def fetch_model_ids(base_url: str, api_key: str | None = None) -> list[str]:
     return parse_model_ids(payload)
 
 
-def listed_models(base_url: str, api_key: str | None = None) -> list[str]:
+def fetch_models_json(base_url: str, api_key: str | None = None) -> object:
     headers: dict[str, str] = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -85,7 +85,7 @@ def listed_models(base_url: str, api_key: str | None = None) -> list[str]:
             status_code=400,
         )
     try:
-        payload = response.json()
+        return response.json()
     except ValueError as exc:
         raise ApiError(
             "invalid_request",
@@ -93,7 +93,10 @@ def listed_models(base_url: str, api_key: str | None = None) -> list[str]:
             code="model_host_unreachable",
             status_code=400,
         ) from exc
-    return parse_model_ids(payload)
+
+
+def listed_models(base_url: str, api_key: str | None = None) -> list[str]:
+    return parse_model_ids(fetch_models_json(base_url, api_key))
 
 
 def require_model(model: str | None) -> str:

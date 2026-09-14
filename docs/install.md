@@ -83,9 +83,11 @@ want one operator key instead of the caller's bearer. A process
 `OPENAI_API_KEY` is ignored.
 
 The `agent.model` on the request must exist on that host. An unknown id
-returns `400` with code `model_not_found`. Pi is started with that id
-and a gateway-owned `models.json`. It does not fall back to Pi's
-built-in OpenAI catalog.
+returns `400` with code `model_not_found`. Clients can list those ids
+with `GET /v1/models`, which proxies to the model host unless
+`APIPI_FORWARD_MODELS` is off. Pi is started with that id and a
+gateway-owned `models.json`. It does not fall back to Pi's built-in
+OpenAI catalog.
 
 Live turns also need Pi on `PATH`. You can override the binary with
 `APIPI_PI_COMMAND`.

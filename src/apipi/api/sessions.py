@@ -13,6 +13,7 @@ from pydantic_core import PydanticCustomError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.api.agents import AgentWrite
+from apipi.api.deps import model_key
 from apipi.auth import get_db, not_found, require_tenant
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import ApiError, gone, not_implemented
@@ -174,21 +175,6 @@ def session_body(row: SessionRow) -> dict[str, Any]:
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
-
-
-def _model_key(request: Request) -> str:
-    overwrite = request.app.state.settings.model_api_key_overwrite
-    if isinstance(overwrite, str) and overwrite:
-        return overwrite
-    bearer = getattr(request.state, "bearer", None)
-    if isinstance(bearer, str) and bearer:
-        return bearer
-    raise ApiError(
-        "invalid_request",
-        "Invalid bearer token",
-        code="unauthorized",
-        status_code=401,
-    )
 
 
 def _key_id(request: Request) -> str | None:
@@ -403,7 +389,7 @@ async def create_agent_session(
                 env_hub=request.app.state.env_hub,
                 settings=request.app.state.settings,
                 pool=request.app.state.pi_pool,
-                api_key=_model_key(request),
+                api_key=model_key(request),
                 key_id=_key_id(request),
             )
         else:
@@ -574,7 +560,7 @@ async def post_session_event(
                 env_hub=request.app.state.env_hub,
                 settings=request.app.state.settings,
                 pool=request.app.state.pi_pool,
-                api_key=_model_key(request),
+                api_key=model_key(request),
                 key_id=_key_id(request),
             )
     else:
@@ -601,7 +587,7 @@ async def post_session_event(
                 env_hub=request.app.state.env_hub,
                 settings=request.app.state.settings,
                 pool=request.app.state.pi_pool,
-                api_key=_model_key(request),
+                api_key=model_key(request),
                 key_id=_key_id(request),
             )
     async with store.session() as db:

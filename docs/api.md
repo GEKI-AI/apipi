@@ -48,6 +48,24 @@ When instructions are set, the gateway appends them to Pi's system
 prompt. Empty or omitted instructions leave Pi's default prompt
 unchanged.
 
+## Models
+
+| Method | Path |
+| --- | --- |
+| `GET` | `/v1/models` |
+
+When `APIPI_FORWARD_MODELS` is on (the default), this route proxies to
+`{OPENAI_BASE_URL}/models` on the model host. The JSON body is the
+host's list, unchanged. Auth is the usual bearer. The host call uses
+`OPENAI_API_KEY_OVERWRITE` when that is set, otherwise the request
+bearer: the same key Pi uses.
+
+A host `401` or `403` is `401` with code `model_host_unauthorized`. If
+the host is unreachable, the response is `400` with code
+`model_host_unreachable`. When `APIPI_FORWARD_MODELS` is off, the
+route returns `400` with type `not_implemented` and code
+`forward_models`.
+
 ## Sessions
 
 | Method | Path |
@@ -218,6 +236,7 @@ steps are in [Using the API](using.md).
 | Surface | Status |
 | --- | --- |
 | Agents CRUD | yes (subset of fields) |
+| `GET /v1/models` | yes (proxy to the model host; off with `APIPI_FORWARD_MODELS`) |
 | Sessions, stream, follow-up input | yes |
 | `environment.openai_hosted` | yes (local sandbox) |
 | `environment.hosted` | yes (alias of `openai_hosted`) |
