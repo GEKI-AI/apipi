@@ -27,6 +27,7 @@ UsageStore = Literal["off", "rollups", "turns"]
 BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "microvm"})
 
 NONE_MODE_WARNING = "APIPI_RUN_MODE=none is not suited for production"
+SQLITE_WARNING = "SQLite is for local single-process use. Use Postgres in production."
 RUN_MODE_HELP = "APIPI_RUN_MODE must be none, microvm, or package.mod:Class"
 USAGE_STORE_OFF = "usage store off"
 USAGE_STORE_ROLLUPS = "usage store rollups"
@@ -123,6 +124,39 @@ _BYTE_UNITS = {
 
 class ConfigError(Exception):
     pass
+
+
+def default_sqlite_path() -> Path:
+    return Path.cwd() / ".apipi" / "apipi.db"
+
+
+def default_sqlite_url() -> str:
+    path = default_sqlite_path().resolve()
+    return f"sqlite+aiosqlite:///{path.as_posix()}"
+
+
+def is_sqlite_url(url: str) -> bool:
+    return url.startswith("sqlite")
+
+
+def postgres_url(url: str) -> str:
+    scheme = url.split(":", 1)[0]
+    if scheme not in {"postgres", "postgresql", "postgresql+asyncpg"}:
+        raise ConfigError("DATABASE_URL must be Postgres or SQLite")
+    if url.startswith("postgresql+asyncpg://"):
+        return url
+    if url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + url.removeprefix("postgresql://")
+    return "postgresql+asyncpg://" + url.removeprefix("postgres://")
+
+
+def store_url(url: str) -> str:
+    scheme = url.split(":", 1)[0]
+    if scheme in {"sqlite", "sqlite+aiosqlite"}:
+        if url.startswith("sqlite+aiosqlite://"):
+            return url
+        return "sqlite+aiosqlite://" + url.removeprefix("sqlite://")
+    return postgres_url(url)
 
 
 class CapacityError(Exception):
@@ -245,7 +279,10 @@ class MappingSource(PydanticBaseSettingsSource):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", populate_by_name=True)
 
-    database_url: str
+    database_url: str = Field(
+        default_factory=default_sqlite_url,
+        validation_alias=AliasChoices("DATABASE_URL", "database_url"),
+    )
     run_mode: RunMode = Field(
         default="none",
         validation_alias=AliasChoices("APIPI_RUN_MODE", "run_mode"),
@@ -485,6 +522,10 @@ class Settings(BaseSettings):
             self.s3_bucket and self.s3_bucket.strip()
         ):
             raise ValueError("APIPI_S3_BUCKET is required")
+        try:
+            self.database_url = store_url(self.database_url)
+        except ConfigError as exc:
+            raise ValueError(str(exc)) from exc
         return self
 
 
@@ -636,7 +677,7 @@ def _settings_message(exc: ValidationError) -> str:
         if RUN_MODE_HELP in msg:
             return RUN_MODE_HELP
         if "database_url" in loc:
-            return "DATABASE_URL is required"
+            return "DATABASE_URL must be Postgres or SQLite"
         if "run_mode" in loc:
             return RUN_MODE_HELP
         if "idle_ttl" in loc or "APIPI_IDLE_TTL" in loc:
@@ -700,17 +741,6 @@ def _settings_message(exc: ValidationError) -> str:
         if "payload_export_retries" in loc or "APIPI_PAYLOAD_EXPORT_RETRIES" in loc:
             return "APIPI_PAYLOAD_EXPORT_RETRIES must be at least 0"
     return "invalid configuration"
-
-
-def postgres_url(url: str) -> str:
-    scheme = url.split(":", 1)[0]
-    if scheme not in {"postgres", "postgresql", "postgresql+asyncpg"}:
-        raise ConfigError("DATABASE_URL must be Postgres")
-    if url.startswith("postgresql+asyncpg://"):
-        return url
-    if url.startswith("postgresql://"):
-        return "postgresql+asyncpg://" + url.removeprefix("postgresql://")
-    return "postgresql+asyncpg://" + url.removeprefix("postgres://")
 
 
 def require_run_mode(mode: str, settings: Settings | None = None) -> None:

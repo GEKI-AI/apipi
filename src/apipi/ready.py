@@ -1,16 +1,17 @@
 import asyncio
-import os
 import sys
 from dataclasses import dataclass
 from typing import TextIO
 
 import asyncpg
+from sqlalchemy import text
 
 from apipi import __version__
 from apipi.auth import load_authenticate
 from apipi.config import (
     ConfigError,
     Settings,
+    is_sqlite_url,
     load_settings,
     postgres_url,
     require_run_mode,
@@ -19,6 +20,7 @@ from apipi.pi.isolation import load_isolation
 from apipi.pi.model_host import fetch_model_ids, installed_pi_version, require_pinned_pi
 from apipi.pi.probe import probe_run_mode
 from apipi.pi.version import PINNED_PI
+from apipi.store.engine import create_engine
 
 
 @dataclass(frozen=True)
@@ -33,17 +35,37 @@ def _line(check: Check) -> str:
     return f"{check.status:<4} {check.name}{extra}"
 
 
-def ping_postgres(url: str) -> None:
+def _database_detail(url: str) -> str:
+    if is_sqlite_url(url):
+        path = url.split("sqlite+aiosqlite:///", 1)[-1]
+        return f"sqlite {path}"
+    host = url.split("@")[-1] if "@" in url else url
+    return f"postgres {host}"
+
+
+def ping_store(url: str) -> None:
+    if is_sqlite_url(url):
+
+        async def _ping_sqlite() -> None:
+            engine = create_engine(url)
+            try:
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+            finally:
+                await engine.dispose()
+
+        asyncio.run(_ping_sqlite())
+        return
     dsn = postgres_url(url).replace("postgresql+asyncpg://", "postgresql://", 1)
 
-    async def _ping() -> None:
+    async def _ping_postgres() -> None:
         conn = await asyncpg.connect(dsn=dsn, timeout=5)
         try:
             await conn.execute("SELECT 1")
         finally:
             await conn.close()
 
-    asyncio.run(_ping())
+    asyncio.run(_ping_postgres())
 
 
 def run_checks(
@@ -61,17 +83,17 @@ def run_checks(
         checks.append(Check("ok", "pi", version))
     except ConfigError as exc:
         checks.append(Check("fail", "pi", str(exc)))
+    url = settings.database_url
     if skip_db:
         checks.append(Check("skip", "database", "--skip-db"))
     else:
         try:
-            postgres_url(settings.database_url)
-            ping_postgres(settings.database_url)
-            checks.append(Check("ok", "database", "reachable"))
+            ping_store(url)
+            checks.append(Check("ok", "database", _database_detail(url)))
         except ConfigError as exc:
             checks.append(Check("fail", "database", str(exc)))
         except (OSError, asyncpg.PostgresError, TimeoutError):
-            checks.append(Check("fail", "database", "Postgres is unreachable"))
+            checks.append(Check("fail", "database", "store is unreachable"))
     if skip_model:
         checks.append(Check("skip", "model host", "--skip-model"))
     elif not settings.model_base_url:
@@ -124,18 +146,8 @@ def check_ready(
     try:
         settings = load_settings(config_path=config_path)
     except ConfigError as exc:
-        if skip_db and str(exc) == "DATABASE_URL is required":
-            os.environ["DATABASE_URL"] = (
-                "postgresql+asyncpg://apipi:apipi@127.0.0.1:1/apipi"
-            )
-            try:
-                settings = load_settings(config_path=config_path)
-            except ConfigError as retry:
-                print(_line(Check("fail", "config", str(retry))), file=stream)
-                return 1
-        else:
-            print(_line(Check("fail", "config", str(exc))), file=stream)
-            return 1
+        print(_line(Check("fail", "config", str(exc))), file=stream)
+        return 1
     checks = run_checks(settings, skip_db=skip_db, skip_model=skip_model, fast=fast)
     failed = False
     for item in checks:

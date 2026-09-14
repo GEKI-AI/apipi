@@ -43,7 +43,8 @@ Before code, read the `docs/` page for the part you are changing.
 
 ## Stack
 
-Python 3.13, FastAPI, Postgres. uv only. PyPI name `geki-apipi`;
+Python 3.13, FastAPI, Postgres (production) or SQLite (local). uv
+only. PyPI name `geki-apipi`;
 import and CLI `apipi`. Pi via RPC, one process per
 session. Run mode `APIPI_RUN_MODE` (`none` \| `microvm`, or
 `package.mod:Class`). Process default `none`. Production

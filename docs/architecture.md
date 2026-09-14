@@ -6,7 +6,7 @@
                  |  bearer key
                  v
             FastAPI gateway          <- never in the guest
-            Postgres
+            store (SQLite or Postgres)
                   |
                   |  rpc
                   v
@@ -47,7 +47,8 @@ process exits. It does not fall back to `none`.
 
 The gateway is Python 3.13 and FastAPI. It authenticates callers,
 owns sessions, appends the event log, and streams SSE. It talks to
-Postgres. It spawns Pi (`pi --mode rpc`).
+the durable store (SQLite locally, Postgres in production). It spawns
+Pi (`pi --mode rpc`).
 
 Pi's environment gets `OPENAI_BASE_URL`, the model key (the request
 bearer, or `OPENAI_API_KEY_OVERWRITE` when set), and that session's MCP
@@ -148,7 +149,7 @@ See [environments](environments.md).
 
 ## Store
 
-Postgres holds tenants, agents, sessions, turns, items, the event
+The durable store holds tenants, agents, sessions, turns, items, the event
 log, hot usage (turn log and/or daily rollups, never prompt text),
 environment state, and artifact metadata. Artifact bytes sit in the
 configured artifact store after a turn completes: local files by
@@ -173,7 +174,7 @@ and artifact bytes are capped per session. See [config](config.md).
 Cross-tenant IDs return `404`, not `403`. Live Pi and the local
 workspace stay on the node that created the session. Published
 artifact bytes follow `APIPI_ARTIFACT_STORE`. Postgres is shared
-across nodes.
+across nodes. SQLite is local single-process only.
 
 
 ## Tools

@@ -7,7 +7,8 @@ Create Date: 2026-09-14
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects import postgresql
+
+from apipi.store.models import JSONType
 
 revision: str = "0001_initial"
 down_revision: str | None = None
@@ -30,8 +31,8 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=255), nullable=True),
         sa.Column("model", sa.String(length=255), nullable=True),
         sa.Column("instructions", sa.String(), nullable=True),
-        sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column("tools", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("metadata", JSONType, nullable=False),
+        sa.Column("tools", JSONType, nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
@@ -46,13 +47,9 @@ def upgrade() -> None:
         sa.Column("model", sa.String(length=255), nullable=True),
         sa.Column("instructions", sa.String(), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False),
-        sa.Column(
-            "environment", postgresql.JSONB(astext_type=sa.Text()), nullable=False
-        ),
-        sa.Column("metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column(
-            "required_actions", postgresql.JSONB(astext_type=sa.Text()), nullable=False
-        ),
+        sa.Column("environment", JSONType, nullable=False),
+        sa.Column("metadata", JSONType, nullable=False),
+        sa.Column("required_actions", JSONType, nullable=False),
         sa.Column("key_id", sa.String(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
@@ -97,7 +94,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
         sa.Column("session_id", sa.Uuid(), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False),
-        sa.Column("usage", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column("usage", JSONType, nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
@@ -126,16 +123,10 @@ def upgrade() -> None:
         sa.Column("total_tokens", sa.Integer(), nullable=False),
         sa.Column("error_code", sa.String(length=128), nullable=True),
         sa.Column("request_id", sa.String(length=512), nullable=True),
-        sa.Column(
-            "tool_names", postgresql.JSONB(astext_type=sa.Text()), nullable=False
-        ),
-        sa.Column(
-            "tool_counts", postgresql.JSONB(astext_type=sa.Text()), nullable=False
-        ),
-        sa.Column("mcp_names", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column(
-            "mcp_counts", postgresql.JSONB(astext_type=sa.Text()), nullable=False
-        ),
+        sa.Column("tool_names", JSONType, nullable=False),
+        sa.Column("tool_counts", JSONType, nullable=False),
+        sa.Column("mcp_names", JSONType, nullable=False),
+        sa.Column("mcp_counts", JSONType, nullable=False),
         sa.Column("key_id", sa.String(), nullable=False),
         sa.Column("environment_type", sa.String(length=32), nullable=False),
         sa.Column("run_mode", sa.String(length=32), nullable=False),
@@ -189,7 +180,7 @@ def upgrade() -> None:
         sa.Column("session_id", sa.Uuid(), nullable=False),
         sa.Column("turn_id", sa.Uuid(), nullable=True),
         sa.Column("type", sa.String(length=32), nullable=False),
-        sa.Column("data", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("data", JSONType, nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "type IN ('message', 'function_call', 'mcp_call', 'command_execution')",
@@ -216,7 +207,7 @@ def upgrade() -> None:
         sa.Column("session_id", sa.Uuid(), nullable=False),
         sa.Column("seq", sa.Integer(), nullable=False),
         sa.Column("type", sa.String(length=128), nullable=False),
-        sa.Column("data", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("data", JSONType, nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(

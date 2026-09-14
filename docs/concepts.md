@@ -1,14 +1,15 @@
 # Concepts
 
 Agents, sessions, the computer, and artifacts are the pieces the
-gateway keeps in Postgres (and, for files, on disk or object storage).
+gateway keeps in the durable store (and, for files, on disk or object
+storage). Local tries use SQLite. Production uses Postgres.
 
 ## Agents
 
 An agent is saved configuration: model, instructions, tools, and
 metadata. You create them; a fresh database has none.
 
-You create agents with `POST /v1/agents`. They live in Postgres until
+You create agents with `POST /v1/agents`. They live in the store until
 you delete them. A session may pass `agent_id` or an inline `agent`.
 Inline config is used for that session only. It is not saved unless
 you `POST /v1/agents`. Inline model and instructions are kept on the
@@ -23,9 +24,9 @@ sessions.
 
 ## Sessions
 
-A session is one conversation. Postgres holds the session row, the
-append-only event log, turns, and items. That transcript is the
-source of truth. Pi's on-disk files are a cache.
+A session is one conversation. The durable store holds the session
+row, the append-only event log, turns, and items. That transcript is
+the source of truth. Pi's on-disk files are a cache.
 
 Create a session with `POST /v1/agents/sessions`. A non-empty `input`
 starts the first turn. Follow-up messages go to
@@ -73,7 +74,7 @@ or `outputs/`.
 ## Artifacts
 
 An artifact is a named output the API can fetch after a turn
-completes. Metadata is in Postgres, including `turn_id` when the file
+completes. Metadata is in the store, including `turn_id` when the file
 was published at turn complete, plus `key_id` and byte size. Bytes
 live in the configured artifact store: local files under
 `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`,
@@ -117,7 +118,7 @@ runner on turn complete and on Pi stop if the socket is up.
 
 Session conversation state is similar: both keep turns and items so
 you can continue later. OpenAI stores that on their side. ApiPi stores
-it in your Postgres. Export is how you take the thread with you.
+it in your store. Export is how you take the thread with you.
 
 OpenAI-only environment fields such as `packages`, `network`, or
 `files` on create return an error (unknown field).

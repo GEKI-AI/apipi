@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `apipi install` installs the pinned Pi CLI. `apipi check` verifies
   requirements without binding HTTP.
+- Unset `DATABASE_URL` uses SQLite at `.apipi/apipi.db`. Postgres
+  remains the production store. `apipi serve` applies migrations.
 
 ## [0.1.0] - 2026-09-14
 

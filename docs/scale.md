@@ -3,7 +3,8 @@
 One `apipi serve` process owns its live Pi processes, local
 `openai_hosted` directories, artifact bytes, SSE subscribers, and
 `self_hosted` runner sockets. Those stay in memory or on that host's
-disk. Postgres is the shared transcript. A live session has no handoff
+disk. Postgres is the shared transcript. Do not share SQLite across
+nodes. A live session has no handoff
 to another node.
 
 Several processes behind a load balancer work if follow-up requests

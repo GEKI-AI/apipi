@@ -1,74 +1,63 @@
 # Install and run
 
-You need Python 3.13 and Postgres. Live turns also need the Pi CLI
-(`pi --mode rpc`) on `PATH` and a model host URL. The gateway pins Pi
-0.85.1. `apipi install` installs that exact version with npm into a
-user-local prefix. Put that binary on `PATH`, or set
-`APIPI_PI_COMMAND`. The manual one-liner is still valid:
+There are two paths. **Try it** is a laptop: SQLite in the current
+directory, isolation `none`, no Docker. **Production** is Postgres,
+`APIPI_RUN_MODE=microvm`, and the rest of this page.
+
+Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model
+host URL. The gateway pins Pi 0.85.1. `apipi install` installs that
+exact version with npm into a user-local prefix. Put that binary on
+`PATH`, or set `APIPI_PI_COMMAND`. The manual one-liner is still valid:
 
 ```
 npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
 ```
 
-A Compose file at the repo root starts Postgres 17 (user `apipi`,
-password `apipi`, database `apipi`) on port 5432.
+## Try it
 
-Firecracker (`APIPI_RUN_MODE=microvm`) needs `/dev/kvm`, `firecracker`,
-`jailer`, kernel and rootfs images, `ip`, `iptables`, and `tc`. Isolation
-`none` runs Pi as a child of the gateway. If the selected mode cannot
-start, `apipi serve` exits before it binds HTTP.
-
-## Install
-
-From PyPI:
+Python 3.13. From PyPI:
 
 ```
 pip install geki-apipi
+apipi install
+export OPENAI_BASE_URL=http://your-model-host/v1
+apipi serve
 ```
 
 The import package and CLI stay `apipi`. `uv add geki-apipi` works in a
 project. S3-compatible artifact storage is an extra:
-`pip install "geki-apipi[s3]"` or `uv add "geki-apipi[s3]"`.
+`pip install "geki-apipi[s3]"`.
 
-Then install the pinned Pi CLI and confirm the machine is ready:
-
-```
-apipi install
-# configure DATABASE_URL, OPENAI_BASE_URL, and run mode
-apipi check
-apipi migrate
-apipi serve
-```
+Unset `DATABASE_URL` uses SQLite at `.apipi/apipi.db` in the current
+working directory, next to `.apipi/sessions`. `apipi serve` applies
+migrations before it binds HTTP. Isolation defaults to `none` and logs
+a warning. That binds `0.0.0.0:8000`. `OPENAI_BASE_URL` is the **model**
+host, not this API.
 
 `apipi check` does not bind HTTP. It exits non-zero when a required
-check fails. `--skip-db` and `--skip-model` skip Postgres and the model
-host. `--fast` skips the throwaway sandbox probe for `microvm`.
+check fails. `--skip-db` and `--skip-model` skip the store and the
+model host. `--fast` skips the throwaway sandbox probe for `microvm`.
 `apipi install` is idempotent; `--force` reinstalls Pi.
 
-From a checkout (contributors):
+From a checkout (contributors): `uv sync`, then prefix commands with
+`uv run`.
 
-```
-uv sync
-```
+## Production store
 
-That installs the `apipi` CLI into the project `.venv`. It does not put
-`apipi` on `PATH`. Prefix commands with `uv run`, or activate the
-environment with `source .venv/bin/activate`.
-
-## Database
-
-Start local Postgres and apply store migrations:
+Production uses Postgres. A Compose file at the repo root starts
+Postgres 17 (user `apipi`, password `apipi`, database `apipi`) on port
+5432:
 
 ```
 docker compose up -d postgres
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
 apipi migrate
+apipi serve
 ```
 
-From a checkout, use `uv run apipi migrate`. `DATABASE_URL` is
-required. `postgres://` and `postgresql://` URLs are rewritten to
-`postgresql+asyncpg://`. You can put it in `.env` or `apipi.toml`
-instead of exporting it.
+`postgres://` and `postgresql://` URLs are rewritten to
+`postgresql+asyncpg://`. You can put the URL in `.env` or `apipi.toml`.
+Do not share a SQLite file across processes or nodes.
 
 `apipi migrate` applies a single baseline revision (`0001_initial`)
 that matches the current schema. Pre-0.1.0 databases have no upgrade

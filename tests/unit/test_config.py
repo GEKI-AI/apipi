@@ -8,9 +8,11 @@ from apipi.config import (
     FLAT_TOML_WARNING,
     ConfigError,
     Settings,
+    default_sqlite_url,
     load_settings,
     parse_bytes,
     postgres_url,
+    store_url,
 )
 from apipi.pi.proc import pi_command_args
 
@@ -22,13 +24,32 @@ def test_postgres_url_accepts_postgresql() -> None:
 
 
 def test_postgres_url_rejects_non_postgres() -> None:
-    with pytest.raises(ConfigError, match="Postgres"):
+    with pytest.raises(ConfigError, match="Postgres or SQLite"):
         postgres_url("sqlite+aiosqlite:///:memory:")
 
 
-def test_migrate_requires_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_store_url_accepts_sqlite() -> None:
+    assert store_url("sqlite:///:memory:") == "sqlite+aiosqlite:///:memory:"
+    assert store_url("sqlite+aiosqlite:///:memory:") == "sqlite+aiosqlite:///:memory:"
+
+
+def test_unset_database_url_defaults_to_sqlite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    assert main(["migrate"]) == 1
+    monkeypatch.chdir(tmp_path)
+    settings = Settings()
+    assert settings.database_url == default_sqlite_url()
+    assert settings.database_url.endswith("/.apipi/apipi.db")
+
+
+def test_migrate_defaults_to_sqlite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert main(["migrate"]) == 0
+    assert (tmp_path / ".apipi" / "apipi.db").is_file()
 
 
 def test_model_api_key_overwrite_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

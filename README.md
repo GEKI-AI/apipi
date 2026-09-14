@@ -16,27 +16,21 @@ infrastructure.
 
 ## Quickstart
 
-Python 3.13 and [uv](https://docs.astral.sh/uv/). Postgres for the
-store. The Pi CLI (`pi --mode rpc`) on `PATH` for live turns.
+Python 3.13. No Postgres for a local try. The Pi CLI (`pi --mode rpc`)
+on `PATH` for live turns.
 
 ```
 pip install geki-apipi
-# or: uv add geki-apipi
-# S3 artifacts: pip install "geki-apipi[s3]"
 apipi install
-docker compose up -d postgres
-export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
 export OPENAI_BASE_URL=http://your-model-host/v1
-apipi check
-apipi migrate
 apipi serve
 ```
 
-From a checkout, `uv sync` then prefix commands with `uv run`. That
-binds `0.0.0.0:8000`. The default isolation is `none` (Pi as a child
-process). `OPENAI_BASE_URL` on the gateway is the **model** host, not
-this API. The client bearer is the model key unless you set
-`OPENAI_API_KEY_OVERWRITE`. For Firecracker:
+That uses SQLite at `.apipi/apipi.db` and binds `0.0.0.0:8000`. Isolation
+defaults to `none` (Pi as a child process). `OPENAI_BASE_URL` on the
+gateway is the **model** host, not this API. The client bearer is the
+model key unless you set `OPENAI_API_KEY_OVERWRITE`. Production uses
+Postgres and Firecracker:
 
 ```
 APIPI_RUN_MODE=microvm apipi serve

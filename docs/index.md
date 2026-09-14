@@ -25,25 +25,19 @@ machine).
 
 ## Quickstart
 
-Python 3.13 and [uv](https://docs.astral.sh/uv/). Install from PyPI,
-then Postgres and Pi:
+Python 3.13. Install from PyPI. No Postgres for a local try:
 
 ```
 pip install geki-apipi
-# or: uv add geki-apipi
 apipi install
-docker compose up -d postgres
-export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
 export OPENAI_BASE_URL=http://your-model-host/v1
-apipi check
-apipi migrate
 apipi serve
 ```
 
-From a checkout, `uv sync` then prefix commands with `uv run`.
+That uses SQLite at `.apipi/apipi.db` and binds `0.0.0.0:8000`.
 `OPENAI_BASE_URL` is the model host, not this API. The client bearer is
-the model key unless you set `OPENAI_API_KEY_OVERWRITE`. That binds
-`0.0.0.0:8000`. Default isolation is `none`. Production uses
+the model key unless you set `OPENAI_API_KEY_OVERWRITE`. Default
+isolation is `none`. Production uses Postgres and
 `APIPI_RUN_MODE=microvm`. Details are on [Install](install.md).
 
 Point a client at `http://localhost:8000/v1` with

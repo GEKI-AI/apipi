@@ -42,7 +42,7 @@ is a lab setup, not the production path.
 ## What to install
 
 Every mode needs Python 3.13, [uv](https://docs.astral.sh/uv/),
-Postgres, the Pi CLI (`pi --mode rpc`) on `PATH` at version 0.85.1, and
+the store, the Pi CLI (`pi --mode rpc`) on `PATH` at version 0.85.1, and
 `OPENAI_BASE_URL`. `apipi serve` exits if those are missing. See
 [install](install.md). The extra OS packages differ by mode.
 
@@ -98,9 +98,9 @@ machine.
 
 | Store | What | Where it lives | Lifetime |
 | --- | --- | --- | --- |
-| **Session** | Transcript: events, turns, items, artifact metadata | Postgres | Until the session is deleted. A session [export](api.md#export) is the thread. |
+| **Session** | Transcript: events, turns, items, artifact metadata | SQLite locally; Postgres in production | Until the session is deleted. A session [export](api.md#export) is the thread. |
 | **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. `self_hosted`: the runner. `none`: no files. | `openai_hosted` lasts across Pi stop until `APIPI_WORKSPACE_TTL` (default 1 hour) with no session activity, or until the session is deleted. Runner files stay on the runner. |
-| **Artifacts** | Named outputs the API can fetch | Metadata in Postgres. Bytes in `APIPI_ARTIFACT_STORE`: local files under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`, or an S3-compatible bucket with the same key layout. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
+| **Artifacts** | Named outputs the API can fetch | Metadata in the store. Bytes in `APIPI_ARTIFACT_STORE`: local files under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`, or an S3-compatible bucket with the same key layout. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
 
 `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB) caps one `openai_hosted`
 directory. An oversized microvm pull is not unpacked onto the host.
