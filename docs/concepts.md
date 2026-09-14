@@ -25,8 +25,9 @@ sessions.
 ## Sessions
 
 A session is one conversation. The durable store holds the session
-row, the append-only event log, turns, and items. That transcript is
-the source of truth. Pi's on-disk files are a cache.
+row, the append-only event log, turns, and items. Token deltas are
+live SSE only and are not stored. That transcript is the source of
+truth. Pi's on-disk files are a cache.
 
 Create a session with `POST /v1/agents/sessions`. A non-empty `input`
 starts the first turn. Follow-up messages go to

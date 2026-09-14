@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remains the production store. `apipi migrate` applies schema;
   `apipi serve` does not.
 
+### Changed
+
+- `output_text.delta` is live SSE only. It is not stored. Reconnect
+  and export use `output_text.done` and items.
+
 ## [0.1.0] - 2026-09-14
 
 First public release. Install from PyPI as `geki-apipi`. The import

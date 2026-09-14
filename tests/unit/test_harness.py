@@ -1,4 +1,4 @@
-from apipi.runtime import FAKE_USAGE, PUBLIC_EVENT_TYPES, FakeHarness
+from apipi.runtime import FAKE_USAGE, LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES, FakeHarness
 
 
 def test_fake_harness_is_determined() -> None:
@@ -19,4 +19,5 @@ def test_public_event_types_match_spec() -> None:
     assert "agent.session.created" in PUBLIC_EVENT_TYPES
     assert "agent.session.turn.cancelled" in PUBLIC_EVENT_TYPES
     assert "agent.session.turn.output_text.delta" in PUBLIC_EVENT_TYPES
+    assert LIVE_EVENT_TYPES <= PUBLIC_EVENT_TYPES
     assert "pi.internal" not in PUBLIC_EVENT_TYPES
