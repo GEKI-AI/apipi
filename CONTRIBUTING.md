@@ -156,12 +156,14 @@ not bump on every merge.
 
 1. Set `__version__` and add a dated section in `CHANGELOG.md`.
 2. Merge to `main`.
-3. Create an annotated tag `vX.Y.Z` and a GitHub Release. Pushing the
-   tag runs `.github/workflows/publish.yml`, which builds the sdist and
-   wheel and uploads them to PyPI with Trusted Publishing (OIDC). There
-   is no PyPI password in GitHub secrets.
+3. Push an annotated tag `vX.Y.Z`. Do not create the GitHub Release by
+   hand. The Publish workflow builds the sdist and wheel, uploads them
+   to PyPI with Trusted Publishing (OIDC), then opens the GitHub
+   Release for that tag and attaches the artifacts. There is no PyPI
+   password in GitHub secrets.
 4. Ordinary PRs do not publish. Optional TestPyPI: run the Publish
-   workflow with `workflow_dispatch` and repository `testpypi`.
+   workflow with `workflow_dispatch` and repository `testpypi` (no
+   GitHub Release).
 
 Before the first upload, an owner must create the PyPI project (name
 `geki-apipi`) and a Trusted Publisher: GitHub org `GEKI-AI`, repository
