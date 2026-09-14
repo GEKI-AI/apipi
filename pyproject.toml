@@ -12,6 +12,17 @@ license = { text = "MIT" }
 authors = [
     { name = "GEKI FlexCo" },
 ]
+keywords = ["openai", "agents", "gateway", "pi", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+]
 dependencies = [
     "alembic>=1.16,<2",
     "asyncpg>=0.30,<1",
@@ -31,6 +42,7 @@ s3 = ["boto3>=1.35,<2"]
 
 [project.urls]
 Homepage = "https://github.com/GEKI-AI/apipi"
+Documentation = "https://geki-ai.github.io/apipi/"
 Repository = "https://github.com/GEKI-AI/apipi"
 Issues = "https://github.com/GEKI-AI/apipi/issues"
 

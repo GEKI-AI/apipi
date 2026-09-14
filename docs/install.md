@@ -1,8 +1,8 @@
 # Install and run
 
-You need Python 3.13, [uv](https://docs.astral.sh/uv/), and Postgres.
-Live turns also need the Pi CLI (`pi --mode rpc`) on `PATH` and a model
-host URL. The gateway pins Pi 0.85.1. Install that exact version:
+You need Python 3.13 and Postgres. Live turns also need the Pi CLI
+(`pi --mode rpc`) on `PATH` and a model host URL. The gateway pins Pi
+0.85.1. Install that exact version:
 
 ```
 npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
@@ -18,7 +18,16 @@ start, `apipi serve` exits before it binds HTTP.
 
 ## Install
 
-From a checkout:
+From PyPI:
+
+```
+pip install apipi
+```
+
+`uv add apipi` works in a project. S3-compatible artifact storage is
+an extra: `pip install "apipi[s3]"` or `uv add "apipi[s3]"`.
+
+From a checkout (contributors):
 
 ```
 uv sync
@@ -35,12 +44,19 @@ Start local Postgres and apply store migrations:
 ```
 docker compose up -d postgres
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
-uv run apipi migrate
+apipi migrate
 ```
 
-`DATABASE_URL` is required. `postgres://` and `postgresql://` URLs are
-rewritten to `postgresql+asyncpg://`. You can put it in `.env` or
-`apipi.toml` instead of exporting it.
+From a checkout, use `uv run apipi migrate`. `DATABASE_URL` is
+required. `postgres://` and `postgresql://` URLs are rewritten to
+`postgresql+asyncpg://`. You can put it in `.env` or `apipi.toml`
+instead of exporting it.
+
+`apipi migrate` applies a single baseline revision (`0001_initial`)
+that matches the current schema. Pre-0.1.0 databases have no upgrade
+path through the old revision chain. Recreate the database, then
+migrate. If the tables already match this schema, stamp Alembic to
+`0001_initial` instead of upgrading.
 
 ## Model URL
 
@@ -72,14 +88,14 @@ jailer, guest images, `ip`, `iptables`, and `tc` are present, and after
 a throwaway guest has booted and been torn down:
 
 ```
-APIPI_RUN_MODE=microvm uv run apipi serve
+APIPI_RUN_MODE=microvm apipi serve
 ```
 
 The process default is `none` (Pi as a child of the gateway). It logs
 a warning that this isolation is meant for laptops and CI:
 
 ```
-APIPI_RUN_MODE=none uv run apipi serve
+APIPI_RUN_MODE=none apipi serve
 ```
 
 That binds `0.0.0.0:8000` by default. `--host`, `--port`, and
