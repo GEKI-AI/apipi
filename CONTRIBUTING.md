@@ -148,6 +148,31 @@ Do not commit if checks fail.
 GitHub: `Check` (format, lint, types), `Tests` (`pytest -m "not slow"`),
 `Docs`.
 
+## Releasing
+
+Version is Hatch dynamic from `src/apipi/__init__.py`. Tags are
+`vX.Y.Z` and must match `__version__`. Releases are intentional: do
+not bump on every merge.
+
+1. Set `__version__` and add a dated section in `CHANGELOG.md`.
+2. Merge to `main`.
+3. Create an annotated tag `vX.Y.Z` and a GitHub Release. Pushing the
+   tag runs `.github/workflows/publish.yml`, which builds the sdist and
+   wheel and uploads them to PyPI with Trusted Publishing (OIDC). There
+   is no PyPI password in GitHub secrets.
+4. Ordinary PRs do not publish. Optional TestPyPI: run the Publish
+   workflow with `workflow_dispatch` and repository `testpypi`.
+
+Before the first upload, an owner must create the PyPI project (name
+`apipi`) and a Trusted Publisher: GitHub org `GEKI-AI`, repository
+`apipi`, workflow `publish.yml`, environment `pypi`. Create that GitHub
+environment too. For TestPyPI, add a second publisher with the TestPyPI
+project and the same workflow.
+
+`0.1.0` squashed Alembic to one baseline. Later schema changes are
+normal forward migrations. Do not squash again unless you mean to reset
+the line.
+
 ## Docs site
 
 Separate from the apipi package. Do not add MkDocs to `pyproject.toml`.

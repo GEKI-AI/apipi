@@ -20,23 +20,25 @@ Python 3.13 and [uv](https://docs.astral.sh/uv/). Postgres for the
 store. The Pi CLI (`pi --mode rpc`) on `PATH` for live turns.
 
 ```
-uv sync
+pip install apipi
+# or: uv add apipi
+# S3 artifacts: pip install "apipi[s3]"
 npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
 docker compose up -d postgres
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
 export OPENAI_BASE_URL=http://your-model-host/v1
-uv run apipi migrate
-uv run apipi serve
+apipi migrate
+apipi serve
 ```
 
-`uv sync` does not put `apipi` on `PATH`; use `uv run`. That binds
-`0.0.0.0:8000`. The default isolation is `none` (Pi as a child
+From a checkout, `uv sync` then prefix commands with `uv run`. That
+binds `0.0.0.0:8000`. The default isolation is `none` (Pi as a child
 process). `OPENAI_BASE_URL` on the gateway is the **model** host, not
 this API. The client bearer is the model key unless you set
 `OPENAI_API_KEY_OVERWRITE`. For Firecracker:
 
 ```
-APIPI_RUN_MODE=microvm uv run apipi serve
+APIPI_RUN_MODE=microvm apipi serve
 ```
 
 In a second shell, point a client at `http://localhost:8000/v1`.

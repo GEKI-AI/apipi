@@ -25,23 +25,25 @@ machine).
 
 ## Quickstart
 
-Python 3.13 and [uv](https://docs.astral.sh/uv/). From a checkout:
+Python 3.13 and [uv](https://docs.astral.sh/uv/). Install from PyPI,
+then Postgres and Pi:
 
 ```
-uv sync
+pip install apipi
+# or: uv add apipi
 npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
 docker compose up -d postgres
 export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
 export OPENAI_BASE_URL=http://your-model-host/v1
-uv run apipi migrate
-uv run apipi serve
+apipi migrate
+apipi serve
 ```
 
-`uv sync` does not put `apipi` on `PATH`; use `uv run`. `OPENAI_BASE_URL`
-is the model host, not this API. The client bearer is the model key
-unless you set `OPENAI_API_KEY_OVERWRITE`. That binds `0.0.0.0:8000`.
-Default isolation is `none`. Production uses `APIPI_RUN_MODE=microvm`.
-Details are on [Install](install.md).
+From a checkout, `uv sync` then prefix commands with `uv run`.
+`OPENAI_BASE_URL` is the model host, not this API. The client bearer is
+the model key unless you set `OPENAI_API_KEY_OVERWRITE`. That binds
+`0.0.0.0:8000`. Default isolation is `none`. Production uses
+`APIPI_RUN_MODE=microvm`. Details are on [Install](install.md).
 
 Point a client at `http://localhost:8000/v1` with
 `Authorization: Bearer`. Any non-empty bearer becomes a tenant.
