@@ -103,3 +103,27 @@ def test_cli_check_skip(
     assert "skip" in text
     assert "database" in text
     assert "model host" in text
+
+
+def test_run_checks_role_api_skips_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("apipi.ready.require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr("apipi.ready.ping_store", lambda _url: None)
+    monkeypatch.setattr("apipi.ready.fetch_model_ids", lambda *_a, **_k: ["m1"])
+    rows = run_checks(_settings(), role="api")
+    by_name = {row.name: row for row in rows}
+    assert by_name["pi"].status == "skip"
+    assert by_name["run mode"].status == "skip"
+    assert by_name["sandbox probe"].status == "skip"
+    assert by_name["database"].status == "ok"
+
+
+def test_run_checks_role_worker_needs_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("apipi.ready.require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr("apipi.ready.installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr("apipi.ready.require_run_mode", lambda *_a, **_k: None)
+    settings = _settings()
+    rows = run_checks(settings, role="worker")
+    by_name = {row.name: row for row in rows}
+    assert by_name["database"].status == "skip"
+    assert by_name["model host"].status == "skip"
+    assert by_name["worker token"].status == "fail"

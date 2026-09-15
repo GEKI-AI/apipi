@@ -47,16 +47,21 @@ log = logging.getLogger("apipi")
 
 
 def prepare_serve(
-    settings: Settings | None = None, *, config_path: str | None = None
+    settings: Settings | None = None,
+    *,
+    config_path: str | None = None,
+    api_only: bool = False,
 ) -> Settings:
     resolved = (
         settings if settings is not None else load_settings(config_path=config_path)
     )
-    require_run_mode(resolved.run_mode, resolved)
+    if not api_only:
+        require_run_mode(resolved.run_mode, resolved)
     if is_sqlite_url(resolved.database_url):
         log.warning(SQLITE_WARNING)
     probe_model_host(resolved)
-    probe_run_mode(resolved)
+    if not api_only:
+        probe_run_mode(resolved)
     reject_prompt_body_logging()
     configure_logging(level=resolved.log_level, format=resolved.log_format)
     backend = load_isolation(resolved.run_mode)
@@ -107,9 +112,13 @@ def microvm_shell(
 
 
 def serve(
-    *, host: str | None, port: int | None, config_path: str | None = None
+    *,
+    host: str | None,
+    port: int | None,
+    config_path: str | None = None,
+    api_only: bool = False,
 ) -> None:
-    settings = prepare_serve(config_path=config_path)
+    settings = prepare_serve(config_path=config_path, api_only=api_only)
     host = host if host is not None else settings.host
     port = port if port is not None else settings.port
     extra: dict[str, object] = {
@@ -118,6 +127,7 @@ def serve(
         "port": port,
         "run_mode": settings.run_mode,
         "store": "sqlite" if is_sqlite_url(settings.database_url) else "postgres",
+        "role": "api" if api_only else "all",
     }
     if settings.instance_id:
         extra["instance_id"] = settings.instance_id
@@ -166,8 +176,20 @@ def main(argv: list[str] | None = None) -> int:
     install_parser.add_argument(
         "--dry-run", action="store_true", help="Print install commands and exit"
     )
+    install_parser.add_argument(
+        "--role",
+        choices=("api", "worker", "all"),
+        default="all",
+        help="What this host will run (default: all)",
+    )
     check_parser = sub.add_parser("check", help="Verify requirements without serving")
     check_parser.add_argument("--config", default=None, help="TOML config file")
+    check_parser.add_argument(
+        "--role",
+        choices=("api", "worker", "all"),
+        default="all",
+        help="What this host will run (default: all)",
+    )
     check_parser.add_argument("--skip-db", action="store_true", help="Skip the store")
     check_parser.add_argument(
         "--skip-model", action="store_true", help="Skip the model host"
@@ -177,10 +199,24 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip the throwaway sandbox probe",
     )
-    serve_parser = sub.add_parser("serve", help="Start the API")
+    serve_parser = sub.add_parser(
+        "serve", help="Start the API (combined with a local sandbox by default)"
+    )
     serve_parser.add_argument("--host", default=None, help="Bind address")
     serve_parser.add_argument("--port", default=None, type=int, help="Bind port")
     serve_parser.add_argument("--config", default=None, help="TOML config file")
+    serve_parser.add_argument(
+        "--api-only",
+        action="store_true",
+        help="Control plane only: no KVM probe and no local Firecracker",
+    )
+    worker_parser = sub.add_parser("worker", help="Start a sandbox worker")
+    worker_parser.add_argument("--config", default=None, help="TOML config file")
+    worker_parser.add_argument(
+        "--url",
+        default=None,
+        help="API base URL (default: APIPI_API_URL or http://127.0.0.1:8000)",
+    )
     microvm_parser = sub.add_parser("microvm", help="Operator microVM tools")
     microvm_sub = microvm_parser.add_subparsers(dest="microvm_command", required=True)
     shell_parser = microvm_sub.add_parser(
@@ -207,6 +243,12 @@ def main(argv: list[str] | None = None) -> int:
             settings = load_settings(config_path=args.config)
             configure_logging(level=settings.log_level, format=settings.log_format)
             flagged = args.pi or args.microvm or args.image is not None
+            if args.role == "api" and not flagged:
+                print("API role needs no Pi or MicroVM install")
+                return 0
+            if args.role == "worker" and not flagged:
+                flagged = True
+                args.microvm = True
             return run_install(
                 settings,
                 pi=args.pi if flagged else None,
@@ -221,9 +263,22 @@ def main(argv: list[str] | None = None) -> int:
                 skip_db=args.skip_db,
                 skip_model=args.skip_model,
                 fast=args.fast,
+                role=args.role,
             )
         if args.command == "serve":
-            serve(host=args.host, port=args.port, config_path=args.config)
+            serve(
+                host=args.host,
+                port=args.port,
+                config_path=args.config,
+                api_only=args.api_only,
+            )
+            return 0
+        if args.command == "worker":
+            from apipi.worker import run_worker
+
+            settings = load_settings(config_path=args.config)
+            configure_logging(level=settings.log_level, format=settings.log_format)
+            asyncio.run(run_worker(settings, url=args.url))
             return 0
         if args.command == "microvm" and args.microvm_command == "shell":
             return microvm_shell(

@@ -75,18 +75,28 @@ def run_checks(
     skip_db: bool = False,
     skip_model: bool = False,
     fast: bool = False,
+    role: str = "all",
 ) -> list[Check]:
+    if role == "api":
+        fast = True
+    elif role == "worker":
+        skip_db = True
+        skip_model = True
     checks: list[Check] = []
     checks.append(Check("ok", "apipi", __version__))
-    try:
-        require_pinned_pi(settings)
-        version = installed_pi_version(settings) or PINNED_PI
-        checks.append(Check("ok", "pi", version))
-    except ConfigError as exc:
-        checks.append(Check("fail", "pi", str(exc)))
+    if role == "api":
+        checks.append(Check("skip", "pi", "--role api"))
+    else:
+        try:
+            require_pinned_pi(settings)
+            version = installed_pi_version(settings) or PINNED_PI
+            checks.append(Check("ok", "pi", version))
+        except ConfigError as exc:
+            checks.append(Check("fail", "pi", str(exc)))
     url = settings.database_url
     if skip_db:
-        checks.append(Check("skip", "database", "--skip-db"))
+        detail = "--role worker" if role == "worker" else "--skip-db"
+        checks.append(Check("skip", "database", detail))
     else:
         try:
             ping_store(url)
@@ -96,7 +106,8 @@ def run_checks(
         except (OSError, asyncpg.PostgresError, TimeoutError):
             checks.append(Check("fail", "database", "store is unreachable"))
     if skip_model:
-        checks.append(Check("skip", "model host", "--skip-model"))
+        detail = "--role worker" if role == "worker" else "--skip-model"
+        checks.append(Check("skip", "model host", detail))
     elif not settings.model_base_url:
         checks.append(Check("fail", "model host", "OPENAI_BASE_URL is required"))
     else:
@@ -106,24 +117,35 @@ def run_checks(
         except ConfigError as exc:
             checks.append(Check("fail", "model host", str(exc)))
     backend = load_isolation(settings.run_mode)
-    try:
-        require_run_mode(settings.run_mode, settings)
-        detail = backend.name
-        if backend.warn_not_production:
-            detail = f"{backend.name} (not for production)"
-        checks.append(Check("ok", "run mode", detail))
-    except ConfigError as exc:
-        checks.append(Check("fail", "run mode", str(exc)))
-        return checks
-    if fast or not backend.needs_probe:
-        if fast and backend.needs_probe:
-            checks.append(Check("skip", "sandbox probe", "--fast"))
+    if role == "api":
+        checks.append(Check("skip", "run mode", "--role api"))
+        checks.append(Check("skip", "sandbox probe", "--role api"))
     else:
         try:
-            probe_run_mode(settings)
-            checks.append(Check("ok", "sandbox probe", backend.name))
+            require_run_mode(settings.run_mode, settings)
+            detail = backend.name
+            if backend.warn_not_production:
+                detail = f"{backend.name} (not for production)"
+            checks.append(Check("ok", "run mode", detail))
         except ConfigError as exc:
-            checks.append(Check("fail", "sandbox probe", str(exc)))
+            checks.append(Check("fail", "run mode", str(exc)))
+            return checks
+        if fast or not backend.needs_probe:
+            if fast and backend.needs_probe:
+                checks.append(Check("skip", "sandbox probe", "--fast"))
+        else:
+            try:
+                probe_run_mode(settings)
+                checks.append(Check("ok", "sandbox probe", backend.name))
+            except ConfigError as exc:
+                checks.append(Check("fail", "sandbox probe", str(exc)))
+    if role == "worker":
+        if settings.worker_token:
+            checks.append(Check("ok", "worker token", "set"))
+        else:
+            checks.append(
+                Check("fail", "worker token", "APIPI_WORKER_TOKEN is required")
+            )
     if settings.auth:
         try:
             load_authenticate(settings.auth)
@@ -141,6 +163,7 @@ def check_ready(
     skip_db: bool = False,
     skip_model: bool = False,
     fast: bool = False,
+    role: str = "all",
     out: TextIO | None = None,
 ) -> int:
     stream: TextIO = sys.stdout if out is None else out
@@ -150,7 +173,9 @@ def check_ready(
     except ConfigError as exc:
         print(_line(Check("fail", "config", str(exc))), file=stream)
         return 1
-    checks = run_checks(settings, skip_db=skip_db, skip_model=skip_model, fast=fast)
+    checks = run_checks(
+        settings, skip_db=skip_db, skip_model=skip_model, fast=fast, role=role
+    )
     failed = False
     for item in checks:
         print(_line(item), file=stream)

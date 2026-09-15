@@ -14,7 +14,9 @@ If the selected mode cannot start, `apipi serve` exits before it binds
 HTTP. The process never switches to another mode on its own. For
 `microvm` and for a custom backend that sets `needs_probe`, the process
 also launches a throwaway sandbox and tears it down. That probe must
-succeed before the API listens.
+succeed before the API listens. `apipi serve --api-only` skips that
+probe so a rootless API host does not need `/dev/kvm`. Sandbox guests
+then belong on `apipi worker`.
 
 When the computer is local (`openai_hosted` or the `hosted` alias), Pi
 and the session files share that isolation boundary. The only supported

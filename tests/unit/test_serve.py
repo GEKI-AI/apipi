@@ -118,6 +118,27 @@ def test_microvm_run_mode_exits_without_kvm(
         require_run_mode("microvm")
 
 
+def test_worker_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.delenv("APIPI_WORKER_TOKEN", raising=False)
+    assert main(["worker"]) == 1
+
+
+def test_serve_api_only_skips_kvm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: False)
+    called: dict[str, object] = {}
+
+    def fake_run(app: object, *, host: str, port: int, **_kwargs: object) -> None:
+        called["host"] = host
+        called["app"] = app
+
+    monkeypatch.setattr("apipi.cli.uvicorn.run", fake_run)
+    assert main(["serve", "--api-only"]) == 0
+    assert called["host"] == "0.0.0.0"
+
+
 def test_serve_microvm_does_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "microvm")

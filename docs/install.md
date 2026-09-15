@@ -41,8 +41,11 @@ defaults to `none` and logs a warning. The process binds `0.0.0.0:8000`.
 `apipi check` verifies requirements and then exits. It leaves HTTP
 unbound. `--skip-db` and `--skip-model` skip the store and the model
 host. `--fast` skips the throwaway sandbox probe for `microvm`.
-`apipi install` is idempotent; `--force` reinstalls Pi and MicroVM
-files that are already present.
+`--role api|worker|all` matches how the host will run (default `all`
+is combined API plus sandbox). `apipi install` is idempotent; `--force`
+reinstalls Pi and MicroVM files that are already present.
+`apipi install --role api` installs nothing extra. `--role worker`
+installs MicroVM.
 
 ## Pi and MicroVM
 
@@ -161,6 +164,13 @@ a warning that this isolation is meant for laptops and CI:
 ```
 APIPI_RUN_MODE=none apipi serve
 ```
+
+`apipi serve` is the combined path: API plus a local sandbox in one
+process. `apipi serve --api-only` is the control plane only. It does
+not probe KVM or start Firecracker, so it can run in rootless Docker.
+`apipi worker` connects outbound to that API (`APIPI_API_URL`,
+`--url`, or `http://127.0.0.1:8000`) with `APIPI_WORKER_TOKEN`. See
+[sandbox workers](workers.md).
 
 That binds `0.0.0.0:8000` by default. `--host`, `--port`, and
 `--config` change the bind and the TOML file. Startup also logs usage

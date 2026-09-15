@@ -217,3 +217,11 @@ def test_cli_install_microvm_dry_run(
     out = capsys.readouterr().out
     assert PINNED_FIRECRACKER in out
     assert "npm install" not in out
+
+
+def test_cli_install_role_api(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    assert main(["install", "--role", "api"]) == 0
+    assert "API role needs no Pi or MicroVM install" in capsys.readouterr().out

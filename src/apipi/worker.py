@@ -1,12 +1,16 @@
 import asyncio
+import json
+import logging
 import secrets
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
+import websockets
 from starlette.websockets import WebSocket, WebSocketState
 
-from apipi.config import Settings
+from apipi.config import ConfigError, Settings
 from apipi.runtime import PUBLIC_EVENT_TYPES, EventHub, persist_event
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
@@ -23,6 +27,7 @@ from apipi.store.repo import (
 
 COMMAND_OPS = frozenset({"turn.start", "turn.cancel", "turn.continue"})
 WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})
+log = logging.getLogger("apipi.worker")
 
 
 @dataclass
@@ -281,3 +286,63 @@ async def _send(websocket: WebSocket, payload: dict[str, Any]) -> None:
 async def _close(websocket: WebSocket) -> None:
     if websocket.client_state == WebSocketState.CONNECTED:
         await websocket.close()
+
+
+def worker_ws_url(base: str) -> str:
+    parsed = urlparse(base)
+    if parsed.scheme in {"http", "https"}:
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        parsed = parsed._replace(scheme=scheme)
+    elif parsed.scheme not in {"ws", "wss"}:
+        raise ConfigError("APIPI_API_URL must be an http URL")
+    path = parsed.path.rstrip("/") + "/internal/worker"
+    return urlunparse(parsed._replace(path=path, fragment=""))
+
+
+async def run_worker(settings: Settings, *, url: str | None = None) -> None:
+    token = settings.worker_token
+    if token is None or token == "":
+        raise ConfigError("APIPI_WORKER_TOKEN is required")
+    base = url or settings.api_url or "http://127.0.0.1:8000"
+    ws_url = worker_ws_url(base)
+    heartbeat = min(10.0, max(1.0, settings.worker_lease_ttl.total_seconds() / 2))
+    log.info("worker connect", extra={"url": ws_url})
+    async with websockets.connect(
+        ws_url, additional_headers={"Authorization": f"Bearer {token}"}
+    ) as sock:
+        await sock.send(
+            json.dumps({"type": "register", "capacity": settings.max_sessions})
+        )
+        raw = await sock.recv()
+        hello = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
+        if not isinstance(hello, dict) or not hello.get("ok"):
+            error = hello.get("error") if isinstance(hello, dict) else "unauthorized"
+            raise ConfigError(f"worker register failed: {error}")
+        log.info("worker hello", extra={"worker_id": hello.get("worker_id")})
+        while True:
+            try:
+                incoming = await asyncio.wait_for(sock.recv(), timeout=heartbeat)
+            except TimeoutError:
+                await sock.send(json.dumps({"type": "heartbeat"}))
+                continue
+            text = incoming if isinstance(incoming, str) else incoming.decode()
+            message = json.loads(text)
+            if not isinstance(message, dict):
+                continue
+            if message.get("type") == "command":
+                await sock.send(
+                    json.dumps(
+                        {
+                            "type": "lease.ack",
+                            "id": message.get("id"),
+                            "lease_id": message.get("lease_id"),
+                        }
+                    )
+                )
+                log.info(
+                    "worker command",
+                    extra={
+                        "op": message.get("op"),
+                        "session_id": message.get("session_id"),
+                    },
+                )
