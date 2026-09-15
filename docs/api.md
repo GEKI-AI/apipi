@@ -110,8 +110,12 @@ A message event starts a turn. Nested form: `type`
 `content` has `input_text`. Flat form: `type`
 `agent.session.input.message` and `content` or `text`. Follow-up
 messages work the same way after the session is idle. A message while
-the session is `requires_action` is rejected; send a tool result
-instead.
+the session is `in_progress` cancels that turn (or fails it if the
+process no longer owns it) and starts a new turn, so a hung Pi cannot
+block the next command. `GET` of a session that is `in_progress` with
+no live turn on this process does the same fail-and-idle recovery.
+A message while the session is `requires_action` is rejected; send a
+tool result instead.
 
 Tool result: `agent.session.input.tool_result` with `turn_id`,
 `call_id`, `success`, and `output` (on success) or `error` (on

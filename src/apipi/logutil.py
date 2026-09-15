@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 import re
@@ -48,6 +49,12 @@ def extra_fields(record: logging.LogRecord) -> dict[str, Any]:
     return fields
 
 
+class FlushStreamHandler(logging.StreamHandler):
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        self.flush()
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -67,13 +74,17 @@ class JsonFormatter(logging.Formatter):
 
 def configure_logging(*, level: str = "info", format: str = "json") -> None:
     global _handler
+    reconfigure = getattr(sys.stderr, "reconfigure", None)
+    if callable(reconfigure):
+        with contextlib.suppress(OSError):
+            reconfigure(line_buffering=True)
     root = logging.getLogger()
     root.setLevel(level.upper())
     formatter: logging.Formatter = (
         logging.Formatter(TEXT_FORMAT) if format == "text" else JsonFormatter()
     )
     if _handler is None:
-        _handler = logging.StreamHandler(sys.stderr)
+        _handler = FlushStreamHandler(sys.stderr)
         root.addHandler(_handler)
     _handler.setFormatter(formatter)
     _handler.setLevel(level.upper())
@@ -91,7 +102,7 @@ def uvicorn_log_config(*, level: str, format: str) -> dict[str, Any]:
         "formatters": {"default": formatter},
         "handlers": {
             "default": {
-                "class": "logging.StreamHandler",
+                "class": "apipi.logutil.FlushStreamHandler",
                 "formatter": "default",
                 "stream": "ext://sys.stderr",
             }
@@ -139,6 +150,12 @@ class RequestLogMiddleware:
             return
         status_box = {"status": 500}
         started = time.perf_counter()
+        method = str(scope.get("method", ""))
+        if method in {"POST", "PUT", "PATCH"}:
+            _http.info(
+                "request start",
+                extra={"method": method, "route": route_path(scope)},
+            )
 
         async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":

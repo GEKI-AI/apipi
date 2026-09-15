@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Serve logs flush each line. A turn logs `request start`,
+  `turn start`, microVM boot/vsock, and `pi prompt` while SSE is
+  still open.
+- MicroVM guests get virtio-rng and a host random seed so Pi is
+  not stuck on `getrandom()` before TLS.
+- A stuck `in_progress` session is failed or cancelled so the next
+  message can run. Guest console logs are debug.
 - `apipi install` asks Pi / MicroVM / both on a TTY. `--microvm`
   downloads pinned Firecracker 1.17.0 and builds guest images.
   Unset kernel and rootfs paths use those cache files when they
