@@ -9,12 +9,12 @@ process runs Pi (`none` or `microvm`) plus a local directory or a
 Run production under systemd on the host with `APIPI_RUN_MODE=microvm`
 so each session is a Firecracker guest with its own kernel. The host
 needs `/dev/kvm` (bare metal, or a VM that exposes KVM). Nested Docker
-or nested KVM is a lab setup. It is not the production path. The
-Compose file in this repo starts Postgres only.
+or nested KVM is a lab setup. Production isolation is systemd on the
+host. The Compose file in this repo starts Postgres only.
 
 Isolation `none` is for local machines and CI. If the selected mode
-cannot start, `apipi serve` exits before it binds HTTP. There is no
-silent fallback.
+cannot start, `apipi serve` exits before it binds HTTP. The process
+never switches to another mode on its own.
 
 Size the box from **live** sessions, not from Postgres row counts.
 Each live session is one Pi process or Firecracker guest. Guest RAM is
@@ -30,15 +30,15 @@ bytes add up to `APIPI_MAX_ARTIFACT_BYTES` (default 512 MiB) per
 session unless you set `APIPI_ARTIFACT_STORE=s3`.
 
 Keeping the store off the gateway host leaves more RAM for guests when
-you use Postgres. One `apipi serve` per host; extra uvicorn workers do
-not share the Pi pool. One process can use SQLite, including with
-`microvm`. Do not share the file.
+you use Postgres. One `apipi serve` per host; extra uvicorn workers
+leave the Pi pool in the first worker only. One process can use SQLite,
+including with `microvm`. Give each process its own database file.
 
 ## Store
 
 | Need | Why Postgres |
 | --- | --- |
-| Several gateway processes or nodes | SQLite is not a shared multi-writer |
+| Several gateway processes or nodes | SQLite is a single-writer file; share Postgres |
 | Many concurrent writers on one DB | Single writer / lock |
 | HA, backups, pooling at scale | Operator story |
 
@@ -66,8 +66,8 @@ max_sessions ≈ (host RAM − reserve) / microvm_mem_mib
 ```
 
 Reserve several GiB for the OS, the Python gateway, jailer, and page
-cache. Colocated Postgres needs more. Do not pick `max_sessions` from
-average guest RSS. Pick it from **reserved** guest RAM. `max_sessions`
+cache. Colocated Postgres needs more. Pick `max_sessions` from
+**reserved** guest RAM rather than average guest RSS. `max_sessions`
 is a hard cap: a new turn that would pass it returns `429` with code
 `capacity`.
 
@@ -121,7 +121,7 @@ Warnings are degraded-but-running (SQLite one-process, `run_mode=none`,
 export drop). Debug is optional diagnosis.
 
 Same id fields as traces when known (`request_id`, `session_id`,
-`turn_id`). Do not log secrets or prompt bodies.
+`turn_id`). Keep secrets and prompt bodies out of the logs.
 
 ## Tuning
 
@@ -130,7 +130,7 @@ field. Details and defaults are in [configuration](config.md).
 
 | Setting | Why it matters |
 | --- | --- |
-| `APIPI_RUN_MODE` | Set `microvm` for Firecracker production isolation. `none` is not production. Nested TOML is `[sandbox].backend`. See [configuration](config.md#sandbox). |
+| `APIPI_RUN_MODE` | Set `microvm` for Firecracker production isolation. Nested TOML is `[sandbox].backend`. See [configuration](config.md#sandbox). |
 | `APIPI_MAX_SESSIONS` | Live Pi on this node. Hard cap (`429` `capacity`). |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | Live Pi for one tenant (`429` `capacity_tenant`). |
 | `APIPI_MICROVM_MEM_MIB` / `APIPI_MICROVM_VCPUS` | Guest RAM and vCPUs. Raise RAM for Playwright. Keep 1 vCPU unless the computer is CPU-heavy. |
@@ -158,13 +158,13 @@ Sticky rules still apply inside the pool. See
 
 ## Failure and drain
 
-Health checks should call `GET /health`. Do not probe a session. That
-endpoint does not require a bearer.
+Health checks should call `GET /health`. Probe health rather than a
+session. That endpoint accepts requests without a bearer.
 
 To drain a node, take it out of the upstream, wait until in-flight
 turns finish or idle TTL has killed Pi, then stop the systemd unit.
-Do not fail health in the middle of a turn. There is no live handoff
-to another node.
+Keep health successful while a turn is in flight. A live session stays
+on the node that owns it.
 
 If SSE drops, reconnect with `after_seq` to replay from the store. The
 next turn still needs the node that holds Pi.

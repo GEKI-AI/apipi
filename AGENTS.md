@@ -1,9 +1,8 @@
 # Agent rules
 
 Laws: `CONSTITUTION.md`. Product: `docs/`. How we work:
-`CONTRIBUTING.md`. If it is not on a product page, update that page in
-this change or stop. Do not build `docs/roadmap.md` unless a product
-page has moved.
+`CONTRIBUTING.md`. If a behavior is missing from a product page, add
+it in the same change or stop.
 
 When the constitution changes, update this file in the same change.
 

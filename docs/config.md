@@ -31,8 +31,8 @@ Durations are like `15m`, `30s`, `2h`, `15d`. Sizes are like `512M` or
 ## Gateway
 
 The gateway is the HTTP product: bind address, store, auth, live
-session caps, artifact store, usage export, and TTLs. It is not the
-Firecracker guest and not Pi's CLI flags.
+session caps, artifact store, usage export, and TTLs. Guest RAM and Pi
+CLI flags live under sandbox and harness.
 
 Unset `auth` uses the default hash in this package. Set an import path
 when you already have a bearer from an LLM router. See [auth](auth.md)
@@ -202,7 +202,7 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | --- | --- | --- | --- |
 | `APIPI_RUN_MODE` | `[sandbox].backend` | `none` | `none` \| `microvm` \| `package.mod:Class`. |
 | `APIPI_MICROVM_KERNEL` | `[sandbox].kernel` | unset | Guest kernel image. Required when the backend is `microvm`. |
-| `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | unset | Guest rootfs for `image = "default"`. Required when the backend is `microvm`. Do not vendor a distro in git. |
+| `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | unset | Guest rootfs for `image = "default"`. Required when the backend is `microvm`. Build the image on the operator machine. |
 | `APIPI_MICROVM_ROOTFS_BROWSER` | `[sandbox].rootfs_browser` | unset | Guest rootfs for `image = "browser"`. Required when that image is selected. Build with `./scripts/microvm-rootfs --flavor browser`. |
 | `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser`. Which rootfs `microvm` boots. Process-wide. Missing path for the selected image exits at startup. |
 

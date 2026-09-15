@@ -6,8 +6,7 @@ description: Propose a plan and GitHub issues for new work. Use when planning. D
 # Plan
 
 Read `CONSTITUTION.md` and the `docs/` page for the part you are
-changing. Do not write product code. Do not build `docs/roadmap.md`
-unless a product page has moved.
+changing. Do not write product code.
 
 Propose a plan. File issues only when the user agrees, using
 `.agents/skills/create-issue/SKILL.md`. Reuse an existing open issue

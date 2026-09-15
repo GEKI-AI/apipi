@@ -56,8 +56,8 @@ status, public `code`, and `message`. The JSON body is the usual
 
 Live Pi caps on this node remain a separate `429` with code `capacity`
 or `capacity_tenant` at turn start. Auth-level limits belong in the
-plugin so the client sees the plugin's `code` and `message`. Do not
-build billing in the gateway.
+plugin so the client sees the plugin's `code` and `message`. Billing
+stays in the plugin.
 
 Unexpected exceptions from the plugin become `401` `unauthorized` and
 are not cached.

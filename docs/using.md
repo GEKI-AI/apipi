@@ -10,8 +10,8 @@ Pi (OpenAI's name for that field).
 
 Have the gateway running ([Install](install.md)): `apipi serve` is
 enough locally (SQLite at `.apipi/apipi.db`). Live turns need Pi on `PATH` and
-`OPENAI_BASE_URL` on the gateway process (the **model** host, not this
-API). The client bearer is the model key unless
+`OPENAI_BASE_URL` on the gateway process (the **model** host that Pi
+calls). The client bearer is the model key unless
 `OPENAI_API_KEY_OVERWRITE` is set. `agent.model` must exist on that
 host. When `agent.instructions` are set, they are appended to Pi's
 system prompt so the model follows them.

@@ -4,8 +4,8 @@ The usual path is a GitHub issue, then one change on a short-lived
 branch. A pull request without an issue is fine when the work was asked
 directly and is already small.
 
-Read `CONSTITUTION.md`, `docs/process.md`, and `AGENTS.md`. If it is
-not on a product page under `docs/`, it is not in this version.
+Read `CONSTITUTION.md`, `docs/process.md`, and `AGENTS.md`. Product
+pages under `docs/` describe what we ship.
 
 Agent steps: `.agents/skills/`.
 
@@ -44,12 +44,7 @@ Optional: **Details** (how to implement, if already known), **Files**
 first). Use Files and Blocked by when splitting work so two people or
 agents can work at the same time.
 
-Do not list what this is not. Anything not in the goal is out of scope.
-
-Do not file work that lives on `docs/roadmap.md` unless a product page
-has moved.
-
-Keep each change small. One goal, few files. If two changes would edit
+The goal is the scope. Keep each change small. One goal, few files. If two changes would edit
 the same file, land shared code first.
 
 ## Git
@@ -118,7 +113,7 @@ change as the code.
 | --- | --- |
 | Public HTTP vs the spec | Pi internals or JSONL |
 | Tenant isolation (wrong tenant is 404) | The agent loop |
-| Unknown fields fail clearly | Roadmap features |
+| Unknown fields fail clearly | Features absent from product pages |
 | Event log is the transcript | |
 
 Gateway tests mock Pi RPC. Local pytest uses SQLite.

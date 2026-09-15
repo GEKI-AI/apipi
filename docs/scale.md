@@ -4,8 +4,8 @@ One `apipi serve` process owns its live Pi processes, local
 `openai_hosted` directories, artifact bytes, SSE subscribers, and
 `self_hosted` runner sockets. Those stay in memory or on that host's
 disk. Postgres is the shared transcript when more than one process
-needs the same store. Do not share SQLite across nodes. A live
-session has no handoff to another node.
+needs the same store. Give each process its own SQLite file, or share
+Postgres. A live session has no handoff to another node.
 
 Several processes behind a load balancer work if follow-up requests
 return to the node that owns the session (sticky affinity). Scale by
@@ -49,15 +49,15 @@ runner to the instance shown in `X-ApiPi-Instance` on create. Cookie
 stickiness only works if the client stores cookies; the OpenAI SDK
 does not.
 
-Do not send a follow-up turn to a different node and expect Pi or the
-workspace to be there.
+Send follow-up turns to the node that already owns the session so Pi
+and the workspace are there.
 
 ## nginx
 
-Health checks should call `GET /health`. Do not probe a session. Take
-a node out of the upstream, wait until turns finish or idle TTL has
-killed Pi, then stop the unit. Do not fail health in the middle of a
-turn.
+Health checks should call `GET /health`. Probe health rather than a
+session. Take a node out of the upstream, wait until turns finish or
+idle TTL has killed Pi, then stop the unit. Keep health successful
+while a turn is in flight.
 
 Long-lived SSE and WebSockets need buffering off and a long read
 timeout. One hour matches a long turn plus idle.
@@ -123,9 +123,4 @@ does not change.
 Shared: Postgres, and artifact bytes when `APIPI_ARTIFACT_STORE=s3`.
 Isolated: Pi and `APIPI_SESSIONS_DIR` (the live workspace). Sticky
 rules above still apply inside the pool for live sessions. With local
-artifact files, do not share a sessions directory across nodes.
-
-## Out of scope
-
-This page does not add a distributed worker registry, a job queue in
-place of SSE, or Docker-in-Docker as production. Those are later work.
+artifact files, give each node its own sessions directory.

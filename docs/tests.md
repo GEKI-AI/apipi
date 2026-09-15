@@ -28,8 +28,8 @@ From a checkout after `uv sync`:
 | Like GitHub (skip slow) | `./scripts/check --fast` |
 | Also build the docs site | `./scripts/check --docs` |
 
-If a live suite cannot start, those tests skip. That skip is not a
-fallback to another run mode.
+If a live suite cannot start, those tests skip. The suite still
+requires the mode it asked for.
 
 ## Suites
 
@@ -46,7 +46,7 @@ fallback to another run mode.
 
 GitHub runs `pytest -m "not slow"`. That is unit, API, and `e2e`.
 Microvm tests skip if KVM, Firecracker, images, or net tools cannot
-start. Do not add Firecracker to GitHub.
+start. GitHub CI stays without Firecracker.
 
 `./scripts/check` runs the slow tests too. They skip when `pi` or the
 OpenAI SDK is missing.
@@ -88,7 +88,7 @@ That must print `True`. TAP creation is the usual extra step after KVM
 works.
 Install Firecracker from the
 [Firecracker release](https://github.com/firecracker-microvm/firecracker/releases).
-Do not vendor a distro in git. Build images on the machine:
+Build guest images on the machine. The distro stays out of git:
 
 ```
 ./scripts/microvm-rootfs
@@ -104,8 +104,8 @@ write the images somewhere else. `--flavor browser` writes
 Firecracker and what the rootfs must contain are in
 [run modes](run-modes.md).
 
-If kernel, rootfs, KVM, or TAP cannot start, the tests skip. That is
-not a fallback to `none`.
+If kernel, rootfs, KVM, or TAP cannot start, the tests skip. They still
+require a real microVM.
 
 ## Slow tests
 

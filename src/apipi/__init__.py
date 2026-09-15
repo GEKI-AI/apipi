@@ -3,4 +3,4 @@
 Point official clients at this gateway and bring your own model URL.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
