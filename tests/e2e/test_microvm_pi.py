@@ -11,9 +11,9 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from apipi.app import create_app
-from apipi.cli import prepare_serve
 from apipi.config import ConfigError, Settings
 from apipi.pi.microvm import require_microvm
+from apipi.pi.probe import probe_run_mode
 from apipi.store.engine import Store
 
 pytestmark = [pytest.mark.e2e, pytest.mark.microvm]
@@ -135,7 +135,7 @@ async def test_microvm_openai_hosted_streams_fake_pi_text(
 
 @pytest.mark.slow
 def test_prepare_serve_boots_throwaway_guest(microvm_settings: Settings) -> None:
-    prepare_serve(microvm_settings)
+    probe_run_mode(microvm_settings)
 
 
 @pytest.mark.slow
@@ -164,11 +164,11 @@ async def test_microvm_workspace_persists_after_guest_stop(
     )
     assert turned.status_code == 200
     await microvm_app.state.pi_pool.kill(session_id)
-    assert (directory / "keep.txt").read_text(encoding="utf-8") == "persist-me"
+    assert not (directory / "keep.txt").exists()
+    shutil.copy(_FAKE_PI, directory / "fake_pi.py")
     again = await microvm_client.post(
         f"/v1/agents/sessions/{session_id}/events",
         headers=_auth(token),
         json={"type": "agent.session.input.message", "content": "again"},
     )
     assert again.status_code == 200
-    assert (directory / "keep.txt").read_text(encoding="utf-8") == "again"
