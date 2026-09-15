@@ -124,10 +124,11 @@ maximum-depth option to `tree.py`, run it, and show me the output.”
 Open the event stream before sending follow-up input so you do not miss
 early events.
 
-This API accepts `POST /v1/agents/sessions/{session_id}/events` with
-`type` `agent.session.input.message` and `text` or `content`. That is
-not OpenAI's nested `events: [{input: [...]}]` body. Unknown fields
-return an error.
+This API accepts `POST /v1/agents/sessions/{session_id}/events` in two
+shapes. Official SDK helpers send a nested `events` list with one
+`agent.session.input.message` whose `input` holds `input_text`. Curl
+and existing clients can send the flat body with `type` and `text` or
+`content`. Unknown fields return an error.
 
 ```
 curl -X POST "$OPENAI_BASE_URL/agents/sessions/$SESSION_ID/events" \

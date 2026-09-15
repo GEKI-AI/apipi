@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from pathlib import Path
@@ -481,3 +482,234 @@ async def test_compat_tenant_404(client: AsyncClient) -> None:
     assert _error(agent)["code"] == "not_found"
     assert _error(session)["code"] == "not_found"
     assert _error(events)["code"] == "not_found"
+
+
+def _nested_message(text: str) -> dict[str, Any]:
+    return {
+        "events": [
+            {
+                "type": "agent.session.input.message",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": text}],
+                    }
+                ],
+            }
+        ]
+    }
+
+
+async def test_compat_nested_events_message(client: AsyncClient) -> None:
+    token = "compat-nested-message"
+    agent_id = await _agent(client, token)
+    created = await _session(
+        client,
+        token,
+        agent_id=agent_id,
+        environment={"type": "none"},
+        input="hello",
+    )
+    session_id = created["id"]
+    follow = await client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(token),
+        json=_nested_message("again"),
+    )
+    assert follow.status_code == 200
+    assert follow.json()["status"] == "idle"
+    events = await client.get(
+        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+    )
+    texts = [
+        event["data"]["text"]
+        for event in events.json()["data"]
+        if event["type"] == "agent.session.turn.output_text.done"
+    ]
+    assert texts == ["hello", "again"]
+
+
+async def test_compat_nested_events_tool_result(
+    settings: Settings, store: Store
+) -> None:
+    harness = FakeHarness()
+    harness.function_calls = [
+        {"name": "echo", "arguments": {"text": "hi"}, "call_id": "call_1"}
+    ]
+    app = create_app(settings, store=store, harness=harness)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = "compat-nested-tool"
+        agent_id = await _agent(client, token, tools=[_TOOLS[0]])
+        created = await _session(
+            client,
+            token,
+            agent_id=agent_id,
+            environment={"type": "none"},
+            input="use echo",
+        )
+        session_id = created["id"]
+        events = await client.get(
+            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        )
+        require = [
+            event
+            for event in events.json()["data"]
+            if event["type"] == "agent.session.requires_action"
+        ]
+        resumed = await client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json={
+                "events": [
+                    {
+                        "type": "agent.session.input.tool_result",
+                        "turn_id": require[0]["data"]["turn_id"],
+                        "call_id": "call_1",
+                        "success": True,
+                        "output": "pong",
+                    }
+                ]
+            },
+        )
+        assert resumed.status_code == 200
+        assert resumed.json()["status"] == "idle"
+
+
+async def test_compat_nested_events_cancel(settings: Settings, store: Store) -> None:
+    harness = FakeHarness()
+    harness.hold = True
+    app = create_app(settings, store=store, harness=harness)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = "compat-nested-cancel"
+        agent_id = await _agent(client, token)
+        created = await _session(
+            client, token, agent_id=agent_id, environment={"type": "none"}
+        )
+        session_id = created["id"]
+        sid = uuid.UUID(session_id)
+        hub = app.state.event_hub
+        queue = hub.subscribe(sid)
+        try:
+            task = asyncio.create_task(
+                client.post(
+                    f"/v1/agents/sessions/{session_id}/events",
+                    headers=_auth(token),
+                    json=_nested_message("go"),
+                )
+            )
+            while True:
+                event = await asyncio.wait_for(queue.get(), timeout=2)
+                if event["type"] == "agent.session.in_progress":
+                    break
+            cancelled = await client.post(
+                f"/v1/agents/sessions/{session_id}/events",
+                headers=_auth(token),
+                json={"events": [{"type": "agent.session.input.cancel"}]},
+            )
+            assert cancelled.status_code == 200
+            posted = await task
+            assert posted.status_code == 200
+            assert posted.json()["status"] == "idle"
+        finally:
+            hub.unsubscribe(sid, queue)
+
+
+async def test_compat_nested_events_rejects(client: AsyncClient) -> None:
+    token = "compat-nested-reject"
+    agent_id = await _agent(client, token)
+    created = await _session(
+        client, token, agent_id=agent_id, environment={"type": "none"}, input="hello"
+    )
+    session_id = created["id"]
+    path = f"/v1/agents/sessions/{session_id}/events"
+    multi = await client.post(
+        path,
+        headers=_auth(token),
+        json={
+            "events": [
+                {
+                    "type": "agent.session.input.message",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "a"}],
+                        }
+                    ],
+                },
+                {
+                    "type": "agent.session.input.message",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "b"}],
+                        }
+                    ],
+                },
+            ]
+        },
+    )
+    assert multi.status_code == 400
+    assert _error(multi)["type"] == "invalid_request"
+    mixed = await client.post(
+        path,
+        headers=_auth(token),
+        json={
+            "type": "agent.session.input.message",
+            "events": [
+                {
+                    "type": "agent.session.input.message",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "x"}],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    assert mixed.status_code == 400
+    assert _error(mixed)["type"] == "invalid_request"
+    extra = await client.post(
+        path,
+        headers=_auth(token),
+        json={
+            "events": [
+                {
+                    "type": "agent.session.input.message",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "x"}],
+                        }
+                    ],
+                    "foo": 1,
+                }
+            ]
+        },
+    )
+    assert extra.status_code == 400
+    assert _error(extra)["code"] == "unknown_field"
+    image = await client.post(
+        path,
+        headers=_auth(token),
+        json={
+            "events": [
+                {
+                    "type": "agent.session.input.message",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "input_image"}],
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    assert image.status_code == 400
+    assert _error(image)["type"] == "not_implemented"

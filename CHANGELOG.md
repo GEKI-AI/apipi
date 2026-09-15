@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `POST /v1/agents/sessions/{id}/events` accepts the OpenAI nested
+  `events` envelope and the existing flat body.
+
 ## [0.2.0] - 2026-09-15
 
 ### Added
