@@ -45,7 +45,9 @@ store when a turn completes.
 
 A custom backend implements the isolation interface (`require`,
 `probe`, `spawn`, plus flags for probe, stdio placement, and the
-production warning) and is selected with `APIPI_RUN_MODE`.
+production warning) and is selected with `APIPI_RUN_MODE`. The gateway
+reaches those backends through the in-process execution adapter. A
+later remote worker uses the same contract.
 
 ## Same server (default)
 

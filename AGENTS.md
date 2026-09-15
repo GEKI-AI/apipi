@@ -27,6 +27,7 @@ Code comments stay omitted unless asked.
 | Path | What |
 | --- | --- |
 | `src/apipi/api/` | HTTP routes |
+| `src/apipi/execution.py` | Session execution contract and in-process adapter |
 | `src/apipi/schemas.py` | Public types |
 | `src/apipi/store/` | Durable store |
 | `src/apipi/pi/` | Harness adapter |

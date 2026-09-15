@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- HTTP session routes run turns through an in-process execution
+  adapter. Isolation backends stay behind that boundary.
+
 ### Added
 
 - Serve logs flush each line. A turn logs `request start`,

@@ -62,6 +62,13 @@ that default prompt unchanged.
 Auth is a callback on the bearer. Default hashes the key. We do not
 store secrets. See [auth](auth.md).
 
+HTTP routes do not spawn Pi or a microVM themselves. They call a
+session execution service (`apipi.execution`). The in-process adapter
+runs today's isolation backends (`none`, `microvm`, or a custom class)
+inside the gateway process: spawn, probe, turns, cancel, artifact
+harvest, and idle TTL. A later remote worker can sit behind the same
+contract without changing the public API.
+
 ## Run mode
 
 Run mode is server config, not an OpenAI field. Set `APIPI_RUN_MODE`.

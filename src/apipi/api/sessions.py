@@ -19,24 +19,19 @@ from apipi.env.hub import EnvironmentHub
 from apipi.env.setup import SetupError, prepare_workspace
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.errors import ApiError, gone
+from apipi.execution import Execution
 from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.otel import set_span, start_span
 from apipi.pi.artifacts import wipe_artifact_store, wipe_workspace
 from apipi.pi.dirs import session_workspace
-from apipi.pi.pool import PiPool
 from apipi.request_id import request_id_of
 from apipi.runtime import (
     EventHub,
-    Harness,
-    continue_turn,
     event_body,
     fail_session,
     fail_stale_in_progress,
     persist_event,
-    prepare_for_new_turn,
-    request_cancel,
-    run_turn,
 )
 from apipi.schemas import StrictModel
 from apipi.skills import copy_capability_directories
@@ -67,10 +62,8 @@ router = APIRouter()
 def _require_capacity(
     request: Request, session_id: uuid.UUID, tenant_id: uuid.UUID
 ) -> None:
-    pool = request.app.state.pi_pool
-    if not isinstance(pool, PiPool):
-        return
-    code = pool.capacity_code(session_id, tenant_id)
+    execution: Execution = request.app.state.execution
+    code = execution.capacity_code(session_id, tenant_id)
     if code is None:
         return
     message = (
@@ -321,7 +314,7 @@ async def create_agent_session(
     agent_id = body.agent_id
     store: Store = request.app.state.store
     hub: EventHub = request.app.state.event_hub
-    harness: Harness = request.app.state.harness
+    execution: Execution = request.app.state.execution
     environment = environment_payload(body.environment)
     raw_tools: list[Any] = []
     env_key: str | None = None
@@ -421,7 +414,7 @@ async def create_agent_session(
             connected = await connect_mcp_http_tools(raw_tools)
             stdio = await start_mcp_stdio_tools(
                 raw_tools,
-                on_host=request.app.state.isolation.stdio_on_host,
+                on_host=execution.stdio_on_host,
             )
         except McpConnectError as exc:
             async with store.session() as db:
@@ -433,26 +426,17 @@ async def create_agent_session(
                 return session_body(row)
         request.app.state.mcp_http[session_id] = connected
         request.app.state.mcp_stdio[session_id] = stdio
-        request.app.state.pi_pool.put_stdio(session_id, stdio)
+        execution.put_stdio(session_id, stdio)
         text = _input_text(body.input)
         if text:
             _require_capacity(request, session_id, tenant.id)
-            await run_turn(
-                store,
-                hub,
-                harness,
+            await execution.run_turn(
                 tenant.id,
                 session_id,
                 text,
                 mcp_http=connected,
                 mcp_stdio=stdio,
                 request_id=request_id,
-                metrics=request.app.state.metrics,
-                tracing=tracing,
-                turn_timeout=request.app.state.settings.turn_timeout,
-                env_hub=request.app.state.env_hub,
-                settings=request.app.state.settings,
-                pool=request.app.state.pi_pool,
                 api_key=model_key(request),
                 key_id=_key_id(request),
             )
@@ -547,8 +531,8 @@ async def delete_agent_session(
     if isinstance(env_id_raw, str):
         env_hub: EnvironmentHub = request.app.state.env_hub
         await env_hub.close(uuid.UUID(env_id_raw))
-    pool: PiPool = request.app.state.pi_pool
-    await pool.kill(session_id)
+    execution: Execution = request.app.state.execution
+    await execution.teardown(session_id)
     if isinstance(directory, str) and directory:
         wipe_workspace(Path(directory))
     await wipe_artifact_store(
@@ -569,22 +553,21 @@ async def post_session_event(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     store: Store = request.app.state.store
-    hub: EventHub = request.app.state.event_hub
-    harness: Harness = request.app.state.harness
+    execution: Execution = request.app.state.execution
     parsed = body.to_session_input() if isinstance(body, OpenAIEventsBody) else body
     text = parsed.content if parsed.content is not None else parsed.text
     if text is None:
         text = ""
     action = "message"
-    abort_ev = None
     stale = False
+    cancel_status = ""
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)
         if row is None:
             not_found()
         if parsed.type == "agent.session.input.cancel":
-            abort_ev = request_cancel(hub, session_id, status=row.status)
             action = "cancel"
+            cancel_status = row.status
         elif parsed.type == "agent.session.input.tool_result":
             if (
                 parsed.turn_id is None
@@ -609,9 +592,7 @@ async def post_session_event(
     tracing = request.app.state.tracing
     request_id = request_id_of(request)
     if action == "cancel":
-        if abort_ev is not None:
-            abort_ev.set()
-        await harness.abort(session_id)
+        await execution.cancel(session_id, status=cancel_status)
     elif action == "tool":
         if parsed.turn_id is None or parsed.call_id is None or parsed.success is None:
             raise ApiError(
@@ -625,10 +606,7 @@ async def post_session_event(
             request_id=request_id,
             session_id=session_id,
         ):
-            await continue_turn(
-                store,
-                hub,
-                harness,
+            await execution.continue_turn(
                 tenant.id,
                 session_id,
                 turn_id=parsed.turn_id,
@@ -639,18 +617,12 @@ async def post_session_event(
                 mcp_http=request.app.state.mcp_http.get(session_id),
                 mcp_stdio=request.app.state.mcp_stdio.get(session_id),
                 request_id=request_id,
-                metrics=request.app.state.metrics,
-                tracing=tracing,
-                turn_timeout=request.app.state.settings.turn_timeout,
-                env_hub=request.app.state.env_hub,
-                settings=request.app.state.settings,
-                pool=request.app.state.pi_pool,
                 api_key=model_key(request),
                 key_id=_key_id(request),
             )
     else:
         if stale:
-            await prepare_for_new_turn(store, hub, harness, tenant.id, session_id)
+            await execution.prepare_for_new_turn(tenant.id, session_id)
         with start_span(
             tracing,
             "session",
@@ -658,22 +630,13 @@ async def post_session_event(
             session_id=session_id,
         ):
             _require_capacity(request, session_id, tenant.id)
-            await run_turn(
-                store,
-                hub,
-                harness,
+            await execution.run_turn(
                 tenant.id,
                 session_id,
                 text,
                 mcp_http=request.app.state.mcp_http.get(session_id),
                 mcp_stdio=request.app.state.mcp_stdio.get(session_id),
                 request_id=request_id,
-                metrics=request.app.state.metrics,
-                tracing=tracing,
-                turn_timeout=request.app.state.settings.turn_timeout,
-                env_hub=request.app.state.env_hub,
-                settings=request.app.state.settings,
-                pool=request.app.state.pi_pool,
                 api_key=model_key(request),
                 key_id=_key_id(request),
             )

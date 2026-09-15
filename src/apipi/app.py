@@ -1,5 +1,4 @@
 import asyncio
-import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -17,15 +16,14 @@ from apipi.blobs import ArtifactBlobs, blob_store
 from apipi.config import Settings, load_settings
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import error_body, register_exception_handlers
+from apipi.execution import LocalExecution
 from apipi.logutil import RequestLogMiddleware
 from apipi.metrics import Metrics, mount_metrics
 from apipi.otel import Tracing, current_trace_id
 from apipi.payload_export import load_payload_sinks
-from apipi.pi.artifacts import harvest_session, reap_workspace_loop
 from apipi.pi.harness import PiHarness
 from apipi.pi.isolation import load_isolation
 from apipi.pi.pool import PiPool
-from apipi.pi.proc import PiProc
 from apipi.request_id import RequestIdMiddleware
 from apipi.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store, create_engine
@@ -169,6 +167,30 @@ def create_app(
 ) -> FastAPI:
     resolved = settings if settings is not None else load_settings()
     resolved_pool = pool if pool is not None else PiPool(resolved)
+    isolation = load_isolation(resolved.run_mode)
+    resolved_harness = harness if harness is not None else PiHarness(resolved_pool)
+    hub = EventHub()
+    env_hub = EnvironmentHub()
+    resolved_blobs = blobs if blobs is not None else blob_store(resolved)
+    resolved_metrics = Metrics() if resolved.metrics else None
+    if tracing is not None:
+        resolved_tracing = tracing
+    elif resolved.otel_endpoint:
+        resolved_tracing = Tracing(endpoint=resolved.otel_endpoint)
+    else:
+        resolved_tracing = None
+    execution = LocalExecution(
+        resolved,
+        pool=resolved_pool,
+        harness=resolved_harness,
+        isolation=isolation,
+        hub=hub,
+        env_hub=env_hub,
+        store=store,
+        blobs=resolved_blobs,
+        metrics=resolved_metrics,
+        tracing=resolved_tracing,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -181,10 +203,9 @@ def create_app(
                 )
             )
             owned = True
-        reap = asyncio.create_task(resolved_pool.reap_loop())
-        workspace_reap = asyncio.create_task(
-            reap_workspace_loop(resolved, app.state.store, resolved_pool)
-        )
+        execution.attach_store(app.state.store)
+        reap = asyncio.create_task(execution.reap_loop())
+        workspace_reap = asyncio.create_task(execution.reap_workspace_loop())
         usage_reap = asyncio.create_task(_purge_usage_loop(resolved, app.state.store))
         try:
             yield
@@ -192,7 +213,7 @@ def create_app(
             reap.cancel()
             workspace_reap.cancel()
             usage_reap.cancel()
-            await resolved_pool.close()
+            await execution.close()
             current = getattr(app.state, "tracing", None)
             if isinstance(current, Tracing):
                 current.shutdown()
@@ -205,14 +226,9 @@ def create_app(
     app.add_middleware(MaxBodyMiddleware, max_bytes=resolved.max_request_bytes)
     app.add_middleware(RequestLogMiddleware)
     app.state.settings = resolved
-    app.state.isolation = load_isolation(resolved.run_mode)
-    app.state.metrics = Metrics() if resolved.metrics else None
-    if tracing is not None:
-        app.state.tracing = tracing
-    elif resolved.otel_endpoint:
-        app.state.tracing = Tracing(endpoint=resolved.otel_endpoint)
-    else:
-        app.state.tracing = None
+    app.state.isolation = isolation
+    app.state.metrics = resolved_metrics
+    app.state.tracing = resolved_tracing
     app.state.store = store
     app.state.mcp_http = {}
     app.state.mcp_stdio = {}
@@ -220,29 +236,12 @@ def create_app(
     app.state.auth_cache = AuthCache(resolved.auth_cache_ttl)
     app.state.usage_sinks = load_usage_sinks(resolved, app.state.metrics)
     app.state.payload_sinks = load_payload_sinks(resolved, app.state.metrics)
-    app.state.event_hub = EventHub()
-    app.state.env_hub = EnvironmentHub()
+    app.state.event_hub = hub
+    app.state.env_hub = env_hub
     app.state.pi_pool = resolved_pool
-    app.state.harness = harness if harness is not None else PiHarness(resolved_pool)
-    app.state.blobs = blobs if blobs is not None else blob_store(resolved)
-
-    async def harvest_killed(session_id: uuid.UUID, proc: PiProc | None) -> None:
-        current = app.state.store
-        if current is None:
-            return
-        async with current.session() as db:
-            await harvest_session(
-                db,
-                resolved,
-                session_id,
-                proc,
-                app.state.env_hub,
-                sync_workspace=False,
-                blobs=app.state.blobs,
-            )
-
-    if resolved_pool.on_kill is None:
-        resolved_pool.on_kill = harvest_killed
+    app.state.harness = resolved_harness
+    app.state.execution = execution
+    app.state.blobs = resolved_blobs
     register_exception_handlers(app)
     app.include_router(sessions_router)
     app.include_router(agents_router)
