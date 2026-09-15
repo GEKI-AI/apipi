@@ -73,6 +73,15 @@ def test_idle_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().idle_ttl == timedelta(minutes=15)
 
 
+def test_worker_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_WORKER_TOKEN", "secret")
+    monkeypatch.setenv("APIPI_WORKER_LEASE_TTL", "15s")
+    settings = Settings()
+    assert settings.worker_token == "secret"
+    assert settings.worker_lease_ttl == timedelta(seconds=15)
+
+
 def test_workspace_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_WORKSPACE_TTL", "2h")

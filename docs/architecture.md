@@ -69,6 +69,9 @@ inside the gateway process: spawn, probe, turns, cancel, artifact
 harvest, and idle TTL. A later remote worker can sit behind the same
 contract without changing the public API.
 
+Trusted sandbox workers connect outbound to `/internal/worker`. That
+protocol is not `self_hosted`. See [sandbox workers](workers.md).
+
 ## Run mode
 
 Run mode is server config, not an OpenAI field. Set `APIPI_RUN_MODE`.

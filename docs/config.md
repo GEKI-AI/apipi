@@ -58,6 +58,8 @@ handlers, and `artifact_store` for local or S3 artifact bytes.
 | `APIPI_MAX_SESSIONS_PER_TENANT` | `max_sessions_per_tenant` | `32` | Live Pi processes for one tenant. A new turn that would pass the cap returns `429` with code `capacity_tenant`. The node cap still applies. |
 | `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Cancel a stuck turn. |
 | `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. The callback may return a typed reject (`401` or `429`). |
+| `APIPI_WORKER_TOKEN` | `worker_token` | unset | Shared secret for `apipi worker` connections. Compared in memory. Not a tenant key and not stored in the database. Unset rejects the worker socket. Put this in the process environment. See [workers](workers.md). |
+| `APIPI_WORKER_LEASE_TTL` | `worker_lease_ttl` | `30s` | How long a session lease stays valid without a heartbeat. Expiry fails closed and emits `agent.session.error` with code `worker_lease_expired`. |
 | `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache success and `401` rejects by SHA-256 of the bearer, never the raw key. `429` rejects are not cached. |
 | `APIPI_SESSIONS_DIR` | `sessions_dir` | `.apipi/sessions` under cwd | Root for local session directories (`openai_hosted`). |
 | `APIPI_DB_POOL_SIZE` | `db_pool_size` | `5` | SQLAlchemy pool size. |

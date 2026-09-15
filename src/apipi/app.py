@@ -11,6 +11,7 @@ from apipi.api.environments import router as environments_router
 from apipi.api.models import router as models_router
 from apipi.api.sessions import router as sessions_router
 from apipi.api.usage import router as usage_router
+from apipi.api.workers import router as workers_router
 from apipi.auth import AuthCache, load_authenticate
 from apipi.blobs import ArtifactBlobs, blob_store
 from apipi.config import Settings, load_settings
@@ -30,6 +31,7 @@ from apipi.store.engine import Store, create_engine
 from apipi.store.models import utc_now
 from apipi.store.repo import purge_turn_logs
 from apipi.usage_export import load_usage_sinks
+from apipi.worker import WorkerHub
 
 _SKIP_CONTEXT = frozenset({"/health", "/metrics"})
 _CONTEXT_HEADERS = frozenset(
@@ -157,6 +159,17 @@ async def _purge_usage_loop(settings: Settings, store: Store) -> None:
             await purge_turn_logs(db, cutoff)
 
 
+async def _expire_worker_leases(app: FastAPI) -> None:
+    while True:
+        await asyncio.sleep(1)
+        hub = getattr(app.state, "workers", None)
+        store = getattr(app.state, "store", None)
+        event_hub = getattr(app.state, "event_hub", None)
+        if hub is None or store is None or event_hub is None:
+            continue
+        await hub.expire(store, event_hub)
+
+
 def create_app(
     settings: Settings | None = None,
     store: Store | None = None,
@@ -191,6 +204,7 @@ def create_app(
         metrics=resolved_metrics,
         tracing=resolved_tracing,
     )
+    workers = WorkerHub(resolved)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -207,12 +221,14 @@ def create_app(
         reap = asyncio.create_task(execution.reap_loop())
         workspace_reap = asyncio.create_task(execution.reap_workspace_loop())
         usage_reap = asyncio.create_task(_purge_usage_loop(resolved, app.state.store))
+        lease_reap = asyncio.create_task(_expire_worker_leases(app))
         try:
             yield
         finally:
             reap.cancel()
             workspace_reap.cancel()
             usage_reap.cancel()
+            lease_reap.cancel()
             await execution.close()
             current = getattr(app.state, "tracing", None)
             if isinstance(current, Tracing):
@@ -241,6 +257,7 @@ def create_app(
     app.state.pi_pool = resolved_pool
     app.state.harness = resolved_harness
     app.state.execution = execution
+    app.state.workers = workers
     app.state.blobs = resolved_blobs
     register_exception_handlers(app)
     app.include_router(sessions_router)
@@ -248,6 +265,7 @@ def create_app(
     app.include_router(environments_router)
     app.include_router(usage_router)
     app.include_router(models_router)
+    app.include_router(workers_router)
     if isinstance(app.state.metrics, Metrics):
         mount_metrics(app, app.state.metrics)
 

@@ -17,6 +17,7 @@ from apipi.store.models import (
     Turn,
     TurnLog,
     UsageRollup,
+    WorkerRow,
     utc_now,
 )
 
@@ -679,3 +680,98 @@ async def purge_turn_logs(db: AsyncSession, older_than: datetime) -> int:
     result = await db.execute(delete(TurnLog).where(TurnLog.created_at < older_than))
     await db.flush()
     return int(getattr(result, "rowcount", 0) or 0)
+
+
+async def upsert_worker(
+    db: AsyncSession,
+    worker_id: uuid.UUID,
+    *,
+    capacity: int,
+) -> WorkerRow:
+    row = await db.scalar(select(WorkerRow).where(WorkerRow.id == worker_id))
+    if row is None:
+        row = WorkerRow(
+            id=worker_id, capacity=capacity, generation=1, last_seen=utc_now()
+        )
+        db.add(row)
+    else:
+        row.capacity = capacity
+        row.generation += 1
+        row.last_seen = utc_now()
+    await db.flush()
+    return row
+
+
+async def get_worker(db: AsyncSession, worker_id: uuid.UUID) -> WorkerRow | None:
+    return await db.scalar(select(WorkerRow).where(WorkerRow.id == worker_id))
+
+
+async def touch_worker(
+    db: AsyncSession, worker_id: uuid.UUID, *, capacity: int | None = None
+) -> WorkerRow | None:
+    row = await get_worker(db, worker_id)
+    if row is None:
+        return None
+    row.last_seen = utc_now()
+    if capacity is not None:
+        row.capacity = capacity
+    await db.flush()
+    return row
+
+
+async def set_session_lease(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    worker_id: uuid.UUID,
+    lease_id: uuid.UUID,
+    lease_until: datetime,
+) -> SessionRow | None:
+    row = await get_session(db, tenant_id, session_id)
+    if row is None:
+        return None
+    row.worker_id = worker_id
+    row.lease_id = lease_id
+    row.lease_until = lease_until
+    row.updated_at = utc_now()
+    await db.flush()
+    return row
+
+
+async def clear_session_lease(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> SessionRow | None:
+    row = await get_session(db, tenant_id, session_id)
+    if row is None:
+        return None
+    row.worker_id = None
+    row.lease_id = None
+    row.lease_until = None
+    row.updated_at = utc_now()
+    await db.flush()
+    return row
+
+
+async def get_session_by_lease(
+    db: AsyncSession, lease_id: uuid.UUID
+) -> SessionRow | None:
+    return await db.scalar(select(SessionRow).where(SessionRow.lease_id == lease_id))
+
+
+async def list_expired_leases(db: AsyncSession, now: datetime) -> list[SessionRow]:
+    result = await db.scalars(
+        select(SessionRow).where(
+            SessionRow.lease_id.is_not(None), SessionRow.lease_until <= now
+        )
+    )
+    return list(result)
+
+
+async def list_worker_leases(
+    db: AsyncSession, worker_id: uuid.UUID
+) -> list[SessionRow]:
+    result = await db.scalars(
+        select(SessionRow).where(SessionRow.worker_id == worker_id)
+    )
+    return list(result)

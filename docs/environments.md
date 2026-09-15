@@ -13,7 +13,7 @@ isolation boundary. A remote runner is valid with `none` and
 | `openai_hosted` | Default. Session directory next to Pi. |
 | `hosted` | Alias for `openai_hosted`. Stored and returned as `openai_hosted`. |
 | `none` | No filesystem, no shell. |
-| `self_hosted` | External runner. Tools go over a socket. |
+| `self_hosted` | External runner. Tools go over a socket. Not an ApiPi sandbox worker. |
 
 `openai_hosted` is OpenAI's field name for a local session directory.
 It is **not** OpenAI's cloud VM. `hosted` means the same folder. You
@@ -87,7 +87,8 @@ work. There is no session directory and no shell.
 Pi stays in the run mode (`none` or `microvm`). Production
 SaaS and enterprise still run that Pi under `microvm`. The computer
 is elsewhere. You must sandbox the runner. The gateway does not nest
-the remote runner in a microvm.
+the remote runner in a microvm. This socket is not the trusted
+[sandbox worker](workers.md) protocol.
 
 1. Create the session with `environment.type` `self_hosted`.
 2. The create response includes `environment.id` on the environment
