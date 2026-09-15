@@ -16,11 +16,13 @@ from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.artifacts import unpack_workspace_tar
 from apipi.pi.guest import _pi_args, _start_mcp, workspace_tar_bytes
+from apipi.pi.guest import main as guest_main
 from apipi.pi.microvm import (
     BOOT_ARGS,
     GUEST_DNS,
     GUEST_WORKSPACE,
     VSOCK_PORT,
+    StartedMicrovm,
     connect_vsock,
     egress_host,
     guest_env,
@@ -31,8 +33,10 @@ from apipi.pi.microvm import (
     microvm_images,
     require_microvm,
     resolve_host_ips,
+    run_microvm_shell,
     setup_tap,
     spawn_microvm_pi,
+    start_microvm,
     tap_net,
     tap_setup_argv,
     tap_teardown_argv,
@@ -277,6 +281,7 @@ def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
     assert net.guest_ip in net_text
     assert net.host_ip in net_text
     assert "127.0.0.1" not in net_text
+    assert ".apipi/shell" not in names
 
 
 def test_workspace_image_includes_setup_script(tmp_path: Path) -> None:
@@ -697,6 +702,143 @@ async def test_spawn_microvm_stdio_stays_in_guest(
     args = list(captured["args"])
     assert args[0] == "/usr/bin/jailer"
     assert "npx" not in args
+
+
+def test_workspace_image_shell_marker(tmp_path: Path) -> None:
+    dest = tmp_path / "workspace.tar"
+    write_workspace_image(
+        dest,
+        cwd=None,
+        env={},
+        pi_args=["pi", "--mode", "rpc", "--no-session"],
+        shell=True,
+    )
+    with tarfile.open(dest, mode="r") as tar:
+        assert ".apipi/shell" in tar.getnames()
+
+
+def test_guest_shell_execs_sh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    home = tmp_path / "workspace"
+    home.mkdir()
+    (home / ".apipi").mkdir()
+    (home / ".apipi" / "shell").write_bytes(b"")
+    monkeypatch.setenv("HOME", str(home))
+    called: list[tuple[str, list[str]]] = []
+
+    def fake_execvp(file: str, args: list[str]) -> None:
+        called.append((file, list(args)))
+        raise SystemExit(0)
+
+    monkeypatch.setattr("apipi.pi.guest.os.execvp", fake_execvp)
+    monkeypatch.setattr("apipi.pi.guest.os.chdir", lambda _path: None)
+    with pytest.raises(SystemExit):
+        guest_main([])
+    assert called == [("sh", ["sh", "-i"])]
+
+
+def _microvm_spawn_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _images(tmp_path)
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.pi.microvm.setup_tap", lambda *_a, **_k: None)
+    monkeypatch.setattr("apipi.pi.microvm.teardown_tap", lambda *_a, **_k: None)
+
+
+async def test_start_microvm_shell_inherits_stdio_and_skips_vsock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+    packed: dict[str, Any] = {}
+    captured: dict[str, Any] = {}
+
+    def fake_write(dest: Path, **kwargs: Any) -> None:
+        packed.update(kwargs)
+        packed["dest"] = dest
+        write_workspace_image(dest, **kwargs)
+
+    async def fake_exec(*args: str, **kwargs: Any) -> _Process:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _Process()
+
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("shell boot must not wait on vsock")
+
+    monkeypatch.setattr("apipi.pi.microvm.write_workspace_image", fake_write)
+    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("apipi.pi.microvm.connect_vsock", boom)
+    started = await start_microvm(
+        _settings(tmp_path),
+        cwd=None,
+        tools=True,
+        shell=True,
+        inherit_stdio=True,
+    )
+    assert packed["shell"] is True
+    assert captured["kwargs"]["stdin"] is None
+    assert captured["kwargs"]["stdout"] is None
+    assert captured["kwargs"]["stderr"] is None
+    assert captured["args"][0] == "/usr/bin/jailer"
+    assert "--no-api" in captured["args"]
+    assert started.process.pid == 4242
+
+
+async def test_spawn_microvm_pi_does_not_set_shell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+    packed: dict[str, Any] = {}
+
+    def fake_write(dest: Path, **kwargs: Any) -> None:
+        packed.update(kwargs)
+        write_workspace_image(dest, **kwargs)
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        return _Process()
+
+    async def fake_connect(*_args: object, **_kwargs: object) -> tuple[object, _Writer]:
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        return reader, _Writer()
+
+    monkeypatch.setattr("apipi.pi.microvm.write_workspace_image", fake_write)
+    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("apipi.pi.microvm.connect_vsock", fake_connect)
+    await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
+    assert packed.get("shell") is False
+
+
+async def test_run_microvm_shell_waits_and_cleans(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cleaned: list[int] = []
+    captured: dict[str, Any] = {}
+
+    class _Done(_Process):
+        async def wait(self) -> int:
+            self.returncode = 0
+            return 0
+
+    async def fake_start(_settings: Settings, **kwargs: Any) -> StartedMicrovm:
+        captured.update(kwargs)
+        return StartedMicrovm(
+            cast(asyncio.subprocess.Process, _Done()),
+            tmp_path,
+            lambda: cleaned.append(1),
+        )
+
+    monkeypatch.setattr("apipi.pi.microvm.start_microvm", fake_start)
+    assert await run_microvm_shell(_settings(tmp_path), cwd=str(tmp_path)) == 0
+    assert captured["shell"] is True
+    assert captured["inherit_stdio"] is True
+    assert captured["tools"] is True
+    assert captured["cwd"] == str(tmp_path.resolve())
+    assert cleaned == [1]
+
+
+async def test_run_microvm_shell_missing_workspace(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="--workspace must be a directory"):
+        await run_microvm_shell(_settings(tmp_path), cwd=str(tmp_path / "missing"))
 
 
 def test_guest_starts_mcp_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

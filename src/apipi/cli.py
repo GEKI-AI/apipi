@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import logging
 import os
 import sys
@@ -31,6 +32,7 @@ from apipi.config import (
 from apipi.logutil import configure_logging, uvicorn_log_config
 from apipi.pi.install import install_pi
 from apipi.pi.isolation import load_isolation
+from apipi.pi.microvm import SHELL_WARNING, run_microvm_shell
 from apipi.pi.model_host import probe_model_host
 from apipi.pi.probe import probe_run_mode
 from apipi.ready import check_ready
@@ -67,6 +69,23 @@ def prepare_serve(
     log.info(METRICS_ON if resolved.metrics else METRICS_OFF)
     log.info(OTEL_SET if resolved.otel_endpoint else OTEL_UNSET)
     return resolved
+
+
+def microvm_shell(
+    *,
+    config_path: str | None,
+    image: str | None,
+    workspace: str | None,
+) -> int:
+    if not sys.stdin.isatty():
+        print("apipi microvm shell needs a TTY", file=sys.stderr)
+        return 1
+    settings = load_settings(config_path=config_path)
+    configure_logging(level=settings.log_level, format=settings.log_format)
+    if image is not None:
+        settings = settings.model_copy(update={"microvm_image": image})
+    print(SHELL_WARNING, file=sys.stderr)
+    return asyncio.run(run_microvm_shell(settings, cwd=workspace))
 
 
 def serve(
@@ -132,6 +151,23 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--host", default=None, help="Bind address")
     serve_parser.add_argument("--port", default=None, type=int, help="Bind port")
     serve_parser.add_argument("--config", default=None, help="TOML config file")
+    microvm_parser = sub.add_parser("microvm", help="Operator microVM tools")
+    microvm_sub = microvm_parser.add_subparsers(dest="microvm_command", required=True)
+    shell_parser = microvm_sub.add_parser(
+        "shell", help="Boot a guest and attach a serial shell"
+    )
+    shell_parser.add_argument("--config", default=None, help="TOML config file")
+    shell_parser.add_argument(
+        "--image",
+        choices=("default", "browser"),
+        default=None,
+        help="Rootfs flavor (default: APIPI_MICROVM_IMAGE)",
+    )
+    shell_parser.add_argument(
+        "--workspace",
+        default=None,
+        help="Host directory packed into guest /workspace",
+    )
     args = parser.parse_args(argv)
     try:
         if args.command == "migrate":
@@ -151,6 +187,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "serve":
             serve(host=args.host, port=args.port, config_path=args.config)
             return 0
+        if args.command == "microvm" and args.microvm_command == "shell":
+            return microvm_shell(
+                config_path=args.config,
+                image=args.image,
+                workspace=args.workspace,
+            )
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 1

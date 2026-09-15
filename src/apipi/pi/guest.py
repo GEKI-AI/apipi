@@ -164,12 +164,23 @@ def _run_setup() -> None:
     done.write_text("ok\n")
 
 
+def _workspace() -> Path:
+    return Path(os.environ.get("HOME", "/workspace"))
+
+
+def _exec_shell() -> None:
+    os.chdir(_workspace())
+    os.execvp("sh", ["sh", "-i"])
+
+
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     port = 52
     if args:
         port = int(args[0])
     _run_setup()
+    if (_workspace() / ".apipi" / "shell").is_file():
+        _exec_shell()
     _start_mcp()
     threading.Thread(
         target=_serve_artifacts, args=(ARTIFACT_PORT,), daemon=True

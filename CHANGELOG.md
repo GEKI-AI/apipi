@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `apipi microvm shell` boots the same Firecracker guest as agent
+  sessions and attaches a serial shell. It does not start the API.
 - `apipi install` installs the pinned Pi CLI. `apipi check` verifies
   requirements without binding HTTP.
 - Unset `DATABASE_URL` uses SQLite at `.apipi/apipi.db`. SQLite is
