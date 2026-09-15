@@ -1035,6 +1035,15 @@ async def run_turn(
                 type="message",
                 data={"role": "user", "content": text},
             )
+        log.info(
+            "turn start",
+            extra={
+                "session_id": str(session_id),
+                "turn_id": str(turn_id),
+                "model": model,
+                **({"request_id": request_id} if request_id else {}),
+            },
+        )
         with start_span(
             tracing,
             "turn",

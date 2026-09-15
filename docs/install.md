@@ -165,7 +165,11 @@ APIPI_RUN_MODE=none apipi serve
 That binds `0.0.0.0:8000` by default. `--host`, `--port`, and
 `--config` change the bind and the TOML file. Startup also logs usage
 store depth, retention, whether usage and payload export are on, and
-whether Prometheus metrics and OpenTelemetry traces are on.
+whether Prometheus metrics and OpenTelemetry traces are on. Logs are
+JSON lines on stderr and flush after each line. A POST logs
+`request start` immediately. A turn logs `turn start`, then microVM
+boot/jailer/vsock and `pi prompt` / first `pi event` while it runs.
+The HTTP `request` line is written when the stream ends.
 
 `microvm` reaches the model URL and HTTP MCP through a TAP device.
 Guest traffic uses that TAP rather than host loopback to Postgres.

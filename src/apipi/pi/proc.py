@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
@@ -8,6 +9,8 @@ from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.version import PINNED_PI
+
+log = logging.getLogger("apipi.pi")
 
 
 class PiProc:
@@ -40,10 +43,17 @@ class PiProc:
         await self._stdin.drain()
 
     async def prompt(self, message: str) -> AsyncIterator[dict[str, Any]]:
+        log.info("pi prompt")
         await self.send({"type": "prompt", "message": message})
+        first = True
         async for event in self._events():
+            kind = event.get("type")
+            if first:
+                log.info("pi event", extra={"type": kind})
+                first = False
             yield event
-            if event.get("type") == "agent_settled":
+            if kind == "agent_settled":
+                log.info("pi settled")
                 return
 
     async def abort(self) -> None:

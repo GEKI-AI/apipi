@@ -3,7 +3,7 @@ import logging
 
 import pytest
 
-from apipi.logutil import JsonFormatter, extra_fields
+from apipi.logutil import FlushStreamHandler, JsonFormatter, extra_fields
 
 
 def _record(msg: str = "hello", **extra: object) -> logging.LogRecord:
@@ -53,6 +53,32 @@ def test_info_drops_debug(caplog: pytest.LogCaptureFixture) -> None:
     log.info("visible")
     assert "visible" in caplog.text
     assert "hidden" not in caplog.text
+
+
+def test_flush_stream_handler_flushes() -> None:
+    stream = _FlushStream()
+    handler = FlushStreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    record = logging.LogRecord("apipi", logging.INFO, __file__, 1, "flushed", (), None)
+    handler.emit(record)
+    assert stream.flushed >= 1
+    assert "flushed" in stream.getvalue()
+
+
+class _FlushStream:
+    def __init__(self) -> None:
+        self.buf = ""
+        self.flushed = 0
+
+    def write(self, data: str) -> int:
+        self.buf += data
+        return len(data)
+
+    def flush(self) -> None:
+        self.flushed += 1
+
+    def getvalue(self) -> str:
+        return self.buf
 
 
 def test_extra_fields_skip_record_attrs() -> None:

@@ -3,6 +3,7 @@ import contextlib
 import errno
 import io
 import json
+import logging
 import os
 import pwd
 import shlex
@@ -49,6 +50,7 @@ NET_RIGHTS = (
 )
 JAILER_RIGHTS = "Need root to chroot Firecracker with jailer."
 INSTALL_HINT = "Run apipi install and pick MicroVM"
+log = logging.getLogger("apipi.microvm")
 
 
 class TapNet(NamedTuple):
@@ -1084,6 +1086,7 @@ async def connect_vsock(
             await asyncio.sleep(0.05)
             continue
         if line.startswith(b"OK"):
+            log.info("vsock", extra={"port": port})
             return reader, writer
         last = ConfigError("microvm cannot start")
         await _close_writer(writer)
@@ -1126,6 +1129,10 @@ async def start_microvm(
         else []
     )
     stdio = None if inherit_stdio else asyncio.subprocess.DEVNULL
+    log.info(
+        "boot",
+        extra={"vm_id": vm_id, "tap": net.name, "shell": shell},
+    )
 
     def cleanup() -> None:
         teardown_tap(
@@ -1209,6 +1216,7 @@ async def start_microvm(
         await process.wait()
         cleanup()
         raise ConfigError("microvm cannot start jailer")
+    log.info("jailer", extra={"vm_id": vm_id, "pid": pid})
     return StartedMicrovm(process, chroot_dir, cleanup)
 
 

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -9,6 +10,7 @@ from apipi.mcp.stdio import McpStdioServer, stop_mcp_stdio
 from apipi.pi.proc import PiProc, spawn_pi
 
 OnKill = Callable[[uuid.UUID, PiProc | None], Awaitable[None]]
+log = logging.getLogger("apipi.pi")
 
 
 class PiPool:
@@ -61,6 +63,13 @@ class PiPool:
                         else "Too many live sessions"
                     )
                     raise CapacityError(message, code=code)
+                log.info(
+                    "pi spawn",
+                    extra={
+                        "session_id": str(session_id),
+                        "run_mode": self.settings.run_mode,
+                    },
+                )
                 proc = await spawn_pi(
                     self.settings,
                     cwd=cwd,
@@ -72,6 +81,7 @@ class PiPool:
                     instructions=instructions,
                     api_key=api_key,
                 )
+                log.info("pi ready", extra={"session_id": str(session_id)})
                 self._procs[session_id] = proc
                 self._spawn_tools[session_id] = tools
                 self._models[session_id] = model
