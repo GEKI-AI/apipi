@@ -378,6 +378,10 @@ class Settings(BaseSettings):
         default=timedelta(seconds=30),
         validation_alias=AliasChoices("APIPI_WORKER_LEASE_TTL", "worker_lease_ttl"),
     )
+    api_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_API_URL", "api_url"),
+    )
     auth: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_AUTH", "auth"),

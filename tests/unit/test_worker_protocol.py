@@ -1,5 +1,5 @@
 from apipi.env.hub import VERBS
-from apipi.worker import COMMAND_OPS, WORKER_IN
+from apipi.worker import COMMAND_OPS, WORKER_IN, worker_ws_url
 
 
 def test_worker_protocol_is_not_self_hosted() -> None:
@@ -11,3 +11,10 @@ def test_worker_protocol_is_not_self_hosted() -> None:
     assert "heartbeat" in WORKER_IN
     assert "lease.ack" in WORKER_IN
     assert "event" in WORKER_IN
+
+
+def test_worker_ws_url() -> None:
+    assert (
+        worker_ws_url("http://127.0.0.1:8000") == "ws://127.0.0.1:8000/internal/worker"
+    )
+    assert worker_ws_url("https://api.example") == "wss://api.example/internal/worker"

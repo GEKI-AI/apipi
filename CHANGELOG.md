@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trusted worker WebSocket at `/internal/worker` with leases,
   heartbeats, and session ownership. This is not customer
   `self_hosted`.
+- `apipi serve --api-only` skips the KVM probe. `apipi worker`
+  connects outbound to the API. `check` and `install` take
+  `--role api|worker|all`.
 
 ### Added
 

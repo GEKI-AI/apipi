@@ -10,6 +10,23 @@ This page is the control protocol. Remote turns over that protocol
 land in a later change. Local `none` and in-process `microvm` still
 run inside `apipi serve`.
 
+Start everything through the ApiPi CLI:
+
+```
+apipi serve
+apipi serve --api-only
+APIPI_WORKER_TOKEN=secret APIPI_API_URL=http://api.example:8000 apipi worker
+apipi check --role api
+apipi check --role worker
+apipi install --role api
+apipi install --role worker
+```
+
+Combined `apipi serve` keeps today's single-host path. `--api-only`
+skips the KVM probe so the API can run without Firecracker.
+`apipi worker` is the sandbox process. It is not a `self_hosted`
+runner.
+
 ## Auth
 
 The worker opens an outbound WebSocket to `/internal/worker` and
