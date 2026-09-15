@@ -100,14 +100,22 @@ Status: `idle | in_progress | requires_action | failed`.
 | `POST` | `/v1/agents/sessions/{session_id}/events` |
 | `GET` | `/v1/agents/sessions/{session_id}/events` |
 
-`POST` with `type` `agent.session.input.message` starts a turn. Use
-`content` or `text` for the user text. Follow-up messages work the same
-way after the session is idle. A message while the session is
-`requires_action` is rejected; send a tool result instead.
+`POST` accepts two bodies with the same meaning. The OpenAI Agents
+shape is `{"events":[{...}]}` with exactly one event (what official
+SDK helpers send). The flat shape is `{type, text|content, …}`. Send
+one shape or the other, not both.
+
+A message event starts a turn. Nested form: `type`
+`agent.session.input.message` and `input` with a `user` message whose
+`content` has `input_text`. Flat form: `type`
+`agent.session.input.message` and `content` or `text`. Follow-up
+messages work the same way after the session is idle. A message while
+the session is `requires_action` is rejected; send a tool result
+instead.
 
 Tool result: `agent.session.input.tool_result` with `turn_id`,
 `call_id`, `success`, and `output` (on success) or `error` (on
-failure).
+failure), either nested in `events` or flat.
 
 Cancel: `agent.session.input.cancel` on a session in `in_progress`.
 The gateway persists `agent.session.turn.cancelled` then

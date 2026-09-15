@@ -128,6 +128,75 @@ class SessionInput(StrictModel):
         )
 
 
+class OpenAIInputText(StrictModel):
+    type: str
+    text: str | None = None
+
+    @model_validator(mode="after")
+    def input_text_only(self) -> Self:
+        if self.type != "input_text":
+            raise PydanticCustomError(
+                "not_implemented",
+                "{field} is not implemented",
+                {"field": self.type},
+            )
+        if self.text is None:
+            raise ValueError("input_text needs text")
+        return self
+
+
+class OpenAIMessageInput(StrictModel):
+    role: str
+    content: list[OpenAIInputText]
+
+
+class OpenAISessionEvent(StrictModel):
+    type: str
+    input: list[OpenAIMessageInput] | None = None
+    turn_id: uuid.UUID | None = None
+    call_id: str | None = None
+    success: bool | None = None
+    output: str | None = None
+    error: str | None = None
+
+
+class OpenAIEventsBody(StrictModel):
+    events: list[OpenAISessionEvent]
+
+    @model_validator(mode="after")
+    def one_event(self) -> Self:
+        if len(self.events) != 1:
+            raise ValueError("events must contain exactly one event")
+        self.to_session_input()
+        return self
+
+    def to_session_input(self) -> SessionInput:
+        event = self.events[0]
+        if event.type == "agent.session.input.message":
+            return SessionInput(type=event.type, content=_first_input_text(event.input))
+        return SessionInput(
+            type=event.type,
+            turn_id=event.turn_id,
+            call_id=event.call_id,
+            success=event.success,
+            output=event.output,
+            error=event.error,
+        )
+
+
+def _first_input_text(messages: list[OpenAIMessageInput] | None) -> str:
+    if not messages:
+        raise ValueError("message needs input")
+    for message in messages:
+        for part in message.content:
+            if part.text is not None:
+                return part.text
+    raise ValueError("message needs input_text")
+
+
+SessionEventBody = OpenAIEventsBody | SessionInput
+
+
 def turn_body(turn: Turn) -> dict[str, Any]:
     return {
         "id": str(turn.id),
@@ -479,14 +548,15 @@ async def delete_agent_session(
 @router.post("/v1/agents/sessions/{session_id}/events")
 async def post_session_event(
     session_id: uuid.UUID,
-    body: SessionInput,
+    body: SessionEventBody,
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     store: Store = request.app.state.store
     hub: EventHub = request.app.state.event_hub
     harness: Harness = request.app.state.harness
-    text = body.content if body.content is not None else body.text
+    parsed = body.to_session_input() if isinstance(body, OpenAIEventsBody) else body
+    text = parsed.content if parsed.content is not None else parsed.text
     if text is None:
         text = ""
     action = "message"
@@ -495,11 +565,15 @@ async def post_session_event(
         row = await get_session(db, tenant.id, session_id)
         if row is None:
             not_found()
-        if body.type == "agent.session.input.cancel":
+        if parsed.type == "agent.session.input.cancel":
             abort_ev = request_cancel(hub, session_id, status=row.status)
             action = "cancel"
-        elif body.type == "agent.session.input.tool_result":
-            if body.turn_id is None or body.call_id is None or body.success is None:
+        elif parsed.type == "agent.session.input.tool_result":
+            if (
+                parsed.turn_id is None
+                or parsed.call_id is None
+                or parsed.success is None
+            ):
                 raise ApiError(
                     "invalid_request",
                     "tool_result needs turn_id, call_id, and success",
@@ -521,7 +595,7 @@ async def post_session_event(
             abort_ev.set()
         await harness.abort(session_id)
     elif action == "tool":
-        if body.turn_id is None or body.call_id is None or body.success is None:
+        if parsed.turn_id is None or parsed.call_id is None or parsed.success is None:
             raise ApiError(
                 "invalid_request",
                 "tool_result needs turn_id, call_id, and success",
@@ -539,11 +613,11 @@ async def post_session_event(
                 harness,
                 tenant.id,
                 session_id,
-                turn_id=body.turn_id,
-                call_id=body.call_id,
-                success=body.success,
-                output=body.output,
-                error=body.error,
+                turn_id=parsed.turn_id,
+                call_id=parsed.call_id,
+                success=parsed.success,
+                output=parsed.output,
+                error=parsed.error,
                 mcp_http=request.app.state.mcp_http.get(session_id),
                 mcp_stdio=request.app.state.mcp_stdio.get(session_id),
                 request_id=request_id,
