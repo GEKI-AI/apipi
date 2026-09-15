@@ -66,7 +66,9 @@ tools, and point at operator-provided guest images:
 | Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4) for `APIPI_MICROVM_IMAGE=default`. Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/pi/guest.sh`. Optional `APIPI_MICROVM_ROOTFS_BROWSER` when `image` is `browser`. |
 | TAP / NAT | Permission to create a TAP device, set `ip_forward`, and add iptables rules. Root or `CAP_NET_ADMIN` is the usual setup. |
 
-Build a rootfs on the operator machine. Two flavors:
+`apipi install --microvm` downloads Firecracker and jailer and builds
+the guest image. Build a rootfs on the operator machine yourself if
+you want another output directory. Two flavors:
 
 | Flavor | Command | Output |
 | --- | --- | --- |
@@ -89,17 +91,20 @@ do not run on this musl guest. The image is 4 GiB unless you set
 guests. See [production sizing](production.md#sizing).
 
 ```
-./scripts/microvm-rootfs
-export APIPI_MICROVM_ROOTFS="$HOME/.cache/apipi/microvm/rootfs.ext4"
-export APIPI_MICROVM_KERNEL="$HOME/.cache/apipi/microvm/vmlinux"
+apipi install --microvm
+apipi install --microvm --image browser
 ```
 
 ```
+./scripts/microvm-rootfs
 ./scripts/microvm-rootfs --flavor browser
-export APIPI_MICROVM_ROOTFS_BROWSER="$HOME/.cache/apipi/microvm/rootfs-browser.ext4"
-export APIPI_MICROVM_IMAGE=browser
-export APIPI_MICROVM_KERNEL="$HOME/.cache/apipi/microvm/vmlinux"
 ```
+
+When `APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` (or the browser
+rootfs) are unset, the process uses those cache files if they exist.
+Env, `.env`, and `[sandbox].kernel` / `rootfs` still override. The
+install command also prints `export` lines. Production should set
+explicit paths.
 
 `APIPI_MICROVM_IMAGE` (`default` or `browser`) selects which rootfs
 the process boots. The choice is process-wide, not per session.
@@ -189,6 +194,8 @@ not bind HTTP and does not create a tenant session. Use it to inspect
 the image, run `pi` on the CLI, and debug networking.
 
 ```
+apipi install --microvm
+apipi microvm shell
 apipi microvm shell --config /etc/apipi.toml
 apipi microvm shell --image browser --workspace /path/to/files
 ```
@@ -200,11 +207,15 @@ guest gets an empty scratch workspace.
 
 Requirements match `apipi check` without `--fast`: KVM, Firecracker,
 jailer, `ip`, `iptables`, `tc`, and the selected kernel and rootfs.
-The command does not need `APIPI_RUN_MODE=microvm`. Creating a TAP
-device, NAT rules, and `ip_forward` needs root or `CAP_NET_ADMIN`.
-Jailer needs root to chroot Firecracker. Misconfiguration fails with
-a message that names the failed step (missing binary, missing image,
-or missing rights) and does not hang. The command needs a TTY.
+The command does not need `APIPI_RUN_MODE=microvm`. Unset image paths
+use the cache files from `apipi install --microvm` when they exist.
+If you are not root, the command re-runs itself with `sudo -E`, the
+absolute interpreter, and `PATH` / `HOME` kept. It does not run
+`sudo uv`. Creating a TAP device, NAT rules, and `ip_forward` needs
+root or `CAP_NET_ADMIN`. Jailer needs root to chroot Firecracker.
+Misconfiguration fails with a message that names the failed step
+(missing binary, missing image, or missing rights) and does not hang.
+The command needs a TTY.
 
 The guest cwd is `/workspace`. Pi is on `PATH`. Type `exit` or press
 Ctrl-C to stop the VM. TAP devices, jailer chroot, and temp dirs are

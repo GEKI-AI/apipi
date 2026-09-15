@@ -86,14 +86,20 @@ python3 -c "import os; print(os.access('/dev/kvm', os.R_OK | os.W_OK))"
 
 That must print `True`. TAP creation is the usual extra step after KVM
 works.
-Install Firecracker from the
-[Firecracker release](https://github.com/firecracker-microvm/firecracker/releases).
-Build guest images on the machine. The distro stays out of git:
+`apipi install --microvm` downloads Firecracker and jailer and builds
+guest images. You can still install Firecracker from the
+[Firecracker release](https://github.com/firecracker-microvm/firecracker/releases)
+and build images with `./scripts/microvm-rootfs`. The distro stays out
+of git. Unset `APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` use the
+cache files when they exist:
+
+```
+uv run apipi install --microvm
+uv run pytest -m microvm
+```
 
 ```
 ./scripts/microvm-rootfs
-export APIPI_MICROVM_KERNEL="$HOME/.cache/apipi/microvm/vmlinux"
-export APIPI_MICROVM_ROOTFS="$HOME/.cache/apipi/microvm/rootfs.ext4"
 uv run pytest -m microvm
 ```
 

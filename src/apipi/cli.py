@@ -30,9 +30,14 @@ from apipi.config import (
     usage_store_log,
 )
 from apipi.logutil import configure_logging, uvicorn_log_config
-from apipi.pi.install import install_pi
+from apipi.pi.install import run_install
 from apipi.pi.isolation import load_isolation
-from apipi.pi.microvm import SHELL_WARNING, run_microvm_shell
+from apipi.pi.microvm import (
+    SHELL_WARNING,
+    microvm_shell_needs_sudo,
+    reexec_microvm_shell,
+    run_microvm_shell,
+)
 from apipi.pi.model_host import probe_model_host
 from apipi.pi.probe import probe_run_mode
 from apipi.ready import check_ready
@@ -83,6 +88,16 @@ def microvm_shell(
             file=sys.stderr,
         )
         return 1
+    extra: list[str] = []
+    if config_path is not None:
+        extra.extend(["--config", config_path])
+    if image is not None:
+        extra.extend(["--image", image])
+    if workspace is not None:
+        extra.extend(["--workspace", workspace])
+    if microvm_shell_needs_sudo():
+        reexec_microvm_shell(extra)
+        return 0
     settings = load_settings(config_path=config_path)
     configure_logging(level=settings.log_level, format=settings.log_format)
     if image is not None:
@@ -131,13 +146,25 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     migrate_parser = sub.add_parser("migrate", help="Apply store migrations")
     migrate_parser.add_argument("--config", default=None, help="TOML config file")
-    install_parser = sub.add_parser("install", help="Install pinned Pi")
+    install_parser = sub.add_parser("install", help="Install Pi and/or MicroVM")
     install_parser.add_argument("--config", default=None, help="TOML config file")
+    install_parser.add_argument("--pi", action="store_true", help="Install pinned Pi")
     install_parser.add_argument(
-        "--force", action="store_true", help="Reinstall even if Pi already matches"
+        "--microvm",
+        action="store_true",
+        help="Install Firecracker, jailer, and guest images",
     )
     install_parser.add_argument(
-        "--dry-run", action="store_true", help="Print the npm command and exit"
+        "--image",
+        choices=("default", "browser"),
+        default=None,
+        help="MicroVM rootfs flavor (default: default)",
+    )
+    install_parser.add_argument(
+        "--force", action="store_true", help="Reinstall even if already present"
+    )
+    install_parser.add_argument(
+        "--dry-run", action="store_true", help="Print install commands and exit"
     )
     check_parser = sub.add_parser("check", help="Verify requirements without serving")
     check_parser.add_argument("--config", default=None, help="TOML config file")
@@ -179,7 +206,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "install":
             settings = load_settings(config_path=args.config)
             configure_logging(level=settings.log_level, format=settings.log_format)
-            return install_pi(settings, force=args.force, dry_run=args.dry_run)
+            flagged = args.pi or args.microvm or args.image is not None
+            return run_install(
+                settings,
+                pi=args.pi if flagged else None,
+                microvm=(args.microvm or args.image is not None) if flagged else None,
+                image=args.image,
+                force=args.force,
+                dry_run=args.dry_run,
+            )
         if args.command == "check":
             return check_ready(
                 config_path=args.config,

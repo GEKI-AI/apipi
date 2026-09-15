@@ -201,9 +201,9 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
 | `APIPI_RUN_MODE` | `[sandbox].backend` | `none` | `none` \| `microvm` \| `package.mod:Class`. |
-| `APIPI_MICROVM_KERNEL` | `[sandbox].kernel` | unset | Guest kernel image. Required when the backend is `microvm`. |
-| `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | unset | Guest rootfs for `image = "default"`. Required when the backend is `microvm`. Build the image on the operator machine. |
-| `APIPI_MICROVM_ROOTFS_BROWSER` | `[sandbox].rootfs_browser` | unset | Guest rootfs for `image = "browser"`. Required when that image is selected. Build with `./scripts/microvm-rootfs --flavor browser`. |
+| `APIPI_MICROVM_KERNEL` | `[sandbox].kernel` | `$XDG_CACHE_HOME/apipi/microvm/vmlinux` when that file exists | Guest kernel image. Required when the backend is `microvm` unless `apipi install --microvm` has already written the cache file. |
+| `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | `$XDG_CACHE_HOME/apipi/microvm/rootfs.ext4` when that file exists | Guest rootfs for `image = "default"`. Required when the backend is `microvm` unless the cache file exists. Build with `apipi install --microvm` or `./scripts/microvm-rootfs`. |
+| `APIPI_MICROVM_ROOTFS_BROWSER` | `[sandbox].rootfs_browser` | `$XDG_CACHE_HOME/apipi/microvm/rootfs-browser.ext4` when that file exists | Guest rootfs for `image = "browser"`. Required when that image is selected unless the cache file exists. Build with `apipi install --microvm --image browser`. |
 | `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser`. Which rootfs `microvm` boots. Process-wide. Missing path for the selected image exits at startup. |
 
 ```toml

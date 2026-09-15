@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `apipi install` asks Pi / MicroVM / both on a TTY. `--microvm`
+  downloads pinned Firecracker 1.17.0 and builds guest images.
+  Unset kernel and rootfs paths use those cache files when they
+  exist. `apipi microvm shell` re-runs under sudo with `PATH` and
+  `HOME` kept.
 - `POST /v1/agents/sessions/{id}/events` accepts the OpenAI nested
   `events` envelope and the existing flat body.
 - OpenAI compatibility page with comparison tables for routes, fields,

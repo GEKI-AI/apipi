@@ -4,10 +4,12 @@ import errno
 import io
 import json
 import os
+import pwd
 import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -40,10 +42,13 @@ SHELL_WARNING = (
     "Operator microVM shell. TAP egress allowlist still applies. "
     "Exit the shell or press Ctrl-C to stop the VM."
 )
+SHELL_SUDO_MARK = "APIPI_MICROVM_SHELL_SUDO"
+SHELL_SUDO_NOTICE = "Need root for TAP, NAT, and jailer. Re-running under sudo."
 NET_RIGHTS = (
     "Need root or CAP_NET_ADMIN (and CAP_NET_RAW) for TAP, NAT, and ip_forward."
 )
 JAILER_RIGHTS = "Need root to chroot Firecracker with jailer."
+INSTALL_HINT = "Run apipi install and pick MicroVM"
 
 
 class TapNet(NamedTuple):
@@ -78,26 +83,103 @@ def kvm_available() -> bool:
     return os.access("/dev/kvm", os.R_OK | os.W_OK)
 
 
+def operator_home() -> Path:
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and os.geteuid() == 0:
+        try:
+            return Path(pwd.getpwnam(sudo_user).pw_dir)
+        except KeyError:
+            pass
+    return Path.home()
+
+
+def xdg_cache_home() -> Path:
+    raw = os.environ.get("XDG_CACHE_HOME")
+    if raw:
+        return Path(raw)
+    return operator_home() / ".cache"
+
+
+def xdg_data_home() -> Path:
+    raw = os.environ.get("XDG_DATA_HOME")
+    if raw:
+        return Path(raw)
+    return operator_home() / ".local" / "share"
+
+
+def microvm_image_dir() -> Path:
+    return xdg_cache_home() / "apipi" / "microvm"
+
+
+def firecracker_bin_dirs() -> list[Path]:
+    dirs = [xdg_data_home() / "apipi" / "firecracker"]
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and os.geteuid() == 0:
+        try:
+            home = Path(pwd.getpwnam(sudo_user).pw_dir)
+        except KeyError:
+            home = None
+        if home is not None:
+            extra = home / ".local" / "share" / "apipi" / "firecracker"
+            if extra not in dirs:
+                dirs.append(extra)
+    return dirs
+
+
+def default_kernel_path() -> Path:
+    return microvm_image_dir() / "vmlinux"
+
+
+def default_rootfs_path() -> Path:
+    return microvm_image_dir() / "rootfs.ext4"
+
+
+def default_rootfs_browser_path() -> Path:
+    return microvm_image_dir() / "rootfs-browser.ext4"
+
+
+def _find_binary(name: str) -> str | None:
+    found = shutil.which(name)
+    if found is not None:
+        return found
+    for folder in firecracker_bin_dirs():
+        candidate = folder / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _image_missing(name: str, path: Path) -> ConfigError:
+    return ConfigError(
+        f"microvm requires {name}. {INSTALL_HINT}, or set {name} / "
+        f"[sandbox].{name.removeprefix('APIPI_MICROVM_').lower()}. Looked at {path}"
+    )
+
+
 def microvm_binaries() -> tuple[str, str]:
-    firecracker = shutil.which("firecracker")
+    firecracker = _find_binary("firecracker")
     if firecracker is None:
-        raise ConfigError("APIPI_RUN_MODE=microvm requires firecracker")
-    jailer = shutil.which("jailer")
+        raise ConfigError(
+            f"microvm requires firecracker. {INSTALL_HINT}, or put firecracker on PATH"
+        )
+    jailer = _find_binary("jailer")
     if jailer is None:
-        raise ConfigError("APIPI_RUN_MODE=microvm requires jailer")
+        raise ConfigError(
+            f"microvm requires jailer. {INSTALL_HINT}, or put jailer on PATH"
+        )
     return firecracker, jailer
 
 
 def microvm_net_binaries() -> tuple[str, str, str]:
     ip = shutil.which("ip")
     if ip is None:
-        raise ConfigError("APIPI_RUN_MODE=microvm requires ip")
+        raise ConfigError("microvm requires ip (install iproute2)")
     iptables = shutil.which("iptables")
     if iptables is None:
-        raise ConfigError("APIPI_RUN_MODE=microvm requires iptables")
+        raise ConfigError("microvm requires iptables (install iptables)")
     tc = shutil.which("tc")
     if tc is None:
-        raise ConfigError("APIPI_RUN_MODE=microvm requires tc")
+        raise ConfigError("microvm requires tc (install iproute2)")
     return ip, iptables, tc
 
 
@@ -111,6 +193,20 @@ def microvm_image_name(settings: Settings | None = None) -> str:
     return image
 
 
+def _resolve_image_file(configured: str | None, default: Path, name: str) -> str:
+    if configured:
+        path = Path(configured)
+        if path.is_file():
+            return str(path)
+        raise ConfigError(
+            f"microvm requires {name} ({path} is not a file). {INSTALL_HINT}, "
+            f"or set {name} / [sandbox].{name.removeprefix('APIPI_MICROVM_').lower()}"
+        )
+    if default.is_file():
+        return str(default)
+    raise _image_missing(name, default)
+
+
 def microvm_images(settings: Settings | None = None) -> tuple[str, str]:
     if settings is not None:
         kernel = settings.microvm_kernel
@@ -120,23 +216,75 @@ def microvm_images(settings: Settings | None = None) -> tuple[str, str]:
         kernel = os.environ.get("APIPI_MICROVM_KERNEL")
         default_rootfs = os.environ.get("APIPI_MICROVM_ROOTFS")
         browser_rootfs = os.environ.get("APIPI_MICROVM_ROOTFS_BROWSER")
-    if not kernel or not Path(kernel).is_file():
-        raise ConfigError("APIPI_RUN_MODE=microvm requires APIPI_MICROVM_KERNEL")
+    kernel_path = _resolve_image_file(
+        kernel, default_kernel_path(), "APIPI_MICROVM_KERNEL"
+    )
     image = microvm_image_name(settings)
     if image == "browser":
-        if not browser_rootfs or not Path(browser_rootfs).is_file():
-            raise ConfigError(
-                "APIPI_RUN_MODE=microvm requires APIPI_MICROVM_ROOTFS_BROWSER"
-            )
-        return kernel, browser_rootfs
-    if not default_rootfs or not Path(default_rootfs).is_file():
-        raise ConfigError("APIPI_RUN_MODE=microvm requires APIPI_MICROVM_ROOTFS")
-    return kernel, default_rootfs
+        rootfs_path = _resolve_image_file(
+            browser_rootfs,
+            default_rootfs_browser_path(),
+            "APIPI_MICROVM_ROOTFS_BROWSER",
+        )
+        return kernel_path, rootfs_path
+    rootfs_path = _resolve_image_file(
+        default_rootfs, default_rootfs_path(), "APIPI_MICROVM_ROOTFS"
+    )
+    return kernel_path, rootfs_path
+
+
+def microvm_shell_needs_sudo() -> bool:
+    if os.geteuid() == 0:
+        return False
+    return os.environ.get(SHELL_SUDO_MARK) != "1"
+
+
+def microvm_shell_sudo_argv(
+    extra: list[str],
+    *,
+    executable: str | None = None,
+    home: str | None = None,
+    path: str | None = None,
+) -> list[str]:
+    argv = [
+        "sudo",
+        "-E",
+        "env",
+        f"PATH={path if path is not None else os.environ.get('PATH', '')}",
+        f"HOME={home if home is not None else os.environ.get('HOME', '')}",
+        f"{SHELL_SUDO_MARK}=1",
+    ]
+    for key in ("XDG_CACHE_HOME", "XDG_DATA_HOME"):
+        value = os.environ.get(key)
+        if value:
+            argv.append(f"{key}={value}")
+    argv.extend(
+        [
+            executable if executable is not None else sys.executable,
+            "-m",
+            "apipi",
+            "microvm",
+            "shell",
+            *extra,
+        ]
+    )
+    return argv
+
+
+def reexec_microvm_shell(extra: list[str]) -> None:
+    argv = microvm_shell_sudo_argv(extra)
+    print(SHELL_SUDO_NOTICE, file=sys.stderr)
+    try:
+        os.execvp(argv[0], argv)
+    except OSError as exc:
+        raise ConfigError(
+            f"microvm shell needs sudo on PATH to create TAP devices: {exc}"
+        ) from exc
 
 
 def require_microvm(settings: Settings | None = None) -> None:
     if not kvm_available():
-        raise ConfigError("APIPI_RUN_MODE=microvm requires /dev/kvm")
+        raise ConfigError("microvm requires /dev/kvm")
     microvm_binaries()
     microvm_net_binaries()
     microvm_images(settings)
@@ -146,7 +294,7 @@ async def probe_microvm(settings: Settings) -> None:
     proc = await spawn_microvm_pi(settings, cwd=None, tools=False)
     try:
         if not proc.alive:
-            raise ConfigError("APIPI_RUN_MODE=microvm cannot start")
+            raise ConfigError("microvm cannot start")
     finally:
         await proc.terminate()
 
@@ -221,7 +369,7 @@ def resolve_host_ips(host: str) -> list[str]:
     try:
         infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
     except OSError as exc:
-        raise ConfigError(f"APIPI_RUN_MODE=microvm cannot resolve {host}") from exc
+        raise ConfigError(f"microvm cannot resolve {host}") from exc
     ips: list[str] = []
     seen: set[str] = set()
     for info in infos:
@@ -231,7 +379,7 @@ def resolve_host_ips(host: str) -> list[str]:
         seen.add(ip)
         ips.append(ip)
     if not ips:
-        raise ConfigError(f"APIPI_RUN_MODE=microvm cannot resolve {host}")
+        raise ConfigError(f"microvm cannot resolve {host}")
     return ips
 
 
@@ -826,10 +974,8 @@ def _host_cmd_error(argv: list[str], exc: BaseException) -> ConfigError:
     detail = _exc_detail(exc)
     step = _host_step(argv)
     if _permission_denied(detail, exc):
-        return ConfigError(
-            f"APIPI_RUN_MODE=microvm cannot {step}: {detail}. {NET_RIGHTS}"
-        )
-    return ConfigError(f"APIPI_RUN_MODE=microvm cannot {step}: {detail}")
+        return ConfigError(f"microvm cannot {step}: {detail}. {NET_RIGHTS}")
+    return ConfigError(f"microvm cannot {step}: {detail}")
 
 
 def _enable_forward() -> None:
@@ -842,11 +988,9 @@ def _enable_forward() -> None:
         detail = _exc_detail(exc)
         if _permission_denied(detail, exc):
             raise ConfigError(
-                f"APIPI_RUN_MODE=microvm cannot set ip_forward: {detail}. {NET_RIGHTS}"
+                f"microvm cannot set ip_forward: {detail}. {NET_RIGHTS}"
             ) from exc
-        raise ConfigError(
-            f"APIPI_RUN_MODE=microvm cannot set ip_forward: {detail}"
-        ) from exc
+        raise ConfigError(f"microvm cannot set ip_forward: {detail}") from exc
 
 
 def _run(argv: list[str]) -> None:
@@ -923,7 +1067,7 @@ async def connect_vsock(
     last: Exception | None = None
     while time.monotonic() < deadline:
         if process is not None and process.returncode is not None:
-            raise ConfigError("APIPI_RUN_MODE=microvm cannot start")
+            raise ConfigError("microvm cannot start")
         try:
             reader, writer = await asyncio.open_unix_connection(str(path))
         except OSError as exc:
@@ -941,10 +1085,10 @@ async def connect_vsock(
             continue
         if line.startswith(b"OK"):
             return reader, writer
-        last = ConfigError("APIPI_RUN_MODE=microvm cannot start")
+        last = ConfigError("microvm cannot start")
         await _close_writer(writer)
         await asyncio.sleep(0.05)
-    raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from last
+    raise ConfigError("microvm cannot start") from last
 
 
 async def start_microvm(
@@ -1056,17 +1200,15 @@ async def start_microvm(
         detail = _exc_detail(exc)
         if _permission_denied(detail, exc):
             raise ConfigError(
-                f"APIPI_RUN_MODE=microvm cannot start jailer: {detail}. {JAILER_RIGHTS}"
+                f"microvm cannot start jailer: {detail}. {JAILER_RIGHTS}"
             ) from exc
-        raise ConfigError(
-            f"APIPI_RUN_MODE=microvm cannot start jailer: {detail}"
-        ) from exc
+        raise ConfigError(f"microvm cannot start jailer: {detail}") from exc
     pid = process.pid
     if pid is None:
         process.kill()
         await process.wait()
         cleanup()
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start jailer")
+        raise ConfigError("microvm cannot start jailer")
     return StartedMicrovm(process, chroot_dir, cleanup)
 
 
@@ -1107,7 +1249,7 @@ async def spawn_microvm_pi(
         started.cleanup()
         if isinstance(exc, ConfigError):
             raise
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from exc
+        raise ConfigError("microvm cannot start") from exc
 
     async def _pull(port: int) -> bytes:
         art_reader, art_writer = await connect_vsock(
