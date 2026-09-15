@@ -1,5 +1,7 @@
 import asyncio
+import errno
 import json
+import subprocess
 import tarfile
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -23,6 +25,8 @@ from apipi.pi.microvm import (
     GUEST_WORKSPACE,
     VSOCK_PORT,
     StartedMicrovm,
+    _enable_forward,
+    _run,
     connect_vsock,
     egress_host,
     guest_env,
@@ -670,6 +674,80 @@ def test_setup_tap_runs_ip_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "127.0.0.1" not in flat
     assert "25mbit" in flat
     assert "203.0.113.10" in flat
+
+
+def test_run_tap_permission_names_rights(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(argv: list[str], **_kwargs: Any) -> None:
+        raise subprocess.CalledProcessError(
+            1,
+            argv,
+            stderr=b"ioctl(TUNSETIFF): Operation not permitted\n",
+        )
+
+    monkeypatch.setattr("apipi.pi.microvm.subprocess.run", fake_run)
+    with pytest.raises(ConfigError, match="TAP device") as err:
+        _run(["/sbin/ip", "tuntap", "add", "dev", "apipix", "mode", "tap"])
+    text = str(err.value)
+    assert "Operation not permitted" in text
+    assert "CAP_NET_ADMIN" in text
+
+
+def test_run_iptables_permission_names_rights(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(argv: list[str], **_kwargs: Any) -> None:
+        raise subprocess.CalledProcessError(1, argv, stderr=b"Permission denied\n")
+
+    monkeypatch.setattr("apipi.pi.microvm.subprocess.run", fake_run)
+    with pytest.raises(ConfigError, match="iptables") as err:
+        _run(["/sbin/iptables", "-w", "-A", "FORWARD"])
+    text = str(err.value)
+    assert "Permission denied" in text
+    assert "CAP_NET_ADMIN" in text
+
+
+def test_run_other_failure_includes_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(argv: list[str], **_kwargs: Any) -> None:
+        raise subprocess.CalledProcessError(
+            1, argv, stderr=b'Cannot find device "apipix"\n'
+        )
+
+    monkeypatch.setattr("apipi.pi.microvm.subprocess.run", fake_run)
+    with pytest.raises(ConfigError, match="Cannot find device") as err:
+        _run(["/sbin/ip", "link", "set", "apipix", "up"])
+    assert "CAP_NET_ADMIN" not in str(err.value)
+
+
+def test_enable_forward_permission_names_rights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Denied:
+        def read_text(self, *_a: object, **_k: object) -> str:
+            return "0\n"
+
+        def write_text(self, *_a: object, **_k: object) -> None:
+            raise OSError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr("apipi.pi.microvm.Path", lambda *_a, **_k: Denied())
+    with pytest.raises(ConfigError, match="ip_forward") as err:
+        _enable_forward()
+    text = str(err.value)
+    assert "Permission denied" in text
+    assert "CAP_NET_ADMIN" in text
+
+
+async def test_start_microvm_jailer_permission(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        raise PermissionError("Permission denied")
+
+    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
+    with pytest.raises(ConfigError, match="jailer") as err:
+        await start_microvm(_settings(tmp_path), cwd=None, tools=True)
+    text = str(err.value)
+    assert "Permission denied" in text
+    assert "root" in text
 
 
 async def test_spawn_microvm_stdio_stays_in_guest(

@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from apipi.cli import main
-from apipi.config import Settings
+from apipi.config import ConfigError, Settings
 from apipi.pi.microvm import SHELL_WARNING
 
 
@@ -58,3 +58,28 @@ def test_cli_microvm_shell_image_and_workspace(
     assert captured["image"] == "browser"
     assert captured["cwd"] == str(workspace)
     assert SHELL_WARNING in capsys.readouterr().err
+
+
+def test_cli_microvm_shell_prints_tap_rights(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def boom(_settings: Settings, *, cwd: str | None = None) -> int:
+        raise ConfigError(
+            "APIPI_RUN_MODE=microvm cannot create a TAP device: "
+            "Operation not permitted. Need root or CAP_NET_ADMIN "
+            "(and CAP_NET_RAW) for TAP, NAT, and ip_forward."
+        )
+
+    monkeypatch.setattr("apipi.cli.sys.stdin", _Tty())
+    monkeypatch.setattr("apipi.cli.run_microvm_shell", boom)
+    monkeypatch.setattr(
+        "apipi.cli.load_settings",
+        lambda config_path=None: Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi"
+        ),
+    )
+    assert main(["microvm", "shell"]) == 1
+    err = capsys.readouterr().err
+    assert "TAP device" in err
+    assert "CAP_NET_ADMIN" in err
+    assert "Operation not permitted" in err

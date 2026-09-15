@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import errno
 import io
 import json
 import os
@@ -39,6 +40,10 @@ SHELL_WARNING = (
     "Operator microVM shell. TAP egress allowlist still applies. "
     "Exit the shell or press Ctrl-C to stop the VM."
 )
+NET_RIGHTS = (
+    "Need root or CAP_NET_ADMIN (and CAP_NET_RAW) for TAP, NAT, and ip_forward."
+)
+JAILER_RIGHTS = "Need root to chroot Firecracker with jailer."
 
 
 class TapNet(NamedTuple):
@@ -780,6 +785,53 @@ def tap_teardown_argv(
     return cmds
 
 
+def _exc_detail(exc: BaseException) -> str:
+    if isinstance(exc, subprocess.CalledProcessError):
+        raw = exc.stderr if exc.stderr else exc.stdout
+        if isinstance(raw, bytes):
+            text = raw.decode("utf-8", "replace").strip()
+        elif raw:
+            text = str(raw).strip()
+        else:
+            text = ""
+        return text or f"exit {exc.returncode}"
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    return str(exc).strip()
+
+
+def _permission_denied(detail: str, exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    if isinstance(exc, OSError) and exc.errno in {errno.EPERM, errno.EACCES}:
+        return True
+    text = detail.lower()
+    return "operation not permitted" in text or "permission denied" in text
+
+
+def _host_step(argv: list[str]) -> str:
+    name = Path(argv[0]).name if argv else "command"
+    if name == "ip" and "tuntap" in argv:
+        return "create a TAP device"
+    if name == "ip":
+        return "configure the TAP device"
+    if name == "iptables":
+        return "add iptables NAT or filter rules"
+    if name == "tc":
+        return "rate-limit TAP egress with tc"
+    return f"run {name}"
+
+
+def _host_cmd_error(argv: list[str], exc: BaseException) -> ConfigError:
+    detail = _exc_detail(exc)
+    step = _host_step(argv)
+    if _permission_denied(detail, exc):
+        return ConfigError(
+            f"APIPI_RUN_MODE=microvm cannot {step}: {detail}. {NET_RIGHTS}"
+        )
+    return ConfigError(f"APIPI_RUN_MODE=microvm cannot {step}: {detail}")
+
+
 def _enable_forward() -> None:
     path = Path("/proc/sys/net/ipv4/ip_forward")
     try:
@@ -787,14 +839,21 @@ def _enable_forward() -> None:
             return
         path.write_text("1")
     except OSError as exc:
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from exc
+        detail = _exc_detail(exc)
+        if _permission_denied(detail, exc):
+            raise ConfigError(
+                f"APIPI_RUN_MODE=microvm cannot set ip_forward: {detail}. {NET_RIGHTS}"
+            ) from exc
+        raise ConfigError(
+            f"APIPI_RUN_MODE=microvm cannot set ip_forward: {detail}"
+        ) from exc
 
 
 def _run(argv: list[str]) -> None:
     try:
         subprocess.run(argv, check=True, capture_output=True)
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from exc
+        raise _host_cmd_error(argv, exc) from exc
 
 
 def setup_tap(
@@ -994,13 +1053,20 @@ async def start_microvm(
         cleanup()
         if isinstance(exc, ConfigError):
             raise
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from exc
+        detail = _exc_detail(exc)
+        if _permission_denied(detail, exc):
+            raise ConfigError(
+                f"APIPI_RUN_MODE=microvm cannot start jailer: {detail}. {JAILER_RIGHTS}"
+            ) from exc
+        raise ConfigError(
+            f"APIPI_RUN_MODE=microvm cannot start jailer: {detail}"
+        ) from exc
     pid = process.pid
     if pid is None:
         process.kill()
         await process.wait()
         cleanup()
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start")
+        raise ConfigError("APIPI_RUN_MODE=microvm cannot start jailer")
     return StartedMicrovm(process, chroot_dir, cleanup)
 
 

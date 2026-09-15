@@ -199,9 +199,11 @@ guest gets an empty scratch workspace.
 
 Requirements match `apipi check` without `--fast`: KVM, Firecracker,
 jailer, `ip`, `iptables`, `tc`, and the selected kernel and rootfs.
-The command does not need `APIPI_RUN_MODE=microvm`. Misconfiguration
-fails with the same class of errors as `apipi check` and does not
-hang. The command needs a TTY.
+The command does not need `APIPI_RUN_MODE=microvm`. Creating a TAP
+device, NAT rules, and `ip_forward` needs root or `CAP_NET_ADMIN`.
+Jailer needs root to chroot Firecracker. Misconfiguration fails with
+a message that names the failed step (missing binary, missing image,
+or missing rights) and does not hang. The command needs a TTY.
 
 The guest cwd is `/workspace`. Pi is on `PATH`. Type `exit` or press
 Ctrl-C to stop the VM. TAP devices, jailer chroot, and temp dirs are

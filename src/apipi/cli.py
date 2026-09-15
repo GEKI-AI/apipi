@@ -78,7 +78,10 @@ def microvm_shell(
     workspace: str | None,
 ) -> int:
     if not sys.stdin.isatty():
-        print("apipi microvm shell needs a TTY", file=sys.stderr)
+        print(
+            "apipi microvm shell needs a TTY. Run it in a terminal, not a pipe.",
+            file=sys.stderr,
+        )
         return 1
     settings = load_settings(config_path=config_path)
     configure_logging(level=settings.log_level, format=settings.log_format)
