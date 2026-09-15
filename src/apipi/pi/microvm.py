@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import errno
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import tarfile
 import tempfile
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlparse
@@ -34,6 +36,14 @@ GUEST_WORKSPACE = "/workspace"
 GUEST_DNS = ("1.1.1.1", "8.8.8.8")
 TAP_NET_BASE = 0xAC100000
 TAP_NET_SLOTS = 16384
+SHELL_WARNING = (
+    "Operator microVM shell. TAP egress allowlist still applies. "
+    "Exit the shell or press Ctrl-C to stop the VM."
+)
+NET_RIGHTS = (
+    "Need root or CAP_NET_ADMIN (and CAP_NET_RAW) for TAP, NAT, and ip_forward."
+)
+JAILER_RIGHTS = "Need root to chroot Firecracker with jailer."
 
 
 class TapNet(NamedTuple):
@@ -52,6 +62,16 @@ class TapNet(NamedTuple):
     @property
     def subnet(self) -> str:
         return f"{self.network}/{self.prefix}"
+
+
+class StartedMicrovm(NamedTuple):
+    process: asyncio.subprocess.Process
+    chroot_dir: Path
+    cleanup: Callable[[], None]
+
+    @property
+    def vsock(self) -> Path:
+        return self.chroot_dir / VSOCK_UDS
 
 
 def kvm_available() -> bool:
@@ -338,6 +358,7 @@ def write_workspace_image(
     pi_args: list[str],
     net: TapNet | None = None,
     extra_dirs: list[tuple[Path, str]] | None = None,
+    shell: bool = False,
 ) -> None:
     guest_py = Path(__file__).with_name("guest.py").read_bytes()
     guest_sh = Path(__file__).with_name("guest.sh").read_bytes()
@@ -354,6 +375,8 @@ def write_workspace_image(
         _add_bytes(tar, ".apipi/pi-cmd", shlex.join(pi_args).encode(), mode=0o644)
         _add_bytes(tar, ".apipi/guest.py", guest_py, mode=0o755)
         _add_bytes(tar, ".apipi/guest.sh", guest_sh, mode=0o755)
+        if shell:
+            _add_bytes(tar, ".apipi/shell", b"", mode=0o644)
     data = buf.getvalue()
     extra = len(data) % 512
     if extra:
@@ -762,6 +785,53 @@ def tap_teardown_argv(
     return cmds
 
 
+def _exc_detail(exc: BaseException) -> str:
+    if isinstance(exc, subprocess.CalledProcessError):
+        raw = exc.stderr if exc.stderr else exc.stdout
+        if isinstance(raw, bytes):
+            text = raw.decode("utf-8", "replace").strip()
+        elif raw:
+            text = str(raw).strip()
+        else:
+            text = ""
+        return text or f"exit {exc.returncode}"
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    return str(exc).strip()
+
+
+def _permission_denied(detail: str, exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    if isinstance(exc, OSError) and exc.errno in {errno.EPERM, errno.EACCES}:
+        return True
+    text = detail.lower()
+    return "operation not permitted" in text or "permission denied" in text
+
+
+def _host_step(argv: list[str]) -> str:
+    name = Path(argv[0]).name if argv else "command"
+    if name == "ip" and "tuntap" in argv:
+        return "create a TAP device"
+    if name == "ip":
+        return "configure the TAP device"
+    if name == "iptables":
+        return "add iptables NAT or filter rules"
+    if name == "tc":
+        return "rate-limit TAP egress with tc"
+    return f"run {name}"
+
+
+def _host_cmd_error(argv: list[str], exc: BaseException) -> ConfigError:
+    detail = _exc_detail(exc)
+    step = _host_step(argv)
+    if _permission_denied(detail, exc):
+        return ConfigError(
+            f"APIPI_RUN_MODE=microvm cannot {step}: {detail}. {NET_RIGHTS}"
+        )
+    return ConfigError(f"APIPI_RUN_MODE=microvm cannot {step}: {detail}")
+
+
 def _enable_forward() -> None:
     path = Path("/proc/sys/net/ipv4/ip_forward")
     try:
@@ -769,14 +839,21 @@ def _enable_forward() -> None:
             return
         path.write_text("1")
     except OSError as exc:
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from exc
+        detail = _exc_detail(exc)
+        if _permission_denied(detail, exc):
+            raise ConfigError(
+                f"APIPI_RUN_MODE=microvm cannot set ip_forward: {detail}. {NET_RIGHTS}"
+            ) from exc
+        raise ConfigError(
+            f"APIPI_RUN_MODE=microvm cannot set ip_forward: {detail}"
+        ) from exc
 
 
 def _run(argv: list[str]) -> None:
     try:
         subprocess.run(argv, check=True, capture_output=True)
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from exc
+        raise _host_cmd_error(argv, exc) from exc
 
 
 def setup_tap(
@@ -870,7 +947,7 @@ async def connect_vsock(
     raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from last
 
 
-async def spawn_microvm_pi(
+async def start_microvm(
     settings: Settings,
     *,
     cwd: str | None,
@@ -881,7 +958,9 @@ async def spawn_microvm_pi(
     model: str | None = None,
     instructions: str | None = None,
     api_key: str | None = None,
-) -> PiProc:
+    shell: bool = False,
+    inherit_stdio: bool = False,
+) -> StartedMicrovm:
     require_microvm(settings)
     firecracker, jailer = microvm_binaries()
     ip_bin, iptables_bin, tc_bin = microvm_net_binaries()
@@ -902,6 +981,7 @@ async def spawn_microvm_pi(
         if allowlist
         else []
     )
+    stdio = None if inherit_stdio else asyncio.subprocess.DEVNULL
 
     def cleanup() -> None:
         teardown_tap(
@@ -942,6 +1022,7 @@ async def spawn_microvm_pi(
             ),
             net=net,
             extra_dirs=extra_dirs,
+            shell=shell,
         )
         config = microvm_config(
             kernel="vmlinux",
@@ -964,24 +1045,58 @@ async def spawn_microvm_pi(
         )
         process = await asyncio.create_subprocess_exec(
             *argv,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stdin=stdio,
+            stdout=stdio,
+            stderr=stdio,
         )
     except (OSError, ConfigError) as exc:
         cleanup()
         if isinstance(exc, ConfigError):
             raise
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from exc
+        detail = _exc_detail(exc)
+        if _permission_denied(detail, exc):
+            raise ConfigError(
+                f"APIPI_RUN_MODE=microvm cannot start jailer: {detail}. {JAILER_RIGHTS}"
+            ) from exc
+        raise ConfigError(
+            f"APIPI_RUN_MODE=microvm cannot start jailer: {detail}"
+        ) from exc
     pid = process.pid
     if pid is None:
         process.kill()
         await process.wait()
         cleanup()
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start")
+        raise ConfigError("APIPI_RUN_MODE=microvm cannot start jailer")
+    return StartedMicrovm(process, chroot_dir, cleanup)
+
+
+async def spawn_microvm_pi(
+    settings: Settings,
+    *,
+    cwd: str | None,
+    tools: bool,
+    mcp_http: list[McpHttpServer] | None = None,
+    mcp_stdio: list[McpStdioServer] | None = None,
+    skill_dirs: list[str] | None = None,
+    model: str | None = None,
+    instructions: str | None = None,
+    api_key: str | None = None,
+) -> PiProc:
+    started = await start_microvm(
+        settings,
+        cwd=cwd,
+        tools=tools,
+        mcp_http=mcp_http,
+        mcp_stdio=mcp_stdio,
+        skill_dirs=skill_dirs,
+        model=model,
+        instructions=instructions,
+        api_key=api_key,
+    )
+    process = started.process
     try:
         reader, writer = await connect_vsock(
-            chroot_dir / VSOCK_UDS,
+            started.vsock,
             VSOCK_PORT,
             process=process,
         )
@@ -989,15 +1104,14 @@ async def spawn_microvm_pi(
         if process.returncode is None:
             process.kill()
             await process.wait()
-        cleanup()
+        started.cleanup()
         if isinstance(exc, ConfigError):
             raise
         raise ConfigError("APIPI_RUN_MODE=microvm cannot start") from exc
-    vsock = chroot_dir / VSOCK_UDS
 
     async def _pull(port: int) -> bytes:
         art_reader, art_writer = await connect_vsock(
-            vsock,
+            started.vsock,
             port,
             timeout=5.0,
             process=process,
@@ -1016,7 +1130,31 @@ async def spawn_microvm_pi(
         process,
         stdin=writer,
         stdout=reader,
-        on_stop=cleanup,
+        on_stop=started.cleanup,
         pull_artifacts=pull_artifacts,
         pull_workspace=pull_workspace,
     )
+
+
+async def run_microvm_shell(settings: Settings, *, cwd: str | None = None) -> int:
+    if cwd is not None:
+        path = Path(cwd).resolve()
+        if not path.is_dir():
+            raise ConfigError("apipi microvm shell --workspace must be a directory")
+        cwd = str(path)
+    started = await start_microvm(
+        settings,
+        cwd=cwd,
+        tools=True,
+        shell=True,
+        inherit_stdio=True,
+    )
+    try:
+        await started.process.wait()
+        code = started.process.returncode
+        return 0 if code == 0 else 1
+    finally:
+        if started.process.returncode is None:
+            started.process.kill()
+            await started.process.wait()
+        started.cleanup()

@@ -179,6 +179,40 @@ This is the mode that protects the host from a hostile session. Guest
 RAM is the real cost (`APIPI_MICROVM_MEM_MIB`, default 512). Chromium
 can use its own sandbox inside the guest.
 
+## Debug the guest
+
+`apipi microvm shell` boots the same Firecracker guest that agent
+sessions use: same kernel, rootfs flavor, jailer, TAP, and egress
+allowlist. It attaches your terminal to the serial console. It does
+not bind HTTP and does not create a tenant session. Use it to inspect
+the image, run `pi` on the CLI, and debug networking.
+
+```
+apipi microvm shell --config /etc/apipi.toml
+apipi microvm shell --image browser --workspace /path/to/files
+```
+
+`--image` selects `default` or `browser` for this VM only. Unset, it
+follows `APIPI_MICROVM_IMAGE`. `--workspace` packs a host directory
+into guest `/workspace` the same way `openai_hosted` does. Unset, the
+guest gets an empty scratch workspace.
+
+Requirements match `apipi check` without `--fast`: KVM, Firecracker,
+jailer, `ip`, `iptables`, `tc`, and the selected kernel and rootfs.
+The command does not need `APIPI_RUN_MODE=microvm`. Creating a TAP
+device, NAT rules, and `ip_forward` needs root or `CAP_NET_ADMIN`.
+Jailer needs root to chroot Firecracker. Misconfiguration fails with
+a message that names the failed step (missing binary, missing image,
+or missing rights) and does not hang. The command needs a TTY.
+
+The guest cwd is `/workspace`. Pi is on `PATH`. Type `exit` or press
+Ctrl-C to stop the VM. TAP devices, jailer chroot, and temp dirs are
+removed the same way a session kill does.
+
+This is an operator and lab tool. The TAP egress allowlist still
+applies. Do not turn the allowlist off unless you already do that in
+this lab. Agent spawn is unchanged.
+
 ## Custom isolation
 
 Operators and embedders can implement another isolation backend
