@@ -73,6 +73,7 @@ nav:
       - Production: production.md
       - Multiple nodes: scale.md
       - Using the API: using.md
+      - OpenAI compatibility: openai-compatibility.md
   - Concepts:
       - Agents, sessions, and storage: concepts.md
   - Reference:

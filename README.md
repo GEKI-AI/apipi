@@ -6,6 +6,9 @@ ApiPi is an open-source agent platform. [Pi](https://pi.dev) runs the
 agent loop. You host the gateway, keep control of the agents, and point
 them at your own LLM endpoints. Clients use an HTTP API compatible with
 the [OpenAI Agents API](https://developers.openai.com/api/docs/guides/agents-api).
+Unknown JSON keys return `invalid_request`. Known OpenAI fields we have
+not implemented return `not_implemented`. See
+[OpenAI compatibility](https://geki-ai.github.io/apipi/openai-compatibility/).
 
 Production sessions run in [Firecracker](https://firecracker-microvm.github.io/)
 microVMs. Each guest has its own kernel. The gateway stays on the host.
