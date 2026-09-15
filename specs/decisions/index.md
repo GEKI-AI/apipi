@@ -21,3 +21,4 @@ These files are not on the MkDocs site.
 | 0007 | Run modes |
 | 0008 | Usage and observability |
 | 0009 | Pluggable auth, no stored keys |
+| 0010 | ApiPi owns Firecracker |
