@@ -169,6 +169,11 @@ unpacked onto a guest tmpfs at `/workspace`, and is the guest cwd.
 Scratch files do not survive sandbox stop. Skill paths from that
 workspace are rewritten to `/workspace`.
 
+The guest kernel needs entropy before Pi can open TLS to the model.
+Firecracker attaches a virtio-rng device, and the workspace includes
+host random that guest init credits into `/dev/urandom`. Without that,
+Linux 4.14 `getrandom()` blocks and the turn stays in progress.
+
 RPC is JSON lines over vsock. Egress uses a TAP device and NAT. There
 is no host loopback to Postgres. By default that TAP is fail-closed:
 the guest may reach the model host from `OPENAI_BASE_URL`, HTTP MCP

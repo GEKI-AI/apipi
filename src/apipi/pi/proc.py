@@ -80,6 +80,7 @@ class PiProc:
             try:
                 event = json.loads(text)
             except json.JSONDecodeError:
+                log.warning("pi stdout not json", extra={"line": text[:200]})
                 continue
             if not isinstance(event, dict):
                 continue

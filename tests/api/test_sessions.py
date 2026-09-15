@@ -15,7 +15,8 @@ from apipi.runtime import PUBLIC_EVENT_TYPES, EventHub, FakeHarness, persist_eve
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import SessionRow
-from apipi.store.repo import create_session, create_tenant
+from apipi.store.repo import create_session, create_tenant, create_turn, update_session
+from apipi.tokens import hash_token
 
 
 def _token(name: str = "t") -> str:
@@ -452,3 +453,56 @@ async def test_unknown_session_field(client: AsyncClient) -> None:
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "unknown_field"
+
+
+async def test_get_session_recovers_stale_in_progress(
+    client: AsyncClient, store: Store
+) -> None:
+    token = _token()
+    agent_id = await _create_agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent_id, "environment": {"type": "none"}},
+    )
+    assert created.status_code == 200
+    sid = uuid.UUID(created.json()["id"])
+    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    async with store.session() as db:
+        await update_session(db, tenant_id, sid, changes={"status": "in_progress"})
+        await create_turn(db, tenant_id, sid, status="in_progress")
+    got = await client.get(f"/v1/agents/sessions/{sid}", headers=_auth(token))
+    assert got.status_code == 200
+    assert got.json()["status"] == "idle"
+    events = await client.get(f"/v1/agents/sessions/{sid}/events", headers=_auth(token))
+    types = [event["type"] for event in events.json()["data"]]
+    assert "agent.session.turn.failed" in types
+    assert types[-1] == "agent.session.idle"
+
+
+async def test_follow_up_on_stale_in_progress_starts_turn(
+    client: AsyncClient, store: Store
+) -> None:
+    token = _token()
+    agent_id = await _create_agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent_id, "environment": {"type": "none"}},
+    )
+    sid = uuid.UUID(created.json()["id"])
+    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    async with store.session() as db:
+        await update_session(db, tenant_id, sid, changes={"status": "in_progress"})
+        await create_turn(db, tenant_id, sid, status="in_progress")
+    posted = await client.post(
+        f"/v1/agents/sessions/{sid}/events",
+        headers=_auth(token),
+        json={"type": "agent.session.input.message", "content": "hello"},
+    )
+    assert posted.status_code == 200
+    assert posted.json()["status"] == "idle"
+    turns = await client.get(f"/v1/agents/sessions/{sid}/turns", headers=_auth(token))
+    statuses = [row["status"] for row in turns.json()["data"]]
+    assert "failed" in statuses
+    assert "completed" in statuses

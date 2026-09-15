@@ -17,7 +17,13 @@ from apipi.config import (
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.artifacts import unpack_workspace_tar
-from apipi.pi.guest import _pi_args, _start_mcp, workspace_tar_bytes
+from apipi.pi.guest import (
+    RNDADDENTROPY,
+    _pi_args,
+    _seed_rng,
+    _start_mcp,
+    workspace_tar_bytes,
+)
 from apipi.pi.guest import main as guest_main
 from apipi.pi.microvm import (
     BOOT_ARGS,
@@ -174,6 +180,7 @@ def test_microvm_images_browser_missing_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "empty-cache"))
     monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
     with pytest.raises(ConfigError, match="APIPI_MICROVM_ROOTFS_BROWSER"):
@@ -362,6 +369,7 @@ def test_jailer_argv_and_config_use_vsock() -> None:
             "host_dev_name": net.name,
         }
     ]
+    assert config["entropy"] == {}
 
 
 def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
@@ -390,12 +398,35 @@ def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
         net_f = tar.extractfile(".apipi/net")
         assert net_f is not None
         net_text = net_f.read().decode()
+        rnd = tar.extractfile(".apipi/random")
+        assert rnd is not None
+        assert len(rnd.read()) == 256
     assert "OPENAI_API_KEY" in text
     assert "DATABASE_URL" not in text
     assert net.guest_ip in net_text
     assert net.host_ip in net_text
     assert "127.0.0.1" not in net_text
     assert ".apipi/shell" not in names
+
+
+def test_seed_rng_credits_host_random(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    secret = tmp_path / ".apipi"
+    secret.mkdir()
+    secret.joinpath("random").write_bytes(b"x" * 256)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    called: list[tuple[int, bytes]] = []
+
+    def fake_ioctl(_fd: int, request: int, arg: bytes) -> int:
+        called.append((request, arg))
+        return 0
+
+    monkeypatch.setattr("apipi.pi.guest.fcntl.ioctl", fake_ioctl)
+    _seed_rng()
+    assert called
+    assert called[0][0] == RNDADDENTROPY
+    assert b"x" * 256 in called[0][1]
 
 
 def test_workspace_image_includes_setup_script(tmp_path: Path) -> None:
@@ -665,8 +696,8 @@ async def test_spawn_pi_microvm_uses_jailer_and_vsock(
     assert "--no-api" in args
     assert captured["vsock"] is True
     assert captured["kwargs"]["stdin"] is asyncio.subprocess.DEVNULL
-    assert captured["kwargs"]["stdout"] is asyncio.subprocess.DEVNULL
-    assert captured["kwargs"]["stderr"] is asyncio.subprocess.DEVNULL
+    assert captured["kwargs"]["stdout"] is asyncio.subprocess.PIPE
+    assert captured["kwargs"]["stderr"] is asyncio.subprocess.PIPE
     await proc.send({"type": "prompt", "message": "hi"})
     assert b'"type": "prompt"' in writer.buf
     assert proc._stdin is writer

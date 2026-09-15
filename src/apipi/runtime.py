@@ -39,6 +39,7 @@ from apipi.store.repo import (
     get_session,
     get_session_turn,
     list_items,
+    list_turns,
     update_session,
 )
 from apipi.usage import add_usage, empty_usage, usage_event, usage_from
@@ -802,6 +803,66 @@ async def _cancel_turn(
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
 
+async def fail_stale_in_progress(
+    db: AsyncSession,
+    hub: EventHub,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    message: str = "Turn interrupted",
+) -> SessionRow | None:
+    row = await get_session(db, tenant_id, session_id)
+    if row is None or row.status != "in_progress":
+        return row
+    turns = await list_turns(db, tenant_id, session_id)
+    if turns:
+        for turn in reversed(turns):
+            if turn.status == "in_progress":
+                await _fail_turn(
+                    db,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    turn.id,
+                    message,
+                    code="turn_interrupted",
+                )
+                return await get_session(db, tenant_id, session_id)
+    await update_session(
+        db,
+        tenant_id,
+        session_id,
+        changes={"status": "idle", "required_actions": []},
+    )
+    await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
+    return await get_session(db, tenant_id, session_id)
+
+
+async def prepare_for_new_turn(
+    store: Store,
+    hub: EventHub,
+    harness: Harness,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+) -> None:
+    async with store.session() as db:
+        row = await get_session(db, tenant_id, session_id)
+        if row is None or row.status != "in_progress":
+            return
+    abort = hub.turn_abort(session_id)
+    if abort is not None:
+        abort.set()
+        await harness.abort(session_id)
+        for _ in range(100):
+            async with store.session() as db:
+                row = await get_session(db, tenant_id, session_id)
+                if row is None or row.status != "in_progress":
+                    return
+            await asyncio.sleep(0.05)
+    async with store.session() as db:
+        await fail_stale_in_progress(db, hub, tenant_id, session_id)
+
+
 async def _fail_turn(
     db: AsyncSession,
     hub: EventHub,
@@ -814,6 +875,7 @@ async def _fail_turn(
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
     settings: Settings | None = None,
+    code: str = "model_host_error",
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is not None:
@@ -844,7 +906,7 @@ async def _fail_turn(
         tenant_id,
         session_id,
         type="agent.session.error",
-        data={"message": message, "code": "model_host_error"},
+        data={"message": message, "code": code},
     )
     row = await get_session(db, tenant_id, session_id)
     current = row.required_actions if row is not None else []

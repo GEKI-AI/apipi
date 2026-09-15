@@ -54,9 +54,17 @@ class PiHarness:
             key_id=key_id if isinstance(key_id, str) else None,
             env_type=env_type,
         )
+        settled = False
         async for event in proc.prompt(text):
+            if event.get("type") == "agent_settled":
+                settled = True
             for public in map_pi_event(event):
                 yield public
+        if not settled:
+            yield (
+                "pi_error",
+                {"message": "Pi stopped before the turn finished"},
+            )
         self.pool.touch(session_id)
 
     async def abort(self, session_id: uuid.UUID) -> None:

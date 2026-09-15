@@ -525,6 +525,7 @@ def write_workspace_image(
         _add_bytes(tar, ".apipi/pi-cmd", shlex.join(pi_args).encode(), mode=0o644)
         _add_bytes(tar, ".apipi/guest.py", guest_py, mode=0o755)
         _add_bytes(tar, ".apipi/guest.sh", guest_sh, mode=0o755)
+        _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
         if shell:
             _add_bytes(tar, ".apipi/shell", b"", mode=0o644)
     data = buf.getvalue()
@@ -572,6 +573,7 @@ def microvm_config(
             "guest_cid": cid,
             "uds_path": vsock,
         },
+        "entropy": {},
         "network-interfaces": [
             {
                 "iface_id": "eth0",
@@ -1058,6 +1060,18 @@ async def _close_writer(writer: asyncio.StreamWriter) -> None:
         await writer.wait_closed()
 
 
+async def _log_console(stream: asyncio.StreamReader | None) -> None:
+    if stream is None:
+        return
+    while True:
+        line = await stream.readline()
+        if not line:
+            return
+        text = line.decode("utf-8", errors="replace").rstrip("\n\r")
+        if text:
+            log.debug("console", extra={"line": text[:500]})
+
+
 async def connect_vsock(
     path: Path,
     port: int,
@@ -1128,13 +1142,17 @@ async def start_microvm(
         if allowlist
         else []
     )
-    stdio = None if inherit_stdio else asyncio.subprocess.DEVNULL
+    stdio_in = None if inherit_stdio else asyncio.subprocess.DEVNULL
+    stdio_out = None if inherit_stdio else asyncio.subprocess.PIPE
+    console_tasks: list[asyncio.Task[None]] = []
     log.info(
         "boot",
         extra={"vm_id": vm_id, "tap": net.name, "shell": shell},
     )
 
     def cleanup() -> None:
+        for task in console_tasks:
+            task.cancel()
         teardown_tap(
             net,
             ip=ip_bin,
@@ -1196,9 +1214,9 @@ async def start_microvm(
         )
         process = await asyncio.create_subprocess_exec(
             *argv,
-            stdin=stdio,
-            stdout=stdio,
-            stderr=stdio,
+            stdin=stdio_in,
+            stdout=stdio_out,
+            stderr=stdio_out,
         )
     except (OSError, ConfigError) as exc:
         cleanup()
@@ -1217,6 +1235,9 @@ async def start_microvm(
         cleanup()
         raise ConfigError("microvm cannot start jailer")
     log.info("jailer", extra={"vm_id": vm_id, "pid": pid})
+    if not inherit_stdio:
+        console_tasks.append(asyncio.create_task(_log_console(process.stdout)))
+        console_tasks.append(asyncio.create_task(_log_console(process.stderr)))
     return StartedMicrovm(process, chroot_dir, cleanup)
 
 

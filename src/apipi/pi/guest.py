@@ -1,8 +1,10 @@
 import contextlib
+import fcntl
 import io
 import json
 import os
 import socket
+import struct
 import subprocess
 import sys
 import tarfile
@@ -13,6 +15,7 @@ from pathlib import Path
 ARTIFACT_PORT = 53
 WORKSPACE_PORT = 54
 PUBLISH_DIRS = ("artifacts", "outputs")
+RNDADDENTROPY = 0x40085203
 
 
 def _start_mcp() -> None:
@@ -108,7 +111,7 @@ def _serve_rpc(args: list[str], port: int) -> None:
         args,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=sys.stderr,
         env=os.environ,
     )
     stdin = proc.stdin
@@ -168,6 +171,22 @@ def _workspace() -> Path:
     return Path(os.environ.get("HOME", "/workspace"))
 
 
+def _seed_rng() -> None:
+    path = _workspace() / ".apipi" / "random"
+    if not path.is_file():
+        return
+    data = path.read_bytes()
+    if len(data) < 64:
+        return
+    payload = struct.pack(f"ii{len(data)}s", len(data) * 8, len(data), data)
+    try:
+        with open("/dev/urandom", "wb") as rng:
+            fcntl.ioctl(rng, RNDADDENTROPY, payload)
+    except OSError:
+        with contextlib.suppress(OSError), open("/dev/urandom", "wb") as rng:
+            rng.write(data)
+
+
 def _exec_shell() -> None:
     os.chdir(_workspace())
     os.execvp("sh", ["sh", "-i"])
@@ -178,6 +197,7 @@ def main(argv: list[str] | None = None) -> None:
     port = 52
     if args:
         port = int(args[0])
+    _seed_rng()
     _run_setup()
     if (_workspace() / ".apipi" / "shell").is_file():
         _exec_shell()

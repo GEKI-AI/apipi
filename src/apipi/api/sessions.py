@@ -32,7 +32,9 @@ from apipi.runtime import (
     continue_turn,
     event_body,
     fail_session,
+    fail_stale_in_progress,
     persist_event,
+    prepare_for_new_turn,
     request_cancel,
     run_turn,
 )
@@ -478,22 +480,36 @@ async def create_agent_session(
 
 @router.get("/v1/agents/sessions")
 async def list_agent_sessions(
+    request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
+    hub: EventHub = request.app.state.event_hub
     rows = await list_sessions(db, tenant.id)
-    return {"data": [session_body(row) for row in rows]}
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if row.status == "in_progress" and hub.turn_abort(row.id) is None:
+            recovered = await fail_stale_in_progress(db, hub, tenant.id, row.id)
+            row = recovered if recovered is not None else row
+        out.append(session_body(row))
+    return {"data": out}
 
 
 @router.get("/v1/agents/sessions/{session_id}")
 async def read_agent_session(
     session_id: uuid.UUID,
+    request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict[str, Any]:
     row = await get_session(db, tenant.id, session_id)
     if row is None:
         not_found()
+    hub: EventHub = request.app.state.event_hub
+    if row.status == "in_progress" and hub.turn_abort(session_id) is None:
+        recovered = await fail_stale_in_progress(db, hub, tenant.id, session_id)
+        if recovered is not None:
+            row = recovered
     return session_body(row)
 
 
@@ -561,6 +577,7 @@ async def post_session_event(
         text = ""
     action = "message"
     abort_ev = None
+    stale = False
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)
         if row is None:
@@ -588,6 +605,7 @@ async def post_session_event(
                     code="invalid_request",
                 )
             action = "message"
+            stale = row.status == "in_progress"
     tracing = request.app.state.tracing
     request_id = request_id_of(request)
     if action == "cancel":
@@ -631,6 +649,8 @@ async def post_session_event(
                 key_id=_key_id(request),
             )
     else:
+        if stale:
+            await prepare_for_new_turn(store, hub, harness, tenant.id, session_id)
         with start_span(
             tracing,
             "session",

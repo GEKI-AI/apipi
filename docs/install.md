@@ -169,7 +169,8 @@ whether Prometheus metrics and OpenTelemetry traces are on. Logs are
 JSON lines on stderr and flush after each line. A POST logs
 `request start` immediately. A turn logs `turn start`, then microVM
 boot/jailer/vsock and `pi prompt` / first `pi event` while it runs.
-The HTTP `request` line is written when the stream ends.
+The HTTP `request` line is written when the stream ends. Guest kernel
+and Firecracker console lines are `debug` (`APIPI_LOG_LEVEL=debug`).
 
 `microvm` reaches the model URL and HTTP MCP through a TAP device.
 Guest traffic uses that TAP rather than host loopback to Postgres.
