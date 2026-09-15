@@ -43,6 +43,7 @@ def test_cli_microvm_shell_image_and_workspace(
         return 0
 
     monkeypatch.setattr("apipi.cli.sys.stdin", _Tty())
+    monkeypatch.setattr("apipi.cli.microvm_shell_needs_sudo", lambda: False)
     monkeypatch.setattr("apipi.cli.run_microvm_shell", fake_run)
     monkeypatch.setattr(
         "apipi.cli.load_settings",
@@ -71,6 +72,7 @@ def test_cli_microvm_shell_prints_tap_rights(
         )
 
     monkeypatch.setattr("apipi.cli.sys.stdin", _Tty())
+    monkeypatch.setattr("apipi.cli.microvm_shell_needs_sudo", lambda: False)
     monkeypatch.setattr("apipi.cli.run_microvm_shell", boom)
     monkeypatch.setattr(
         "apipi.cli.load_settings",
@@ -83,3 +85,16 @@ def test_cli_microvm_shell_prints_tap_rights(
     assert "TAP device" in err
     assert "CAP_NET_ADMIN" in err
     assert "Operation not permitted" in err
+
+
+def test_cli_microvm_shell_reexecs_sudo(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("apipi.cli.sys.stdin", _Tty())
+    monkeypatch.setattr("apipi.cli.microvm_shell_needs_sudo", lambda: True)
+    called: dict[str, list[str]] = {}
+
+    def fake_reexec(extra: list[str]) -> None:
+        called["extra"] = extra
+
+    monkeypatch.setattr("apipi.cli.reexec_microvm_shell", fake_reexec)
+    assert main(["microvm", "shell", "--image", "browser"]) == 0
+    assert called["extra"] == ["--image", "browser"]

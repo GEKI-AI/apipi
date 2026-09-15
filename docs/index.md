@@ -28,7 +28,8 @@ Pi (OpenAI's field name for a folder on your machine).
 
 You need Python 3.13 and a model host URL. Live turns also need the Pi
 CLI (`pi --mode rpc`) on `PATH`. The gateway pins Pi 0.85.1; `apipi
-install` puts that binary in a user-local prefix.
+install` can install that binary and, if you pick MicroVM, Firecracker
+plus a guest image.
 
 A single process stores data in SQLite at `.apipi/apipi.db` and binds
 `0.0.0.0:8000`. `OPENAI_BASE_URL` on the gateway is the model host that

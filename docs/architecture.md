@@ -122,9 +122,10 @@ guest rootfs is operator-provided. It should include Node, Pi, and
 That init mounts a tmpfs workspace, unpacks the workspace drive,
 brings up the TAP interface, and bridges vsock port 52 to
 `pi --mode rpc`. The guest needs `python3` or `socat` for that
-bridge. Build a rootfs with `scripts/microvm-rootfs`. Set
-`APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` to the image files.
-Missing paths are a configuration error.
+bridge. Build a rootfs with `apipi install --microvm` or
+`scripts/microvm-rootfs`. Unset `APIPI_MICROVM_KERNEL` and
+`APIPI_MICROVM_ROOTFS` use the cache files when they exist. Missing
+paths are a configuration error.
 
 Chromium can use its own sandbox inside the guest, which is where
 browsers belong in this stack.

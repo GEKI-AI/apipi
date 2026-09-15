@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
-GUEST_SH="${ROOT}/src/apipi/pi/guest.sh"
+HERE=$(cd "$(dirname "$0")" && pwd)
+if [[ -f "$HERE/guest.sh" ]]; then
+  GUEST_SH="$HERE/guest.sh"
+  ROOT="$HERE"
+else
+  ROOT=$(cd "$HERE/.." && pwd)
+  GUEST_SH="${ROOT}/src/apipi/pi/guest.sh"
+fi
 ALPINE_VER=${ALPINE_VER:-3.21.3}
 ARCH=$(uname -m)
 FLAVOR=default
@@ -83,7 +89,10 @@ case "$ARCH" in
     ;;
 esac
 
-PIN=$(sed -n 's/^PINNED_PI = "\(.*\)"/\1/p' "${ROOT}/src/apipi/pi/version.py")
+PIN=${PINNED_PI:-}
+if [[ -z "$PIN" && -f "${ROOT}/src/apipi/pi/version.py" ]]; then
+  PIN=$(sed -n 's/^PINNED_PI = "\(.*\)"/\1/p' "${ROOT}/src/apipi/pi/version.py")
+fi
 if [[ -z "$PIN" ]]; then
   echo "could not read PINNED_PI" >&2
   exit 1

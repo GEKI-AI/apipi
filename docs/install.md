@@ -6,9 +6,11 @@ isolation is `APIPI_RUN_MODE=microvm`. One process can keep SQLite.
 Several processes share Postgres.
 
 Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model
-host URL. The gateway pins Pi 0.85.1. `apipi install` installs that
-exact version with npm into a user-local prefix. Put that binary on
-`PATH`, or set `APIPI_PI_COMMAND`. You can also install Pi yourself:
+host URL. The gateway pins Pi 0.85.1. `apipi install` can install that
+Pi CLI, a Firecracker microVM, or both. On a TTY with no flags it asks
+what to install (default is Pi). Without a TTY it installs Pi only, so
+scripts and CI keep working. Put the Pi binary on `PATH`, or set
+`APIPI_PI_COMMAND`. You can also install Pi yourself:
 
 ```
 npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
@@ -39,7 +41,45 @@ defaults to `none` and logs a warning. The process binds `0.0.0.0:8000`.
 `apipi check` verifies requirements and then exits. It leaves HTTP
 unbound. `--skip-db` and `--skip-model` skip the store and the model
 host. `--fast` skips the throwaway sandbox probe for `microvm`.
-`apipi install` is idempotent; `--force` reinstalls Pi.
+`apipi install` is idempotent; `--force` reinstalls Pi and MicroVM
+files that are already present.
+
+## Pi and MicroVM
+
+Flags skip the prompt: `--pi`, `--microvm`, and `--image default|browser`.
+`--dry-run` prints the commands and exits. `--image` without `--pi`
+installs only the microVM.
+
+```
+apipi install --pi
+apipi install --microvm
+apipi install --microvm --image browser
+apipi install --pi --microvm
+```
+
+`--microvm` checks `/dev/kvm`, `ip`, `iptables`, and `tc` (it names
+the packages; it does not run apt). It downloads pinned Firecracker
+1.17.0 and jailer into `$XDG_DATA_HOME/apipi/firecracker` (or
+`~/.local/share/apipi/firecracker`). It builds the guest kernel and
+rootfs with the packaged rootfs script into
+`$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). The
+loop mount still needs sudo, the same way
+`./scripts/microvm-rootfs` does. It prints `export` lines for the
+kernel and rootfs. It does not write `.env` or `apipi.toml`, and it
+does not set `APIPI_RUN_MODE`.
+
+When those image paths are unset, `apipi serve` and
+`apipi microvm shell` use the cache files if they exist. Env, `.env`,
+and `[sandbox].kernel` / `rootfs` still override. Missing files fail
+with `apipi install` and the path that was looked at. Firecracker and
+jailer are found on `PATH`, then in that install prefix, then under
+`SUDO_USER` when the process is root.
+
+`apipi microvm shell` needs a TTY. If you are not root, it re-runs
+itself with `sudo -E`, the absolute Python interpreter, and `PATH` /
+`HOME` kept, so sudo `secure_path` does not need `uv`. It never runs
+`sudo uv`. `apipi serve` does not re-exec. TAP and jailer still need
+root or the capabilities in [run modes](run-modes.md).
 
 ## From a git checkout
 
@@ -129,8 +169,10 @@ whether Prometheus metrics and OpenTelemetry traces are on.
 
 `microvm` reaches the model URL and HTTP MCP through a TAP device.
 Guest traffic uses that TAP rather than host loopback to Postgres.
-The TAP is allowlisted and rate-limited by default. Set
-`APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS`.
+The TAP is allowlisted and rate-limited by default. Run
+`apipi install --microvm` so the kernel and rootfs exist; unset, the
+process uses those cache files. Production units still set explicit
+paths in the environment file.
 
 `GET /health` returns `{"status": "ok"}` without a bearer.
 

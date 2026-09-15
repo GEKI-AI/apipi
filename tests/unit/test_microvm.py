@@ -23,6 +23,8 @@ from apipi.pi.microvm import (
     BOOT_ARGS,
     GUEST_DNS,
     GUEST_WORKSPACE,
+    INSTALL_HINT,
+    SHELL_SUDO_MARK,
     VSOCK_PORT,
     StartedMicrovm,
     _enable_forward,
@@ -32,9 +34,12 @@ from apipi.pi.microvm import (
     guest_env,
     guest_skill_dirs,
     jailer_argv,
+    microvm_binaries,
     microvm_config,
     microvm_egress_hosts,
     microvm_images,
+    microvm_shell_needs_sudo,
+    microvm_shell_sudo_argv,
     require_microvm,
     resolve_host_ips,
     run_microvm_shell,
@@ -98,6 +103,7 @@ def test_require_microvm_missing_firecracker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr(
         "apipi.pi.microvm.shutil.which",
@@ -111,6 +117,7 @@ def test_require_microvm_missing_jailer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr(
         "apipi.pi.microvm.shutil.which",
@@ -173,6 +180,109 @@ def test_microvm_images_browser_missing_file(
         require_microvm(_settings(tmp_path, image="browser"))
 
 
+def _cache_settings() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi"
+    )
+
+
+def test_microvm_images_uses_cache_when_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.delenv("APIPI_MICROVM_KERNEL", raising=False)
+    monkeypatch.delenv("APIPI_MICROVM_ROOTFS", raising=False)
+    cache = tmp_path / "apipi" / "microvm"
+    cache.mkdir(parents=True)
+    kernel = cache / "vmlinux"
+    rootfs = cache / "rootfs.ext4"
+    kernel.write_bytes(b"k")
+    rootfs.write_bytes(b"r")
+    assert microvm_images(_cache_settings()) == (str(kernel), str(rootfs))
+
+
+def test_microvm_images_explicit_wins_over_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    cache = tmp_path / "cache" / "apipi" / "microvm"
+    cache.mkdir(parents=True)
+    (cache / "vmlinux").write_bytes(b"cache-k")
+    (cache / "rootfs.ext4").write_bytes(b"cache-r")
+    kernel, rootfs = _images(tmp_path)
+    assert microvm_images(_settings(tmp_path)) == (str(kernel), str(rootfs))
+
+
+def test_microvm_images_missing_explains_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.delenv("APIPI_MICROVM_KERNEL", raising=False)
+    monkeypatch.delenv("APIPI_MICROVM_ROOTFS", raising=False)
+    with pytest.raises(ConfigError, match="APIPI_MICROVM_KERNEL") as exc:
+        microvm_images(_cache_settings())
+    assert INSTALL_HINT in str(exc.value)
+    assert "Looked at" in str(exc.value)
+    assert str(tmp_path / "apipi" / "microvm" / "vmlinux") in str(exc.value)
+
+
+def test_microvm_binaries_uses_install_prefix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("apipi.pi.microvm.shutil.which", lambda _name: None)
+    prefix = tmp_path / "apipi" / "firecracker"
+    prefix.mkdir(parents=True)
+    firecracker = prefix / "firecracker"
+    jailer = prefix / "jailer"
+    firecracker.write_text("")
+    jailer.write_text("")
+    firecracker.chmod(0o755)
+    jailer.chmod(0o755)
+    assert microvm_binaries() == (str(firecracker), str(jailer))
+
+
+def test_microvm_shell_sudo_argv_preserves_path_and_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    argv = microvm_shell_sudo_argv(
+        ["--image", "browser"],
+        executable="/venv/bin/python",
+        home="/home/agent",
+        path="/home/agent/.local/bin:/usr/bin",
+    )
+    assert argv[:3] == ["sudo", "-E", "env"]
+    assert "PATH=/home/agent/.local/bin:/usr/bin" in argv
+    assert "HOME=/home/agent" in argv
+    assert f"{SHELL_SUDO_MARK}=1" in argv
+    assert argv[-7:] == [
+        "/venv/bin/python",
+        "-m",
+        "apipi",
+        "microvm",
+        "shell",
+        "--image",
+        "browser",
+    ]
+
+
+def test_microvm_shell_needs_sudo_skips_when_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("apipi.pi.microvm.os.geteuid", lambda: 0)
+    assert microvm_shell_needs_sudo() is False
+
+
+def test_microvm_shell_needs_sudo_skips_after_reexec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("apipi.pi.microvm.os.geteuid", lambda: 1000)
+    monkeypatch.setenv(SHELL_SUDO_MARK, "1")
+    assert microvm_shell_needs_sudo() is False
+
+
 def test_require_microvm_missing_ip(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -182,7 +292,7 @@ def test_require_microvm_missing_ip(
         "apipi.pi.microvm.shutil.which",
         lambda name: None if name == "ip" else _which_ok(name),
     )
-    with pytest.raises(ConfigError, match=r"requires ip$"):
+    with pytest.raises(ConfigError, match="requires ip"):
         require_microvm(_settings(tmp_path))
 
 
@@ -584,6 +694,7 @@ async def test_spawn_microvm_missing_firecracker_does_not_fallback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr("apipi.pi.microvm.shutil.which", lambda _name: None)
     called = False
@@ -618,7 +729,7 @@ async def test_spawn_microvm_missing_ip_does_not_fallback(
 
     monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
-    with pytest.raises(ConfigError, match=r"requires ip$"):
+    with pytest.raises(ConfigError, match="requires ip"):
         await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
     assert called is False
 

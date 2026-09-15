@@ -12,7 +12,7 @@ from httpx import ASGITransport, AsyncClient
 
 from apipi.app import create_app
 from apipi.config import ConfigError, Settings
-from apipi.pi.microvm import require_microvm
+from apipi.pi.microvm import microvm_images, require_microvm
 from apipi.pi.probe import probe_run_mode
 from apipi.store.engine import Store
 
@@ -27,16 +27,10 @@ def _auth(token: str) -> dict[str, str]:
 
 
 def _image_paths() -> tuple[str | None, str | None]:
-    cache = (
-        Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-        / "apipi"
-        / "microvm"
-    )
-    kernel = Path(os.environ.get("APIPI_MICROVM_KERNEL") or cache / "vmlinux")
-    rootfs = Path(os.environ.get("APIPI_MICROVM_ROOTFS") or cache / "rootfs.ext4")
-    if kernel.is_file() and rootfs.is_file():
-        return str(kernel), str(rootfs)
-    return None, None
+    try:
+        return microvm_images()
+    except ConfigError:
+        return None, None
 
 
 def _tap_or_skip() -> None:
