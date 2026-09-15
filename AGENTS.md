@@ -28,6 +28,7 @@ Code comments stay omitted unless asked.
 | --- | --- |
 | `src/apipi/api/` | HTTP routes |
 | `src/apipi/execution.py` | Session execution contract and in-process adapter |
+| `src/apipi/worker.py` | Trusted worker control protocol (not self_hosted) |
 | `src/apipi/schemas.py` | Public types |
 | `src/apipi/store/` | Durable store |
 | `src/apipi/pi/` | Harness adapter |

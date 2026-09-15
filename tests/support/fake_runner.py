@@ -9,9 +9,16 @@ from starlette.types import Message
 
 
 class AsgiWebsocket:
-    def __init__(self, app: FastAPI, path: str) -> None:
+    def __init__(
+        self,
+        app: FastAPI,
+        path: str,
+        *,
+        headers: list[tuple[bytes, bytes]] | None = None,
+    ) -> None:
         self.app = app
         self.path = path
+        self._headers = headers if headers is not None else []
         self._incoming: asyncio.Queue[Message] = asyncio.Queue()
         self._outgoing: asyncio.Queue[Message] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
@@ -26,7 +33,7 @@ class AsgiWebsocket:
             "raw_path": self.path.encode(),
             "query_string": b"",
             "root_path": "",
-            "headers": [(b"host", b"test")],
+            "headers": [(b"host", b"test"), *self._headers],
             "client": ("testclient", 50000),
             "server": ("testserver", 80),
             "subprotocols": [],

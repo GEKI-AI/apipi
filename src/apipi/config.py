@@ -370,6 +370,14 @@ class Settings(BaseSettings):
         default=timedelta(minutes=10),
         validation_alias=AliasChoices("APIPI_TURN_TIMEOUT", "turn_timeout"),
     )
+    worker_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_WORKER_TOKEN", "worker_token"),
+    )
+    worker_lease_ttl: IdleTtl = Field(
+        default=timedelta(seconds=30),
+        validation_alias=AliasChoices("APIPI_WORKER_LEASE_TTL", "worker_lease_ttl"),
+    )
     auth: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_AUTH", "auth"),

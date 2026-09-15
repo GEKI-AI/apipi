@@ -80,6 +80,7 @@ nav:
       - API: api.md
       - Auth: auth.md
       - Environments: environments.md
+      - Sandbox workers: workers.md
       - Tools and skills: tools.md
       - Usage: usage.md
       - How it works: architecture.md

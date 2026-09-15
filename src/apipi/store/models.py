@@ -102,10 +102,32 @@ class SessionRow(Base):
         JSONType, default=list, nullable=False
     )
     key_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    worker_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
+    lease_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
+    lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class WorkerRow(Base):
+    __tablename__ = "workers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    capacity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
 

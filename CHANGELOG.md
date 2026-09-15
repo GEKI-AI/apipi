@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Trusted worker WebSocket at `/internal/worker` with leases,
+  heartbeats, and session ownership. This is not customer
+  `self_hosted`.
+
+### Added
+
 - Serve logs flush each line. A turn logs `request start`,
   `turn start`, microVM boot/vsock, and `pi prompt` while SSE is
   still open.

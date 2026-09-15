@@ -1,0 +1,186 @@
+import asyncio
+import uuid
+from datetime import timedelta
+
+from httpx import ASGITransport, AsyncClient
+from tests.support.fake_worker import FakeWorker
+
+from apipi.app import create_app
+from apipi.config import Settings
+from apipi.runtime import FakeHarness
+from apipi.store.engine import Store
+from apipi.store.events import list_events
+from apipi.store.models import Event, utc_now
+from apipi.store.repo import get_session
+from apipi.tokens import hash_token
+
+
+def _auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def _wait_events(
+    store: Store,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    event_type: str,
+) -> list[Event]:
+    for _ in range(50):
+        async with store.session() as db:
+            events = await list_events(db, tenant_id, session_id)
+        if any(event.type == event_type for event in events):
+            return events
+        await asyncio.sleep(0.02)
+    async with store.session() as db:
+        return await list_events(db, tenant_id, session_id)
+
+
+def _tenant(token: str) -> uuid.UUID:
+    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+
+
+def _worker_settings(
+    settings: Settings, *, worker_lease_ttl: timedelta = timedelta(seconds=30)
+) -> Settings:
+    return Settings(
+        database_url=settings.database_url,
+        run_mode="none",
+        sessions_dir=settings.sessions_dir,
+        worker_token="worker-secret",
+        worker_lease_ttl=worker_lease_ttl,
+    )
+
+
+async def test_worker_requires_token(settings: Settings, store: Store) -> None:
+    app = create_app(settings, store=store, harness=FakeHarness())
+    worker = FakeWorker(app, "worker-secret")
+    await worker.connect()
+    hello = worker.hello
+    assert hello is not None
+    assert hello.get("ok") is False
+    assert hello.get("error") == "unauthorized"
+    await worker.close()
+
+
+async def test_worker_wrong_token(settings: Settings, store: Store) -> None:
+    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    worker = FakeWorker(app, "nope")
+    await worker.connect()
+    hello = worker.hello
+    assert hello is not None
+    assert hello.get("error") == "unauthorized"
+    await worker.close()
+
+
+async def test_worker_register_lease_command_event_and_expiry(
+    settings: Settings, store: Store
+) -> None:
+    worker_settings = _worker_settings(settings)
+    app = create_app(worker_settings, store=store, harness=FakeHarness())
+    token = "t"
+    tenant_id = _tenant(token)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        agent = await client.post(
+            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        )
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
+        )
+        session_id = uuid.UUID(created.json()["id"])
+        worker = FakeWorker(app, "worker-secret")
+        hello = await worker.connect(capacity=2)
+        assert hello["ok"] is True
+        assert hello["type"] == "hello"
+        command = await app.state.workers.acquire(
+            store,
+            tenant_id,
+            session_id,
+            op="turn.start",
+            payload={"text": "hi"},
+        )
+        assert command is not None
+        assert command["type"] == "command"
+        assert command["op"] == "turn.start"
+        assert command["payload"] == {"text": "hi"}
+        incoming = await worker.receive_json()
+        assert incoming["id"] == command["id"]
+        assert incoming["lease_id"] == command["lease_id"]
+        await worker.send_json(
+            {
+                "type": "lease.ack",
+                "id": incoming["id"],
+                "lease_id": incoming["lease_id"],
+            }
+        )
+        await worker.send_json(
+            {
+                "type": "event",
+                "lease_id": incoming["lease_id"],
+                "event_type": "agent.session.error",
+                "data": {"message": "from worker", "code": "worker_test"},
+            }
+        )
+        events = await _wait_events(store, tenant_id, session_id, "agent.session.error")
+        types = [event.type for event in events]
+        assert "agent.session.error" in types
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            assert row is not None
+            row.lease_until = utc_now() - timedelta(seconds=1)
+            await db.flush()
+        expired = await app.state.workers.expire(store, app.state.event_hub)
+        assert session_id in expired
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            assert row is not None
+            assert row.lease_id is None
+            events = await list_events(db, tenant_id, session_id)
+        codes = [
+            event.data.get("code")
+            for event in events
+            if event.type == "agent.session.error"
+        ]
+        assert "worker_lease_expired" in codes
+        revoke = await worker.receive_json()
+        assert revoke["type"] == "lease.revoke"
+        await worker.close()
+
+
+async def test_worker_reconnect_replays_unacked(
+    settings: Settings, store: Store
+) -> None:
+    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    token = "t"
+    tenant_id = _tenant(token)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        agent = await client.post(
+            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        )
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
+        )
+        session_id = uuid.UUID(created.json()["id"])
+        first = FakeWorker(app, "worker-secret", worker_id=str(uuid.uuid4()))
+        hello = await first.connect()
+        worker_id = hello["worker_id"]
+        command = await app.state.workers.acquire(
+            store, tenant_id, session_id, op="turn.cancel"
+        )
+        assert command is not None
+        await first.receive_json()
+        await first.close()
+        second = FakeWorker(app, "worker-secret", worker_id=worker_id)
+        replayed_hello = await second.connect()
+        assert replayed_hello["generation"] == 2
+        replayed = await second.receive_json()
+        assert replayed["id"] == command["id"]
+        assert replayed["op"] == "turn.cancel"
+        await second.close()
