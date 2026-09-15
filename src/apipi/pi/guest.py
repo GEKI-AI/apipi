@@ -132,8 +132,9 @@ def _serve_rpc(args: list[str], port: int) -> None:
 
     threading.Thread(target=to_pi, daemon=True).start()
     try:
+        fd = stdout.fileno()
         while True:
-            data = stdout.read(65536)
+            data = os.read(fd, 65536)
             if not data:
                 break
             conn.sendall(data)
