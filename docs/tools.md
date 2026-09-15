@@ -32,9 +32,8 @@ HTTP MCP uses OpenAI's shape:
 }
 ```
 
-Stdio MCP is not in OpenAI's API. We accept it for local servers that
-follow Pi (on the host in `none` mode, inside the guest in `microvm`
-mode):
+Stdio MCP is an ApiPi extension for local servers that follow Pi (on
+the host in `none` mode, inside the guest in `microvm` mode):
 
 ```json
 {
@@ -51,7 +50,7 @@ Pi. Stdio servers start next to Pi: on the host in `none` mode, and
 inside the same guest in `microvm` mode. Credentials stay in
 environment variables or a secret store, not in git.
 
-`web_search` as a first-party OpenAI tool is not implemented. Use MCP.
+Search goes through MCP.
 
 ### Search — Tavily example
 

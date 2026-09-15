@@ -145,8 +145,8 @@ defaults to `5s`. After the first try plus `APIPI_USAGE_EXPORT_RETRIES`
 session transcript. `apipi_usage_export_total` counts `ok` and `drop`
 when Prometheus is on.
 
-This is the path for long-term SaaS analytics. It is not LLM-call
-tracing. Existing `APIPI_OTEL_ENDPOINT` stays traces, without bodies.
+This is the path for long-term SaaS analytics.
+`APIPI_OTEL_ENDPOINT` stays traces, without bodies.
 
 Extra usage sinks use `APIPI_USAGE_SINKS` (TOML `usage_sinks`): a
 comma-separated list of `package.mod:Class`. Each sink implements
@@ -234,9 +234,5 @@ for agent usage history.
 
 The full setting list is in [configuration](config.md).
 
-There is no flag that writes prompt or completion bodies into ApiPi
-Postgres, logs, metrics, or default spans.
-
-## Compatibility
-
-`/v1/chat/completions` is not a product surface. We do not serve it.
+Prompt and completion bodies stay out of ApiPi Postgres, logs, metrics,
+and default spans.

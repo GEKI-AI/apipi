@@ -2,7 +2,7 @@
 
 Run mode is where Pi and stdio MCP run (`APIPI_RUN_MODE`). Environment
 is a separate choice: where file and shell tools run. A remote runner
-does not replace Pi isolation. The gateway always stays on the host.
+leaves Pi isolation in place. The gateway always stays on the host.
 
 Production isolation is a Firecracker microVM: each session gets its
 own kernel so a hostile tenant cannot share the host kernel with the
@@ -11,10 +11,10 @@ shared-kernel container. Pi and the local computer share that guest.
 The HTTP API never runs inside it.
 
 If the selected mode cannot start, `apipi serve` exits before it binds
-HTTP. There is no silent fallback. For `microvm` and for a custom
-backend that sets `needs_probe`, the process also launches a throwaway
-sandbox and tears it down. That probe must succeed before the API
-listens.
+HTTP. The process never switches to another mode on its own. For
+`microvm` and for a custom backend that sets `needs_probe`, the process
+also launches a throwaway sandbox and tears it down. That probe must
+succeed before the API listens.
 
 When the computer is local (`openai_hosted` or the `hosted` alias), Pi
 and the session files share that isolation boundary. The only supported
@@ -26,18 +26,19 @@ not the same setting.
 
 | Mode | When to use | Isolation |
 | --- | --- | --- |
-| `none` | Local tests and laptops without a sandbox | None. Pi is a child of the gateway. Not for production. |
+| `none` | Local tests and laptops without a sandbox | Pi is a child of the gateway. Use `microvm` in production. |
 | `microvm` | SaaS and enterprise production when a computer is in use | KVM guest with its own kernel. Protects the host from a hostile session. |
 | `package.mod:Class` | An operator-provided backend | Whatever that class implements. Missing import fails at startup. |
 
 The process default is `none` so `apipi serve` can start without KVM.
 Production operators set `APIPI_RUN_MODE=microvm`. If the microVM cannot
-launch, the process exits rather than switching mode. `none` logs a
-warning. `host` and `jail` are not valid run modes.
+launch, the process exits. `none` logs a warning. Valid built-in names
+are `none` and `microvm`.
 
 Run production under systemd on the host, next to Pi. Docker Compose
 in this repo starts Postgres only. Nested microVM inside a container
-is a lab setup, not the production path.
+is a lab setup. Production isolation is systemd on the host with
+`APIPI_RUN_MODE=microvm`.
 
 ## What to install
 
@@ -147,8 +148,8 @@ delete files on a remote runner.
 ## `none`
 
 Pi is a child of `apipi serve`. There is no namespace, cgroup, or
-guest. Use this when a microvm cannot run. Do not use it in
-production. The process logs a warning.
+guest. Use this when a microvm cannot run. Use `microvm` in production.
+The process logs a warning.
 
 ## `microvm`
 
@@ -210,8 +211,8 @@ Ctrl-C to stop the VM. TAP devices, jailer chroot, and temp dirs are
 removed the same way a session kill does.
 
 This is an operator and lab tool. The TAP egress allowlist still
-applies. Do not turn the allowlist off unless you already do that in
-this lab. Agent spawn is unchanged.
+applies. Leave the allowlist on unless this lab already turns it off.
+Agent spawn is unchanged.
 
 ## Custom isolation
 
@@ -244,7 +245,7 @@ module on `PYTHONPATH`.
 
 Run `apipi serve` under systemd on the host with
 `APIPI_RUN_MODE=microvm`. Keep secrets in an environment file that the
-unit loads. One process per host: do not add uvicorn workers. Host
+unit loads. One process per host; run a single uvicorn worker. Host
 sizing, overprovision, and drain are in [production](production.md).
 Several hosts need sticky load balancing. See [multiple nodes](scale.md).
 
@@ -276,12 +277,11 @@ and the process can create TAP devices. Set `APIPI_MICROVM_KERNEL` and
 ## Docker
 
 The Compose file at the repo root starts Postgres and publishes it on
-the host. It does not start the gateway.
+the host. Start the gateway on the host with systemd.
 
-Running the gateway inside Docker is not the production path. Nested
-user namespaces, TAP devices, and `/dev/kvm` each need extra
-capabilities. A privileged container can be used in a lab. It is not
-equivalent to systemd on the host.
+Nested user namespaces, TAP devices, and `/dev/kvm` each need extra
+capabilities inside Docker. A privileged container can be used in a
+lab. Production isolation is systemd on the host.
 
 Sandbox backend, guest images, RAM, vCPUs, and TAP egress are in
 [configuration](config.md#sandbox).

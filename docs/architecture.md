@@ -158,7 +158,7 @@ usage analytics use the optional HTTPS export. Prometheus and
 OpenTelemetry are exports. See [usage](usage.md) and
 [run modes](run-modes.md#storage).
 
-Pi JSONL is a cache. Do not read it to serve the API. The
+Pi JSONL is a cache. The durable store serves the API. The
 `openai_hosted` workspace is ephemeral: after
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour) with no activity,
 Pi stops and the directory is deleted, or the session is deleted.

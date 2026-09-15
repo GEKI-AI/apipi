@@ -14,18 +14,30 @@ infrastructure.
 
 Official OpenAI clients work for the subset we implement. Unknown
 fields return an error. `environment.type` `openai_hosted` is a local
-session directory next to Pi (OpenAI's field name, a folder on your
+session directory next to Pi (OpenAI's field name for a folder on your
 machine).
 
 | You get | You bring |
 | --- | --- |
 | Agents, sessions, events, artifacts | An OpenAI-compatible model URL |
-| Function tools, MCP, skills | A bearer the gateway does not store |
+| Function tools, MCP, skills | A bearer the gateway maps to a tenant |
 | A local directory or a `self_hosted` runner | Pi on `PATH` for live turns |
 
 ## Quickstart
 
-Python 3.13. Install from PyPI. No Postgres for a local try:
+You need Python 3.13 and a model host URL. Live turns also need the Pi
+CLI (`pi --mode rpc`) on `PATH`. The gateway pins Pi 0.85.1; `apipi
+install` puts that binary in a user-local prefix.
+
+A single process stores data in SQLite at `.apipi/apipi.db` and binds
+`0.0.0.0:8000`. `OPENAI_BASE_URL` on the gateway is the model host that
+Pi calls. Clients send `Authorization: Bearer`; any non-empty bearer
+becomes a tenant, and that value is the model key unless you set
+`OPENAI_API_KEY_OVERWRITE`. Isolation defaults to `none`. For
+production, set `APIPI_RUN_MODE=microvm`. Several processes share
+Postgres. Details are on [Install](install.md).
+
+### From PyPI
 
 ```
 pip install geki-apipi
@@ -35,17 +47,28 @@ apipi migrate
 apipi serve
 ```
 
-That uses SQLite at `.apipi/apipi.db` and binds `0.0.0.0:8000`.
-`OPENAI_BASE_URL` is the model host, not this API. The client bearer is
-the model key unless you set `OPENAI_API_KEY_OVERWRITE`. Default
-isolation is `none`. One process can keep SQLite. Production isolation
-is `APIPI_RUN_MODE=microvm`. Details are on [Install](install.md).
+`uv add geki-apipi` works in a project. The import package and CLI are
+`apipi`. S3-compatible artifact storage is `pip install "geki-apipi[s3]"`.
 
-Point a client at `http://localhost:8000/v1` with
-`Authorization: Bearer`. Any non-empty bearer becomes a tenant.
+### From a git checkout
 
-The `openai` package is not an ApiPi dependency. In a second shell, point
-the client at this gateway. `agent.model` must exist on the model host.
+```
+git clone https://github.com/GEKI-AI/apipi.git
+cd apipi
+uv sync
+uv run apipi install
+export OPENAI_BASE_URL=http://your-model-host/v1
+uv run apipi migrate
+uv run apipi serve
+```
+
+Prefix every `apipi` command with `uv run` in a checkout.
+
+### Client
+
+In a second shell, point a client at `http://localhost:8000/v1`.
+`agent.model` must exist on the model host. Install the `openai`
+package yourself if you want the official client:
 
 ```
 export OPENAI_API_KEY=dev-token

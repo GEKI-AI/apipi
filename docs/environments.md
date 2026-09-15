@@ -32,8 +32,8 @@ one sandbox and the local files in another. The path is
 `APIPI_SESSIONS_DIR` is unset, that root is `.apipi/sessions` under the
 gateway's working directory.
 
-In isolation `none` this is a folder on the host. It is not a security
-boundary. In `microvm`, that folder is packed into a workspace drive
+In isolation `none` this is a folder on the host. In `microvm`, that
+folder is packed into a workspace drive
 at boot and unpacked onto a guest tmpfs at `/workspace`. Published
 artifacts are harvested when a turn completes. Scratch files do not
 survive sandbox stop.
