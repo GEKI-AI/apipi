@@ -1,13 +1,13 @@
 # API
 
-Every public route lives under `/v1`. Official OpenAI clients work for
-the subset we implement. The beta header `OpenAI-Beta: agents=v1` is
-accepted and ignored.
+Every public route lives under `/v1`. The beta header
+`OpenAI-Beta: agents=v1` is accepted and ignored.
 
-Unknown fields and unimplemented features return an error
-(`invalid_request` or `not_implemented`). They are not stored and they
-are not ignored. Extra JSON keys are rejected because request bodies
-use strict models.
+Unknown JSON keys return `invalid_request` with code `unknown_field`.
+Known OpenAI fields we have not implemented return `not_implemented`.
+They are not stored and they are not ignored. Extra JSON keys are
+rejected because request bodies use strict models. The comparison
+matrix is [OpenAI compatibility](openai-compatibility.md).
 
 Auth is `Authorization: Bearer` on every request except `/health` and
 `/metrics`. The gateway does not mint or store keys. A callback maps
@@ -249,33 +249,10 @@ See [environments](environments.md).
 
 ## Compatibility
 
-Official clients work for the subset we implement. The OpenAI Python
-client example is `examples/openai_sdk.py`. The same create-and-stream
-steps are in [Using the API](using.md).
-
-| Surface | Status |
-| --- | --- |
-| Agents CRUD | yes (subset of fields) |
-| `GET /v1/models` | yes (proxy to the model host; off with `APIPI_FORWARD_MODELS`) |
-| Sessions, stream, follow-up input | yes |
-| `environment.openai_hosted` | yes (local sandbox) |
-| `environment.hosted` | yes (alias of `openai_hosted`) |
-| `environment.none` | yes |
-| `environment.self_hosted` | yes (our protocol) |
-| Function tools | yes |
-| MCP | yes |
-| Skills (`capability_directories`, `SKILL.md`) | yes |
-| `environment.packages`, `setup_commands` | yes (`openai_hosted` only) |
-| `environment.files`, `env`, `network` | no |
-| Artifacts | yes |
-| Usage tokens on turns | yes |
-| Session export | yes |
-| `/v1/chat/completions` | no |
-| `web_search` first-party | no (MCP; example: Tavily) |
-| Browser | no first-party (MCP; example: Playwright) |
-| `/v1/skills` hosted store | no (files on the computer) |
-| Vaults, multi-agent, tool search | no |
-| ChatKit | no |
+The official client surface, backend differences, and error matrix are
+on [OpenAI compatibility](openai-compatibility.md). The OpenAI Python
+example is `examples/openai_sdk.py`. Create-and-stream steps are in
+[Using the API](using.md).
 
 ## Errors
 

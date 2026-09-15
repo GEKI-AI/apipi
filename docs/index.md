@@ -12,10 +12,11 @@ Pi, stdio MCP, and a local session directory share the guest.
 [GEKI](https://geki.ai) also runs a managed ApiPi on European
 infrastructure.
 
-Official OpenAI clients work for the subset we implement. Unknown
-fields return an error. `environment.type` `openai_hosted` is a local
-session directory next to Pi (OpenAI's field name for a folder on your
-machine).
+Unknown JSON keys return `invalid_request`. Known OpenAI fields we
+have not implemented return `not_implemented`. See
+[OpenAI compatibility](openai-compatibility.md) for the matrix.
+`environment.type` `openai_hosted` is a local session directory next to
+Pi (OpenAI's field name for a folder on your machine).
 
 | You get | You bring |
 | --- | --- |
