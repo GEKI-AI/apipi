@@ -44,9 +44,9 @@ is not saved unless you `POST /v1/agents`. A live turn needs
 is `400` with code `model_required`. Unknown model is `400` with code
 `model_not_found`. Inline `model` and `instructions` are kept on the
 session for follow-up turns. Saved agents keep reading the agent row.
-When instructions are set, the gateway appends them to Pi's system
-prompt. Empty or omitted instructions leave Pi's default prompt
-unchanged.
+The gateway always appends a platform prompt, then `agent.instructions`
+when those are set. See [Concepts](concepts.md#agents) and
+[config](config.md#pi).
 
 ## Models
 
