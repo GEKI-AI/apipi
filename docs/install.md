@@ -294,7 +294,9 @@ and Firecracker console lines are `debug` (`APIPI_LOG_LEVEL=debug`).
 
 `microvm` reaches the model URL and HTTP MCP through a TAP device.
 Guest traffic uses that TAP rather than host loopback to Postgres.
-The TAP is allowlisted and rate-limited by default. Run
+The TAP may use the public internet by default and is rate-limited.
+An optional destination allowlist can lock the guest to named hosts.
+Run
 `apipi install --microvm` so the kernel and rootfs exist; unset, the
 process uses those cache files. Production units still set explicit
 paths in the environment file.

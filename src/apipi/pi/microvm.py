@@ -40,8 +40,9 @@ GUEST_DNS = ("1.1.1.1", "8.8.8.8")
 TAP_NET_BASE = 0xAC100000
 TAP_NET_SLOTS = 16384
 SHELL_WARNING = (
-    "Operator microVM shell. TAP egress allowlist still applies. "
-    "Exit the shell or press Ctrl-C to stop the VM."
+    "Operator microVM shell. Guest localhost and the public internet "
+    "are open by default. The same TAP rate limit as agent sessions "
+    "applies. Exit the shell or press Ctrl-C to stop the VM."
 )
 SHELL_SUDO_MARK = "APIPI_MICROVM_SHELL_SUDO"
 SHELL_SUDO_NOTICE = "Need root for TAP, NAT, and jailer. Re-running under sudo."
@@ -624,7 +625,7 @@ def tap_setup_argv(
     uid: int,
     gid: int,
     tc: str | None = None,
-    allowlist: bool = True,
+    allowlist: bool = False,
     allowed_ips: list[str] | None = None,
     egress_mbit: int = 50,
 ) -> list[list[str]]:
@@ -846,7 +847,7 @@ def tap_teardown_argv(
     ip: str,
     iptables: str,
     tc: str | None = None,
-    allowlist: bool = True,
+    allowlist: bool = False,
 ) -> list[list[str]]:
     comment = f"apipi-{net.name}"
     chain = _tap_chain(net)
@@ -1012,7 +1013,7 @@ def setup_tap(
     uid: int,
     gid: int,
     tc: str | None = None,
-    allowlist: bool = True,
+    allowlist: bool = False,
     allowed_ips: list[str] | None = None,
     egress_mbit: int = 50,
 ) -> None:
@@ -1037,7 +1038,7 @@ def teardown_tap(
     ip: str,
     iptables: str,
     tc: str | None = None,
-    allowlist: bool = True,
+    allowlist: bool = False,
 ) -> None:
     for argv in tap_teardown_argv(
         net, ip=ip, iptables=iptables, tc=tc, allowlist=allowlist

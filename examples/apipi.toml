@@ -29,7 +29,7 @@ mem_mib = 512
 vcpus = 1
 
 [sandbox.network]
-egress_allowlist = true
+egress_allowlist = false
 egress_hosts = []
 egress_mbit = 50
 

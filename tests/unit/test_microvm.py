@@ -484,7 +484,6 @@ def test_tap_setup_nat_without_host_loopback() -> None:
         uid=123,
         gid=100,
         tc="/sbin/tc",
-        allowed_ips=["203.0.113.10"],
     )
     flat = " ".join(" ".join(part) for part in argv)
     assert net.name in flat
@@ -493,9 +492,27 @@ def test_tap_setup_nat_without_host_loopback() -> None:
     assert "127.0.0.1" not in flat
     assert "DNAT" not in flat
     assert "--map-host-loopback" not in flat
+    assert "REJECT" not in flat
+    assert "-j ACCEPT" in flat
+    assert "50mbit" in flat
+    assert "198.51.100.9" not in flat
+
+
+def test_tap_setup_allowlist_on_rejects_unlisted() -> None:
+    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
+    argv = tap_setup_argv(
+        net,
+        ip="/sbin/ip",
+        iptables="/sbin/iptables",
+        uid=123,
+        gid=100,
+        tc="/sbin/tc",
+        allowlist=True,
+        allowed_ips=["203.0.113.10"],
+    )
+    flat = " ".join(" ".join(part) for part in argv)
     assert "REJECT" in flat
     assert "203.0.113.10" in flat
-    assert "50mbit" in flat
     for dns in GUEST_DNS:
         assert dns in flat
     assert "198.51.100.9" not in flat
@@ -519,7 +536,11 @@ def test_tap_setup_allowlist_off_accepts_all() -> None:
 def test_tap_teardown_cleans_tc_and_chain() -> None:
     net = tap_net("551e7604-e35c-42b3-b825-416853441234")
     argv = tap_teardown_argv(
-        net, ip="/sbin/ip", iptables="/sbin/iptables", tc="/sbin/tc"
+        net,
+        ip="/sbin/ip",
+        iptables="/sbin/iptables",
+        tc="/sbin/tc",
+        allowlist=True,
     )
     flat = " ".join(" ".join(part) for part in argv)
     assert "qdisc del" in flat
@@ -807,7 +828,6 @@ def test_setup_tap_runs_ip_commands(monkeypatch: pytest.MonkeyPatch) -> None:
         uid=1,
         gid=2,
         tc="/sbin/tc",
-        allowed_ips=["203.0.113.10"],
         egress_mbit=25,
     )
     flat = " ".join(" ".join(part) for part in ran)
@@ -815,7 +835,7 @@ def test_setup_tap_runs_ip_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "MASQUERADE" in flat
     assert "127.0.0.1" not in flat
     assert "25mbit" in flat
-    assert "203.0.113.10" in flat
+    assert "REJECT" not in flat
 
 
 def test_run_tap_permission_names_rights(monkeypatch: pytest.MonkeyPatch) -> None:
