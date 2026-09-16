@@ -192,7 +192,7 @@ def create_app(
         resolved_tracing = Tracing(endpoint=resolved.otel_endpoint)
     else:
         resolved_tracing = None
-    workers = WorkerHub(resolved)
+    workers = WorkerHub(resolved, metrics=resolved_metrics)
     if resolved.api_only:
         execution: LocalExecution | RemoteExecution = RemoteExecution(
             resolved, workers=workers, store=store, hub=hub

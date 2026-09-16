@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import secrets
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -38,11 +39,13 @@ class WorkerConnection:
     websocket: WebSocket
     capacity: int
     leases: set[uuid.UUID] = field(default_factory=set)
+    draining: bool = False
 
 
 class WorkerHub:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, metrics: Any | None = None) -> None:
         self.settings = settings
+        self.metrics = metrics
         self._conns: dict[uuid.UUID, WorkerConnection] = {}
         self._unacked: dict[uuid.UUID, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
@@ -65,6 +68,7 @@ class WorkerHub:
             self._conns[conn.worker_id] = conn
         if previous is not None and previous is not conn:
             await _close(previous.websocket)
+        self._observe()
         return conn
 
     async def detach(
@@ -77,10 +81,22 @@ class WorkerHub:
             if conn is not None and current is not conn:
                 return
             del self._conns[worker_id]
+        self._observe()
+
+    def _observe(self) -> None:
+        metrics = self.metrics
+        if metrics is None:
+            return
+        metrics.workers.set(len(self._conns))
+        metrics.worker_leases.set(
+            sum(len(conn.leases) for conn in self._conns.values())
+        )
 
     def pick(self) -> WorkerConnection | None:
         ready = [
-            conn for conn in self._conns.values() if len(conn.leases) < conn.capacity
+            conn
+            for conn in self._conns.values()
+            if not conn.draining and len(conn.leases) < conn.capacity
         ]
         if not ready:
             return None
@@ -98,6 +114,7 @@ class WorkerHub:
     ) -> dict[str, Any] | None:
         if op not in COMMAND_OPS:
             raise ValueError(op)
+        started = time.monotonic()
         conn = self.pick()
         if conn is None:
             return None
@@ -126,6 +143,10 @@ class WorkerHub:
         }
         self._unacked[lease_id] = command
         await _send(conn.websocket, command)
+        metrics = self.metrics
+        if metrics is not None:
+            metrics.worker_assign.observe(time.monotonic() - started)
+        self._observe()
         return command
 
     async def command(
@@ -186,6 +207,7 @@ class WorkerHub:
             conn = self._conns.get(worker_id)
             if conn is not None:
                 conn.leases.discard(lease_id)
+        self._observe()
 
     async def expire(self, store: Store, hub: EventHub) -> list[uuid.UUID]:
         expired: list[uuid.UUID] = []
@@ -220,6 +242,7 @@ class WorkerHub:
                                 "lease_id": str(lease_id),
                             },
                         )
+        self._observe()
         return expired
 
     async def replay(self, conn: WorkerConnection, store: Store) -> None:
@@ -314,6 +337,12 @@ async def heartbeat_worker(
         )
     if isinstance(capacity, int):
         conn.capacity = capacity
+    if message.get("drain") is True:
+        conn.draining = True
+        hub._observe()
+    elif message.get("drain") is False:
+        conn.draining = False
+        hub._observe()
 
 
 async def _send(websocket: WebSocket, payload: dict[str, Any]) -> None:
