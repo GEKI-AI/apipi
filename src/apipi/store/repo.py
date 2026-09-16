@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.store.errors import NotFoundError
@@ -691,17 +691,23 @@ async def upsert_worker(
     worker_id: uuid.UUID,
     *,
     capacity: int,
+    api_instance_id: str | None = None,
 ) -> WorkerRow:
     row = await db.scalar(select(WorkerRow).where(WorkerRow.id == worker_id))
     if row is None:
         row = WorkerRow(
-            id=worker_id, capacity=capacity, generation=1, last_seen=utc_now()
+            id=worker_id,
+            capacity=capacity,
+            generation=1,
+            last_seen=utc_now(),
+            api_instance_id=api_instance_id,
         )
         db.add(row)
     else:
         row.capacity = capacity
         row.generation += 1
         row.last_seen = utc_now()
+        row.api_instance_id = api_instance_id
     await db.flush()
     return row
 
@@ -711,7 +717,11 @@ async def get_worker(db: AsyncSession, worker_id: uuid.UUID) -> WorkerRow | None
 
 
 async def touch_worker(
-    db: AsyncSession, worker_id: uuid.UUID, *, capacity: int | None = None
+    db: AsyncSession,
+    worker_id: uuid.UUID,
+    *,
+    capacity: int | None = None,
+    api_instance_id: str | None = None,
 ) -> WorkerRow | None:
     row = await get_worker(db, worker_id)
     if row is None:
@@ -719,8 +729,21 @@ async def touch_worker(
     row.last_seen = utc_now()
     if capacity is not None:
         row.capacity = capacity
+    if api_instance_id is not None:
+        row.api_instance_id = api_instance_id
     await db.flush()
     return row
+
+
+async def clear_worker_api_instance(
+    db: AsyncSession, worker_id: uuid.UUID, *, instance_id: str | None
+) -> None:
+    row = await get_worker(db, worker_id)
+    if row is None:
+        return
+    if row.api_instance_id == instance_id:
+        row.api_instance_id = None
+        await db.flush()
 
 
 async def set_session_lease(
@@ -732,14 +755,29 @@ async def set_session_lease(
     lease_id: uuid.UUID,
     lease_until: datetime,
 ) -> SessionRow | None:
-    row = await get_session(db, tenant_id, session_id)
-    if row is None:
+    now = utc_now()
+    result = await db.execute(
+        update(SessionRow)
+        .where(
+            SessionRow.tenant_id == tenant_id,
+            SessionRow.id == session_id,
+            or_(SessionRow.lease_id.is_(None), SessionRow.lease_until < func.now()),
+        )
+        .values(
+            worker_id=worker_id,
+            lease_id=lease_id,
+            lease_until=lease_until,
+            updated_at=now,
+        )
+        .returning(SessionRow.id)
+        .execution_options(synchronize_session=False)
+    )
+    updated = result.scalar_one_or_none()
+    if updated is None:
         return None
-    row.worker_id = worker_id
-    row.lease_id = lease_id
-    row.lease_until = lease_until
-    row.updated_at = utc_now()
-    await db.flush()
+    row = await get_session(db, tenant_id, session_id)
+    if row is not None:
+        await db.refresh(row)
     return row
 
 
@@ -765,9 +803,9 @@ async def get_session_by_lease(
 
 async def list_expired_leases(db: AsyncSession, now: datetime) -> list[SessionRow]:
     result = await db.scalars(
-        select(SessionRow).where(
-            SessionRow.lease_id.is_not(None), SessionRow.lease_until <= now
-        )
+        select(SessionRow)
+        .where(SessionRow.lease_id.is_not(None), SessionRow.lease_until <= now)
+        .with_for_update(skip_locked=True)
     )
     return list(result)
 
@@ -784,11 +822,15 @@ async def list_worker_leases(
 async def extend_worker_leases(
     db: AsyncSession, worker_id: uuid.UUID, *, lease_until: datetime
 ) -> None:
-    rows = await list_worker_leases(db, worker_id)
-    for row in rows:
-        if row.lease_id is None:
-            continue
-        row.lease_until = lease_until
+    await db.execute(
+        update(SessionRow)
+        .where(
+            SessionRow.worker_id == worker_id,
+            SessionRow.lease_id.is_not(None),
+        )
+        .values(lease_until=lease_until, updated_at=utc_now())
+        .execution_options(synchronize_session=False)
+    )
 
 
 async def create_vault(

@@ -297,7 +297,12 @@ async def register_worker(
     else:
         worker_id = uuid.uuid4()
     async with store.session() as db:
-        row = await upsert_worker(db, worker_id, capacity=capacity)
+        row = await upsert_worker(
+            db,
+            worker_id,
+            capacity=capacity,
+            api_instance_id=hub.settings.instance_id,
+        )
     conn = WorkerConnection(
         worker_id=row.id,
         generation=row.generation,
@@ -329,6 +334,7 @@ async def heartbeat_worker(
             db,
             conn.worker_id,
             capacity=capacity if isinstance(capacity, int) else None,
+            api_instance_id=hub.settings.instance_id,
         )
         await extend_worker_leases(
             db,

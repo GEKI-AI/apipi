@@ -82,13 +82,26 @@ API to worker:
 ## Leases
 
 A lease is durable on the session row (`worker_id`, `lease_id`,
-`lease_until`). Commands carry `lease_id`. A worker that does not hold
-that lease cannot ack, emit events, or release it.
+`lease_until`). Grant is a single conditional `UPDATE`: it only
+succeeds when there is no live lease. Heartbeats extend all of that
+worker's leases in one statement. Commands carry `lease_id`. A worker
+that does not hold that lease cannot ack, emit events, or release it.
 
-When `lease_until` passes, the API clears ownership, emits
-`agent.session.error` with code `worker_lease_expired`, and sends
-`lease.revoke` if the worker is still connected. It does not assign
-the session to another worker in this version.
+When `lease_until` passes, API processes expire rows with
+`FOR UPDATE SKIP LOCKED` so two reapers do not double-clear. The API
+clears ownership, emits `agent.session.error` with code
+`worker_lease_expired`, and sends `lease.revoke` if the worker is
+still connected. It does not assign the session to another worker in
+this version.
+
+`workers.api_instance_id` is the `APIPI_INSTANCE_ID` of the API process
+that currently holds that worker's WebSocket. Register and heartbeat
+write it. Detach clears it only if it still matches this process. If
+a turn needs that worker but this process has no socket, the API
+returns `429` with code `capacity` and names that instance. There is
+no cross-API command forwarding. Point each worker at the API that
+will dispatch its turns, or stick `/internal/worker` to one API. SSE
+and session create stay store-backed on any replica.
 
 Reconnect with the same worker id replaces the old socket, increments
 generation, and retransmits unacked commands for leases that worker
