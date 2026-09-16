@@ -3,13 +3,17 @@ from typing import Any, Literal, Self
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
 
-from apipi.env.setup import SetupError, packages_from, setup_commands_from
+from apipi.env.setup import (
+    SetupError,
+    inline_files_from,
+    packages_from,
+    session_env_from,
+    setup_commands_from,
+)
 from apipi.errors import ApiError, not_implemented
 from apipi.schemas import StrictModel
 
 _UNIMPLEMENTED = (
-    "files",
-    "env",
     "network",
     "environment_template_id",
     "skills",
@@ -21,6 +25,12 @@ class PackagesSpec(StrictModel):
     python: list[str] | None = None
     system: list[str] | None = None
     npm: list[str] | None = None
+
+
+class InlineFileSpec(StrictModel):
+    type: Literal["inline"]
+    path: str
+    data: str
 
 
 class SetupCommandSpec(StrictModel):
@@ -40,6 +50,8 @@ class EnvironmentSpec(StrictModel):
     packages: PackagesSpec | None = None
     setup_commands: list[SetupCommandSpec] | None = None
     sandbox_size: Literal["S", "M", "L"] | None = None
+    env: dict[str, str] | None = None
+    files: list[InlineFileSpec] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -52,6 +64,15 @@ class EnvironmentSpec(StrictModel):
                         "{field} is not implemented",
                         {"field": field},
                     )
+            raw_files = data.get("files")
+            if isinstance(raw_files, list):
+                for item in raw_files:
+                    if isinstance(item, dict) and item.get("type") != "inline":
+                        raise PydanticCustomError(
+                            "not_implemented",
+                            "{field} is not implemented",
+                            {"field": "files"},
+                        )
         return data
 
 
@@ -64,12 +85,16 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
     payload: dict[str, Any] = {"type": env_type}
     if spec is None:
         return payload
-    if (
-        spec.packages is not None or spec.setup_commands is not None
-    ) and env_type != "openai_hosted":
+    hosted_only = (
+        spec.packages is not None
+        or spec.setup_commands is not None
+        or spec.env is not None
+        or spec.files is not None
+    )
+    if hosted_only and env_type != "openai_hosted":
         raise ApiError(
             "invalid_request",
-            "packages and setup_commands need openai_hosted",
+            "packages, setup_commands, env, and files need openai_hosted",
             code="invalid_request",
         )
     if spec.capability_directories is not None:
@@ -84,9 +109,15 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
         payload["setup_commands"] = [
             command.model_dump(exclude_none=True) for command in spec.setup_commands
         ]
+    if spec.env is not None:
+        payload["env"] = spec.env
+    if spec.files is not None:
+        payload["files"] = [item.model_dump() for item in spec.files]
     try:
         packages_from(payload)
         setup_commands_from(payload)
+        session_env_from(payload)
+        inline_files_from(payload)
     except SetupError as exc:
         raise ApiError("invalid_request", exc.message, code="invalid_request") from exc
     return payload

@@ -39,6 +39,7 @@ class FakeIsolation:
         api_key: str | None = None,
         mem_mib: int | None = None,
         image: str | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> PiProc:
         type(self).spawned = True
         return await self._inner.spawn(
@@ -53,6 +54,7 @@ class FakeIsolation:
             api_key=api_key,
             mem_mib=mem_mib,
             image=image,
+            extra_env=extra_env,
         )
 
 

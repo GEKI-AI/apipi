@@ -263,16 +263,25 @@ these. See [multiple nodes](scale.md).
 `SKILL.md` trees. See [tools](tools.md).
 
 On `openai_hosted` (and the `hosted` alias), create also accepts
-`packages` and `setup_commands`. `packages` is an object with optional
-`python`, `system`, and `npm` lists of package names (pin versions when
-you need to, such as `pandas==2.2.3`). `setup_commands` is an ordered
-list of `{ "command": "…", "cwd": "…" }` objects. `cwd` is optional and
-defaults to the session workspace. Packages are installed first, then
-setup commands run, before the first agent turn. A nonzero install or
-setup exit emits `agent.session.environment.failed` and fails the
-session; Pi does not start. Those fields on `none` or `self_hosted`
-return `400`. `files`, `env`, `network`, `environment_template_id`,
-`skills`, and `plugins` return `400` with type `not_implemented`.
+`packages`, `setup_commands`, `env`, and inline `files`. `packages` is
+an object with optional `python`, `system`, and `npm` lists of package
+names (pin versions when you need to, such as `pandas==2.2.3`).
+`setup_commands` is an ordered list of `{ "command": "…", "cwd": "…" }`
+objects. `cwd` is optional and defaults to the session workspace.
+`env` is an object of string environment variables for that session.
+`files` entries are `{ "type": "inline", "path": "/workspace/…",
+"data": "<base64>" }`. Inline files are written first, then packages
+install, then setup commands run, before the first agent turn. A
+nonzero install or setup exit emits
+`agent.session.environment.failed` and fails the session; Pi does not
+start. Those fields on `none` or `self_hosted` return `400`.
+`network`, `environment_template_id`, `skills`, and `plugins` return
+`400` with type `not_implemented`. Non-inline `files` (Files API ids)
+are `not_implemented`. Reserved `env` names (`PATH`, `HOME`,
+`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `DATABASE_URL`,
+`PI_CODING_AGENT_DIR`, and `APIPI_` / `CODEX_` / `PI_` prefixes)
+return `400`. Decoded inline files must fit
+`APIPI_MAX_WORKSPACE_BYTES`.
 
 `environment.sandbox_size` is an ApiPi extension: `S`, `M`, or `L`.
 Unknown values return `400`. A top-level `sandbox_size` on the session

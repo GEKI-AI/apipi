@@ -34,6 +34,7 @@ class NoneIsolation:
         api_key: str | None = None,
         mem_mib: int | None = None,
         image: str | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> PiProc:
         del mem_mib, image
         session_file = None
@@ -64,7 +65,14 @@ class NoneIsolation:
             port=0,
         )
         try:
-            env = pi_env(settings, mcp_http, mcp_stdio, api_key=api_key, broker=broker)
+            env = pi_env(
+                settings,
+                mcp_http,
+                mcp_stdio,
+                api_key=api_key,
+                broker=broker,
+                extra_env=extra_env,
+            )
             if cwd:
                 agent_dir = Path(cwd) / ".pi" / "agent"
                 agent_dir.mkdir(parents=True, exist_ok=True)

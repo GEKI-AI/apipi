@@ -47,6 +47,7 @@ class PiPool:
         env_type: str | None = None,
         mem_mib: int | None = None,
         image: str | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> PiProc:
         instructions = instructions if instructions else None
         session_mem = mem_mib if mem_mib is not None else self.settings.microvm_mem_mib
@@ -89,6 +90,7 @@ class PiPool:
                     api_key=api_key,
                     mem_mib=mem_mib,
                     image=image,
+                    extra_env=extra_env,
                 )
                 log.info("pi ready", extra={"session_id": str(session_id)})
                 self._procs[session_id] = proc

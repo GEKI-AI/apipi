@@ -625,6 +625,9 @@ def test_guest_env_drops_host_path(tmp_path: Path) -> None:
     assert "PATH" not in env
     assert "DATABASE_URL" not in env
     assert env["APIPI_PINNED_PI"]
+    env = guest_env(settings, extra_env={"REPORT": "yes"})
+    assert env["REPORT"] == "yes"
+    assert "PATH" not in env
 
 
 class _Writer:

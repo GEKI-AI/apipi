@@ -118,6 +118,7 @@ def pi_env(
     *,
     api_key: str | None = None,
     broker: Any | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     from apipi.broker import DUMMY_KEY
     from apipi.pi.model_host import pi_agent_dir
@@ -158,6 +159,8 @@ def pi_env(
             env[f"{prefix}_ARGS"] = "\x1f".join(server.args)
             if server.cwd:
                 env[f"{prefix}_CWD"] = server.cwd
+    if extra_env:
+        env.update(extra_env)
     return env
 
 
@@ -208,6 +211,7 @@ async def spawn_pi(
     api_key: str | None = None,
     mem_mib: int | None = None,
     image: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> PiProc:
     from apipi.pi.isolation import load_isolation
 
@@ -223,4 +227,5 @@ async def spawn_pi(
         api_key=api_key,
         mem_mib=mem_mib,
         image=image,
+        extra_env=extra_env,
     )
