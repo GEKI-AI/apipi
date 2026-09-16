@@ -16,6 +16,7 @@ from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import (
     clear_session_lease,
+    extend_worker_leases,
     get_session,
     get_session_by_lease,
     list_expired_leases,
@@ -115,6 +116,39 @@ class WorkerHub:
             if row is None:
                 return None
         conn.leases.add(lease_id)
+        command = {
+            "type": "command",
+            "id": str(command_id),
+            "session_id": str(session_id),
+            "lease_id": str(lease_id),
+            "op": op,
+            "payload": payload if payload is not None else {},
+        }
+        self._unacked[lease_id] = command
+        await _send(conn.websocket, command)
+        return command
+
+    async def command(
+        self,
+        store: Store,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        op: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if op not in COMMAND_OPS:
+            raise ValueError(op)
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            if row is None or row.lease_id is None or row.worker_id is None:
+                return None
+            worker_id = row.worker_id
+            lease_id = row.lease_id
+        conn = self._conns.get(worker_id)
+        if conn is None or lease_id not in conn.leases:
+            return None
+        command_id = uuid.uuid4()
         command = {
             "type": "command",
             "id": str(command_id),
@@ -273,6 +307,11 @@ async def heartbeat_worker(
             conn.worker_id,
             capacity=capacity if isinstance(capacity, int) else None,
         )
+        await extend_worker_leases(
+            db,
+            conn.worker_id,
+            lease_until=utc_now() + hub.settings.worker_lease_ttl,
+        )
     if isinstance(capacity, int):
         conn.capacity = capacity
 
@@ -288,6 +327,60 @@ async def _close(websocket: WebSocket) -> None:
         await websocket.close()
 
 
+async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
+    op = message.get("op")
+    payload = message.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        session_id = uuid.UUID(str(message.get("session_id")))
+        tenant_id = uuid.UUID(str(payload.get("tenant_id")))
+    except (ValueError, TypeError):
+        return
+    request_id = payload.get("request_id")
+    api_key = payload.get("api_key")
+    key_id = payload.get("key_id")
+    request_id = request_id if isinstance(request_id, str) else None
+    api_key = api_key if isinstance(api_key, str) else None
+    key_id = key_id if isinstance(key_id, str) else None
+    if op == "turn.start":
+        text = payload.get("text")
+        await execution.run_turn(
+            tenant_id,
+            session_id,
+            text if isinstance(text, str) else "",
+            request_id=request_id,
+            api_key=api_key,
+            key_id=key_id,
+        )
+        return
+    if op == "turn.continue":
+        raw_turn = payload.get("turn_id")
+        call_id = payload.get("call_id")
+        success = payload.get("success")
+        if not isinstance(raw_turn, str) or not isinstance(call_id, str):
+            return
+        if not isinstance(success, bool):
+            return
+        output = payload.get("output")
+        error = payload.get("error")
+        await execution.continue_turn(
+            tenant_id,
+            session_id,
+            turn_id=uuid.UUID(raw_turn),
+            call_id=call_id,
+            success=success,
+            output=output if isinstance(output, str) else None,
+            error=error if isinstance(error, str) else None,
+            request_id=request_id,
+            api_key=api_key,
+            key_id=key_id,
+        )
+        return
+    if op == "turn.cancel":
+        await execution.cancel(session_id, status="in_progress")
+
+
 def worker_ws_url(base: str) -> str:
     parsed = urlparse(base)
     if parsed.scheme in {"http", "https"}:
@@ -300,49 +393,68 @@ def worker_ws_url(base: str) -> str:
 
 
 async def run_worker(settings: Settings, *, url: str | None = None) -> None:
+    from apipi.execution import local_execution
+    from apipi.store.engine import Store, create_engine
+
     token = settings.worker_token
     if token is None or token == "":
         raise ConfigError("APIPI_WORKER_TOKEN is required")
     base = url or settings.api_url or "http://127.0.0.1:8000"
     ws_url = worker_ws_url(base)
     heartbeat = min(10.0, max(1.0, settings.worker_lease_ttl.total_seconds() / 2))
+    store = Store(create_engine(settings.database_url, pool_size=settings.db_pool_size))
+    execution = local_execution(settings, store=store)
+    tasks: set[asyncio.Task[None]] = set()
     log.info("worker connect", extra={"url": ws_url})
-    async with websockets.connect(
-        ws_url, additional_headers={"Authorization": f"Bearer {token}"}
-    ) as sock:
-        await sock.send(
-            json.dumps({"type": "register", "capacity": settings.max_sessions})
-        )
-        raw = await sock.recv()
-        hello = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
-        if not isinstance(hello, dict) or not hello.get("ok"):
-            error = hello.get("error") if isinstance(hello, dict) else "unauthorized"
-            raise ConfigError(f"worker register failed: {error}")
-        log.info("worker hello", extra={"worker_id": hello.get("worker_id")})
-        while True:
-            try:
-                incoming = await asyncio.wait_for(sock.recv(), timeout=heartbeat)
-            except TimeoutError:
-                await sock.send(json.dumps({"type": "heartbeat"}))
-                continue
-            text = incoming if isinstance(incoming, str) else incoming.decode()
-            message = json.loads(text)
-            if not isinstance(message, dict):
-                continue
-            if message.get("type") == "command":
-                await sock.send(
-                    json.dumps(
-                        {
-                            "type": "lease.ack",
-                            "id": message.get("id"),
-                            "lease_id": message.get("lease_id"),
-                        }
+    try:
+        async with websockets.connect(
+            ws_url, additional_headers={"Authorization": f"Bearer {token}"}
+        ) as sock:
+            await sock.send(
+                json.dumps({"type": "register", "capacity": settings.max_sessions})
+            )
+            raw = await sock.recv()
+            hello = (
+                json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
+            )
+            if not isinstance(hello, dict) or not hello.get("ok"):
+                error = (
+                    hello.get("error") if isinstance(hello, dict) else "unauthorized"
+                )
+                raise ConfigError(f"worker register failed: {error}")
+            log.info("worker hello", extra={"worker_id": hello.get("worker_id")})
+            while True:
+                try:
+                    incoming = await asyncio.wait_for(sock.recv(), timeout=heartbeat)
+                except TimeoutError:
+                    await sock.send(json.dumps({"type": "heartbeat"}))
+                    continue
+                text = incoming if isinstance(incoming, str) else incoming.decode()
+                message = json.loads(text)
+                if not isinstance(message, dict):
+                    continue
+                if message.get("type") == "command":
+                    await sock.send(
+                        json.dumps(
+                            {
+                                "type": "lease.ack",
+                                "id": message.get("id"),
+                                "lease_id": message.get("lease_id"),
+                            }
+                        )
                     )
-                )
-                log.info(
-                    "worker command",
-                    extra={
-                        "op": message.get("op"),
-                        "session_id": message.get("session_id"),
-                    },
-                )
+                    log.info(
+                        "worker command",
+                        extra={
+                            "op": message.get("op"),
+                            "session_id": message.get("session_id"),
+                        },
+                    )
+                    task = asyncio.create_task(dispatch_command(execution, message))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await execution.close()
+        await store.dispose()

@@ -382,6 +382,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("APIPI_API_URL", "api_url"),
     )
+    api_only: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("APIPI_API_ONLY", "api_only"),
+    )
     auth: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_AUTH", "auth"),

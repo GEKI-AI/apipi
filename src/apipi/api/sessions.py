@@ -277,15 +277,27 @@ async def _event_stream(
         async with store.session() as db:
             existing = await list_events(db, tenant_id, session_id, after_seq=after_seq)
         last = after_seq or 0
+        ping_at = 0.0
         for event in existing:
             last = event.seq
             yield _sse(event_body(event))
         while True:
             try:
-                payload = await asyncio.wait_for(queue.get(), timeout=15)
+                payload = await asyncio.wait_for(queue.get(), timeout=0.25)
             except TimeoutError:
-                yield SSE_PING
+                async with store.session() as db:
+                    extra = await list_events(db, tenant_id, session_id, after_seq=last)
+                if extra:
+                    for event in extra:
+                        last = event.seq
+                        yield _sse(event_body(event))
+                    continue
+                ping_at += 0.25
+                if ping_at >= 15:
+                    ping_at = 0.0
+                    yield SSE_PING
                 continue
+            ping_at = 0.0
             seq = payload.get("seq")
             if seq is None:
                 yield _sse(payload)

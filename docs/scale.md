@@ -1,11 +1,16 @@
 # Multiple nodes
 
-One `apipi serve` process owns its live Pi processes, local
+One combined `apipi serve` process owns its live Pi processes, local
 `openai_hosted` directories, artifact bytes, SSE subscribers, and
 `self_hosted` runner sockets. Those stay in memory or on that host's
 disk. Postgres is the shared transcript when more than one process
 needs the same store. Give each process its own SQLite file, or share
-Postgres. A live session has no handoff to another node.
+Postgres.
+
+With `apipi serve --api-only` and `apipi worker`, session ownership is
+the worker lease. API nodes are interchangeable for follow-up REST and
+SSE (SSE also polls the store). `self_hosted` runner sockets still
+stick to the API process that created them.
 
 Several processes behind a load balancer work if follow-up requests
 return to the node that owns the session (sticky affinity). Scale by

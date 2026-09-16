@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `apipi worker` probes the sandbox before it connects. Firecracker,
   jailer, and TAP stay on the worker (or on combined `apipi serve` as
   an embedded worker). API-only hosts do not create TAP devices.
+- `apipi serve --api-only` leases a worker for turns. SSE reads new
+  events from the store so API nodes do not need the live Pi process.
+  No worker is `429` with code `capacity`.
 
 ### Added
 

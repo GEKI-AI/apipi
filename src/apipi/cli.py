@@ -55,12 +55,14 @@ def prepare_serve(
     resolved = (
         settings if settings is not None else load_settings(config_path=config_path)
     )
-    if not api_only:
+    if api_only and not resolved.api_only:
+        resolved = resolved.model_copy(update={"api_only": True})
+    if not resolved.api_only:
         require_run_mode(resolved.run_mode, resolved)
     if is_sqlite_url(resolved.database_url):
         log.warning(SQLITE_WARNING)
     probe_model_host(resolved)
-    if not api_only:
+    if not resolved.api_only:
         probe_run_mode(resolved)
     reject_prompt_body_logging()
     configure_logging(level=resolved.log_level, format=resolved.log_format)
