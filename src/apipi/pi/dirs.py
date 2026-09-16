@@ -3,6 +3,8 @@ from pathlib import Path
 
 from apipi.config import Settings
 
+PI_SESSION_REL = ".apipi/pi-session.jsonl"
+
 
 def sessions_root(settings: Settings) -> Path:
     if settings.sessions_dir:
@@ -19,6 +21,10 @@ def session_workspace(
     path = sessions_root(settings) / str(tenant_id) / str(session_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def pi_session_file(workspace: Path) -> Path:
+    return workspace / PI_SESSION_REL
 
 
 def blob_user(key_id: str) -> str:

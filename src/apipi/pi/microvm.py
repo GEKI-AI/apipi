@@ -24,12 +24,14 @@ from apipi.config import ConfigError, Settings
 from apipi.env.setup import workspace_egress_hosts
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
+from apipi.pi.dirs import PI_SESSION_REL, pi_session_file
 from apipi.pi.model_host import pi_agent_dir
 from apipi.pi.proc import PiProc, pi_command_args, pi_env
 
 VSOCK_PORT = 52
 VSOCK_ARTIFACT_PORT = 53
 VSOCK_WORKSPACE_PORT = 54
+VSOCK_SESSION_PORT = 55
 VSOCK_UDS = "vsock.sock"
 MEM_MIB = 512
 VCPU_COUNT = 1
@@ -1177,6 +1179,8 @@ async def start_microvm(
         )
         _link_or_copy(Path(kernel), chroot_dir / "vmlinux")
         _link_or_copy(Path(rootfs), chroot_dir / "rootfs.ext4")
+        if cwd:
+            pi_session_file(Path(cwd)).parent.mkdir(parents=True, exist_ok=True)
         write_workspace_image(
             chroot_dir / "workspace.tar",
             cwd=cwd,
@@ -1189,6 +1193,7 @@ async def start_microvm(
                 skill_dirs=guest_skills,
                 model=model,
                 instructions=instructions,
+                session_file=PI_SESSION_REL if cwd else None,
             ),
             net=net,
             extra_dirs=extra_dirs,
@@ -1298,6 +1303,9 @@ async def spawn_microvm_pi(
     async def pull_workspace() -> bytes:
         return await _pull(VSOCK_WORKSPACE_PORT)
 
+    async def pull_session() -> bytes:
+        return await _pull(VSOCK_SESSION_PORT)
+
     return PiProc(
         process,
         stdin=writer,
@@ -1305,6 +1313,7 @@ async def spawn_microvm_pi(
         on_stop=started.cleanup,
         pull_artifacts=pull_artifacts,
         pull_workspace=pull_workspace,
+        pull_session=pull_session,
     )
 
 

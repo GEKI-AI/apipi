@@ -16,7 +16,11 @@ from apipi.errors import ApiError
 from apipi.metrics import Metrics, observe_turn
 from apipi.otel import Tracing, set_span, start_span
 from apipi.payload_export import export_payload
-from apipi.pi.artifacts import ensure_openai_workspace, harvest_session
+from apipi.pi.artifacts import (
+    ensure_openai_workspace,
+    harvest_session,
+    restore_pi_session,
+)
 from apipi.pi.model_host import (
     listed_models,
     require_listed_model,
@@ -1051,6 +1055,8 @@ async def run_turn(
                 await fail_environment(db, hub, tenant_id, session_id, exc.message)
                 return
             cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
+            if settings is not None and cwd_path:
+                await restore_pi_session(settings, row, Path(cwd_path))
             computer = (
                 bind_computer(env_hub, env_id)
                 if env_hub is not None and env_id is not None
@@ -1338,6 +1344,8 @@ async def continue_turn(
             return
         ensure_openai_workspace(row.environment)
         cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
+        if settings is not None and cwd_path:
+            await restore_pi_session(settings, row, Path(cwd_path))
         computer = (
             bind_computer(env_hub, env_id)
             if env_hub is not None and env_id is not None

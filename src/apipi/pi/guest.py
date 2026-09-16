@@ -14,7 +14,9 @@ from pathlib import Path
 
 ARTIFACT_PORT = 53
 WORKSPACE_PORT = 54
+SESSION_PORT = 55
 PUBLISH_DIRS = ("artifacts", "outputs")
+SESSION_REL = ".apipi/pi-session.jsonl"
 RNDADDENTROPY = 0x40085203
 
 
@@ -64,6 +66,13 @@ def artifacts_tar_bytes(root: Path) -> bytes:
     return buf.getvalue()
 
 
+def session_file_bytes(root: Path) -> bytes:
+    path = root / SESSION_REL
+    if not path.is_file():
+        return b""
+    return path.read_bytes()
+
+
 def workspace_tar_bytes(root: Path) -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
@@ -99,6 +108,22 @@ def _serve_artifacts(port: int) -> None:
 
 def _serve_workspace(port: int) -> None:
     _serve_tar(port, workspace_tar_bytes)
+
+
+def _serve_session(port: int) -> None:
+    sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((socket.VMADDR_CID_ANY, port))
+    sock.listen(8)
+    root = Path(os.environ.get("HOME", "/workspace"))
+    while True:
+        conn, _ = sock.accept()
+        try:
+            conn.sendall(session_file_bytes(root))
+        except OSError:
+            pass
+        finally:
+            conn.close()
 
 
 def _serve_rpc(args: list[str], port: int) -> None:
@@ -208,6 +233,7 @@ def main(argv: list[str] | None = None) -> None:
     threading.Thread(
         target=_serve_workspace, args=(WORKSPACE_PORT,), daemon=True
     ).start()
+    threading.Thread(target=_serve_session, args=(SESSION_PORT,), daemon=True).start()
     _serve_rpc(_pi_args(), port)
 
 
