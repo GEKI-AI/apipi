@@ -30,4 +30,5 @@ class Isolation(Protocol):
         api_key: str | None = None,
         mem_mib: int | None = None,
         image: str | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> PiProc: ...

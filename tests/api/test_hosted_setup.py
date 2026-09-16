@@ -1,3 +1,4 @@
+import base64
 from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
@@ -59,7 +60,7 @@ async def test_packages_and_setup_commands_are_stored(client: AsyncClient) -> No
 async def test_setup_runs_before_turn(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_run(workspace: Path) -> None:
+    def fake_run(workspace: Path, **_kwargs: object) -> None:
         (workspace / "ready.txt").write_text("ok")
 
     monkeypatch.setattr("apipi.env.setup.run_host_setup", fake_run)
@@ -92,7 +93,7 @@ async def test_setup_runs_before_turn(
 async def test_setup_failure_does_not_start_turn(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def boom(_workspace: Path) -> None:
+    def boom(_workspace: Path, **_kwargs: object) -> None:
         raise SetupError("pip failed")
 
     monkeypatch.setattr("apipi.env.setup.run_host_setup", boom)
@@ -146,8 +147,6 @@ async def test_unimplemented_env_fields(client: AsyncClient) -> None:
     token = "setup-unimpl"
     agent_id = await _agent(client, token)
     for field, value in (
-        ("files", []),
-        ("env", {"A": "b"}),
         ("network", {"access": "disabled"}),
         ("environment_template_id", "tpl"),
         ("skills", []),
@@ -173,7 +172,7 @@ async def test_sandbox_ttl_wipes_scratch_and_rehydrates(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_run(workspace: Path) -> None:
+    def fake_run(workspace: Path, **_kwargs: object) -> None:
         (workspace / "ready.txt").write_text("ok")
 
     monkeypatch.setattr("apipi.env.setup.run_host_setup", fake_run)
@@ -293,3 +292,88 @@ async def test_spawn_oserror_fails_turn_not_500(
         assert "agent.session.error" in types
         error = next(event for event in body if event["type"] == "agent.session.error")
         assert error["data"]["code"] == "spawn_failed"
+
+
+async def test_env_and_inline_files_are_stored(client: AsyncClient) -> None:
+    token = "env-files"
+    agent_id = await _agent(client, token)
+    payload = base64.b64encode(b"a,b\n1,2\n").decode()
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {
+                "type": "openai_hosted",
+                "env": {"REPORT": "yes"},
+                "files": [
+                    {
+                        "type": "inline",
+                        "path": "/workspace/amounts.csv",
+                        "data": payload,
+                    }
+                ],
+            },
+        },
+    )
+    assert created.status_code == 200
+    env = created.json()["environment"]
+    assert env["env"] == {"REPORT": "yes"}
+    assert env["files"][0]["path"] == "/workspace/amounts.csv"
+    directory = Path(env["directory"])
+    assert (directory / "amounts.csv").read_bytes() == b"a,b\n1,2\n"
+    user_env = (directory / ".apipi" / "user.env").read_text()
+    assert "REPORT=" in user_env
+
+
+async def test_reserved_env_name_rejected(client: AsyncClient) -> None:
+    token = "env-reserved"
+    agent_id = await _agent(client, token)
+    response = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {
+                "type": "openai_hosted",
+                "env": {"OPENAI_API_KEY": "nope"},
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert "reserved env" in response.json()["error"]["message"]
+
+
+async def test_env_rejected_on_none(client: AsyncClient) -> None:
+    token = "env-none"
+    agent_id = await _agent(client, token)
+    response = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {"type": "none", "env": {"A": "b"}},
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
+async def test_non_inline_files_not_implemented(client: AsyncClient) -> None:
+    token = "files-id"
+    agent_id = await _agent(client, token)
+    response = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {
+                "type": "openai_hosted",
+                "files": [{"type": "file", "file_id": "file_123"}],
+            },
+        },
+    )
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["type"] == "not_implemented"
+    assert error["code"] == "files"

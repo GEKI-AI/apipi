@@ -446,15 +446,25 @@ def guest_env(
     *,
     api_key: str | None = None,
     broker: object | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    env = pi_env(settings, mcp_http, mcp_stdio, api_key=api_key, broker=broker)
+    env = pi_env(
+        settings,
+        mcp_http,
+        mcp_stdio,
+        api_key=api_key,
+        broker=broker,
+        extra_env=extra_env,
+    )
     env["PI_CODING_AGENT_DIR"] = f"{GUEST_WORKSPACE}/.pi/agent"
+    extra_keys = set(extra_env) if extra_env else set()
     return {
         key: value
         for key, value in env.items()
         if key.startswith("OPENAI_")
         or key.startswith("APIPI_")
         or key == "PI_CODING_AGENT_DIR"
+        or key in extra_keys
     }
 
 
@@ -1144,6 +1154,7 @@ async def start_microvm(
     inherit_stdio: bool = False,
     mem_mib: int | None = None,
     image: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> StartedMicrovm:
     require_microvm(settings)
     firecracker, jailer = microvm_binaries()
@@ -1219,7 +1230,12 @@ async def start_microvm(
             chroot_dir / "workspace.tar",
             cwd=cwd,
             env=guest_env(
-                settings, mcp_http, mcp_stdio, api_key=api_key, broker=broker
+                settings,
+                mcp_http,
+                mcp_stdio,
+                api_key=api_key,
+                broker=broker,
+                extra_env=extra_env,
             ),
             pi_args=pi_command_args(
                 settings,
@@ -1303,6 +1319,7 @@ async def spawn_microvm_pi(
     api_key: str | None = None,
     mem_mib: int | None = None,
     image: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> PiProc:
     started = await start_microvm(
         settings,
@@ -1316,6 +1333,7 @@ async def spawn_microvm_pi(
         api_key=api_key,
         mem_mib=mem_mib,
         image=image,
+        extra_env=extra_env,
     )
     process = started.process
     try:

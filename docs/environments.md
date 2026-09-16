@@ -96,19 +96,32 @@ process that exits immediately fails the guest instead of booting L
 without browser tools. The platform prompt mentions Chromium only when
 those tools are attached.
 
-### Packages and setup commands
+### Packages, files, env, and setup commands
 
-Session create may include `environment.packages` and
-`environment.setup_commands` on `openai_hosted`. Those fields are
-stored on the session. Prep runs before the first agent turn that needs
-the computer:
+Session create may include `environment.packages`,
+`environment.setup_commands`, `environment.env`, and inline
+`environment.files` on `openai_hosted`. Those fields are stored on the
+session. Prep runs before the first agent turn that needs the computer:
 
-1. Install `packages.python`, then `packages.system`, then
+1. Write inline `files` into the session directory. Paths use the same
+   `/workspace` and `/tmp/workspace` mapping as setup `cwd`. Other
+   absolute paths, `..` escapes, and writes under `.apipi/` are
+   rejected. `data` is standard base64. The decoded total must fit
+   `APIPI_MAX_WORKSPACE_BYTES`.
+2. Apply `env` (string keys and values) to that session's Pi process
+   and to prep. Reserved names are rejected: `PATH`, `HOME`, `USER`,
+   `SHELL`, `PWD`, `LD_LIBRARY_PATH`, `LD_PRELOAD`, `OPENAI_API_KEY`,
+   `OPENAI_BASE_URL`, `DATABASE_URL`, `PI_CODING_AGENT_DIR`, and any
+   name starting with `APIPI_`, `CODEX_`, or `PI_`.
+3. Install `packages.python`, then `packages.system`, then
    `packages.npm`.
-2. Run `setup_commands` in order. Each item is an object with
+4. Run `setup_commands` in order. Each item is an object with
    `command` and optional `cwd`. `cwd` defaults to the session
    directory. Absolute OpenAI paths `/workspace` and `/tmp/workspace`
    map to that directory. Other absolute paths are rejected.
+
+After a sandbox TTL wipe, the next turn recreates `/workspace` and
+re-applies the stored files, env, packages, and setup commands.
 
 Isolation `none` runs that script in the session directory on the host
 (`uv pip` or `python3 -m pip`, `apk` or `apt-get` if present, `npm`).

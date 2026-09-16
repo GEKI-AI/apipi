@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.config import CapacityError, Settings
 from apipi.env.computer import Computer, bind_computer, computer_item_events
 from apipi.env.hub import EnvironmentHub
-from apipi.env.setup import SetupError, provision_hosted
+from apipi.env.setup import SetupError, provision_hosted, session_env_from
 from apipi.errors import ApiError
 from apipi.mcp.http import McpConnectError
 from apipi.mcp.stdio import start_mcp_stdio_tools
@@ -1068,6 +1068,7 @@ async def run_turn(
         env_type: str | None
         sandbox_mem: int | None
         sandbox_image: str
+        extra_env: dict[str, str]
         raw_tools: list[Any]
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
@@ -1089,6 +1090,9 @@ async def run_turn(
                 provision_hosted(
                     row.environment,
                     run_mode=settings.run_mode if settings is not None else "none",
+                    max_bytes=(
+                        settings.max_workspace_bytes if settings is not None else None
+                    ),
                 )
             except SetupError as exc:
                 await fail_environment(db, hub, tenant_id, session_id, exc.message)
@@ -1110,6 +1114,7 @@ async def run_turn(
                 else None
             )
             sandbox_image = image_for_size(sandbox_size)
+            extra_env = session_env_from(row.environment)
             await update_session(
                 db,
                 tenant_id,
@@ -1206,6 +1211,7 @@ async def run_turn(
                     env_type=env_type,
                     mem_mib=sandbox_mem,
                     image=sandbox_image,
+                    extra_env=extra_env,
                 )
                 try:
                     if turn_timeout is None:
@@ -1448,6 +1454,7 @@ async def continue_turn(
             mem_mib_for_size(settings, sandbox_size) if settings is not None else None
         )
         sandbox_image = image_for_size(sandbox_size)
+        extra_env = session_env_from(row.environment)
         result = {
             "call_id": call_id,
             "success": success,
@@ -1503,6 +1510,7 @@ async def continue_turn(
                     env_type=env_type,
                     mem_mib=sandbox_mem,
                     image=sandbox_image,
+                    extra_env=extra_env,
                 )
                 try:
                     if turn_timeout is None:

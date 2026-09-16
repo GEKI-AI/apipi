@@ -31,6 +31,7 @@ class MicrovmIsolation:
         api_key: str | None = None,
         mem_mib: int | None = None,
         image: str | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> PiProc:
         return await spawn_microvm_pi(
             settings,
@@ -44,4 +45,5 @@ class MicrovmIsolation:
             api_key=api_key,
             mem_mib=mem_mib,
             image=image,
+            extra_env=extra_env,
         )

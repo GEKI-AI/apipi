@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workers advertise `capacity` (max sessions) and `memory_mb` (RAM
   budget in MiB). The API will not lease a worker that would pass
   either cap. Among eligible workers it prefers more free RAM.
+- Hosted sessions accept `environment.env` and inline `environment.files`
+  (`type: "inline"`, base64 under `/workspace`). Reserved names and
+  Files API ids are rejected. Values persist for sandbox TTL rebuild.
 - Session sandbox sizes `S` / `M` / `L`. `environment.sandbox_size` is
   an ApiPi extension. Stock SDKs can set `metadata["apipi.sandbox_size"]`.
   `L` boots the browser rootfs. Live guests follow the resolved size,

@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from apipi.env.setup import (
     render_setup_script,
     resolve_setup_cwd,
     run_host_setup,
+    session_env_from,
     setup_commands_from,
     workspace_egress_hosts,
 )
@@ -152,3 +154,49 @@ def test_workspace_egress_hosts_file(tmp_path: Path) -> None:
     hosts = workspace_egress_hosts(str(workspace))
     assert "pypi.org" in hosts
     assert workspace_egress_hosts(None) == []
+
+
+def test_session_env_rejects_reserved() -> None:
+    with pytest.raises(SetupError, match="reserved env"):
+        session_env_from({"env": {"PATH": "/bin"}})
+    with pytest.raises(SetupError, match="reserved env"):
+        session_env_from({"env": {"APIPI_FOO": "x"}})
+    assert session_env_from({"env": {"REPORT": "yes"}}) == {"REPORT": "yes"}
+
+
+def test_prepare_writes_inline_files_and_env(tmp_path: Path) -> None:
+    workspace = tmp_path / "session"
+    payload = base64.b64encode(b"hello").decode()
+    prepare_workspace(
+        workspace,
+        {
+            "type": "openai_hosted",
+            "env": {"REPORT": "yes"},
+            "files": [
+                {"type": "inline", "path": "/workspace/notes.txt", "data": payload}
+            ],
+        },
+    )
+    assert (workspace / "notes.txt").read_bytes() == b"hello"
+    assert "REPORT=" in (workspace / ".apipi" / "user.env").read_text()
+    assert not (workspace / ".apipi" / "setup.sh").exists()
+
+
+def test_inline_file_rejects_escape(tmp_path: Path) -> None:
+    workspace = tmp_path / "session"
+    workspace.mkdir()
+    payload = base64.b64encode(b"x").decode()
+    with pytest.raises(SetupError, match="inside the workspace"):
+        prepare_workspace(
+            workspace,
+            {
+                "type": "openai_hosted",
+                "files": [
+                    {
+                        "type": "inline",
+                        "path": "/etc/passwd",
+                        "data": payload,
+                    }
+                ],
+            },
+        )

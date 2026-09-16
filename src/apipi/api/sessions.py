@@ -406,7 +406,11 @@ async def create_agent_session(
                     directory, [item for item in caps if isinstance(item, str)]
                 )
             try:
-                prepare_workspace(directory, environment)
+                prepare_workspace(
+                    directory,
+                    environment,
+                    max_bytes=request.app.state.settings.max_workspace_bytes,
+                )
             except SetupError as exc:
                 raise ApiError(
                     "invalid_request",
