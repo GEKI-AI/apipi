@@ -17,6 +17,12 @@ for a laptop or one box. Production is API-only plus one or more
 run mode before it connects. If `APIPI_RUN_MODE=microvm` cannot start,
 the worker exits. It does not fall back to `none`.
 
+`apipi serve --api-only` (or `APIPI_API_ONLY`) runs turns on a leased
+worker. The API persists events from the store and streams SSE without
+Pi on that node. If no worker can take a lease, the turn returns `429`
+with code `capacity`. Combined `apipi serve` still runs turns
+in-process.
+
 Start everything through the ApiPi CLI:
 
 ```

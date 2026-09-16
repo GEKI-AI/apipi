@@ -17,7 +17,7 @@ from apipi.blobs import ArtifactBlobs, blob_store
 from apipi.config import Settings, load_settings
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import error_body, register_exception_handlers
-from apipi.execution import LocalExecution
+from apipi.execution import LocalExecution, RemoteExecution
 from apipi.logutil import RequestLogMiddleware
 from apipi.metrics import Metrics, mount_metrics
 from apipi.otel import Tracing, current_trace_id
@@ -192,19 +192,24 @@ def create_app(
         resolved_tracing = Tracing(endpoint=resolved.otel_endpoint)
     else:
         resolved_tracing = None
-    execution = LocalExecution(
-        resolved,
-        pool=resolved_pool,
-        harness=resolved_harness,
-        isolation=isolation,
-        hub=hub,
-        env_hub=env_hub,
-        store=store,
-        blobs=resolved_blobs,
-        metrics=resolved_metrics,
-        tracing=resolved_tracing,
-    )
     workers = WorkerHub(resolved)
+    if resolved.api_only:
+        execution: LocalExecution | RemoteExecution = RemoteExecution(
+            resolved, workers=workers, store=store, hub=hub
+        )
+    else:
+        execution = LocalExecution(
+            resolved,
+            pool=resolved_pool,
+            harness=resolved_harness,
+            isolation=isolation,
+            hub=hub,
+            env_hub=env_hub,
+            store=store,
+            blobs=resolved_blobs,
+            metrics=resolved_metrics,
+            tracing=resolved_tracing,
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

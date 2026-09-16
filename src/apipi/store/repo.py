@@ -775,3 +775,13 @@ async def list_worker_leases(
         select(SessionRow).where(SessionRow.worker_id == worker_id)
     )
     return list(result)
+
+
+async def extend_worker_leases(
+    db: AsyncSession, worker_id: uuid.UUID, *, lease_until: datetime
+) -> None:
+    rows = await list_worker_leases(db, worker_id)
+    for row in rows:
+        if row.lease_id is None:
+            continue
+        row.lease_until = lease_until
