@@ -184,11 +184,34 @@ Firecracker.
 | --- | --- | --- | --- |
 | `APIPI_PI_COMMAND` | `[pi].command` | `pi` | Pi binary used as `pi --mode rpc`. |
 | `APIPI_PI_AUTO_COMPACT` | `[pi].auto_compact` | on | When off, ApiPi passes `--no-auto-compact` so Pi does not compact context on its own. |
+| `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | built-in text | Main platform prompt appended after Pi's harness default. Unset keeps the built-in. Set to `""` to disable the main block. A non-empty value replaces the built-in entirely. |
+| `APIPI_PLATFORM_PROMPT_ADDITIONAL` | `[pi].platform_prompt_additional` | empty | Optional extra platform text appended after the main block. Does not replace the main prompt. |
+
+The gateway always composes those blocks before `agent.instructions`.
+Order: Pi's default system prompt, main platform prompt, additional
+platform prompt, then agent instructions. Skills, capability
+directories, packages, and setup commands are unchanged. Empty main
+(`platform_prompt = ""`) drops only the main block; additional and
+agent instructions still apply. These settings live on the process
+that runs Pi (combined `apipi serve` or `apipi worker`).
+
+The built-in main prompt tells the model that hosted cwd is
+`/workspace`, durable files go under `outputs/` only, `none` has no
+computer, scratch is deleted with the sandbox, and it must not invent
+unavailable APIs.
 
 ```toml
 [pi]
 command = "pi"
 auto_compact = true
+```
+
+Override the main prompt, or keep it and append a sentence:
+
+```toml
+[pi]
+platform_prompt = ""
+platform_prompt_additional = "Always answer in German."
 ```
 
 ## Sandbox

@@ -52,7 +52,12 @@ FLAT_TOML_WARNING = "TOML key {key} is deprecated; use {path}"
 
 _log = logging.getLogger("apipi")
 
-_PI_TOML = {"command": "pi_command", "auto_compact": "pi_auto_compact"}
+_PI_TOML = {
+    "command": "pi_command",
+    "auto_compact": "pi_auto_compact",
+    "platform_prompt": "platform_prompt",
+    "platform_prompt_additional": "platform_prompt_additional",
+}
 _SANDBOX_TOML = {
     "backend": "run_mode",
     "kernel": "microvm_kernel",
@@ -401,6 +406,16 @@ class Settings(BaseSettings):
     pi_auto_compact: bool = Field(
         default=True,
         validation_alias=AliasChoices("APIPI_PI_AUTO_COMPACT", "pi_auto_compact"),
+    )
+    platform_prompt: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_PLATFORM_PROMPT", "platform_prompt"),
+    )
+    platform_prompt_additional: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "APIPI_PLATFORM_PROMPT_ADDITIONAL", "platform_prompt_additional"
+        ),
     )
     sessions_dir: str | None = Field(
         default=None,

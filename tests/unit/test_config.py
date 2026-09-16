@@ -537,6 +537,8 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.max_sessions == 8
     assert settings.pi_command == "pi-dev"
     assert settings.pi_auto_compact is False
+    assert settings.platform_prompt is None
+    assert settings.platform_prompt_additional == ""
     assert settings.run_mode == "microvm"
     assert settings.microvm_kernel == "/tmp/vmlinux"
     assert settings.microvm_rootfs == "/tmp/rootfs.ext4"
@@ -549,6 +551,25 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.microvm_egress_mbit == 25
     assert settings.workspace_ttl == timedelta(minutes=45)
     assert settings.sandbox_ttl_self_hosted is None
+
+
+def test_nested_toml_platform_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("APIPI_PLATFORM_PROMPT", raising=False)
+    monkeypatch.delenv("APIPI_PLATFORM_PROMPT_ADDITIONAL", raising=False)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        'run_mode = "none"\n'
+        "[pi]\n"
+        'platform_prompt = ""\n'
+        'platform_prompt_additional = "Always answer in German."\n'
+    )
+    settings = load_settings()
+    assert settings.platform_prompt == ""
+    assert settings.platform_prompt_additional == "Always answer in German."
 
 
 def test_legacy_flat_toml_warns(

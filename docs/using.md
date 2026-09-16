@@ -13,8 +13,8 @@ enough locally (SQLite at `.apipi/apipi.db`). Live turns need Pi on `PATH` and
 `OPENAI_BASE_URL` on the gateway process (the **model** host that Pi
 calls). The client bearer is the model key unless
 `OPENAI_API_KEY_OVERWRITE` is set. `agent.model` must exist on that
-host. When `agent.instructions` are set, they are appended to Pi's
-system prompt so the model follows them.
+host. The gateway always sends a short platform prompt, then
+`agent.instructions` when those are set. See [config](config.md#pi).
 
 In a second shell, point the official client at the gateway. For this
 script, `OPENAI_BASE_URL` is the ApiPi gateway and `OPENAI_API_KEY` is

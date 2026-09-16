@@ -1,0 +1,62 @@
+from apipi.config import Settings
+from apipi.pi.platform_prompt import DEFAULT_PLATFORM_PROMPT, compose_instructions
+
+
+def _settings(
+    *,
+    platform_prompt: str | None = None,
+    platform_prompt_additional: str = "",
+) -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        platform_prompt=platform_prompt,
+        platform_prompt_additional=platform_prompt_additional,
+    )
+
+
+def test_default_main_then_agent() -> None:
+    assert compose_instructions(_settings(), "be brief") == (
+        f"{DEFAULT_PLATFORM_PROMPT}\n\nbe brief"
+    )
+
+
+def test_omitted_agent_keeps_default_main() -> None:
+    assert compose_instructions(_settings(), None) == DEFAULT_PLATFORM_PROMPT
+    assert compose_instructions(_settings(), "") == DEFAULT_PLATFORM_PROMPT
+
+
+def test_empty_main_keeps_additional_and_agent() -> None:
+    settings = _settings(
+        platform_prompt="",
+        platform_prompt_additional="Always answer in German.",
+    )
+    assert compose_instructions(settings, "be brief") == (
+        "Always answer in German.\n\nbe brief"
+    )
+
+
+def test_empty_main_without_other_blocks_is_none() -> None:
+    assert compose_instructions(_settings(platform_prompt=""), None) is None
+
+
+def test_override_main_then_additional_then_agent() -> None:
+    settings = _settings(
+        platform_prompt="Use outputs/ only.",
+        platform_prompt_additional="Be terse.",
+    )
+    assert compose_instructions(settings, "write tests") == (
+        "Use outputs/ only.\n\nBe terse.\n\nwrite tests"
+    )
+
+
+def test_additional_without_touching_main() -> None:
+    settings = _settings(platform_prompt_additional="Be terse.")
+    assert compose_instructions(settings, None) == (
+        f"{DEFAULT_PLATFORM_PROMPT}\n\nBe terse."
+    )
+
+
+def test_default_mentions_outputs_not_workspace_artifacts() -> None:
+    assert "outputs/" in DEFAULT_PLATFORM_PROMPT
+    assert "artifacts/" not in DEFAULT_PLATFORM_PROMPT

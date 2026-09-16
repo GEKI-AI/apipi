@@ -27,6 +27,7 @@ from apipi.pi.model_host import (
     require_model,
     write_pi_models_json,
 )
+from apipi.pi.platform_prompt import compose_instructions
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
 from apipi.skills import discover_skill_dirs
@@ -1144,7 +1145,7 @@ async def run_turn(
                     computer=computer,
                     tenant_id=tenant_id,
                     model=model,
-                    instructions=instructions,
+                    instructions=compose_instructions(settings, instructions),
                     api_key=api_key,
                     key_id=key_id,
                     env_type=env_type,
@@ -1421,7 +1422,7 @@ async def continue_turn(
                     computer=computer,
                     tenant_id=tenant_id,
                     model=model,
-                    instructions=instructions,
+                    instructions=compose_instructions(settings, instructions),
                     api_key=api_key,
                     key_id=key_id,
                     env_type=env_type,
