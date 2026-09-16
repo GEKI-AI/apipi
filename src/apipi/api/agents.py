@@ -36,6 +36,7 @@ class McpTool(StrictModel):
     headers: dict[str, str] | None = None
     command: str | None = None
     args: list[str] | None = None
+    credential_id: str | None = None
 
     @model_validator(mode="after")
     def http_or_stdio(self) -> Self:

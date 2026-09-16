@@ -15,4 +15,5 @@ cached as themselves. `429` is not cached. Unexpected plugin errors
 stay `401` and are not cached as success.
 
 Postgres keeps tenants, sessions, and the event log. It does not keep
-secrets.
+the gateway auth bearer. MCP vault tokens may be stored tenant-scoped;
+GET never returns them. See 0011.

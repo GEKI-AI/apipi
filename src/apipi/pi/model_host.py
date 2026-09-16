@@ -144,6 +144,38 @@ def write_pi_models_json(settings: Settings, model_ids: list[str]) -> Path:
     return path
 
 
+def models_json_for_base_url(settings: Settings, base_url: str) -> bytes:
+    path = pi_agent_dir(settings) / "models.json"
+    if path.is_file():
+        payload = json.loads(path.read_text())
+        providers = payload.get("providers")
+        if isinstance(providers, dict):
+            provider = providers.get(PI_PROVIDER)
+            if isinstance(provider, dict):
+                provider["baseUrl"] = base_url
+        return (json.dumps(payload, indent=2) + "\n").encode()
+    return (
+        json.dumps(
+            {
+                "providers": {
+                    PI_PROVIDER: {
+                        "baseUrl": base_url,
+                        "api": "openai-completions",
+                        "apiKey": "$OPENAI_API_KEY",
+                        "compat": {
+                            "supportsDeveloperRole": False,
+                            "supportsReasoningEffort": False,
+                        },
+                        "models": [],
+                    }
+                }
+            },
+            indent=2,
+        )
+        + "\n"
+    ).encode()
+
+
 def pi_binary(settings: Settings) -> str:
     command = settings.pi_command.split()
     if not command:

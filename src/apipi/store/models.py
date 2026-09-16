@@ -115,6 +115,7 @@ class SessionRow(Base):
         Uuid(as_uuid=True), nullable=True
     )
     pi_session_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    vault_ids: Mapped[list[Any]] = mapped_column(JSONType, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -314,6 +315,62 @@ class Item(Base):
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     data: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class Vault(Base):
+    __tablename__ = "vaults"
+    __table_args__ = (UniqueConstraint("tenant_id", "id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONType, default=dict, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class VaultCredential(Base):
+    __tablename__ = "vault_credentials"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "vault_id"],
+            ["vaults.tenant_id", "vaults.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "auth_type IN ('static_bearer')",
+            name="vault_credentials_auth_type_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    vault_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    auth_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    mcp_server_url: Mapped[str] = mapped_column(String, nullable=False)
+    token: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
 

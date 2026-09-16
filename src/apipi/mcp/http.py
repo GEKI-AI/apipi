@@ -19,6 +19,7 @@ class McpHttpServer:
     server_label: str
     server_url: str
     headers: dict[str, str]
+    credential_id: str | None = None
 
 
 def mcp_http_tools(tools: list[Any] | None) -> list[McpHttpServer]:
@@ -34,11 +35,14 @@ def mcp_http_tools(tools: list[Any] | None) -> list[McpHttpServer]:
             continue
         raw_headers = tool.get("headers")
         headers = raw_headers if isinstance(raw_headers, dict) else {}
+        raw_cred = tool.get("credential_id")
+        credential_id = raw_cred if isinstance(raw_cred, str) and raw_cred else None
         servers.append(
             McpHttpServer(
                 server_label=label,
                 server_url=url,
                 headers={str(key): str(value) for key, value in headers.items()},
+                credential_id=credential_id,
             )
         )
     return servers
@@ -94,7 +98,50 @@ async def connect_mcp_http(server: McpHttpServer) -> McpHttpServer:
         server_label=server.server_label,
         server_url=server.server_url,
         headers=headers,
+        credential_id=server.credential_id,
     )
+
+
+def _norm_url(url: str) -> str:
+    return url.rstrip("/")
+
+
+def apply_vault_headers(
+    servers: list[McpHttpServer],
+    credentials: list[Any],
+) -> list[McpHttpServer]:
+    applied: list[McpHttpServer] = []
+    for server in servers:
+        chosen = None
+        if server.credential_id:
+            for cred in credentials:
+                if str(cred.id) == server.credential_id:
+                    chosen = cred
+                    break
+        else:
+            matches = [
+                cred
+                for cred in credentials
+                if _norm_url(cred.mcp_server_url) == _norm_url(server.server_url)
+            ]
+            if len(matches) > 1:
+                raise McpConnectError(
+                    f"mcp {server.server_label} matches several vault credentials"
+                )
+            if len(matches) == 1:
+                chosen = matches[0]
+        if chosen is None:
+            applied.append(server)
+            continue
+        applied.append(
+            McpHttpServer(
+                server_label=server.server_label,
+                server_url=server.server_url,
+                headers={"Authorization": f"Bearer {chosen.token}"},
+                credential_id=str(chosen.id),
+            )
+        )
+    return applied
 
 
 async def connect_mcp_http_tools(tools: list[Any] | None) -> list[McpHttpServer]:

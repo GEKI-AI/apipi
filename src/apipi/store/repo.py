@@ -17,6 +17,8 @@ from apipi.store.models import (
     Turn,
     TurnLog,
     UsageRollup,
+    Vault,
+    VaultCredential,
     WorkerRow,
     utc_now,
 )
@@ -128,6 +130,7 @@ async def create_session(
     environment: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     key_id: str = "",
+    vault_ids: list[str] | None = None,
 ) -> SessionRow:
     row = SessionRow(
         tenant_id=tenant_id,
@@ -138,6 +141,7 @@ async def create_session(
         environment=environment if environment is not None else {},
         metadata_json=metadata if metadata is not None else {},
         key_id=key_id,
+        vault_ids=vault_ids if vault_ids is not None else [],
     )
     db.add(row)
     await db.flush()
@@ -785,3 +789,163 @@ async def extend_worker_leases(
         if row.lease_id is None:
             continue
         row.lease_until = lease_until
+
+
+async def create_vault(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> Vault:
+    row = Vault(
+        tenant_id=tenant_id,
+        name=name,
+        metadata_json=metadata if metadata is not None else {},
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def list_vaults(db: AsyncSession, tenant_id: uuid.UUID) -> list[Vault]:
+    result = await db.scalars(select(Vault).where(Vault.tenant_id == tenant_id))
+    return list(result)
+
+
+async def get_vault(
+    db: AsyncSession, tenant_id: uuid.UUID, vault_id: uuid.UUID
+) -> Vault | None:
+    return await db.scalar(
+        select(Vault).where(Vault.tenant_id == tenant_id, Vault.id == vault_id)
+    )
+
+
+async def update_vault(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    vault_id: uuid.UUID,
+    *,
+    name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> Vault | None:
+    row = await get_vault(db, tenant_id, vault_id)
+    if row is None:
+        return None
+    if name is not None:
+        row.name = name
+    if metadata is not None:
+        row.metadata_json = metadata
+    row.updated_at = utc_now()
+    await db.flush()
+    return row
+
+
+async def delete_vault(
+    db: AsyncSession, tenant_id: uuid.UUID, vault_id: uuid.UUID
+) -> bool:
+    row = await get_vault(db, tenant_id, vault_id)
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.flush()
+    return True
+
+
+async def create_vault_credential(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    vault_id: uuid.UUID,
+    *,
+    name: str | None = None,
+    auth_type: str,
+    mcp_server_url: str,
+    token: str,
+) -> VaultCredential:
+    row = VaultCredential(
+        tenant_id=tenant_id,
+        vault_id=vault_id,
+        name=name,
+        auth_type=auth_type,
+        mcp_server_url=mcp_server_url,
+        token=token,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def list_vault_credentials(
+    db: AsyncSession, tenant_id: uuid.UUID, vault_id: uuid.UUID
+) -> list[VaultCredential]:
+    result = await db.scalars(
+        select(VaultCredential).where(
+            VaultCredential.tenant_id == tenant_id,
+            VaultCredential.vault_id == vault_id,
+        )
+    )
+    return list(result)
+
+
+async def get_vault_credential(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    vault_id: uuid.UUID,
+    credential_id: uuid.UUID,
+) -> VaultCredential | None:
+    return await db.scalar(
+        select(VaultCredential).where(
+            VaultCredential.tenant_id == tenant_id,
+            VaultCredential.vault_id == vault_id,
+            VaultCredential.id == credential_id,
+        )
+    )
+
+
+async def update_vault_credential(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    vault_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    *,
+    name: str | None = None,
+    token: str | None = None,
+) -> VaultCredential | None:
+    row = await get_vault_credential(db, tenant_id, vault_id, credential_id)
+    if row is None:
+        return None
+    if name is not None:
+        row.name = name
+    if token is not None:
+        row.token = token
+    row.updated_at = utc_now()
+    await db.flush()
+    return row
+
+
+async def delete_vault_credential(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    vault_id: uuid.UUID,
+    credential_id: uuid.UUID,
+) -> bool:
+    row = await get_vault_credential(db, tenant_id, vault_id, credential_id)
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.flush()
+    return True
+
+
+async def list_credentials_for_vault_ids(
+    db: AsyncSession, tenant_id: uuid.UUID, vault_ids: list[uuid.UUID]
+) -> list[VaultCredential]:
+    if not vault_ids:
+        return []
+    result = await db.scalars(
+        select(VaultCredential).where(
+            VaultCredential.tenant_id == tenant_id,
+            VaultCredential.vault_id.in_(vault_ids),
+        )
+    )
+    return list(result)

@@ -10,8 +10,9 @@ id that belongs to another tenant is `404`, not `403`.
 
 The same bearer is the model key unless `OPENAI_API_KEY_OVERWRITE` is
 set. Auth only maps the token to `key_id` and `tenant_id`. The raw
-value is not written to Postgres. A live Pi process receives it as
-`OPENAI_API_KEY` for that session.
+gateway bearer is not written to Postgres. Pi reaches the model host
+through a host credential broker. The guest does not receive the real
+key.
 
 ## Callback
 
@@ -76,4 +77,6 @@ success; the next request calls the plugin again.
 
 A `tenants` row is created on first use of a `tenant_id`. There is no
 `api_keys` table and no `apipi tenant create`. Postgres holds tenants,
-sessions, and the event log. It does not hold secrets.
+sessions, and the event log. It does not hold the gateway auth bearer.
+MCP vault tokens may be stored tenant-scoped. GET never returns those
+token values. Guests and browsers never see them.

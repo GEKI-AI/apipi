@@ -91,7 +91,8 @@ yours.
 | `GET /health`, `GET /metrics` | ApiPi operator routes |
 | `/v1/chat/completions` | Error (no such route) |
 | `/v1/skills` hosted store | Error (skills are files on the computer) |
-| ChatKit, vaults | Error (no such routes) |
+| ChatKit | Error (no such routes) |
+| Vaults | `/v1/agents/vaults` and credentials. `static_bearer` only. GET omits token values. `mcp_oauth` is `not_implemented`. |
 
 ## Agent fields and tools
 

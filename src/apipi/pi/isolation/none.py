@@ -40,6 +40,9 @@ class NoneIsolation:
             path = pi_session_file(root)
             path.parent.mkdir(parents=True, exist_ok=True)
             session_file = PI_SESSION_REL
+        from apipi.broker import start_broker
+        from apipi.pi.model_host import models_json_for_base_url
+
         args = pi_command_args(
             settings,
             tools=tools,
@@ -50,12 +53,31 @@ class NoneIsolation:
             instructions=instructions,
             session_file=session_file,
         )
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-            env=pi_env(settings, mcp_http, mcp_stdio, api_key=api_key),
+        broker = await start_broker(
+            settings,
+            api_key=api_key,
+            mcp_http=mcp_http,
+            host="127.0.0.1",
+            port=0,
         )
-        return PiProc(process)
+        try:
+            env = pi_env(settings, mcp_http, mcp_stdio, api_key=api_key, broker=broker)
+            if cwd:
+                agent_dir = Path(cwd) / ".pi" / "agent"
+                agent_dir.mkdir(parents=True, exist_ok=True)
+                (agent_dir / "models.json").write_bytes(
+                    models_json_for_base_url(settings, broker.openai_base_url)
+                )
+                env["PI_CODING_AGENT_DIR"] = str(agent_dir)
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env,
+            )
+        except BaseException:
+            await broker.stop()
+            raise
+        return PiProc(process, broker=broker)

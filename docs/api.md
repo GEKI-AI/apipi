@@ -10,7 +10,7 @@ rejected because request bodies use strict models. The comparison
 matrix is [OpenAI compatibility](openai-compatibility.md).
 
 Auth is `Authorization: Bearer` on every request except `/health` and
-`/metrics`. The gateway does not mint or store keys. A callback maps
+`/metrics`. The gateway does not mint or store the auth bearer. A callback maps
 the bearer to `key_id` and `tenant_id`, or rejects with a status,
 `code`, and `message`. Invalid keys are `401` with code
 `unauthorized`. An auth plugin may return `429` for a rate limit or
@@ -47,6 +47,30 @@ session for follow-up turns. Saved agents keep reading the agent row.
 The gateway always appends a platform prompt, then `agent.instructions`
 when those are set. See [Concepts](concepts.md#agents) and
 [config](config.md#pi).
+
+`vault_ids` on session create attaches vaults for HTTP MCP. The
+gateway matches `mcp_server_url` and injects the bearer on the host
+broker. GET of a vault or credential never returns the token.
+
+## Vaults
+
+| Method | Path |
+| --- | --- |
+| `POST` | `/v1/agents/vaults` |
+| `GET` | `/v1/agents/vaults` |
+| `GET` | `/v1/agents/vaults/{vault_id}` |
+| `POST` | `/v1/agents/vaults/{vault_id}` |
+| `DELETE` | `/v1/agents/vaults/{vault_id}` |
+| `POST` | `/v1/agents/vaults/{vault_id}/credentials` |
+| `GET` | `/v1/agents/vaults/{vault_id}/credentials` |
+| `GET` | `/v1/agents/vaults/{vault_id}/credentials/{id}` |
+| `POST` | `/v1/agents/vaults/{vault_id}/credentials/{id}` |
+| `DELETE` | `/v1/agents/vaults/{vault_id}/credentials/{id}` |
+
+Create a vault with `name` and `metadata`. Add a credential with
+`auth.type` `static_bearer`, `mcp_server_url`, and `token`. List and
+get omit `token`. `auth.type` `mcp_oauth` is `not_implemented`. Every
+query is tenant-scoped. A vault from another tenant is `404`.
 
 ## Models
 
