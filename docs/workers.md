@@ -1,10 +1,15 @@
 # Sandbox workers
 
-Trusted ApiPi workers are the future host for Firecracker. They are
-**not** customer `self_hosted` runners. `self_hosted` is an untrusted
-computer that a tenant attaches with a per-session key on
-`/v1/environments/{id}`. Workers are operator hosts. They use a
-different path, a different secret, and different messages.
+This page is the operator reference: messages, leases, drain, and
+which process needs KVM. Why workers exist and how a turn moves is in
+[Workers](worker-concepts.md). Isolation of Pi is in
+[isolation](isolation.md).
+
+Trusted ApiPi workers host Firecracker. They are **not** customer
+`self_hosted` runners. `self_hosted` is an untrusted computer that a
+tenant attaches with a per-session key on `/v1/environments/{id}`.
+Workers use a different path, a different secret, and different
+messages.
 
 Firecracker, jailer, TAP, and the guest live on the **worker**.
 `apipi serve --api-only` never probes `/dev/kvm` and never creates a

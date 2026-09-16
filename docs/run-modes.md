@@ -3,12 +3,14 @@
 Run mode is where Pi and stdio MCP run (`APIPI_RUN_MODE`). Environment
 is a separate choice: where file and shell tools run. A remote runner
 leaves Pi isolation in place. The gateway always stays on the host.
+Why the modes exist, and what a microVM contains, is in
+[isolation](isolation.md).
 
-Production isolation is a Firecracker microVM: each session gets its
-own kernel so a hostile tenant cannot share the host kernel with the
-gateway or with other sessions. That is stronger than a
-shared-kernel container. Pi and the local computer share that guest.
-The HTTP API never runs inside it.
+Production isolation is a Firecracker microVM on a worker (or on
+combined `apipi serve`). Each session gets its own kernel so a hostile
+tenant cannot share the host kernel with the gateway or with other
+sessions. Pi and the local computer share that guest. The HTTP API
+never runs inside it.
 
 If the selected mode cannot start, `apipi serve` exits before it binds
 HTTP. The process never switches to another mode on its own. For
@@ -33,14 +35,13 @@ not the same setting.
 | `package.mod:Class` | An operator-provided backend | Whatever that class implements. Missing import fails at startup. |
 
 The process default is `none` so `apipi serve` can start without KVM.
-Production operators set `APIPI_RUN_MODE=microvm`. If the microVM cannot
-launch, the process exits. `none` logs a warning. Valid built-in names
-are `none` and `microvm`.
+Production operators set `APIPI_RUN_MODE=microvm` on the worker. If the
+microVM cannot launch, that process exits. `none` logs a warning. Valid
+built-in names are `none` and `microvm`.
 
-Run production under systemd on the host, next to Pi. Docker Compose
-in this repo starts Postgres only. Nested microVM inside a container
-is a lab setup. Production isolation is systemd on the host with
-`APIPI_RUN_MODE=microvm`.
+Run production as `apipi serve --api-only` plus `apipi worker` on the
+host. Docker Compose can run the API without privileged mode. Nested
+microVM inside a container is a lab setup.
 
 ## What to install
 
@@ -266,9 +267,10 @@ process should be `apipi serve --api-only` and does not need KVM.
 Combined `apipi serve` (no `--api-only`) is the single-host embedded
 worker: it still probes the run mode and can create TAP devices on
 that box. Host sizing, overprovision, and drain are in
-[production](production.md). Several API hosts need sticky routing
-only while Pi is still in-process; workers remove that for live Pi.
-See [multiple nodes](scale.md) and [sandbox workers](workers.md).
+[production](production.md). Combined serve still needs sticky routing
+when you run more than one process. API-only plus workers does not,
+for live Pi. See [multiple nodes](scale.md) and
+[workers](worker-concepts.md).
 
 A typical worker unit (KVM and TAP stay here):
 

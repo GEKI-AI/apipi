@@ -1,8 +1,8 @@
 # Environments
 
 An environment is where file and shell tools run. That choice is
-independent of [run mode](architecture.md), which is where Pi itself
-runs. When the computer is local, Pi and the files share the same
+independent of [isolation](isolation.md) (run mode), which is where Pi
+itself runs. When the computer is local, Pi and the files share the same
 isolation boundary. A remote runner is valid with `none` and
 `microvm`. That is the only supported split.
 

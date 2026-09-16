@@ -1,8 +1,10 @@
 # Production
 
-How to choose hosts, scale out, and size an ApiPi process. The API
-process runs Pi (`none` or `microvm`) plus a local directory or a
-`self_hosted` runner.
+How to choose hosts, scale out, and size an ApiPi process. Production
+is `apipi serve --api-only` plus `apipi worker` on KVM. Combined
+`apipi serve` is one box. Why that split exists is in
+[workers](worker-concepts.md). Guest internals are in
+[isolation](isolation.md).
 
 ## Host selection
 
@@ -31,10 +33,11 @@ sandbox TTL. Local artifact
 bytes add up to `APIPI_MAX_ARTIFACT_BYTES` (default 512 MiB) per
 session unless you set `APIPI_ARTIFACT_STORE=s3`.
 
-Keeping the store off the gateway host leaves more RAM for guests when
-you use Postgres. One `apipi serve` per host; extra uvicorn workers
-leave the Pi pool in the first worker only. One process can use SQLite,
-including with `microvm`. Give each process its own database file.
+Keeping the store off the worker host leaves more RAM for guests when
+you use Postgres. One `apipi worker` (or one combined `apipi serve`)
+per sandbox host; extra uvicorn workers leave the Pi pool in the first
+worker only. One process can use SQLite. Several API processes share
+Postgres. Give each process its own SQLite file if you are not sharing.
 
 ## Store
 
@@ -48,35 +51,39 @@ including with `microvm`. Give each process its own database file.
 
 | Shape | When | What stays on the node | What is shared |
 | --- | --- | --- | --- |
-| One host, one process | You fit in `max_sessions` on one box | Pi, SSE, WebSockets, `openai_hosted` directories, local artifacts | SQLite or Postgres |
-| Several hosts, sticky load balancer | More live sessions than one box | Same as one host, plus each process has its own `APIPI_SESSIONS_DIR` | Postgres, auth callback. Artifact bytes too when `APIPI_ARTIFACT_STORE=s3` |
-| External artifact store | Clients read artifacts from any node, or you do not want artifact files on the gateway disk | Live workspace still on the node | Postgres, S3-compatible bucket |
+| Combined, one host | You fit in `max_sessions` on one box | Pi, SSE, WebSockets, `openai_hosted` directories, local artifacts | SQLite or Postgres |
+| API-only + workers | Production. API in Docker or several replicas | Guests and workspaces on **workers**. API is stateless for Pi | Postgres, worker token. Artifact bytes too when `APIPI_ARTIFACT_STORE=s3` |
+| Combined, several hosts | You have not split workers yet | Same as combined one host, plus each process has its own `APIPI_SESSIONS_DIR` | Postgres, auth callback. Sticky for live Pi. See [multiple nodes](scale.md) |
+| External artifact store | Clients read artifacts from any API node | Live workspace still on the worker (or combined node) | Postgres, S3-compatible bucket |
 
-`POST /v1/agents/sessions` may land on any node. Follow-up REST and
-SSE must return to the node that owns Pi. There is no live handoff.
-How to hash `session_id` and an nginx example are in
+With workers, `POST /v1/agents/sessions` and follow-up REST/SSE may
+land on any API replica. The session is owned by the worker lease.
+There is no live handoff of a running guest. Combined serve still
+needs sticky routing for Pi. Examples are in
 [multiple nodes](scale.md).
 
 ## Sizing
 
-Count **live** Pi processes (or guests). Idle TTL (default 15 minutes)
-kills Pi and frees that RAM. The session row and the workspace can
-outlive the process. `max_sessions` does not count Postgres rows.
+Count **live** Pi processes (or guests) on **workers**. The API
+process is cheap next to guest RAM. Idle TTL (default 15 minutes)
+kills Pi and frees that RAM. The session row can outlive the process.
+`max_sessions` does not count Postgres rows.
 
 ```
-max_sessions ≈ (host RAM − reserve) / microvm_mem_mib
+max_sessions ≈ (worker RAM − reserve) / microvm_mem_mib
 ```
 
-Reserve several GiB for the OS, the Python gateway, jailer, and page
-cache. Colocated Postgres needs more. Pick `max_sessions` from
-**reserved** guest RAM rather than average guest RSS. `max_sessions`
-is a hard cap: a new turn that would pass it returns `429` with code
+Reserve several GiB on each worker for the OS, jailer, and page cache.
+Colocated Postgres needs more. Pick `max_sessions` from **reserved**
+guest RAM rather than average guest RSS. `max_sessions` is a hard cap
+on that worker: a new turn that cannot lease returns `429` with code
 `capacity`.
 
 ### Example: 64 GiB RAM, 12 cores
 
-Postgres on another host. `APIPI_RUN_MODE=microvm`. Default guest RAM
-512 MiB and 1 vCPU.
+Postgres on another host. Worker `APIPI_RUN_MODE=microvm`. Default
+guest RAM 512 MiB and 1 vCPU. The API can be a small VM or a
+container.
 
 | | |
 | --- | --- |

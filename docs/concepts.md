@@ -1,8 +1,49 @@
-# Concepts
+# How it fits together
 
-Agents, sessions, the computer, and artifacts are the pieces the
-gateway keeps in the durable store (and, for files, on disk or object
-storage). One process uses SQLite. Several processes share Postgres.
+ApiPi is an HTTP gateway compatible with the OpenAI Agents API. Your
+app talks to the gateway. The gateway talks to Pi. Pi talks to your
+model URL. Isolation and the computer are separate choices: where Pi
+runs, and where files run.
+
+```
+  OpenAI SDK / your app
+           |
+           |  bearer
+           v
+      ApiPi HTTP API              never inside a guest
+      store (SQLite or Postgres)
+           |
+           |  in-process, or a worker lease
+           v
+      Pi  (+ stdio MCP)           none | microvm
+           |
+           +-- local files        next to Pi (/workspace in a guest)
+           +-- or remote env      self_hosted runner
+           +-- HTTP MCP           e.g. Tavily
+           +-- model host         OPENAI_BASE_URL
+```
+
+A turn is one model loop. The client posts a message. The API
+authenticates the bearer, loads the session, and asks execution to
+run. Combined `apipi serve` runs Pi in that process.
+`apipi serve --api-only` leases a [worker](worker-concepts.md). Pi
+runs in [isolation](isolation.md) (`none` or a Firecracker guest).
+Public events are written to the store, then SSE. Token deltas are
+live only and are not stored.
+
+Two knobs:
+
+| Knob | What it controls |
+| --- | --- |
+| **Run mode** | Where Pi and stdio MCP run (`APIPI_RUN_MODE`) |
+| **Environment** | Where file and shell tools run (`environment.type`) |
+
+They combine. `self_hosted` does not replace a microVM around Pi. The
+API stays on the host.
+
+Agents, sessions, the computer, and artifacts below are the pieces the
+durable store keeps (and, for files, disk or object storage). One
+process uses SQLite. Several processes share Postgres.
 
 ## Agents
 
