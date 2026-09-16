@@ -156,6 +156,8 @@ def pi_env(
             env[f"{prefix}_LABEL"] = server.server_label
             env[f"{prefix}_COMMAND"] = server.command
             env[f"{prefix}_ARGS"] = "\x1f".join(server.args)
+            if server.cwd:
+                env[f"{prefix}_CWD"] = server.cwd
     return env
 
 

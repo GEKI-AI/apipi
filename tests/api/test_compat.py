@@ -24,14 +24,20 @@ _TOOLS = [
     {
         "type": "mcp",
         "server_label": "tavily",
-        "server_url": "https://mcp.tavily.com/mcp",
+        "transport": {
+            "type": "http",
+            "server_url": "https://mcp.tavily.com/mcp",
+        },
         "headers": {"Authorization": "Bearer x"},
     },
     {
         "type": "mcp",
         "server_label": "playwright",
-        "command": "npx",
-        "args": ["-y", "@playwright/mcp@latest"],
+        "transport": {
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@playwright/mcp@latest"],
+        },
     },
 ]
 
@@ -308,8 +314,8 @@ async def test_compat_mcp(client: AsyncClient) -> None:
     agent_id = await _agent(client, token, tools=_TOOLS[1:])
     got = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
     tools = got.json()["tools"]
-    assert tools[0]["server_url"] == "https://mcp.tavily.com/mcp"
-    assert tools[1]["command"] == "npx"
+    assert tools[0]["transport"]["server_url"] == "https://mcp.tavily.com/mcp"
+    assert tools[1]["transport"]["command"] == "npx"
 
 
 async def test_compat_skills(settings: Settings, store: Store, tmp_path: Path) -> None:

@@ -19,40 +19,45 @@ OpenAI's Agents API. The gateway does not execute the function.
 
 ## MCP
 
-HTTP MCP uses OpenAI's shape:
+HTTP and stdio MCP use OpenAI's nested `transport` shape:
 
 ```json
 {
   "type": "mcp",
   "server_label": "tavily",
-  "server_url": "https://mcp.tavily.com/mcp",
+  "transport": {
+    "type": "http",
+    "server_url": "https://mcp.tavily.com/mcp"
+  },
   "headers": {
     "Authorization": "Bearer ${TAVILY_API_KEY}"
   }
 }
 ```
 
-Stdio MCP is an ApiPi extension for local servers that follow Pi (on
-the host in `none` mode, inside the guest in `microvm` mode):
-
 ```json
 {
   "type": "mcp",
   "server_label": "playwright",
-  "command": "npx",
-  "args": ["-y", "@playwright/mcp@latest", "--headless"]
+  "transport": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@playwright/mcp@latest", "--headless"]
+  }
 }
 ```
 
-An MCP tool must have `server_url` or `command`, not both. The gateway
+Top-level `server_url`, `command`, or `args` on the tool are unknown
+fields. Unknown `transport.type` values return `400`. The gateway
 connects HTTP servers when the session is created, then hands them to
 Pi through a host credential broker. The guest does not receive MCP
 bearers. Prefer a [vault](api.md#vaults) (`static_bearer` bound to
 `mcp_server_url`, attach `vault_ids` on the session). Tool `headers`
 with `${ENV}` still expand on the host. Stdio servers start next to
 Pi: on the host in `none` mode, and inside the same guest in
-`microvm` mode. Stdio credentials stay in environment variables, not
-in git.
+`microvm` mode. Optional `transport.cwd` is the process working
+directory. Stdio credentials stay in environment variables, not in
+git.
 
 Search goes through MCP.
 

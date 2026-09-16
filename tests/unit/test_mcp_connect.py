@@ -12,11 +12,18 @@ def test_mcp_http_tools_skips_stdio_and_functions() -> None:
     servers = mcp_http_tools(
         [
             {"type": "function", "name": "echo"},
-            {"type": "mcp", "server_label": "local", "command": "npx"},
+            {
+                "type": "mcp",
+                "server_label": "local",
+                "transport": {"type": "stdio", "command": "npx"},
+            },
             {
                 "type": "mcp",
                 "server_label": "tavily",
-                "server_url": "https://mcp.tavily.com/mcp",
+                "transport": {
+                    "type": "http",
+                    "server_url": "https://mcp.tavily.com/mcp",
+                },
                 "headers": {"Authorization": "Bearer ${TAVILY_API_KEY}"},
             },
         ]

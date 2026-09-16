@@ -123,8 +123,11 @@ async def test_l_does_not_duplicate_caller_playwright(
                     {
                         "type": "mcp",
                         "server_label": "playwright",
-                        "command": "npx",
-                        "args": ["-y", "@playwright/mcp@1.0.0"],
+                        "transport": {
+                            "type": "stdio",
+                            "command": "npx",
+                            "args": ["-y", "@playwright/mcp@1.0.0"],
+                        },
                     }
                 ],
             },

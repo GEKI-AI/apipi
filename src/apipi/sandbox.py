@@ -75,20 +75,28 @@ def playwright_tool(settings: Settings) -> dict[str, Any]:
     return {
         "type": "mcp",
         "server_label": PLAYWRIGHT_LABEL,
-        "command": "npx",
-        "args": [
-            "-y",
-            settings.sandbox_playwright_mcp,
-            "--headless",
-            "--isolated",
-            f"--executable-path={PLAYWRIGHT_CHROMIUM}",
-        ],
+        "transport": {
+            "type": "stdio",
+            "command": "npx",
+            "args": [
+                "-y",
+                settings.sandbox_playwright_mcp,
+                "--headless",
+                "--isolated",
+                f"--executable-path={PLAYWRIGHT_CHROMIUM}",
+            ],
+        },
     }
 
 
 def _tool_blob(tool: dict[str, Any]) -> str:
-    command = tool.get("command")
-    raw_args = tool.get("args")
+    transport = tool.get("transport")
+    if isinstance(transport, dict):
+        command = transport.get("command")
+        raw_args = transport.get("args")
+    else:
+        command = None
+        raw_args = None
     args = [str(item) for item in raw_args] if isinstance(raw_args, list) else []
     parts = [str(command)] if command is not None else []
     parts.extend(args)

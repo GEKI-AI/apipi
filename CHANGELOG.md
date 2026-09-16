@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- MCP tools use OpenAI nested `transport` only (`http` with
+  `server_url`, `stdio` with `command` / `args`). Flat `server_url` or
+  `command` on the tool object is rejected. Rewrite saved agent tool
+  JSON. Stdio MCP is the same API, not an ApiPi extension.
+
 ### Changed
 
 - HTTP session routes run turns through an in-process execution

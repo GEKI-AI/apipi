@@ -34,6 +34,7 @@ def _start_mcp() -> None:
             continue
         raw_args = env.get(f"{prefix}_ARGS", "")
         args = raw_args.split("\x1f") if raw_args else []
+        cwd = env.get(f"{prefix}_CWD") or None
         name = label.strip() or command
         try:
             process = subprocess.Popen(
@@ -42,6 +43,7 @@ def _start_mcp() -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=env,
+                cwd=cwd,
             )
         except OSError as exc:
             raise RuntimeError(f"mcp {name} failed") from exc

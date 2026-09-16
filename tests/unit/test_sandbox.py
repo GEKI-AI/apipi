@@ -92,9 +92,11 @@ def test_merge_playwright_on_l_microvm() -> None:
     tools = merge_playwright([], size="L", settings=_microvm())
     assert len(tools) == 1
     assert tools[0]["server_label"] == PLAYWRIGHT_LABEL
-    assert tools[0]["command"] == "npx"
-    assert "@playwright/mcp@latest" in tools[0]["args"]
-    assert "--executable-path=/usr/bin/chromium-browser" in tools[0]["args"]
+    assert tools[0]["transport"]["command"] == "npx"
+    assert "@playwright/mcp@latest" in tools[0]["transport"]["args"]
+    assert (
+        "--executable-path=/usr/bin/chromium-browser" in tools[0]["transport"]["args"]
+    )
     assert has_playwright(tools)
     assert playwright_attached(tools)
 
@@ -123,8 +125,11 @@ def test_merge_playwright_does_not_duplicate() -> None:
         {
             "type": "mcp",
             "server_label": "playwright",
-            "command": "npx",
-            "args": ["-y", "@playwright/mcp@1.2.3"],
+            "transport": {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@playwright/mcp@1.2.3"],
+            },
         }
     ]
     merged = merge_playwright(existing, size="L", settings=_microvm())
@@ -136,8 +141,11 @@ def test_merge_playwright_detects_package_without_label() -> None:
         {
             "type": "mcp",
             "server_label": "browser",
-            "command": "npx",
-            "args": ["-y", "@playwright/mcp@latest", "--headless"],
+            "transport": {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@playwright/mcp@latest", "--headless"],
+            },
         }
     ]
     assert merge_playwright(existing, size="L", settings=_microvm()) == existing

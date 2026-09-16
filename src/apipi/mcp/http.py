@@ -29,7 +29,10 @@ def mcp_http_tools(tools: list[Any] | None) -> list[McpHttpServer]:
     for tool in tools:
         if not isinstance(tool, dict) or tool.get("type") != "mcp":
             continue
-        url = tool.get("server_url")
+        transport = tool.get("transport")
+        if not isinstance(transport, dict) or transport.get("type") != "http":
+            continue
+        url = transport.get("server_url")
         label = tool.get("server_label")
         if not isinstance(url, str) or not url or not isinstance(label, str):
             continue
