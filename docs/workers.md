@@ -102,3 +102,17 @@ When `lease_until` passes, the lease is cleared and the session gets
 guest and workspace were on the expired host. Start a new turn after
 that error. Heartbeats extend `lease_until` so a live worker does not
 expire mid-turn.
+
+## What runs where
+
+| Process | Trust | Needs |
+| --- | --- | --- |
+| `apipi serve --api-only` | Operator control plane | Postgres, worker token, no KVM |
+| `apipi worker` | Operator sandbox host | KVM, Firecracker, worker token, outbound to the API |
+| Combined `apipi serve` | Lab / one box | Whatever the run mode needs, including KVM when `microvm` |
+| `self_hosted` runner | Tenant computer | Per-session key on `/v1/environments/{id}` |
+
+The worker token is an operator secret. It is not a tenant bearer and
+is not stored in Postgres. Do not put it in the browser. The API
+container in Compose is unprivileged. The worker unit is the only
+place that should receive `/dev/kvm` and `CAP_NET_ADMIN`.

@@ -1,0 +1,15 @@
+[Unit]
+Description=ApiPi API (control plane)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=apipi
+WorkingDirectory=/opt/apipi
+EnvironmentFile=/etc/apipi.env
+ExecStart=/opt/apipi/.venv/bin/apipi serve --api-only --config /etc/apipi.toml
+Restart=on-failure
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
