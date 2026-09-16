@@ -37,6 +37,12 @@ from apipi.runtime import (
     fail_stale_in_progress,
     persist_event,
 )
+from apipi.sandbox import (
+    mem_mib_for_size,
+    require_size_rootfs,
+    resolve_sandbox_size,
+    sandbox_size_of,
+)
 from apipi.schemas import StrictModel
 from apipi.skills import copy_capability_directories
 from apipi.store.engine import Store
@@ -66,10 +72,16 @@ router = APIRouter()
 
 
 def _require_capacity(
-    request: Request, session_id: uuid.UUID, tenant_id: uuid.UUID
+    request: Request,
+    session_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    *,
+    session_mem_mib: int | None = None,
 ) -> None:
     execution: Execution = request.app.state.execution
-    code = execution.capacity_code(session_id, tenant_id)
+    code = execution.capacity_code(
+        session_id, tenant_id, session_mem_mib=session_mem_mib
+    )
     if code is None:
         return
     message = (
@@ -341,20 +353,34 @@ async def create_agent_session(
     env_id: uuid.UUID | None = None
     model: str | None = None
     instructions: str | None = None
+    settings = request.app.state.settings
     async with store.session() as db:
+        agent_metadata: dict[str, Any] | None = None
         if agent_id is not None:
             agent = await get_agent(db, tenant.id, agent_id)
             if agent is None:
                 not_found()
             raw_tools = agent.tools
             model = agent.model
+            agent_metadata = agent.metadata_json
         elif body.agent is not None:
             model = body.agent.model
             instructions = body.agent.instructions
+            agent_metadata = body.agent.metadata
             if body.agent.tools is not None:
                 raw_tools = [
                     tool.model_dump(exclude_none=True) for tool in body.agent.tools
                 ]
+        size = resolve_sandbox_size(
+            environment_size=environment.get("sandbox_size")
+            if isinstance(environment.get("sandbox_size"), str)
+            else None,
+            session_metadata=body.metadata,
+            agent_metadata=agent_metadata,
+            default=settings.sandbox_default_size,
+        )
+        environment = {**environment, "sandbox_size": size}
+        require_size_rootfs(settings, size)
         key_id = getattr(request.state, "key_id", "")
         vault_ids = [str(item) for item in (body.vault_ids or [])]
         for vault_id in body.vault_ids or []:
@@ -462,7 +488,12 @@ async def create_agent_session(
         execution.put_stdio(session_id, stdio)
         text = _input_text(body.input)
         if text:
-            _require_capacity(request, session_id, tenant.id)
+            _require_capacity(
+                request,
+                session_id,
+                tenant.id,
+                session_mem_mib=mem_mib_for_size(settings, size),
+            )
             await execution.run_turn(
                 tenant.id,
                 session_id,
@@ -594,10 +625,12 @@ async def post_session_event(
     action = "message"
     stale = False
     cancel_status = ""
+    follow_size = "S"
     async with store.session() as db:
         row = await get_session(db, tenant.id, session_id)
         if row is None:
             not_found()
+        follow_size = sandbox_size_of(row.environment)
         if parsed.type == "agent.session.input.cancel":
             action = "cancel"
             cancel_status = row.status
@@ -662,7 +695,14 @@ async def post_session_event(
             request_id=request_id,
             session_id=session_id,
         ):
-            _require_capacity(request, session_id, tenant.id)
+            _require_capacity(
+                request,
+                session_id,
+                tenant.id,
+                session_mem_mib=mem_mib_for_size(
+                    request.app.state.settings, follow_size
+                ),
+            )
             await execution.run_turn(
                 tenant.id,
                 session_id,

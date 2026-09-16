@@ -274,6 +274,20 @@ session; Pi does not start. Those fields on `none` or `self_hosted`
 return `400`. `files`, `env`, `network`, `environment_template_id`,
 `skills`, and `plugins` return `400` with type `not_implemented`.
 
+`environment.sandbox_size` is an ApiPi extension: `S`, `M`, or `L`.
+Unknown values return `400`. A top-level `sandbox_size` on the session
+body is still `unknown_field`. Stock OpenAI clients can set
+`metadata["apipi.sandbox_size"]` instead. Agent metadata with that key
+is a default for later sessions. The gateway default is
+`APIPI_SANDBOX_DEFAULT_SIZE` (`S` unless you change it). The resolved
+size is stored on the session `environment` and does not change if you
+later PATCH metadata. Isolation `none` accepts the field and ignores
+RAM and rootfs. Isolation `microvm` uses it for guest RAM and image:
+`S`/`M` boot the default rootfs, `L` boots the browser rootfs. `L`
+without that rootfs fails clearly (combined create returns `400`;
+API-only fails when the worker spawns). See
+[environments](environments.md).
+
 See [environments](environments.md).
 
 ## Compatibility

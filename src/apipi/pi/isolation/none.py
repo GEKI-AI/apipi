@@ -32,7 +32,10 @@ class NoneIsolation:
         model: str | None = None,
         instructions: str | None = None,
         api_key: str | None = None,
+        mem_mib: int | None = None,
+        image: str | None = None,
     ) -> PiProc:
+        del mem_mib, image
         session_file = None
         if cwd:
             root = Path(cwd)

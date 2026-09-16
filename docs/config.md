@@ -237,7 +237,8 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | `APIPI_MICROVM_KERNEL` | `[sandbox].kernel` | `$XDG_CACHE_HOME/apipi/microvm/vmlinux` when that file exists | Guest kernel image. Required when the backend is `microvm` unless `apipi install --microvm` has already written the cache file. |
 | `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | `$XDG_CACHE_HOME/apipi/microvm/rootfs.ext4` when that file exists | Guest rootfs for `image = "default"`. Required when the backend is `microvm` unless the cache file exists. Build with `apipi install --microvm` or `./scripts/microvm-rootfs`. |
 | `APIPI_MICROVM_ROOTFS_BROWSER` | `[sandbox].rootfs_browser` | `$XDG_CACHE_HOME/apipi/microvm/rootfs-browser.ext4` when that file exists | Guest rootfs for `image = "browser"`. Required when that image is selected unless the cache file exists. Build with `apipi install --microvm --image browser`. |
-| `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser`. Which rootfs `microvm` boots. Process-wide. Missing path for the selected image exits at startup. |
+| `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser`. Used by `apipi install` and `apipi microvm shell`. Live session guests follow sandbox size (`S`/`M` → default rootfs, `L` → browser), not this process-wide setting. |
+| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. |
 
 ```toml
 [sandbox]
@@ -246,6 +247,7 @@ kernel = "/var/lib/apipi/vmlinux"
 rootfs = "/var/lib/apipi/rootfs.ext4"
 rootfs_browser = "/var/lib/apipi/rootfs-browser.ext4"
 image = "default"
+default_size = "S"
 ```
 
 ```
@@ -256,19 +258,23 @@ APIPI_RUN_MODE=microvm uv run apipi serve
 
 Guest RAM and vCPUs belong to the sandbox, not to the HTTP process.
 Set `worker_memory_mb` to usable host RAM minus reserve. Size
-`max_sessions` so `max_sessions × mem_mib` still fits in that budget;
-the scheduler will not oversubscribe either cap. Raise `mem_mib` when
-you enable heavy stdio MCP such as Playwright. A worked example is in
-[production](production.md#sizing).
+`max_sessions` so packed guests still fit in that budget; the
+scheduler will not oversubscribe either cap. `S` uses `mem_mib`. `M`
+and `L` use their own RAM settings. `L` is the browser-class size.
+A worked example is in [production](production.md#sizing).
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
-| `APIPI_MICROVM_MEM_MIB` | `[sandbox.resources].mem_mib` | `512` | Guest RAM in MiB. |
+| `APIPI_MICROVM_MEM_MIB` | `[sandbox.resources].mem_mib` | `512` | Guest RAM in MiB for size `S`. |
+| `APIPI_SANDBOX_M_MEM_MIB` | `[sandbox.resources].m_mem_mib` | `1024` | Guest RAM in MiB for size `M`. |
+| `APIPI_SANDBOX_L_MEM_MIB` | `[sandbox.resources].l_mem_mib` | `2048` | Guest RAM in MiB for size `L`. |
 | `APIPI_MICROVM_VCPUS` | `[sandbox.resources].vcpus` | `1` | Guest vCPUs. |
 
 ```toml
 [sandbox.resources]
 mem_mib = 512
+m_mem_mib = 1024
+l_mem_mib = 2048
 vcpus = 1
 ```
 
@@ -363,9 +369,12 @@ kernel = "/var/lib/apipi/vmlinux"
 rootfs = "/var/lib/apipi/rootfs.ext4"
 rootfs_browser = "/var/lib/apipi/rootfs-browser.ext4"
 image = "default"
+default_size = "S"
 
 [sandbox.resources]
 mem_mib = 512
+m_mem_mib = 1024
+l_mem_mib = 2048
 vcpus = 1
 
 [sandbox.network]

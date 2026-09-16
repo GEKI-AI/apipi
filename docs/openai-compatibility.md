@@ -114,6 +114,7 @@ yours.
 | `type`: `openai_hosted`, `hosted`, `none`, `self_hosted` | Same shape, different backend for hosted; same API for `none` |
 | `capability_directories` | Same API (skills on the computer) |
 | `packages`, `setup_commands` | Same API on `openai_hosted` only; `400` on `none` or `self_hosted` |
+| `sandbox_size` | ApiPi extension (`S` \| `M` \| `L`). Stock SDKs can set `metadata["apipi.sandbox_size"]`. Top-level session `sandbox_size` is `unknown_field`. |
 | `files`, `env`, `network`, `environment_template_id`, `skills`, `plugins` | Error (`not_implemented`) |
 | Unknown JSON keys | Error (`unknown_field`) |
 

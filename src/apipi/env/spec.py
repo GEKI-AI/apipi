@@ -1,4 +1,4 @@
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
@@ -39,6 +39,7 @@ class EnvironmentSpec(StrictModel):
     capability_directories: list[str] | None = None
     packages: PackagesSpec | None = None
     setup_commands: list[SetupCommandSpec] | None = None
+    sandbox_size: Literal["S", "M", "L"] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -73,6 +74,8 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
         )
     if spec.capability_directories is not None:
         payload["capability_directories"] = spec.capability_directories
+    if spec.sandbox_size is not None:
+        payload["sandbox_size"] = spec.sandbox_size
     if spec.packages is not None:
         packages = spec.packages.model_dump(exclude_none=True)
         if packages:

@@ -48,6 +48,17 @@ def test_pick_rejects_session_cap_with_ram() -> None:
     assert hub.pick() is None
 
 
+def test_pick_uses_lease_mem_for_mixed_sizes() -> None:
+    hub = WorkerHub(_settings())
+    conn = _conn(capacity=8, memory_mb=2560)
+    lease = uuid.uuid4()
+    conn.leases.add(lease)
+    conn.lease_mem[lease] = 2048
+    hub._conns[conn.worker_id] = conn
+    assert hub.pick(512) is conn
+    assert hub.pick(1024) is None
+
+
 def test_pick_tie_break_fewer_leases() -> None:
     hub = WorkerHub(_settings())
     busy = _conn(capacity=8, memory_mb=4096)

@@ -68,6 +68,7 @@ def _settings(
     rootfs: str | None = None,
     rootfs_browser: str | None = None,
     image: Literal["default", "browser"] = "default",
+    sandbox_default_size: Literal["S", "M", "L"] = "S",
 ) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
@@ -77,6 +78,7 @@ def _settings(
         microvm_rootfs=rootfs or str(tmp_path / "rootfs.ext4"),
         microvm_rootfs_browser=rootfs_browser,
         microvm_image=image,
+        sandbox_default_size=sandbox_default_size,
     )
 
 
@@ -184,7 +186,7 @@ def test_microvm_images_browser_missing_file(
     monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
     with pytest.raises(ConfigError, match="APIPI_MICROVM_ROOTFS_BROWSER"):
-        require_microvm(_settings(tmp_path, image="browser"))
+        require_microvm(_settings(tmp_path, sandbox_default_size="L"))
 
 
 def _cache_settings() -> Settings:

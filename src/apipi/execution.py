@@ -36,7 +36,10 @@ class Execution(Protocol):
     stdio_on_host: bool
 
     def capacity_code(
-        self, session_id: uuid.UUID, tenant_id: uuid.UUID
+        self,
+        session_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        session_mem_mib: int | None = None,
     ) -> str | None: ...
 
     def put_stdio(
@@ -127,8 +130,15 @@ class LocalExecution:
     def attach_store(self, store: Store) -> None:
         self.store = store
 
-    def capacity_code(self, session_id: uuid.UUID, tenant_id: uuid.UUID) -> str | None:
-        return self.pool.capacity_code(session_id, tenant_id)
+    def capacity_code(
+        self,
+        session_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        session_mem_mib: int | None = None,
+    ) -> str | None:
+        return self.pool.capacity_code(
+            session_id, tenant_id, session_mem_mib=session_mem_mib
+        )
 
     def put_stdio(self, session_id: uuid.UUID, servers: list[McpStdioServer]) -> None:
         self.pool.put_stdio(session_id, servers)
@@ -299,8 +309,13 @@ class RemoteExecution:
     def attach_store(self, store: Store) -> None:
         self.store = store
 
-    def capacity_code(self, session_id: uuid.UUID, tenant_id: uuid.UUID) -> str | None:
-        del session_id, tenant_id
+    def capacity_code(
+        self,
+        session_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        session_mem_mib: int | None = None,
+    ) -> str | None:
+        del session_id, tenant_id, session_mem_mib
         if self.workers.live() == 0:
             return "capacity"
         return None

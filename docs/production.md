@@ -94,7 +94,7 @@ container.
 | Default 32 live | 32 × 512 MiB ≈ **16 GiB** guests plus ~0.2 GiB VMM. Fits easily. |
 | Starting cap | **`max_sessions=48`** (24 GiB guests) or keep **32**. Raise after you watch host RSS and `429` `capacity`. The RAM cap still applies. |
 | Ceiling | 57344 / 512 ≈ **112** live at 512 MiB. That is the wall, not a starting point. |
-| Playwright / Chromium | Boot the **browser** rootfs (`APIPI_MICROVM_IMAGE=browser`) and raise `APIPI_MICROVM_MEM_MIB` to **1024–2048**. Then about **24–48** live on this box. 512 MiB is for Pi and light tools. |
+| Playwright / Chromium | Use sandbox size **`L`** so the guest gets the **browser** rootfs and about **2 GiB** RAM. Then about **24–28** live `L` guests in a 56 GiB budget. `S` (512 MiB) is for Pi and light tools. Attaching Playwright MCP is still a tool on the agent until auto-inject ships. |
 | CPU | 48 × 1 vCPU on 12 cores is normal while turns wait on the model URL. Keep `APIPI_MICROVM_VCPUS=1` unless the computer is CPU-heavy. |
 | Disk | Hosted workspaces last until sandbox TTL (default 1 hour), capped at 1 GiB each. Local artifacts 512 MiB per session unless S3. Worst case is cap × live-and-idle directories, not typical use. |
 | NIC | Each guest TAP is 50 Mbit. 48 guests all saturated ≈ 2.4 Gbit. That is the ceiling, not the plan. |

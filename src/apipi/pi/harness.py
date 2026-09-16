@@ -34,6 +34,10 @@ class PiHarness:
         key_id = _kwargs.get("key_id")
         raw_env_type = _kwargs.get("env_type")
         env_type = raw_env_type if isinstance(raw_env_type, str) else None
+        raw_mem = _kwargs.get("mem_mib")
+        mem_mib = raw_mem if isinstance(raw_mem, int) else None
+        raw_image = _kwargs.get("image")
+        image = raw_image if isinstance(raw_image, str) else None
         raw_instructions = _kwargs.get("instructions")
         instructions = (
             raw_instructions
@@ -53,6 +57,8 @@ class PiHarness:
             api_key=api_key if isinstance(api_key, str) else None,
             key_id=key_id if isinstance(key_id, str) else None,
             env_type=env_type,
+            mem_mib=mem_mib,
+            image=image,
         )
         settled = False
         async for event in proc.prompt(text):

@@ -53,6 +53,38 @@ up to `APIPI_MAX_ARTIFACT_BYTES` (default 512MiB) per session. See
 There is no runner socket. The directory is created when the session is
 created. File tools (read, write, edit, bash) run against that folder.
 
+### Sandbox size
+
+Session create may include `environment.sandbox_size` with value `S`,
+`M`, or `L`. That field is an ApiPi extension. Official OpenAI clients
+that reject unknown environment keys can set
+`metadata["apipi.sandbox_size"]` instead. Other `metadata` keys stay
+opaque tags; the `apipi.` prefix is reserved for gateway scheduling
+and resources.
+
+Resolution, highest wins:
+
+1. `environment.sandbox_size`
+2. Session create `metadata["apipi.sandbox_size"]`
+3. Agent `metadata["apipi.sandbox_size"]`
+4. Gateway `APIPI_SANDBOX_DEFAULT_SIZE` / `[sandbox].default_size`
+   (shipped default `S`)
+
+The resolved size is stored on the session `environment` and is fixed
+for the life of the live guest. Updating session metadata later does
+not resize or reimage an already chosen size.
+
+| Size | Guest RAM | Rootfs | When |
+| --- | --- | --- | --- |
+| `S` | `[sandbox.resources].mem_mib` (512) | `default` | Pi and light tools |
+| `M` | `APIPI_SANDBOX_M_MEM_MIB` (1024) | `default` | Heavier non-browser work |
+| `L` | `APIPI_SANDBOX_L_MEM_MIB` (2048) | `browser` | Chromium in the guest. Install the browser rootfs. Browser MCP tools are a separate step. |
+
+Isolation `none` accepts the field and does not apply RAM or rootfs.
+Isolation `microvm` applies both, including when `environment.type` is
+`none` (Pi still runs in a guest). Each live lease consumes that
+size's RAM against worker `memory_mb` and still counts as one session.
+
 ### Packages and setup commands
 
 Session create may include `environment.packages` and

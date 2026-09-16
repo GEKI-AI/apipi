@@ -90,8 +90,8 @@ overwrite each other. The script needs `curl`, `tar`, `mkfs.ext4`,
 stdio MCP such as Playwright can drive a **system** browser
 (`/usr/bin/chromium-browser`). Playwright's own glibc browser builds
 do not run on this musl guest. The image is 4 GiB unless you set
-`SIZE_MIB`. Raise `APIPI_MICROVM_MEM_MIB` to 1024–2048 for browser
-guests. See [production sizing](production.md#sizing).
+`SIZE_MIB`. Use sandbox size `L` (2 GiB guest RAM by default) for
+browser guests. See [production sizing](production.md#sizing).
 
 ```
 apipi install --microvm
@@ -109,11 +109,16 @@ Env, `.env`, and `[sandbox].kernel` / `rootfs` still override. The
 install command also prints `export` lines. Production should set
 explicit paths.
 
-`APIPI_MICROVM_IMAGE` (`default` or `browser`) selects which rootfs
-the process boots. The choice is process-wide, not per session.
-Missing path for the selected image exits at startup. Session
-`packages` and `setup_commands` still run on whichever image you
-booted; flavors are the heavy, stable base.
+Live session guests pick a rootfs from sandbox size: `S` and `M` boot
+the default image, `L` boots the browser image. Both rootfs files
+should be installed on workers that accept `L`. Missing browser rootfs
+when a session resolves to `L` fails clearly; the process does not
+fall back to the default image. `APIPI_MICROVM_IMAGE` still selects
+the image for `apipi install` and `apipi microvm shell`. To make every
+session browser-class without callers setting a size, set
+`[sandbox].default_size = "L"` (and size `worker_memory_mb` for ~2 GiB
+guests). Session `packages` and `setup_commands` still run on whichever
+image that session booted.
 
 If the kernel download fails, get a Firecracker-compatible `vmlinux`
 from the [Firecracker getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)

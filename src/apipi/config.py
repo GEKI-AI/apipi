@@ -26,8 +26,10 @@ ArtifactStore = Literal["local", "s3"]
 S3Addressing = Literal["auto", "path", "virtual"]
 UsageStore = Literal["off", "rollups", "turns"]
 MicrovmImage = Literal["default", "browser"]
+SandboxSize = Literal["S", "M", "L"]
 BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "microvm"})
 MICROVM_IMAGE_HELP = "APIPI_MICROVM_IMAGE must be default or browser"
+SANDBOX_SIZE_HELP = "APIPI_SANDBOX_DEFAULT_SIZE must be S, M, or L"
 
 NONE_MODE_WARNING = "APIPI_RUN_MODE=none is not suited for production"
 SQLITE_WARNING = (
@@ -64,8 +66,14 @@ _SANDBOX_TOML = {
     "rootfs": "microvm_rootfs",
     "rootfs_browser": "microvm_rootfs_browser",
     "image": "microvm_image",
+    "default_size": "sandbox_default_size",
 }
-_SANDBOX_RESOURCES_TOML = {"mem_mib": "microvm_mem_mib", "vcpus": "microvm_vcpus"}
+_SANDBOX_RESOURCES_TOML = {
+    "mem_mib": "microvm_mem_mib",
+    "vcpus": "microvm_vcpus",
+    "m_mem_mib": "sandbox_m_mem_mib",
+    "l_mem_mib": "sandbox_l_mem_mib",
+}
 _SANDBOX_NETWORK_TOML = {
     "egress_allowlist": "microvm_egress_allowlist",
     "egress_hosts": "microvm_egress_hosts",
@@ -278,6 +286,16 @@ def parse_microvm_image(value: object) -> object:
     return value
 
 
+def parse_sandbox_size_setting(value: object) -> object:
+    if value is None:
+        return "S"
+    if isinstance(value, str) and not value.strip():
+        return "S"
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
 IdleTtl = Annotated[timedelta, BeforeValidator(parse_ttl)]
 OptionalTtl = Annotated[timedelta | None, BeforeValidator(parse_optional_ttl)]
 ByteSize = Annotated[int, BeforeValidator(parse_bytes)]
@@ -286,6 +304,7 @@ ExportUrl = Annotated[str | None, BeforeValidator(parse_export_url)]
 HostList = Annotated[str, BeforeValidator(parse_hosts)]
 InstanceId = Annotated[str | None, BeforeValidator(parse_instance_id)]
 MicrovmImageName = Annotated[MicrovmImage, BeforeValidator(parse_microvm_image)]
+SandboxSizeName = Annotated[SandboxSize, BeforeValidator(parse_sandbox_size_setting)]
 
 
 class MappingSource(PydanticBaseSettingsSource):
@@ -466,10 +485,26 @@ class Settings(BaseSettings):
         default="default",
         validation_alias=AliasChoices("APIPI_MICROVM_IMAGE", "microvm_image"),
     )
+    sandbox_default_size: SandboxSizeName = Field(
+        default="S",
+        validation_alias=AliasChoices(
+            "APIPI_SANDBOX_DEFAULT_SIZE", "sandbox_default_size"
+        ),
+    )
     microvm_mem_mib: int = Field(
         default=512,
         ge=1,
         validation_alias=AliasChoices("APIPI_MICROVM_MEM_MIB", "microvm_mem_mib"),
+    )
+    sandbox_m_mem_mib: int = Field(
+        default=1024,
+        ge=1,
+        validation_alias=AliasChoices("APIPI_SANDBOX_M_MEM_MIB", "sandbox_m_mem_mib"),
+    )
+    sandbox_l_mem_mib: int = Field(
+        default=2048,
+        ge=1,
+        validation_alias=AliasChoices("APIPI_SANDBOX_L_MEM_MIB", "sandbox_l_mem_mib"),
     )
     microvm_vcpus: int = Field(
         default=1,
@@ -618,13 +653,22 @@ class Settings(BaseSettings):
         except ConfigError as exc:
             raise ValueError(str(exc)) from exc
         if self.worker_memory_mb is None:
-            self.worker_memory_mb = self.max_sessions * self.microvm_mem_mib
+            self.worker_memory_mb = self.max_sessions * self.sandbox_mem_mib(
+                self.sandbox_default_size
+            )
         return self
+
+    def sandbox_mem_mib(self, size: str) -> int:
+        if size == "M":
+            return self.sandbox_m_mem_mib
+        if size == "L":
+            return self.sandbox_l_mem_mib
+        return self.microvm_mem_mib
 
     def node_memory_mb(self) -> int:
         memory = self.worker_memory_mb
         if memory is None:
-            return self.max_sessions * self.microvm_mem_mib
+            return self.max_sessions * self.sandbox_mem_mib(self.sandbox_default_size)
         return memory
 
     def sandbox_ttl_for(self, env_type: str | None) -> timedelta | None:
@@ -844,8 +888,14 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_DB_POOL_SIZE must be at least 1"
         if "microvm_image" in loc or "APIPI_MICROVM_IMAGE" in loc:
             return MICROVM_IMAGE_HELP
+        if "sandbox_default_size" in loc or "APIPI_SANDBOX_DEFAULT_SIZE" in loc:
+            return SANDBOX_SIZE_HELP
         if "microvm_mem_mib" in loc:
             return "APIPI_MICROVM_MEM_MIB must be at least 1"
+        if "sandbox_m_mem_mib" in loc or "APIPI_SANDBOX_M_MEM_MIB" in loc:
+            return "APIPI_SANDBOX_M_MEM_MIB must be at least 1"
+        if "sandbox_l_mem_mib" in loc or "APIPI_SANDBOX_L_MEM_MIB" in loc:
+            return "APIPI_SANDBOX_L_MEM_MIB must be at least 1"
         if "microvm_vcpus" in loc:
             return "APIPI_MICROVM_VCPUS must be at least 1"
         if "microvm_egress_allowlist" in loc or "APIPI_MICROVM_EGRESS_ALLOWLIST" in loc:
