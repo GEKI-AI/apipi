@@ -32,6 +32,25 @@ def test_has_capacity_counts_live_procs() -> None:
     assert pool.capacity_code(second) == "capacity"
 
 
+def test_has_capacity_ram_cap() -> None:
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+            max_sessions=8,
+            worker_memory_mb=512,
+            microvm_mem_mib=512,
+        )
+    )
+    first = uuid.uuid4()
+    second = uuid.uuid4()
+    assert pool.has_capacity(first)
+    pool._procs[first] = cast(PiProc, _Alive())
+    assert pool.has_capacity(first)
+    assert not pool.has_capacity(second)
+    assert pool.capacity_code(second) == "capacity"
+
+
 def test_has_capacity_per_tenant() -> None:
     pool = PiPool(
         Settings(

@@ -60,8 +60,8 @@ events land in the store before the client sees them on SSE. If the
 SSE connection sits on another API replica, that replica polls the
 store. Pi does not have to live on the API node.
 
-If no worker can take a lease, the turn returns `429` with code
-`capacity`.
+If no worker can take a lease (session cap or RAM budget), the turn
+returns `429` with code `capacity`.
 
 A heartbeat may set `"drain": true`. That worker keeps current leases
 and takes no new ones. When `lease_until` passes, the lease is

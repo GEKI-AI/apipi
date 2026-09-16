@@ -227,9 +227,12 @@ APIPI_RUN_MODE=microvm
 
 One API tier, many KVM hosts, shared Postgres. Start more
 `apipi worker` processes with the same token and API URL. Each worker
-advertises `capacity` (from `APIPI_MAX_SESSIONS`). Placement is
-least-loaded. A turn with no lease returns `429` with code `capacity`.
-Drain a worker with a heartbeat `"drain": true` before you stop it.
+advertises `capacity` (from `APIPI_MAX_SESSIONS`) and `memory_mb` (from
+`APIPI_WORKER_MEMORY_MB`, default `max_sessions × mem_mib`). Placement
+picks the worker with the most free RAM among those that still have a
+session slot and enough remaining RAM. A turn with no lease returns
+`429` with code `capacity`. Drain a worker with a heartbeat
+`"drain": true` before you stop it.
 
 API replicas do not need sticky routing for Pi. See
 [multiple nodes](scale.md).

@@ -38,6 +38,7 @@ class WorkerConnection:
     generation: int
     websocket: WebSocket
     capacity: int
+    memory_mb: int
     leases: set[uuid.UUID] = field(default_factory=set)
     draining: bool = False
 
@@ -92,15 +93,27 @@ class WorkerHub:
             sum(len(conn.leases) for conn in self._conns.values())
         )
 
-    def pick(self) -> WorkerConnection | None:
+    def pick(self, session_mem_mib: int | None = None) -> WorkerConnection | None:
+        session_mem = (
+            session_mem_mib
+            if session_mem_mib is not None
+            else self.settings.microvm_mem_mib
+        )
         ready = [
             conn
             for conn in self._conns.values()
-            if not conn.draining and len(conn.leases) < conn.capacity
+            if not conn.draining
+            and len(conn.leases) + 1 <= conn.capacity
+            and len(conn.leases) * session_mem + session_mem <= conn.memory_mb
         ]
         if not ready:
             return None
-        ready.sort(key=lambda item: len(item.leases))
+        ready.sort(
+            key=lambda item: (
+                -(item.memory_mb - len(item.leases) * session_mem),
+                len(item.leases),
+            )
+        )
         return ready[0]
 
     async def acquire(
@@ -282,13 +295,27 @@ class WorkerHub:
         return True
 
 
+def _positive_int(value: object) -> int | None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        return None
+    return value
+
+
 async def register_worker(
     hub: WorkerHub, store: Store, websocket: WebSocket, message: dict[str, Any]
 ) -> WorkerConnection | None:
     raw_id = message.get("id")
-    capacity = message.get("capacity", 1)
-    if not isinstance(capacity, int) or capacity < 1:
+    capacity = _positive_int(message.get("capacity", 1))
+    if capacity is None:
         return None
+    raw_memory = message.get("memory_mb")
+    if raw_memory is None:
+        memory_mb = capacity * hub.settings.microvm_mem_mib
+    else:
+        parsed = _positive_int(raw_memory)
+        if parsed is None:
+            return None
+        memory_mb = parsed
     if isinstance(raw_id, str) and raw_id:
         try:
             worker_id = uuid.UUID(raw_id)
@@ -301,6 +328,7 @@ async def register_worker(
             db,
             worker_id,
             capacity=capacity,
+            memory_mb=memory_mb,
             api_instance_id=hub.settings.instance_id,
         )
     conn = WorkerConnection(
@@ -308,6 +336,7 @@ async def register_worker(
         generation=row.generation,
         websocket=websocket,
         capacity=row.capacity,
+        memory_mb=row.memory_mb,
     )
     await hub.attach(conn)
     await _send(
@@ -327,13 +356,19 @@ async def heartbeat_worker(
     hub: WorkerHub, store: Store, conn: WorkerConnection, message: dict[str, Any]
 ) -> None:
     capacity = message.get("capacity")
-    if capacity is not None and (not isinstance(capacity, int) or capacity < 1):
+    if capacity is not None and _positive_int(capacity) is None:
         return
+    memory_mb = message.get("memory_mb")
+    if memory_mb is not None and _positive_int(memory_mb) is None:
+        return
+    parsed_capacity = _positive_int(capacity) if capacity is not None else None
+    parsed_memory = _positive_int(memory_mb) if memory_mb is not None else None
     async with store.session() as db:
         await touch_worker(
             db,
             conn.worker_id,
-            capacity=capacity if isinstance(capacity, int) else None,
+            capacity=parsed_capacity,
+            memory_mb=parsed_memory,
             api_instance_id=hub.settings.instance_id,
         )
         await extend_worker_leases(
@@ -341,8 +376,10 @@ async def heartbeat_worker(
             conn.worker_id,
             lease_until=utc_now() + hub.settings.worker_lease_ttl,
         )
-    if isinstance(capacity, int):
-        conn.capacity = capacity
+    if parsed_capacity is not None:
+        conn.capacity = parsed_capacity
+    if parsed_memory is not None:
+        conn.memory_mb = parsed_memory
     if message.get("drain") is True:
         conn.draining = True
         hub._observe()
@@ -446,7 +483,13 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
             ws_url, additional_headers={"Authorization": f"Bearer {token}"}
         ) as sock:
             await sock.send(
-                json.dumps({"type": "register", "capacity": settings.max_sessions})
+                json.dumps(
+                    {
+                        "type": "register",
+                        "capacity": settings.max_sessions,
+                        "memory_mb": settings.node_memory_mb(),
+                    }
+                )
             )
             raw = await sock.recv()
             hello = (
@@ -462,7 +505,15 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
                 try:
                     incoming = await asyncio.wait_for(sock.recv(), timeout=heartbeat)
                 except TimeoutError:
-                    await sock.send(json.dumps({"type": "heartbeat"}))
+                    await sock.send(
+                        json.dumps(
+                            {
+                                "type": "heartbeat",
+                                "capacity": settings.max_sessions,
+                                "memory_mb": settings.node_memory_mb(),
+                            }
+                        )
+                    )
                     continue
                 text = incoming if isinstance(incoming, str) else incoming.decode()
                 message = json.loads(text)

@@ -32,9 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `apipi serve --api-only` leases a worker for turns. SSE reads new
   events from the store so API nodes do not need the live Pi process.
   No worker is `429` with code `capacity`.
-- Worker drain (`heartbeat` `"drain": true`), least-loaded placement,
+- Worker drain (`heartbeat` `"drain": true`), RAM-first placement,
   and Prometheus gauges for workers, leases, and assign latency.
   Expired leases fail closed and are not reassigned.
+- Workers advertise `capacity` (max sessions) and `memory_mb` (RAM
+  budget in MiB). The API will not lease a worker that would pass
+  either cap. Among eligible workers it prefers more free RAM.
 - Rootless API Docker image and Compose service (`apipi serve
   --api-only`). Worker systemd units live in `deploy/systemd/`.
 

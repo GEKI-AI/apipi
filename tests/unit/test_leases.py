@@ -134,7 +134,9 @@ async def test_remote_execution_names_missing_socket_instance(
     async with store.session() as db:
         tenant = await create_tenant(db, name="t")
         session = await create_session(db, tenant.id)
-        await upsert_worker(db, worker_id, capacity=1, api_instance_id="node-b")
+        await upsert_worker(
+            db, worker_id, capacity=1, memory_mb=512, api_instance_id="node-b"
+        )
         await set_session_lease(
             db,
             tenant.id,
@@ -156,8 +158,11 @@ async def test_remote_execution_names_missing_socket_instance(
 async def test_upsert_worker_records_instance(store: Store) -> None:
     worker_id = uuid.uuid4()
     async with store.session() as db:
-        await upsert_worker(db, worker_id, capacity=2, api_instance_id="node-a")
+        await upsert_worker(
+            db, worker_id, capacity=2, memory_mb=2048, api_instance_id="node-a"
+        )
         row = await get_worker(db, worker_id)
         assert row is not None
         assert row.api_instance_id == "node-a"
         assert row.capacity == 2
+        assert row.memory_mb == 2048

@@ -251,3 +251,136 @@ async def test_worker_register_records_api_instance_id(
         row = await get_worker(db, worker_id)
         assert row is not None
         assert row.api_instance_id is None
+
+
+async def test_worker_register_defaults_memory_mb(
+    settings: Settings, store: Store
+) -> None:
+    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    worker = FakeWorker(app, "worker-secret")
+    hello = await worker.connect(capacity=4)
+    assert hello["ok"] is True
+    worker_id = uuid.UUID(str(hello["worker_id"]))
+    async with store.session() as db:
+        row = await get_worker(db, worker_id)
+        assert row is not None
+        assert row.memory_mb == 4 * app.state.settings.microvm_mem_mib
+    await worker.close()
+
+
+async def test_worker_register_rejects_invalid_memory_mb(
+    settings: Settings, store: Store
+) -> None:
+    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    worker = FakeWorker(app, "worker-secret")
+    hello = await worker.connect(capacity=4, memory_mb=0)
+    assert hello.get("ok") is False
+    assert hello.get("error") == "invalid register"
+    await worker.close()
+
+
+async def test_worker_register_records_memory_mb(
+    settings: Settings, store: Store
+) -> None:
+    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    worker = FakeWorker(app, "worker-secret")
+    hello = await worker.connect(capacity=4, memory_mb=2048)
+    assert hello["ok"] is True
+    worker_id = uuid.UUID(str(hello["worker_id"]))
+    async with store.session() as db:
+        row = await get_worker(db, worker_id)
+        assert row is not None
+        assert row.capacity == 4
+        assert row.memory_mb == 2048
+    conn = app.state.workers.get(worker_id)
+    assert conn is not None
+    assert conn.memory_mb == 2048
+    await worker.send_json({"type": "heartbeat", "memory_mb": 8192, "capacity": 4})
+    for _ in range(50):
+        if conn.memory_mb == 8192:
+            break
+        await asyncio.sleep(0.02)
+    assert conn.memory_mb == 8192
+    async with store.session() as db:
+        row = await get_worker(db, worker_id)
+        assert row is not None
+        assert row.memory_mb == 8192
+    await worker.close()
+
+
+async def test_pick_skips_worker_at_ram_cap(settings: Settings, store: Store) -> None:
+    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    token = "t"
+    tenant_id = _tenant(token)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        agent = await client.post(
+            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        )
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
+        )
+        session_id = uuid.UUID(created.json()["id"])
+        full = FakeWorker(app, "worker-secret")
+        await full.connect(capacity=8, memory_mb=512)
+        first = await app.state.workers.acquire(
+            store, tenant_id, session_id, op="turn.start"
+        )
+        assert first is not None
+        other = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
+        )
+        other_id = uuid.UUID(other.json()["id"])
+        second = await app.state.workers.acquire(
+            store, tenant_id, other_id, op="turn.start"
+        )
+        assert second is None
+        roomy = FakeWorker(app, "worker-secret")
+        await roomy.connect(capacity=1, memory_mb=4096)
+        second = await app.state.workers.acquire(
+            store, tenant_id, other_id, op="turn.start"
+        )
+        assert second is not None
+        await roomy.close()
+        await full.close()
+
+
+async def test_pick_prefers_worker_with_more_free_ram(
+    settings: Settings, store: Store
+) -> None:
+    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    token = "t"
+    tenant_id = _tenant(token)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        agent = await client.post(
+            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        )
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
+        )
+        session_id = uuid.UUID(created.json()["id"])
+        small = FakeWorker(app, "worker-secret")
+        small_hello = await small.connect(capacity=8, memory_mb=1024)
+        large = FakeWorker(app, "worker-secret")
+        large_hello = await large.connect(capacity=8, memory_mb=4096)
+        command = await app.state.workers.acquire(
+            store, tenant_id, session_id, op="turn.start"
+        )
+        assert command is not None
+        picked = app.state.workers.get(uuid.UUID(str(large_hello["worker_id"])))
+        assert picked is not None
+        assert uuid.UUID(command["lease_id"]) in picked.leases
+        skipped = app.state.workers.get(uuid.UUID(str(small_hello["worker_id"])))
+        assert skipped is not None
+        assert not skipped.leases
+        await small.close()
+        await large.close()
