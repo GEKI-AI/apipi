@@ -28,8 +28,10 @@ and every worker at the same `DATABASE_URL`. Workers set
 `APIPI_API_URL` and `APIPI_WORKER_TOKEN`. Give each worker its own
 `APIPI_SESSIONS_DIR`. Artifact bytes can be local on the worker or S3.
 
-The balancer can use least-conn (or round robin) for `/v1`. A turn
-that cannot lease a worker returns `429` with code `capacity`. Worker
+The balancer can use least-conn (or round robin) for `/v1`. Workers
+advertise a session cap and a RAM budget. Placement prefers free RAM
+and will not oversubscribe either. A turn that cannot lease a worker
+returns `429` with code `capacity`. Worker
 WebSockets are local to one API process. `workers.api_instance_id`
 records that process (`APIPI_INSTANCE_ID`). Stick `/internal/worker`
 to one API, or have each worker dial the API that will send it

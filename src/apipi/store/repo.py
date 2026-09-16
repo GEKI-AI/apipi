@@ -691,6 +691,7 @@ async def upsert_worker(
     worker_id: uuid.UUID,
     *,
     capacity: int,
+    memory_mb: int,
     api_instance_id: str | None = None,
 ) -> WorkerRow:
     row = await db.scalar(select(WorkerRow).where(WorkerRow.id == worker_id))
@@ -698,6 +699,7 @@ async def upsert_worker(
         row = WorkerRow(
             id=worker_id,
             capacity=capacity,
+            memory_mb=memory_mb,
             generation=1,
             last_seen=utc_now(),
             api_instance_id=api_instance_id,
@@ -705,6 +707,7 @@ async def upsert_worker(
         db.add(row)
     else:
         row.capacity = capacity
+        row.memory_mb = memory_mb
         row.generation += 1
         row.last_seen = utc_now()
         row.api_instance_id = api_instance_id
@@ -721,6 +724,7 @@ async def touch_worker(
     worker_id: uuid.UUID,
     *,
     capacity: int | None = None,
+    memory_mb: int | None = None,
     api_instance_id: str | None = None,
 ) -> WorkerRow | None:
     row = await get_worker(db, worker_id)
@@ -729,6 +733,8 @@ async def touch_worker(
     row.last_seen = utc_now()
     if capacity is not None:
         row.capacity = capacity
+    if memory_mb is not None:
+        row.memory_mb = memory_mb
     if api_instance_id is not None:
         row.api_instance_id = api_instance_id
     await db.flush()

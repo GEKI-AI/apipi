@@ -6,6 +6,7 @@ log_format = "json"
 idle_ttl = "15m"
 max_sessions = 32
 max_sessions_per_tenant = 32
+worker_memory_mb = 16384
 turn_timeout = "10m"
 auth_cache_ttl = "30s"
 max_request_bytes = "1MiB"

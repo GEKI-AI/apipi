@@ -119,6 +119,9 @@ class PiPool:
             return "capacity_tenant"
         if self.live() >= self.settings.max_sessions:
             return "capacity"
+        session_mem = self.settings.microvm_mem_mib
+        if self.live() * session_mem + session_mem > self.settings.node_memory_mb():
+            return "capacity"
         return None
 
     def has_capacity(

@@ -67,16 +67,18 @@ needs sticky routing for Pi. Examples are in
 Count **live** Pi processes (or guests) on **workers**. The API
 process is cheap next to guest RAM. Idle TTL (default 15 minutes)
 kills Pi and frees that RAM. The session row can outlive the process.
-`max_sessions` does not count Postgres rows.
+`max_sessions` and `worker_memory_mb` do not count Postgres rows.
 
 ```
-max_sessions ≈ (worker RAM − reserve) / microvm_mem_mib
+worker_memory_mb ≈ (worker RAM − reserve)   # MiB, advertised as memory_mb
+max_sessions ≈ worker_memory_mb / microvm_mem_mib
 ```
 
 Reserve several GiB on each worker for the OS, jailer, and page cache.
-Colocated Postgres needs more. Pick `max_sessions` from **reserved**
-guest RAM rather than average guest RSS. `max_sessions` is a hard cap
-on that worker: a new turn that cannot lease returns `429` with code
+Colocated Postgres needs more. Set `APIPI_WORKER_MEMORY_MB` from
+**reserved** guest RAM rather than average guest RSS. The scheduler
+will not start a guest that would pass either the RAM budget or
+`max_sessions`. A new turn that cannot lease returns `429` with code
 `capacity`.
 
 ### Example: 64 GiB RAM, 12 cores
@@ -88,9 +90,10 @@ container.
 | | |
 | --- | --- |
 | Reserve | About **8 GiB** for OS, gateway, jailer, and page cache. |
+| RAM budget | **`worker_memory_mb=57344`** (56 GiB). This is what the worker advertises as `memory_mb`. |
 | Default 32 live | 32 × 512 MiB ≈ **16 GiB** guests plus ~0.2 GiB VMM. Fits easily. |
-| Starting cap | **`max_sessions=48`** (24 GiB guests) or keep **32**. Raise after you watch host RSS and `429` `capacity`. |
-| Ceiling | (64 − 8) / 0.5 ≈ **110** live at 512 MiB. That is the wall, not a starting point. |
+| Starting cap | **`max_sessions=48`** (24 GiB guests) or keep **32**. Raise after you watch host RSS and `429` `capacity`. The RAM cap still applies. |
+| Ceiling | 57344 / 512 ≈ **112** live at 512 MiB. That is the wall, not a starting point. |
 | Playwright / Chromium | Boot the **browser** rootfs (`APIPI_MICROVM_IMAGE=browser`) and raise `APIPI_MICROVM_MEM_MIB` to **1024–2048**. Then about **24–48** live on this box. 512 MiB is for Pi and light tools. |
 | CPU | 48 × 1 vCPU on 12 cores is normal while turns wait on the model URL. Keep `APIPI_MICROVM_VCPUS=1` unless the computer is CPU-heavy. |
 | Disk | Hosted workspaces last until sandbox TTL (default 1 hour), capped at 1 GiB each. Local artifacts 512 MiB per session unless S3. Worst case is cap × live-and-idle directories, not typical use. |
@@ -107,7 +110,7 @@ elsewhere and is not capped here.
 
 | Resource | Overprovision? | Why |
 | --- | --- | --- |
-| Guest RAM | **No.** Size `max_sessions` so `max_sessions × microvm_mem_mib` plus the host reserve fits. | Each live session is a Firecracker guest with that RAM. There is no balloon device. The guest kernel usually touches the memory. `max_sessions` is a hard cap, not a hint. |
+| Guest RAM | **No.** Set `worker_memory_mb` so the sum of guest `mem_mib` plus the host reserve fits. Size `max_sessions` as a second hard cap. | Each live session is a Firecracker guest with that RAM. There is no balloon device. The guest kernel usually touches the memory. The scheduler will not oversubscribe RAM or session count. |
 | CPU | **Yes.** Default 1 vCPU per guest. | Turns mostly wait on the model URL. Watch host load, not the vCPU count. Raise `microvm_vcpus` only if the computer is CPU-heavy (builds, Playwright). |
 | Disk | Caps are maxima, not reservations. | `max_workspace_bytes` and `max_artifact_bytes` are per session. Summing them is worst case. Hosted workspaces last until sandbox TTL. Provision for typical use and alert before the disk fills; a burst can still hit the caps. S3 moves artifact bytes off the node. |
 | NIC | Same as disk. | Each TAP is capped at 50 Mbit. All guests saturating at once is unlikely. |

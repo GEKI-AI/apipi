@@ -64,8 +64,8 @@ Worker to API:
 
 | `type` | Fields | What |
 | --- | --- | --- |
-| `register` | `id` (optional UUID), `capacity` (int ≥ 1) | Create or reconnect the worker. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
-| `heartbeat` | `capacity` (optional) | Refresh `last_seen`. |
+| `register` | `id` (optional UUID), `capacity` (int ≥ 1), `memory_mb` (int ≥ 1, optional) | Create or reconnect the worker. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB. If `memory_mb` is omitted, the API uses `capacity ×` guest `mem_mib`. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
+| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `drain` (optional bool) | Refresh `last_seen`. May update both caps and drain posture. |
 | `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. |
 | `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |
@@ -112,8 +112,11 @@ that id as idempotent so a turn is not run twice.
 
 A heartbeat may include `"drain": true`. That worker keeps its current
 leases and heartbeats them, but the scheduler does not give it new
-sessions. Placement is least-loaded among workers that are not
-draining.
+sessions. Placement picks among workers that are not draining, have a
+free session slot, and have enough remaining `memory_mb` for one more
+guest (`mem_mib` from `[sandbox.resources]`, default 512). Among those
+it prefers the worker with the most free RAM. Session count is only a
+filter and a tie-break.
 
 When `lease_until` passes, the lease is cleared and the session gets
 `worker_lease_expired`. The turn is not moved to another worker: the

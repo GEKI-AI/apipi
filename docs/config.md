@@ -56,8 +56,9 @@ handlers, and `artifact_store` for local or S3 artifact bytes.
 | `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process for `none` and `self_hosted` sessions to free RAM. Hosted computers use the sandbox TTL instead. |
 | `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | `[sandbox.ttl].openai_hosted` | `1h` | Stop Pi and delete the `openai_hosted` workspace after this idle. Transcript and published artifacts stay. `0` turns the timer off. `APIPI_WORKSPACE_TTL` / `workspace_ttl` is an alias. |
 | `APIPI_SANDBOX_TTL_SELF_HOSTED` | `[sandbox.ttl].self_hosted` | `0` (off) | Idle policy for `self_hosted`. The gateway cannot delete files on the runner. `0` means off. |
-| `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. |
+| `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. Workers advertise this as `capacity`. |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | `max_sessions_per_tenant` | `32` | Live Pi processes for one tenant. A new turn that would pass the cap returns `429` with code `capacity_tenant`. The node cap still applies. |
+| `APIPI_WORKER_MEMORY_MB` | `worker_memory_mb` | `max_sessions × mem_mib` (16384 at defaults) | RAM budget this worker (or combined node) will run, in MiB. Sum of guest `mem_mib` for live leases must stay under this. Set it to usable host RAM minus OS and worker reserve. Do not read `/proc/meminfo` automatically. |
 | `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Cancel a stuck turn. |
 | `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. The callback may return a typed reject (`401` or `429`). |
 | `APIPI_WORKER_TOKEN` | `worker_token` | unset | Shared secret for `apipi worker` connections. Compared in memory. Not a tenant key and not stored in the database. Unset rejects the worker socket. Put this in the process environment. See [workers](workers.md). |
@@ -104,6 +105,7 @@ log_format = "json"
 idle_ttl = "15m"
 max_sessions = 32
 max_sessions_per_tenant = 32
+worker_memory_mb = 16384
 turn_timeout = "10m"
 auth_cache_ttl = "30s"
 max_request_bytes = "1MiB"
@@ -137,7 +139,9 @@ affinity ([multiple nodes](scale.md)).
 
 Each live session is one Pi process (or guest). `max_sessions` counts
 those live processes on the node. `max_sessions_per_tenant` counts them
-for one tenant. The session row in Postgres can outlive the process;
+for one tenant. `worker_memory_mb` is the RAM budget for the same live
+guests. A new turn that would pass either node cap returns `429` with
+code `capacity`. The session row in Postgres can outlive the process;
 idle TTL kills the process and frees a slot.
 
 | Failure | HTTP or event | Code |
@@ -251,9 +255,11 @@ APIPI_RUN_MODE=microvm uv run apipi serve
 ### Resources
 
 Guest RAM and vCPUs belong to the sandbox, not to the HTTP process.
-Size `max_sessions` from host RAM divided by `mem_mib`. Raise `mem_mib`
-when you enable heavy stdio MCP such as Playwright. A worked example is
-in [production](production.md#sizing).
+Set `worker_memory_mb` to usable host RAM minus reserve. Size
+`max_sessions` so `max_sessions × mem_mib` still fits in that budget;
+the scheduler will not oversubscribe either cap. Raise `mem_mib` when
+you enable heavy stdio MCP such as Playwright. A worked example is in
+[production](production.md#sizing).
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
@@ -344,6 +350,7 @@ port = 8000
 instance_id = "node-a"
 max_sessions = 32
 max_sessions_per_tenant = 8
+worker_memory_mb = 16384
 auth = "mycompany.apipi_auth:authenticate"
 
 [pi]

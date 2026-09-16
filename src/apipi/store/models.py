@@ -152,6 +152,7 @@ class WorkerRow(Base):
         Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     capacity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    memory_mb: Mapped[int] = mapped_column(Integer, nullable=False, default=16384)
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     last_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False

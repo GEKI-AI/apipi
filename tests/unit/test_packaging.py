@@ -25,4 +25,5 @@ def test_alembic_revisions_chain() -> None:
         "0003_pi_session.py",
         "0004_vaults.py",
         "0005_leases.py",
+        "0006_worker_memory.py",
     ]

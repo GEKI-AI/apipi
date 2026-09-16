@@ -383,6 +383,11 @@ class Settings(BaseSettings):
         default=timedelta(seconds=30),
         validation_alias=AliasChoices("APIPI_WORKER_LEASE_TTL", "worker_lease_ttl"),
     )
+    worker_memory_mb: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("APIPI_WORKER_MEMORY_MB", "worker_memory_mb"),
+    )
     api_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_API_URL", "api_url"),
@@ -612,7 +617,15 @@ class Settings(BaseSettings):
             self.database_url = store_url(self.database_url)
         except ConfigError as exc:
             raise ValueError(str(exc)) from exc
+        if self.worker_memory_mb is None:
+            self.worker_memory_mb = self.max_sessions * self.microvm_mem_mib
         return self
+
+    def node_memory_mb(self) -> int:
+        memory = self.worker_memory_mb
+        if memory is None:
+            return self.max_sessions * self.microvm_mem_mib
+        return memory
 
     def sandbox_ttl_for(self, env_type: str | None) -> timedelta | None:
         if env_type in {"openai_hosted", "hosted"}:
@@ -815,6 +828,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_MAX_SESSIONS_PER_TENANT must be at least 1"
         if "max_sessions" in loc:
             return "APIPI_MAX_SESSIONS must be at least 1"
+        if "worker_memory_mb" in loc or "APIPI_WORKER_MEMORY_MB" in loc:
+            return "APIPI_WORKER_MEMORY_MB must be at least 1"
         if "max_request_bytes" in loc:
             return "APIPI_MAX_REQUEST_BYTES must be like 1MiB"
         if "max_workspace_bytes" in loc:

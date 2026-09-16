@@ -82,6 +82,25 @@ def test_worker_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.worker_lease_ttl == timedelta(seconds=15)
 
 
+def test_worker_memory_mb_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_WORKER_MEMORY_MB", "57344")
+    settings = Settings()
+    assert settings.worker_memory_mb == 57344
+    assert settings.node_memory_mb() == 57344
+
+
+def test_worker_memory_mb_invalid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_WORKER_MEMORY_MB", "0")
+    with pytest.raises(ConfigError, match="APIPI_WORKER_MEMORY_MB must be"):
+        load_settings()
+
+
 def test_workspace_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_WORKSPACE_TTL", "2h")
@@ -277,6 +296,7 @@ def test_parse_bytes() -> None:
 def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.delenv("APIPI_MAX_SESSIONS", raising=False)
+    monkeypatch.delenv("APIPI_WORKER_MEMORY_MB", raising=False)
     monkeypatch.delenv("APIPI_TURN_TIMEOUT", raising=False)
     settings = Settings()
     assert settings.max_sessions == 32
@@ -296,6 +316,8 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.s3_prefix == "apipi/artifacts"
     assert settings.s3_addressing == "auto"
     assert settings.db_pool_size == 5
+    assert settings.worker_memory_mb == 16384
+    assert settings.node_memory_mb() == 16384
     assert settings.microvm_mem_mib == 512
     assert settings.microvm_vcpus == 1
     assert settings.microvm_egress_allowlist is False
@@ -390,6 +412,7 @@ def test_load_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings = load_settings()
     assert settings.run_mode == "none"
     assert settings.max_sessions == 4
+    assert settings.worker_memory_mb == 2048
     assert settings.idle_ttl == timedelta(minutes=5)
 
 
