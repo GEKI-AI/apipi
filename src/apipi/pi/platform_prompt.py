@@ -15,15 +15,24 @@ DEFAULT_PLATFORM_PROMPT = (
     "Do not invent APIs or tools that this session does not provide."
 )
 
+BROWSER_HINT = (
+    "Chromium is available through the Playwright MCP tools. "
+    "Do not invent bash or chromium APIs for the browser."
+)
+
 
 def compose_instructions(
-    settings: Settings | None, agent_instructions: str | None
+    settings: Settings | None,
+    agent_instructions: str | None,
+    *,
+    browser: bool = False,
 ) -> str | None:
     if settings is None or settings.platform_prompt is None:
         main = DEFAULT_PLATFORM_PROMPT
     else:
         main = settings.platform_prompt
     extra = "" if settings is None else settings.platform_prompt_additional
+    hint = BROWSER_HINT if browser else ""
     agent = agent_instructions or ""
-    parts = [part for part in (main, extra, agent) if part]
+    parts = [part for part in (main, extra, hint, agent) if part]
     return "\n\n".join(parts) or None

@@ -6,6 +6,8 @@ from apipi.errors import ApiError
 SANDBOX_SIZES = frozenset({"S", "M", "L"})
 SANDBOX_SIZE_KEY = "apipi.sandbox_size"
 SANDBOX_SIZE_HELP = "sandbox_size must be S, M, or L"
+PLAYWRIGHT_LABEL = "playwright"
+PLAYWRIGHT_CHROMIUM = "/usr/bin/chromium-browser"
 
 
 def parse_sandbox_size(value: object) -> str | None:
@@ -67,6 +69,81 @@ def resolve_sandbox_size(
 
 def mem_mib_for_size(settings: Settings, size: str | None) -> int:
     return settings.sandbox_mem_mib(size if size is not None else "S")
+
+
+def playwright_tool(settings: Settings) -> dict[str, Any]:
+    return {
+        "type": "mcp",
+        "server_label": PLAYWRIGHT_LABEL,
+        "command": "npx",
+        "args": [
+            "-y",
+            settings.sandbox_playwright_mcp,
+            "--headless",
+            "--isolated",
+            f"--executable-path={PLAYWRIGHT_CHROMIUM}",
+        ],
+    }
+
+
+def _tool_blob(tool: dict[str, Any]) -> str:
+    command = tool.get("command")
+    raw_args = tool.get("args")
+    args = [str(item) for item in raw_args] if isinstance(raw_args, list) else []
+    parts = [str(command)] if command is not None else []
+    parts.extend(args)
+    return " ".join(parts)
+
+
+def has_playwright(tools: list[Any] | None) -> bool:
+    if not tools:
+        return False
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "mcp":
+            continue
+        label = tool.get("server_label")
+        if isinstance(label, str) and label.lower() == PLAYWRIGHT_LABEL:
+            return True
+        if "playwright/mcp" in _tool_blob(tool):
+            return True
+    return False
+
+
+def playwright_attached(stdio: list[Any] | None) -> bool:
+    if not stdio:
+        return False
+    for server in stdio:
+        if isinstance(server, dict):
+            label = server.get("server_label")
+            args = server.get("args")
+        else:
+            label = getattr(server, "server_label", None)
+            args = getattr(server, "args", None)
+        if isinstance(label, str) and label.lower() == PLAYWRIGHT_LABEL:
+            return True
+        blob = " ".join(str(item) for item in args) if isinstance(args, list) else ""
+        if "playwright/mcp" in blob:
+            return True
+    return False
+
+
+def should_inject_playwright(settings: Settings, size: str) -> bool:
+    return (
+        size == "L"
+        and settings.sandbox_auto_playwright
+        and settings.run_mode == "microvm"
+    )
+
+
+def merge_playwright(
+    tools: list[Any] | None, *, size: str, settings: Settings
+) -> list[Any]:
+    out = list(tools) if tools else []
+    if not should_inject_playwright(settings, size):
+        return out
+    if has_playwright(out):
+        return out
+    return [*out, playwright_tool(settings)]
 
 
 def require_size_rootfs(settings: Settings, size: str) -> None:

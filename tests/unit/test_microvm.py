@@ -1086,15 +1086,38 @@ async def test_run_microvm_shell_missing_workspace(tmp_path: Path) -> None:
 def test_guest_starts_mcp_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     started: list[list[str]] = []
 
-    def fake_popen(cmd: list[str], **_kwargs: Any) -> None:
+    class _Alive:
+        def poll(self) -> None:
+            return None
+
+    def fake_popen(cmd: list[str], **_kwargs: Any) -> _Alive:
         started.append(cmd)
+        return _Alive()
 
     monkeypatch.setattr("apipi.pi.guest.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("apipi.pi.guest.time.sleep", lambda _seconds: None)
     monkeypatch.setenv("APIPI_MCP_STDIO", "local")
     monkeypatch.setenv("APIPI_MCP_STDIO_0_COMMAND", "npx")
     monkeypatch.setenv("APIPI_MCP_STDIO_0_ARGS", "-y\x1fmcp")
     _start_mcp()
     assert started == [["npx", "-y", "mcp"]]
+
+
+def test_guest_mcp_fails_when_process_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Dead:
+        def poll(self) -> int:
+            return 1
+
+    monkeypatch.setattr(
+        "apipi.pi.guest.subprocess.Popen", lambda *_args, **_kwargs: _Dead()
+    )
+    monkeypatch.setattr("apipi.pi.guest.time.sleep", lambda _seconds: None)
+    monkeypatch.setenv("APIPI_MCP_STDIO", "playwright")
+    monkeypatch.setenv("APIPI_MCP_STDIO_0_COMMAND", "npx")
+    with pytest.raises(RuntimeError, match="mcp playwright failed"):
+        _start_mcp()
 
 
 def test_guest_pi_args_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

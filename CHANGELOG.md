@@ -41,7 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session sandbox sizes `S` / `M` / `L`. `environment.sandbox_size` is
   an ApiPi extension. Stock SDKs can set `metadata["apipi.sandbox_size"]`.
   `L` boots the browser rootfs. Live guests follow the resolved size,
-  not process-wide `APIPI_MICROVM_IMAGE`.
+  not process-wide `APIPI_MICROVM_IMAGE`. Size `L` also injects Playwright
+  MCP (system Chromium in the guest) unless the agent already attached
+  it or `auto_playwright` is off. The platform prompt mentions the
+  browser only when those tools are present.
 - Rootless API Docker image and Compose service (`apipi serve
   --api-only`). Worker systemd units live in `deploy/systemd/`.
 

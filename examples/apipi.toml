@@ -40,3 +40,6 @@ egress_mbit = 50
 [sandbox.ttl]
 openai_hosted = "1h"
 self_hosted = "0"
+
+[sandbox.browser]
+auto_playwright = true

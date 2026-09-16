@@ -341,6 +341,8 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.worker_memory_mb == 16384
     assert settings.node_memory_mb() == 16384
     assert settings.sandbox_default_size == "S"
+    assert settings.sandbox_auto_playwright is True
+    assert settings.sandbox_playwright_mcp == "@playwright/mcp@latest"
     assert settings.microvm_mem_mib == 512
     assert settings.sandbox_m_mem_mib == 1024
     assert settings.sandbox_l_mem_mib == 2048
@@ -583,6 +585,9 @@ def test_nested_toml_sandbox_and_pi(
         "[sandbox.ttl]\n"
         'openai_hosted = "45m"\n'
         'self_hosted = "0"\n'
+        "[sandbox.browser]\n"
+        "auto_playwright = false\n"
+        'playwright_mcp = "@playwright/mcp@1.2.3"\n'
     )
     settings = load_settings()
     assert settings.max_sessions == 8
@@ -605,6 +610,8 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.microvm_egress_mbit == 25
     assert settings.workspace_ttl == timedelta(minutes=45)
     assert settings.sandbox_ttl_self_hosted is None
+    assert settings.sandbox_auto_playwright is False
+    assert settings.sandbox_playwright_mcp == "@playwright/mcp@1.2.3"
 
 
 def test_nested_toml_platform_prompt(

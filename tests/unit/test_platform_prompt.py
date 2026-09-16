@@ -1,5 +1,9 @@
 from apipi.config import Settings
-from apipi.pi.platform_prompt import DEFAULT_PLATFORM_PROMPT, compose_instructions
+from apipi.pi.platform_prompt import (
+    BROWSER_HINT,
+    DEFAULT_PLATFORM_PROMPT,
+    compose_instructions,
+)
 
 
 def _settings(
@@ -60,3 +64,13 @@ def test_additional_without_touching_main() -> None:
 def test_default_mentions_outputs_not_workspace_artifacts() -> None:
     assert "outputs/" in DEFAULT_PLATFORM_PROMPT
     assert "artifacts/" not in DEFAULT_PLATFORM_PROMPT
+
+
+def test_browser_hint_only_when_requested() -> None:
+    plain = compose_instructions(_settings(), None)
+    assert plain is not None
+    assert BROWSER_HINT not in plain
+    with_browser = compose_instructions(_settings(), None, browser=True)
+    assert with_browser is not None
+    assert with_browser.endswith(BROWSER_HINT)
+    assert DEFAULT_PLATFORM_PROMPT in with_browser
