@@ -75,7 +75,9 @@ nav:
       - Using the API: using.md
       - OpenAI compatibility: openai-compatibility.md
   - Concepts:
-      - Agents, sessions, and storage: concepts.md
+      - How it fits together: concepts.md
+      - Isolation: isolation.md
+      - Workers: worker-concepts.md
   - Reference:
       - API: api.md
       - Auth: auth.md

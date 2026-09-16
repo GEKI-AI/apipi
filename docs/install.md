@@ -2,8 +2,10 @@
 
 You can install ApiPi from PyPI or from a git checkout. A laptop try
 uses SQLite in the current directory and isolation `none`. Production
-isolation is `APIPI_RUN_MODE=microvm`. One process can keep SQLite.
-Several processes share Postgres.
+isolation is `APIPI_RUN_MODE=microvm` on **workers** (or on combined
+`apipi serve` on one box). One process can keep SQLite. Several
+processes share Postgres. How isolation and workers fit is in
+[Concepts](concepts.md).
 
 Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model
 host URL. The gateway pins Pi 0.85.1. `apipi install` can install that
@@ -150,6 +152,88 @@ APIPI_API_URL=http://api.example:8000 APIPI_WORKER_TOKEN=secret \
 
 Unit files are in `deploy/systemd/`.
 
+## Three ways to run
+
+Everything starts through the `apipi` CLI. `uvicorn` is not a
+supported operator path.
+
+### Combined (one host)
+
+Laptop or a single server. API and sandbox share one process.
+
+```
+apipi install
+export OPENAI_BASE_URL=http://your-model-host/v1
+apipi check
+apipi migrate
+apipi serve
+```
+
+Isolation defaults to `none`. For Firecracker on that same box:
+
+```
+apipi install --microvm
+export APIPI_RUN_MODE=microvm
+apipi check --role all
+apipi serve
+```
+
+`apipi serve` probes the run mode. If `microvm` cannot start, the
+process exits.
+
+### Split (API + worker)
+
+Rootless API, KVM on another host. Example Compose plus a worker:
+
+```
+# API host (or docker compose up --build)
+export OPENAI_BASE_URL=http://your-model-host/v1
+export APIPI_WORKER_TOKEN=secret
+apipi check --role api
+apipi migrate
+apipi serve --api-only
+```
+
+```
+# KVM host
+apipi install --role worker
+export OPENAI_BASE_URL=http://your-model-host/v1
+export APIPI_WORKER_TOKEN=secret
+export APIPI_API_URL=http://api.example:8000
+export APIPI_RUN_MODE=microvm
+apipi check --role worker
+apipi worker
+```
+
+The API never opens `/dev/kvm`. The worker probes Firecracker before
+it connects. Put `APIPI_WORKER_TOKEN` in the process environment, not
+in the browser. Example `apipi.toml` keys: `worker_token` is allowed
+but secrets belong in `.env`.
+
+```
+# .env on the API and on each worker
+APIPI_WORKER_TOKEN=secret
+OPENAI_BASE_URL=http://your-model-host/v1
+DATABASE_URL=postgresql+asyncpg://apipi:apipi@db:5432/apipi
+```
+
+```
+# extra on the worker
+APIPI_API_URL=http://api.example:8000
+APIPI_RUN_MODE=microvm
+```
+
+### Several workers
+
+One API tier, many KVM hosts, shared Postgres. Start more
+`apipi worker` processes with the same token and API URL. Each worker
+advertises `capacity` (from `APIPI_MAX_SESSIONS`). Placement is
+least-loaded. A turn with no lease returns `429` with code `capacity`.
+Drain a worker with a heartbeat `"drain": true` before you stop it.
+
+API replicas do not need sticky routing for Pi. See
+[multiple nodes](scale.md).
+
 ## Model URL
 
 `OPENAI_BASE_URL` is required. It is the model host Pi calls. Clients
@@ -218,38 +302,27 @@ paths in the environment file.
 `GET /health` returns `{"status": "ok"}` without a bearer.
 
 One `apipi serve` is one process. The Pi pool lives in that process, so
-run a single uvicorn worker. Several processes need sticky
-routing ([production](production.md), [multiple nodes](scale.md)).
+run a single uvicorn worker. Combined serve with several processes
+needs sticky routing. API-only plus workers does not, for live Pi.
+See [production](production.md) and [multiple nodes](scale.md).
 
 ## systemd
 
-Run the gateway under systemd on the host with
-`APIPI_RUN_MODE=microvm`. Keep secrets in an environment file that the
-unit loads. MicroVM units need `/dev/kvm` and permission to create TAP
-devices. Full unit examples are in [run modes](run-modes.md).
+Run the API under systemd as `apipi serve --api-only`. Run guests as
+`apipi worker` with `APIPI_RUN_MODE=microvm`. Keep secrets in an
+environment file that the unit loads. Worker units need `/dev/kvm` and
+permission to create TAP devices. Files are in `deploy/systemd/` and
+[run modes](run-modes.md).
 
-```
-[Unit]
-Description=ApiPi gateway
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/apipi
-EnvironmentFile=/etc/apipi.env
-ExecStart=/opt/apipi/.venv/bin/apipi serve --config /etc/apipi.toml
-Restart=on-failure
-DeviceAllow=/dev/kvm rw
-DeviceAllow=/dev/net/tun rw
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-
-[Install]
-WantedBy=multi-user.target
-```
+Example units: `deploy/systemd/apipi-api.service` (`serve --api-only`,
+no KVM) and `deploy/systemd/apipi-worker.service` (DeviceAllow for
+`/dev/kvm` and TAP). Combined serve on one box can still use
+`apipi serve` with `APIPI_RUN_MODE=microvm` if that host is the
+hypervisor.
 
 Environment variables in `/etc/apipi.env` override keys in the TOML
-file. Bind, run mode, and the auth callback are the usual ones to set
-there.
+file. Bind, run mode, worker token, and the auth callback are the
+usual ones to set there.
 
 ## Auth callback
 

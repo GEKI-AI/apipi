@@ -4,7 +4,9 @@ Operator settings fall into three areas: the **gateway** (HTTP process,
 Postgres, auth, limits, usage), the **Pi harness** (how ApiPi launches
 Pi), and the **sandbox** (isolation backend, guest images, resources,
 and networking). Put the bulk of that in a TOML file. Keep secrets and
-sparse overrides in the process environment or `.env`.
+sparse overrides in the process environment or `.env`. What those
+areas mean is in [Concepts](concepts.md):
+[isolation](isolation.md) and [workers](worker-concepts.md).
 
 The example file in this repo is `examples/apipi.toml`. Copy
 `examples/env.example` to `.env` for secrets.

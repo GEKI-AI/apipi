@@ -6,8 +6,10 @@ them at your own LLM endpoints. Clients use an HTTP API compatible with
 the [OpenAI Agents API](https://developers.openai.com/api/docs/guides/agents-api).
 
 Production sessions run in [Firecracker](https://firecracker-microvm.github.io/)
-microVMs. Each guest has its own kernel. The gateway stays on the host.
-Pi, stdio MCP, and a local session directory share the guest.
+microVMs on **workers** (or on combined `apipi serve` on one box). Each
+guest has its own kernel. The HTTP API stays outside the guest. Pi,
+stdio MCP, and a local session directory share the guest. How that
+fits together is in [Concepts](concepts.md).
 
 [GEKI](https://geki.ai) also runs a managed ApiPi on European
 infrastructure.
@@ -36,7 +38,8 @@ A single process stores data in SQLite at `.apipi/apipi.db` and binds
 Pi calls. Clients send `Authorization: Bearer`; any non-empty bearer
 becomes a tenant, and that value is the model key unless you set
 `OPENAI_API_KEY_OVERWRITE`. Isolation defaults to `none`. For
-production, set `APIPI_RUN_MODE=microvm`. Several processes share
+production, run `apipi serve --api-only` and set
+`APIPI_RUN_MODE=microvm` on `apipi worker`. Several API processes share
 Postgres. Details are on [Install](install.md).
 
 ### From PyPI

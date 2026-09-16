@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - HTTP session routes run turns through an in-process execution
   adapter. Isolation backends stay behind that boundary.
+- Concepts pages for how it fits together, isolation, and workers.
+  Scale docs treat worker leases as session ownership; sticky routing
+  is for combined serve and `self_hosted` sockets.
 
 ### Added
 

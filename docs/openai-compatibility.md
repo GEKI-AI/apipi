@@ -124,7 +124,7 @@ yours.
 | Computer / files | Cloud sandbox, about an hour idle | Hosted directory until sandbox TTL (default 1 hour), then a fresh `/workspace`. `none` has no files. `self_hosted` files stay on the runner. |
 | Idle Pi | Their sandbox runtime | `none` and `self_hosted`: `APIPI_IDLE_TTL` (default 15 minutes) stops Pi. Hosted computers use sandbox TTL. The session row stays. |
 | Artifacts | `/workspace/outputs` published on turn complete | `artifacts/` and `outputs/` copied to the host store on turn complete. Immutable. Downloadable after the workspace expires. |
-| Follow-up affinity | OpenAI's fleet | One `apipi serve` owns live Pi. Several nodes need sticky routing. See [multiple nodes](scale.md). |
+| Follow-up affinity | OpenAI's fleet | API-only plus workers: any API replica. Combined `apipi serve`: sticky to the node that holds Pi. See [multiple nodes](scale.md). |
 
 ## Errors
 
