@@ -245,18 +245,31 @@ vcpus = 1
 
 ### Networking
 
-MicroVM TAP egress is allowlisted and capped at 50 Mbit by default. The
-guest may reach the model host, this session's HTTP MCP hosts, extra
-`egress_hosts`, and DNS. Unlisted TCP is rejected. The gateway's HTTP
-MCP probe stays on the host; Pi still dials those URLs from the guest,
-so those hosts are added to the TAP allowlist when the session starts.
-Turn the allowlist off only in a lab.
+MicroVM TAP egress is open to the public internet by default and
+capped at 50 Mbit with `tc`. Guest localhost (loopback inside the
+guest) works. The model host from `OPENAI_BASE_URL` is always
+reachable, including when you turn the optional destination allowlist
+on. The guest cannot use **host** loopback, so it cannot open Postgres
+on the worker's `localhost`.
+
+To lock destinations, set `egress_allowlist = true`. Then the guest
+may reach only the model host, this session's HTTP MCP hosts, extra
+`egress_hosts`, package registries when `environment.packages` is set,
+and DNS. Unlisted TCP is rejected.
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
-| `APIPI_MICROVM_EGRESS_ALLOWLIST` | `[sandbox.network].egress_allowlist` | on | Fail-closed TAP allowlist when the backend is `microvm`. |
-| `APIPI_MICROVM_EGRESS_HOSTS` | `[sandbox.network].egress_hosts` | empty | Extra hostnames the guest may reach, comma-separated or a TOML array. |
-| `APIPI_MICROVM_EGRESS_MBIT` | `[sandbox.network].egress_mbit` | `50` | `tc` rate on each guest TAP, both directions. |
+| `APIPI_MICROVM_EGRESS_ALLOWLIST` | `[sandbox.network].egress_allowlist` | off | Optional fail-closed TAP allowlist when the backend is `microvm`. |
+| `APIPI_MICROVM_EGRESS_HOSTS` | `[sandbox.network].egress_hosts` | empty | Extra hostnames when the allowlist is on, comma-separated or a TOML array. |
+| `APIPI_MICROVM_EGRESS_MBIT` | `[sandbox.network].egress_mbit` | `50` | `tc` rate on each guest TAP, both directions. Always on. |
+
+```toml
+[sandbox.network]
+egress_allowlist = false
+egress_mbit = 50
+```
+
+Lock down to named hosts (model host is still included):
 
 ```toml
 [sandbox.network]
@@ -326,7 +339,7 @@ mem_mib = 512
 vcpus = 1
 
 [sandbox.network]
-egress_allowlist = true
+egress_allowlist = false
 egress_mbit = 50
 
 [sandbox.ttl]

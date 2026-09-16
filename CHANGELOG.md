@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Concepts pages for how it fits together, isolation, and workers.
   Scale docs treat worker leases as session ownership; sticky routing
   is for combined serve and `self_hosted` sockets.
+- MicroVM TAP egress is public internet by default. Guest localhost
+  works. The model host is always reachable. Destination allowlist is
+  optional. `tc` rate limits stay.
 
 ### Added
 

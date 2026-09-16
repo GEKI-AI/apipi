@@ -457,7 +457,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("APIPI_MICROVM_VCPUS", "microvm_vcpus"),
     )
     microvm_egress_allowlist: bool = Field(
-        default=True,
+        default=False,
         validation_alias=AliasChoices(
             "APIPI_MICROVM_EGRESS_ALLOWLIST", "microvm_egress_allowlist"
         ),

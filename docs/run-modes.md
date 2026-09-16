@@ -177,17 +177,17 @@ Firecracker attaches a virtio-rng device, and the workspace includes
 host random that guest init credits into `/dev/urandom`. Without that,
 Linux 4.14 `getrandom()` blocks and the turn stays in progress.
 
-RPC is JSON lines over vsock. Egress uses a TAP device and NAT. There
-is no host loopback to Postgres. By default that TAP is fail-closed:
-the guest may reach the model host from `OPENAI_BASE_URL`, HTTP MCP
-hosts for that session, extra hosts in `APIPI_MICROVM_EGRESS_HOSTS`,
-package registries when `environment.packages` is set (PyPI, npm,
-Alpine), and DNS (`1.1.1.1` and `8.8.8.8`). Other TCP is rejected. The gateway
-connects HTTP MCP from the host first; Pi still dials the same URLs
-from the guest, so those hosts must be allowed. Set
-`APIPI_MICROVM_EGRESS_ALLOWLIST=off` only in a lab. Each TAP is also
-rate-limited with `tc` (`APIPI_MICROVM_EGRESS_MBIT`, default 50). See
-[config](config.md).
+RPC is JSON lines over vsock. Egress uses a TAP device and NAT. Guest
+localhost works. There is no host loopback to Postgres. By default the
+guest may use the public internet. The model host from
+`OPENAI_BASE_URL` is always reachable. Each TAP is rate-limited with
+`tc` (`APIPI_MICROVM_EGRESS_MBIT`, default 50).
+
+To lock destinations, set `APIPI_MICROVM_EGRESS_ALLOWLIST=on`. Then the
+guest may reach only the model host, HTTP MCP hosts for that session,
+extra hosts in `APIPI_MICROVM_EGRESS_HOSTS`, package registries when
+`environment.packages` is set (PyPI, npm, Alpine), and DNS (`1.1.1.1`
+and `8.8.8.8`). Other TCP is rejected. See [config](config.md).
 
 This is the mode that protects the host from a hostile session. Guest
 RAM is the real cost (`APIPI_MICROVM_MEM_MIB`, default 512). Chromium
@@ -197,7 +197,7 @@ can use its own sandbox inside the guest.
 
 `apipi microvm shell` boots the same Firecracker guest that agent
 sessions use: same kernel, rootfs flavor, jailer, TAP, and egress
-allowlist. It attaches your terminal to the serial console. It does
+policy. It attaches your terminal to the serial console. It does
 not bind HTTP and does not create a tenant session. Use it to inspect
 the image, run `pi` on the CLI, and debug networking.
 
@@ -229,9 +229,9 @@ The guest cwd is `/workspace`. Pi is on `PATH`. Type `exit` or press
 Ctrl-C to stop the VM. TAP devices, jailer chroot, and temp dirs are
 removed the same way a session kill does.
 
-This is an operator and lab tool. The TAP egress allowlist still
-applies. Leave the allowlist on unless this lab already turns it off.
-Agent spawn is unchanged.
+This is an operator and lab tool. TAP egress matches agent sessions:
+public internet by default, optional allowlist, same `tc` rate. Agent
+spawn is unchanged.
 
 ## Custom isolation
 

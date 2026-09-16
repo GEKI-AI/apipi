@@ -54,9 +54,13 @@ host.
 ```
 
 RPC is JSON lines over vsock. The host does not pipe stdin into the
-guest process tree. The guest cannot use host loopback, so it cannot
-open Postgres on `localhost`. Model calls and HTTP MCP go through a
-TAP device and NAT.
+guest process tree. Guest localhost works (loopback inside the guest).
+The guest cannot use **host** loopback, so it cannot open Postgres on
+the worker's `localhost`. Model calls and HTTP MCP go through a TAP
+device and NAT. By default that TAP may reach the public internet. It
+is rate-limited with `tc`. An optional destination allowlist can lock
+the guest to named hosts; the model host is always included. See
+[configuration](config.md#networking).
 
 Jailer is useful when present. It is not required. ApiPi starts
 Firecracker itself. Managers such as Flintlock remain a possible later

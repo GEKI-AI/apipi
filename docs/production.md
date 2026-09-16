@@ -150,7 +150,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_MAX_REQUEST_BYTES` | HTTP body cap (`413` `payload_too_large`). |
 | `APIPI_MAX_WORKSPACE_BYTES` / `APIPI_MAX_ARTIFACT_BYTES` | Directory and published-artifact caps. |
 | `APIPI_ARTIFACT_STORE` | `local` or `s3`. Use `s3` when more than one node serves artifact bytes. |
-| `APIPI_MICROVM_EGRESS_ALLOWLIST` / `HOSTS` / `MBIT` | Guest TAP allowlist (on by default) and 50 Mbit rate. |
+| `APIPI_MICROVM_EGRESS_ALLOWLIST` / `HOSTS` / `MBIT` | Optional destination allowlist (off by default) and 50 Mbit TAP rate. |
 | `APIPI_INSTANCE_ID` | Sets `X-ApiPi-Instance` so you can confirm stickiness. |
 
 ## Tenant-aware deployments

@@ -69,8 +69,9 @@ Isolation `none` runs that script in the session directory on the host
 (`uv pip` or `python3 -m pip`, `apk` or `apt-get` if present, `npm`).
 Missing tools fail the session. Isolation `microvm` packs the same
 script into the guest and runs it after unpack, before Pi, in the same
-guest. Install hosts (PyPI, npm, Alpine) are added to that session's
-TAP allowlist when the matching package list is set.
+guest. When the optional TAP allowlist is on, install hosts (PyPI,
+npm, Alpine) are added for that session if the matching package list
+is set.
 
 A nonzero exit emits `agent.session.environment.failed` and
 `agent.session.failed`. Pi does not start. Successful prep is visible
