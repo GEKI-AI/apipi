@@ -1,6 +1,7 @@
 import asyncio
+import logging
 import uuid
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 
 from apipi.blobs import ArtifactBlobs
 from apipi.config import Settings
@@ -26,7 +27,9 @@ from apipi.runtime import (
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
-from apipi.store.repo import get_session_by_id
+from apipi.store.repo import get_session, get_session_by_id, get_worker
+
+log = logging.getLogger("apipi.worker")
 
 
 class Execution(Protocol):
@@ -394,12 +397,7 @@ class RemoteExecution:
                 ),
             )
         if sent is None:
-            raise ApiError(
-                "invalid_request",
-                "Too many live sessions",
-                code="capacity",
-                status_code=429,
-            )
+            await self._raise_no_worker(tenant_id, session_id)
         await self._wait(tenant_id, session_id)
 
     async def continue_turn(
@@ -441,13 +439,46 @@ class RemoteExecution:
             ),
         )
         if sent is None:
+            await self._raise_no_worker(tenant_id, session_id)
+        await self._wait(tenant_id, session_id)
+
+    async def _raise_no_worker(
+        self, tenant_id: uuid.UUID, session_id: uuid.UUID
+    ) -> NoReturn:
+        store = self.store
+        assert store is not None
+        instance: str | None = None
+        worker_id = None
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            if row is not None and row.worker_id is not None:
+                worker_id = row.worker_id
+                worker = await get_worker(db, row.worker_id)
+                if worker is not None:
+                    instance = worker.api_instance_id
+        missing = worker_id is not None and self.workers.get(worker_id) is None
+        if missing:
+            where = instance if instance else "another API process"
+            log.warning(
+                "worker socket missing",
+                extra={
+                    "session_id": str(session_id),
+                    "worker_id": str(worker_id),
+                    "api_instance_id": instance,
+                },
+            )
             raise ApiError(
                 "invalid_request",
-                "Too many live sessions",
+                f"Worker socket is on {where}",
                 code="capacity",
                 status_code=429,
             )
-        await self._wait(tenant_id, session_id)
+        raise ApiError(
+            "invalid_request",
+            "Too many live sessions",
+            code="capacity",
+            status_code=429,
+        )
 
     async def cancel(self, session_id: uuid.UUID, *, status: str) -> None:
         abort = request_cancel(self.hub, session_id, status=status)

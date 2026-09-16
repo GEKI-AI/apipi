@@ -8,10 +8,12 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -78,6 +80,25 @@ class SessionRow(Base):
             "status IN ('idle', 'in_progress', 'requires_action', 'failed')",
             name="sessions_status_check",
         ),
+        Index(
+            "ix_sessions_lease_until",
+            "lease_until",
+            postgresql_where=text("lease_id IS NOT NULL"),
+            sqlite_where=text("lease_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_sessions_worker_id",
+            "worker_id",
+            postgresql_where=text("worker_id IS NOT NULL"),
+            sqlite_where=text("worker_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_sessions_lease_id",
+            "lease_id",
+            unique=True,
+            postgresql_where=text("lease_id IS NOT NULL"),
+            sqlite_where=text("lease_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -135,6 +156,7 @@ class WorkerRow(Base):
     last_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
+    api_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class EnvironmentRow(Base):

@@ -11,7 +11,7 @@ from apipi.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import Event, utc_now
-from apipi.store.repo import get_session
+from apipi.store.repo import get_session, get_worker
 from apipi.tokens import hash_token
 
 
@@ -40,7 +40,10 @@ def _tenant(token: str) -> uuid.UUID:
 
 
 def _worker_settings(
-    settings: Settings, *, worker_lease_ttl: timedelta = timedelta(seconds=30)
+    settings: Settings,
+    *,
+    worker_lease_ttl: timedelta = timedelta(seconds=30),
+    instance_id: str | None = None,
 ) -> Settings:
     return Settings(
         database_url=settings.database_url,
@@ -48,6 +51,7 @@ def _worker_settings(
         sessions_dir=settings.sessions_dir,
         worker_token="worker-secret",
         worker_lease_ttl=worker_lease_ttl,
+        instance_id=instance_id,
     )
 
 
@@ -224,3 +228,26 @@ async def test_draining_worker_is_not_scheduled(
         assert command is not None
         await ready.close()
         await draining.close()
+
+
+async def test_worker_register_records_api_instance_id(
+    settings: Settings, store: Store
+) -> None:
+    app = create_app(
+        _worker_settings(settings, instance_id="node-a"),
+        store=store,
+        harness=FakeHarness(),
+    )
+    worker = FakeWorker(app, "worker-secret")
+    hello = await worker.connect(capacity=1)
+    assert hello["ok"] is True
+    worker_id = uuid.UUID(str(hello["worker_id"]))
+    async with store.session() as db:
+        row = await get_worker(db, worker_id)
+        assert row is not None
+        assert row.api_instance_id == "node-a"
+    await worker.close()
+    async with store.session() as db:
+        row = await get_worker(db, worker_id)
+        assert row is not None
+        assert row.api_instance_id is None

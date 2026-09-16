@@ -29,7 +29,14 @@ and every worker at the same `DATABASE_URL`. Workers set
 `APIPI_SESSIONS_DIR`. Artifact bytes can be local on the worker or S3.
 
 The balancer can use least-conn (or round robin) for `/v1`. A turn
-that cannot lease a worker returns `429` with code `capacity`.
+that cannot lease a worker returns `429` with code `capacity`. Worker
+WebSockets are local to one API process. `workers.api_instance_id`
+records that process (`APIPI_INSTANCE_ID`). Stick `/internal/worker`
+to one API, or have each worker dial the API that will send it
+commands. If a replica has the lease in Postgres but no socket, the
+turn fails with `429` `capacity` and names the instance that holds the
+socket. Session create, follow-up REST, and SSE still work on any
+replica.
 
 **Combined.** N gateway hosts, each `apipi serve` with
 `APIPI_RUN_MODE=microvm`. Sticky hash on `session_id` so follow-up

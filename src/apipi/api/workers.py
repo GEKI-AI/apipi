@@ -7,7 +7,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from apipi.runtime import EventHub
 from apipi.store.engine import Store
-from apipi.store.repo import get_session_by_lease
+from apipi.store.repo import clear_worker_api_instance, get_session_by_lease
 from apipi.worker import (
     WORKER_IN,
     WorkerHub,
@@ -112,6 +112,10 @@ async def worker_socket(websocket: WebSocket) -> None:
         pass
     finally:
         await hub.detach(conn.worker_id, conn)
+        async with store.session() as db:
+            await clear_worker_api_instance(
+                db, conn.worker_id, instance_id=hub.settings.instance_id
+            )
 
 
 def _uuid(value: object) -> uuid.UUID | None:
