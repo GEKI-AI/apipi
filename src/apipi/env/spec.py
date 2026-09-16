@@ -8,13 +8,13 @@ from apipi.env.setup import (
     inline_files_from,
     packages_from,
     session_env_from,
+    session_network_from,
     setup_commands_from,
 )
 from apipi.errors import ApiError, not_implemented
 from apipi.schemas import StrictModel
 
 _UNIMPLEMENTED = (
-    "network",
     "environment_template_id",
     "skills",
     "plugins",
@@ -31,6 +31,11 @@ class InlineFileSpec(StrictModel):
     type: Literal["inline"]
     path: str
     data: str
+
+
+class NetworkSpec(StrictModel):
+    access: Literal["enabled", "disabled", "restricted"]
+    allowed_domains: list[str] | None = None
 
 
 class SetupCommandSpec(StrictModel):
@@ -52,6 +57,7 @@ class EnvironmentSpec(StrictModel):
     sandbox_size: Literal["S", "M", "L"] | None = None
     env: dict[str, str] | None = None
     files: list[InlineFileSpec] | None = None
+    network: NetworkSpec | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -113,11 +119,28 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
         payload["env"] = spec.env
     if spec.files is not None:
         payload["files"] = [item.model_dump() for item in spec.files]
+    if spec.network is not None:
+        if env_type == "self_hosted":
+            raise ApiError(
+                "invalid_request",
+                "network needs openai_hosted",
+                code="invalid_request",
+            )
+        dumped = spec.network.model_dump(exclude_none=True)
+        try:
+            session_network_from({"network": dumped})
+        except SetupError as exc:
+            raise ApiError(
+                "invalid_request", exc.message, code="invalid_request"
+            ) from exc
+        if env_type == "openai_hosted":
+            payload["network"] = dumped
     try:
         packages_from(payload)
         setup_commands_from(payload)
         session_env_from(payload)
         inline_files_from(payload)
+        session_network_from(payload)
     except SetupError as exc:
         raise ApiError("invalid_request", exc.message, code="invalid_request") from exc
     return payload

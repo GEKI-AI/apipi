@@ -63,8 +63,11 @@ host broker on the TAP gateway address. The broker forwards to the
 real model host and MCP servers. By default the TAP may also reach
 the public internet. It
 is rate-limited with `tc`. An optional destination allowlist can lock
-the guest to named hosts; the model host is always included. See
-[configuration](config.md#networking).
+the guest to named hosts; the model host is always included. Session
+`environment.network` can disable or restrict that TAP further. It
+cannot open hosts the process-wide allowlist forbids. See
+[configuration](config.md#networking) and
+[environments](environments.md).
 
 Jailer is useful when present. It is not required. ApiPi starts
 Firecracker itself. Managers such as Flintlock remain a possible later
@@ -83,7 +86,7 @@ Scratch files do not survive sandbox stop. After
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour) with no activity, Pi
 stops and the directory is deleted. The session row, the event log, and
 published artifacts stay. The next turn creates an empty `/workspace`
-and re-applies skills, packages, and setup commands.
+and re-applies skills, packages, setup commands, and network policy.
 
 Ask the agent to write under `outputs/` if you need the file after
 that. That folder is harvested onto the host artifact store when a

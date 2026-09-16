@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import re
 import shlex
@@ -20,6 +21,7 @@ SETUP_SCRIPT = ".apipi/setup.sh"
 SETUP_DONE = ".apipi/setup.done"
 EGRESS_HOSTS_FILE = ".apipi/egress-hosts"
 USER_ENV_FILE = ".apipi/user.env"
+NETWORK_FILE = ".apipi/network"
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _RESERVED_ENV = frozenset(
@@ -44,7 +46,12 @@ NPM_HOSTS = ("registry.npmjs.org", "registry.npmjs.com")
 ALPINE_HOSTS = ("dl-cdn.alpinelinux.org",)
 
 _PKG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+=~:-]*$")
+_HOSTNAME = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+)
 _WORKSPACE_PREFIXES = ("/workspace", "/tmp/workspace")
+_MAX_NETWORK_HOSTS = 100
 
 
 class SetupError(Exception):
@@ -67,6 +74,18 @@ class Packages:
 class SetupCommand:
     command: str
     cwd: str | None = None
+
+
+@dataclass(frozen=True)
+class NetworkPolicy:
+    access: str
+    allowed_domains: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TapPolicy:
+    allowlist: bool
+    hosts: tuple[str, ...] = ()
 
 
 def _names(raw: object) -> tuple[str, ...]:
@@ -173,6 +192,109 @@ def inline_files_from(environment: dict[str, Any]) -> list[tuple[str, bytes]]:
             raise SetupError("files data must be base64") from exc
         files.append((path.strip(), decoded))
     return files
+
+
+def session_network_from(environment: dict[str, Any]) -> NetworkPolicy | None:
+    raw = environment.get("network")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise SetupError("network must be an object")
+    extra = set(raw) - {"access", "allowed_domains"}
+    if extra:
+        raise SetupError("unknown network field")
+    access = raw.get("access")
+    if access not in {"enabled", "disabled", "restricted"}:
+        raise SetupError("network access must be enabled, disabled, or restricted")
+    domains_raw = raw.get("allowed_domains")
+    if access != "restricted":
+        if domains_raw is not None:
+            raise SetupError("allowed_domains is only valid with restricted")
+        return NetworkPolicy(access=access)
+    if not isinstance(domains_raw, list) or not domains_raw:
+        raise SetupError("restricted network needs allowed_domains")
+    if len(domains_raw) > _MAX_NETWORK_HOSTS:
+        raise SetupError("allowed_domains is at most 100")
+    domains: list[str] = []
+    seen: set[str] = set()
+    for item in domains_raw:
+        if not isinstance(item, str) or not item.strip():
+            raise SetupError("allowed_domains must be hostnames")
+        host = item.strip()
+        if len(host) > 253 or _HOSTNAME.fullmatch(host) is None:
+            raise SetupError(f"invalid network host: {host}")
+        key = host.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        domains.append(host)
+    return NetworkPolicy(access="restricted", allowed_domains=tuple(domains))
+
+
+def tap_policy_from(
+    policy: NetworkPolicy | None,
+    *,
+    gateway_allowlist: bool,
+    gateway_hosts: tuple[str, ...] = (),
+    extra_hosts: tuple[str, ...] = (),
+) -> TapPolicy:
+    if policy is None or policy.access == "enabled":
+        if not gateway_allowlist:
+            return TapPolicy(allowlist=False)
+        return TapPolicy(
+            allowlist=True, hosts=_unique_hosts((*gateway_hosts, *extra_hosts))
+        )
+    if policy.access == "disabled":
+        return TapPolicy(allowlist=True)
+    if gateway_allowlist:
+        floor = {host.lower() for host in (*gateway_hosts, *extra_hosts)}
+        for host in policy.allowed_domains:
+            if host.lower() not in floor:
+                raise SetupError(f"network host {host} is not allowed")
+    return TapPolicy(
+        allowlist=True,
+        hosts=_unique_hosts((*policy.allowed_domains, *extra_hosts)),
+    )
+
+
+def _unique_hosts(hosts: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for host in hosts:
+        key = host.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(host)
+    return tuple(out)
+
+
+def write_network_policy(workspace: Path, policy: NetworkPolicy | None) -> None:
+    path = workspace / NETWORK_FILE
+    if policy is None:
+        if path.exists():
+            path.unlink()
+        return
+    payload: dict[str, Any] = {"access": policy.access}
+    if policy.allowed_domains:
+        payload["allowed_domains"] = list(policy.allowed_domains)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload) + "\n")
+
+
+def workspace_network_policy(cwd: str | None) -> NetworkPolicy | None:
+    if not cwd:
+        return None
+    path = Path(cwd) / NETWORK_FILE
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SetupError("network policy is invalid") from exc
+    if not isinstance(raw, dict):
+        raise SetupError("network policy is invalid")
+    return session_network_from({"network": raw})
 
 
 def needs_setup(environment: dict[str, Any]) -> bool:
@@ -359,13 +481,21 @@ def prepare_workspace(
     files = inline_files_from(environment)
     packages = packages_from(environment)
     commands = setup_commands_from(environment)
-    if packages.empty() and not commands and not values and not files:
+    policy = session_network_from(environment)
+    if (
+        packages.empty()
+        and not commands
+        and not values
+        and not files
+        and policy is None
+    ):
         return
     workspace.mkdir(parents=True, exist_ok=True)
     apipi = workspace / ".apipi"
     apipi.mkdir(parents=True, exist_ok=True)
     write_inline_files(workspace, files, max_bytes=max_bytes)
     write_user_env(workspace, values)
+    write_network_policy(workspace, policy)
     if packages.empty() and not commands:
         return
     script = render_setup_script(workspace, packages, commands)
@@ -415,6 +545,8 @@ def provision_hosted(
     *,
     run_mode: str,
     max_bytes: int | None = None,
+    gateway_allowlist: bool = False,
+    gateway_hosts: tuple[str, ...] = (),
 ) -> None:
     if environment.get("type") != "openai_hosted":
         return
@@ -423,5 +555,15 @@ def provision_hosted(
         return
     workspace = Path(directory)
     prepare_workspace(workspace, environment, max_bytes=max_bytes)
+    policy = session_network_from(environment)
+    if policy is not None and policy.access in {"disabled", "restricted"}:
+        if run_mode == "none":
+            raise SetupError("network needs microvm isolation")
+        tap_policy_from(
+            policy,
+            gateway_allowlist=gateway_allowlist,
+            gateway_hosts=gateway_hosts,
+            extra_hosts=package_egress_hosts(environment),
+        )
     if run_mode == "none":
         run_host_setup(workspace, extra_env=session_env_from(environment))

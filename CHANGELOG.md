@@ -48,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hosted sessions accept `environment.env` and inline `environment.files`
   (`type: "inline"`, base64 under `/workspace`). Reserved names and
   Files API ids are rejected. Values persist for sandbox TTL rebuild.
+- Hosted sessions accept `environment.network` (`enabled`, `disabled`,
+  `restricted` with exact `allowed_domains`). Session policy cannot
+  widen `[sandbox.network]`. Isolation `none` cannot enforce
+  `disabled` or `restricted`.
 - Session sandbox sizes `S` / `M` / `L`. `environment.sandbox_size` is
   an ApiPi extension. Stock SDKs can set `metadata["apipi.sandbox_size"]`.
   `L` boots the browser rootfs. Live guests follow the resolved size,

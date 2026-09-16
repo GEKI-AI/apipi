@@ -295,7 +295,11 @@ on the worker's `localhost`.
 To lock destinations, set `egress_allowlist = true`. Then the guest
 may reach only the model host, this session's HTTP MCP hosts, extra
 `egress_hosts`, package registries when `environment.packages` is set,
-and DNS. Unlisted TCP is rejected.
+and DNS. Unlisted TCP is rejected. Session `environment.network` can
+still disable TAP egress or restrict it to named hosts. A session
+cannot add a host that this allowlist forbids. If the allowlist is
+off, a session may still set `disabled` or `restricted`. Isolation
+`none` cannot enforce that field.
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
