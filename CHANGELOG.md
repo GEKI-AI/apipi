@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `apipi serve --api-only` skips the KVM probe. `apipi worker`
   connects outbound to the API. `check` and `install` take
   `--role api|worker|all`.
+- `apipi worker` probes the sandbox before it connects. Firecracker,
+  jailer, and TAP stay on the worker (or on combined `apipi serve` as
+  an embedded worker). API-only hosts do not create TAP devices.
 
 ### Added
 

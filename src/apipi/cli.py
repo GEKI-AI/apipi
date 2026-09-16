@@ -81,6 +81,28 @@ def prepare_serve(
     return resolved
 
 
+def prepare_worker(
+    settings: Settings | None = None, *, config_path: str | None = None
+) -> Settings:
+    resolved = (
+        settings if settings is not None else load_settings(config_path=config_path)
+    )
+    if resolved.worker_token is None or resolved.worker_token == "":
+        raise ConfigError("APIPI_WORKER_TOKEN is required")
+    require_run_mode(resolved.run_mode, resolved)
+    probe_run_mode(resolved)
+    reject_prompt_body_logging()
+    configure_logging(level=resolved.log_level, format=resolved.log_format)
+    backend = load_isolation(resolved.run_mode)
+    if backend.warn_not_production:
+        if backend.name == "none":
+            log.warning(NONE_MODE_WARNING)
+        else:
+            log.warning(f"APIPI_RUN_MODE={backend.name} is not suited for production")
+    log.info("worker sandbox", extra={"run_mode": backend.name})
+    return resolved
+
+
 def microvm_shell(
     *,
     config_path: str | None,
@@ -210,7 +232,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Control plane only: no KVM probe and no local Firecracker",
     )
-    worker_parser = sub.add_parser("worker", help="Start a sandbox worker")
+    worker_parser = sub.add_parser(
+        "worker", help="Start a sandbox worker (Firecracker/KVM lives here)"
+    )
     worker_parser.add_argument("--config", default=None, help="TOML config file")
     worker_parser.add_argument(
         "--url",
@@ -276,8 +300,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "worker":
             from apipi.worker import run_worker
 
-            settings = load_settings(config_path=args.config)
-            configure_logging(level=settings.log_level, format=settings.log_format)
+            settings = prepare_worker(config_path=args.config)
             asyncio.run(run_worker(settings, url=args.url))
             return 0
         if args.command == "microvm" and args.microvm_command == "shell":

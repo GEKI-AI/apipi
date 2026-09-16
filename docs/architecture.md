@@ -40,8 +40,10 @@ machine without KVM can start; it logs a warning.
 `microvm` starts Pi (and stdio MCP) in a Firecracker guest when
 `/dev/kvm`, `firecracker`, `jailer`, the kernel and rootfs images, and
 host net tools (`ip`, `iptables`, `tc`) are present, and after a throwaway
-guest has booted. If any of those are missing or the probe fails, the
-process exits. It does not fall back to `none`.
+guest has booted. That stack belongs on `apipi worker`, or on combined
+`apipi serve` as an embedded worker. `apipi serve --api-only` does not
+probe it. If the worker (or embedded serve) cannot start the guest, it
+exits. It does not fall back to `none`.
 
 ## Gateway
 
@@ -63,11 +65,12 @@ Auth is a callback on the bearer. Default hashes the key. We do not
 store secrets. See [auth](auth.md).
 
 HTTP routes do not spawn Pi or a microVM themselves. They call a
-session execution service (`apipi.execution`). The in-process adapter
-runs today's isolation backends (`none`, `microvm`, or a custom class)
-inside the gateway process: spawn, probe, turns, cancel, artifact
-harvest, and idle TTL. A later remote worker can sit behind the same
-contract without changing the public API.
+session execution service (`apipi.execution`). Combined `apipi serve`
+uses the in-process adapter (embedded worker). Isolation backends
+(`none`, `microvm`, or a custom class) spawn, probe, turn, cancel,
+harvest, and idle TTL. `apipi worker` probes and owns Firecracker on
+the sandbox host. A remote adapter can sit behind the same contract
+without changing the public API.
 
 Trusted sandbox workers connect outbound to `/internal/worker`. That
 protocol is not `self_hosted`. See [sandbox workers](workers.md).

@@ -6,9 +6,16 @@ computer that a tenant attaches with a per-session key on
 `/v1/environments/{id}`. Workers are operator hosts. They use a
 different path, a different secret, and different messages.
 
-This page is the control protocol. Remote turns over that protocol
-land in a later change. Local `none` and in-process `microvm` still
-run inside `apipi serve`.
+Firecracker, jailer, TAP, and the guest live on the **worker**.
+`apipi serve --api-only` never probes `/dev/kvm` and never creates a
+TAP device. Combined `apipi serve` (no `--api-only`) is the
+single-host embedded worker: the same in-process adapter as today,
+for a laptop or one box. Production is API-only plus one or more
+`apipi worker` hosts.
+
+`apipi worker` requires `APIPI_WORKER_TOKEN` and probes the configured
+run mode before it connects. If `APIPI_RUN_MODE=microvm` cannot start,
+the worker exits. It does not fall back to `none`.
 
 Start everything through the ApiPi CLI:
 

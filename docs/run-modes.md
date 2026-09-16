@@ -261,24 +261,27 @@ module on `PYTHONPATH`.
 
 ## Production
 
-Run `apipi serve` under systemd on the host with
-`APIPI_RUN_MODE=microvm`. Keep secrets in an environment file that the
-unit loads. One process per host; run a single uvicorn worker. Host
-sizing, overprovision, and drain are in [production](production.md).
-Several hosts need sticky load balancing. See [multiple nodes](scale.md).
+Production isolation is Firecracker on a **worker host**. The API
+process should be `apipi serve --api-only` and does not need KVM.
+Combined `apipi serve` (no `--api-only`) is the single-host embedded
+worker: it still probes the run mode and can create TAP devices on
+that box. Host sizing, overprovision, and drain are in
+[production](production.md). Several API hosts need sticky routing
+only while Pi is still in-process; workers remove that for live Pi.
+See [multiple nodes](scale.md) and [sandbox workers](workers.md).
 
-A typical microvm unit:
+A typical worker unit (KVM and TAP stay here):
 
 ```
 [Unit]
-Description=ApiPi gateway
-After=network.target postgresql.service
+Description=ApiPi worker
+After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/apipi
 EnvironmentFile=/etc/apipi.env
-ExecStart=/opt/apipi/.venv/bin/apipi serve --config /etc/apipi.toml
+ExecStart=/opt/apipi/.venv/bin/apipi worker --config /etc/apipi.toml
 Restart=on-failure
 DeviceAllow=/dev/kvm rw
 DeviceAllow=/dev/net/tun rw
@@ -289,8 +292,10 @@ WantedBy=multi-user.target
 ```
 
 Many operators run that unit as root so jailer can chroot Firecracker
-and the process can create TAP devices. Set `APIPI_MICROVM_KERNEL` and
-`APIPI_MICROVM_ROOTFS` in the environment file.
+and the process can create TAP devices. Set `APIPI_MICROVM_KERNEL`,
+`APIPI_MICROVM_ROOTFS`, `APIPI_WORKER_TOKEN`, and `APIPI_API_URL` in
+the environment file. The API unit is `apipi serve --api-only` with
+no DeviceAllow for KVM.
 
 ## Docker
 
