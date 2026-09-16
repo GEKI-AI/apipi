@@ -18,23 +18,27 @@ def test_read_workspace_artifacts(tmp_path: Path) -> None:
     (tmp_path / "artifacts").mkdir()
     (tmp_path / "artifacts" / "out.txt").write_text("hi", encoding="utf-8")
     (tmp_path / "outputs").mkdir()
-    (tmp_path / "outputs" / "out.bin").write_bytes(b"xyz")
+    nested = tmp_path / "outputs" / "dir"
+    nested.mkdir()
+    (nested / "out.bin").write_bytes(b"xyz")
     (tmp_path / "scratch.txt").write_text("no", encoding="utf-8")
     files = dict(read_workspace_artifacts(tmp_path))
-    assert files == {"artifacts/out.txt": b"hi", "outputs/out.bin": b"xyz"}
+    assert files == {"outputs/dir/out.bin": b"xyz"}
 
 
 def test_unpack_artifact_tar_roundtrip(tmp_path: Path) -> None:
     (tmp_path / "artifacts").mkdir()
-    nested = tmp_path / "artifacts" / "dir"
+    nested_skip = tmp_path / "artifacts" / "dir"
+    nested_skip.mkdir()
+    (nested_skip / "a.bin").write_bytes(b"abc")
+    (tmp_path / "outputs").mkdir()
+    nested = tmp_path / "outputs" / "dir"
     nested.mkdir()
     (nested / "a.bin").write_bytes(b"abc")
-    (tmp_path / "outputs").mkdir()
     (tmp_path / "outputs" / "out.txt").write_text("z", encoding="utf-8")
     data = artifacts_tar_bytes(tmp_path)
     files = dict(unpack_artifact_tar(data))
-    assert files["artifacts/dir/a.bin"] == b"abc"
-    assert files["outputs/out.txt"] == b"z"
+    assert files == {"outputs/dir/a.bin": b"abc", "outputs/out.txt": b"z"}
 
 
 def test_unpack_empty_tar() -> None:

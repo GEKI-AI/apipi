@@ -296,7 +296,7 @@ async def test_self_hosted_tool_use_then_harvest(
             "name": "write",
             "call_id": "w1",
             "arguments": {
-                "path": "artifacts/note.txt",
+                "path": "outputs/note.txt",
                 "content": "hello",
             },
         }
@@ -318,7 +318,7 @@ async def test_self_hosted_tool_use_then_harvest(
                 json={"type": "agent.session.input.message", "content": "write out"},
             )
             assert turned.status_code == 200
-            assert runner.files["artifacts/note.txt"] == "hello"
+            assert runner.files["outputs/note.txt"] == "hello"
             from apipi.pi.artifacts import harvest_session
 
             async with store.session() as db:
@@ -361,7 +361,8 @@ async def test_self_hosted_artifact_content_via_runner(
         )
         assert listed.json() == {"data": []}
         async with connect_runner(app, env_id, body["key"]) as runner:
-            runner.files["artifacts/note.txt"] = "hello"
+            runner.files["artifacts/note.txt"] = "skip"
+            runner.files["outputs/note.txt"] = "hello"
             from apipi.pi.artifacts import harvest_session
 
             async with store.session() as db:
@@ -375,7 +376,9 @@ async def test_self_hosted_artifact_content_via_runner(
         listed = await client.get(
             f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
         )
-        artifact_id = listed.json()["data"][0]["id"]
+        data = listed.json()["data"]
+        assert [item["path"] for item in data] == ["outputs/note.txt"]
+        artifact_id = data[0]["id"]
         content = await client.get(
             f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
             headers=_auth(token),

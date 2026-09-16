@@ -81,9 +81,9 @@ stops and the directory is deleted. The session row, the event log, and
 published artifacts stay. The next turn creates an empty `/workspace`
 and re-applies skills, packages, and setup commands.
 
-Ask the agent to write under `artifacts/` or `outputs/` if you need
-the file after that. Those paths are harvested onto the host artifact
-store when a turn completes.
+Ask the agent to write under `outputs/` if you need the file after
+that. That folder is harvested onto the host artifact store when a
+turn completes.
 
 ## Probe
 

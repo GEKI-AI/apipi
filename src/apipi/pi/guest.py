@@ -15,7 +15,7 @@ from pathlib import Path
 ARTIFACT_PORT = 53
 WORKSPACE_PORT = 54
 SESSION_PORT = 55
-PUBLISH_DIRS = ("artifacts", "outputs")
+PUBLISH_DIRS = ("outputs",)
 SESSION_REL = ".apipi/pi-session.jsonl"
 RNDADDENTROPY = 0x40085203
 

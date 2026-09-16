@@ -347,8 +347,8 @@ async def test_compat_artifacts(
     created = await _session(client, token, agent_id=agent_id)
     session_id = created["id"]
     directory = Path(created["environment"]["directory"])
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     from apipi.pi.artifacts import harvest_session
 
     async with store.session() as db:

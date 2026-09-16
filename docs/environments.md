@@ -34,8 +34,8 @@ gateway's working directory.
 
 In isolation `none` this is a folder on the host. In `microvm`, that
 folder is packed into a workspace drive
-at boot and unpacked onto a guest tmpfs at `/workspace`. Published
-artifacts are harvested when a turn completes. Scratch files do not
+at boot and unpacked onto a guest tmpfs at `/workspace`. Files under
+`outputs/` are harvested when a turn completes. Scratch files do not
 survive sandbox stop.
 
 Session rows live in the store. The `openai_hosted` workspace is

@@ -175,10 +175,11 @@ Item types: `message`, `function_call`, `mcp_call`,
 | `GET` | `/v1/agents/sessions/{session_id}/artifacts/{id}/content` |
 | `DELETE` | `/v1/agents/sessions/{session_id}/artifacts/{id}` |
 
-When a turn completes, files under `artifacts/` and `outputs/` on the
-computer are copied into the artifact store. Copies are immutable and
-include `turn_id`. A later turn that writes the same path publishes
-another artifact. `GET` content works as soon as the turn has
+When a turn completes, files under `outputs/` on the computer are
+copied into the artifact store. Copies are immutable and include
+`turn_id`. A later turn that writes the same path publishes another
+artifact. Rows already stored with a path under `artifacts/` stay
+readable; new publishes use `outputs/`. `GET` content works as soon as the turn has
 completed, even if Pi is still alive. Harvest on Pi stop is a safety
 net for files written after the last completed turn. `410` if nothing
 was published. `DELETE` removes the metadata and the stored bytes. The
