@@ -48,8 +48,8 @@ async def test_write_host_file_and_fetch_content(
 ) -> None:
     token = _token()
     session_id, directory = await _hosted_session(client, token)
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     await _harvest(store, settings, session_id)
     assert directory.exists()
 
@@ -60,7 +60,7 @@ async def test_write_host_file_and_fetch_content(
     data = listed.json()["data"]
     assert len(data) == 1
     assert data[0]["session_id"] == session_id
-    assert data[0]["path"] == "artifacts/note.txt"
+    assert data[0]["path"] == "outputs/note.txt"
     assert data[0]["content_type"] == "text/plain"
     artifact_id = data[0]["id"]
 
@@ -71,6 +71,23 @@ async def test_write_host_file_and_fetch_content(
     assert content.status_code == 200
     assert content.content == b"hello"
     assert content.headers["content-type"].startswith("text/plain")
+
+
+async def test_harvest_skips_workspace_artifacts_folder(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = _token()
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "artifacts").mkdir()
+    (directory / "artifacts" / "note.txt").write_text("skip", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "keep.txt").write_text("keep", encoding="utf-8")
+    await _harvest(store, settings, session_id)
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    data = listed.json()["data"]
+    assert [item["path"] for item in data] == ["outputs/keep.txt"]
 
 
 async def test_artifact_content_gone_if_never_published(
@@ -101,8 +118,8 @@ async def test_delete_artifact_removes_file_and_metadata(
 ) -> None:
     token = _token()
     session_id, directory = await _hosted_session(client, token)
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     await _harvest(store, settings, session_id)
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
@@ -152,8 +169,8 @@ async def test_cross_tenant_artifacts_are_404(
     token_a = _token("a")
     token_b = _token("b")
     session_id, directory = await _hosted_session(client, token_a)
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     await _harvest(store, settings, session_id)
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token_a)
@@ -188,15 +205,15 @@ async def test_workspace_persists_after_harvest(
     token = _token()
     session_id, directory = await _hosted_session(client, token)
     (directory / "keep.txt").write_text("stay", encoding="utf-8")
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     await _harvest(store, settings, session_id)
     assert directory.exists()
     assert (directory / "keep.txt").read_text(encoding="utf-8") == "stay"
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
     )
-    assert listed.json()["data"][0]["path"] == "artifacts/note.txt"
+    assert listed.json()["data"][0]["path"] == "outputs/note.txt"
 
 
 async def test_publish_on_turn_complete(client: AsyncClient) -> None:
@@ -217,16 +234,16 @@ async def test_publish_on_turn_complete(client: AsyncClient) -> None:
     )
     data = listed.json()["data"]
     by_path = {item["path"]: item for item in data}
-    assert set(by_path) == {"artifacts/note.txt", "outputs/out.bin"}
-    assert by_path["artifacts/note.txt"]["turn_id"] is not None
+    assert set(by_path) == {"outputs/out.bin"}
+    assert by_path["outputs/out.bin"]["turn_id"] is not None
     assert by_path["outputs/out.bin"]["content_type"] == "application/octet-stream"
     assert directory.exists()
     note = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/"
-        f"{by_path['artifacts/note.txt']['id']}/content",
+        f"{by_path['outputs/out.bin']['id']}/content",
         headers=_auth(token),
     )
-    assert note.content == b"hello"
+    assert note.content == b"xyz"
 
 
 async def test_later_turn_publishes_new_artifact_for_same_path(
@@ -234,14 +251,14 @@ async def test_later_turn_publishes_new_artifact_for_same_path(
 ) -> None:
     token = _token()
     session_id, directory = await _hosted_session(client, token)
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "note.txt").write_text("one", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("one", encoding="utf-8")
     await client.post(
         f"/v1/agents/sessions/{session_id}/events",
         headers=_auth(token),
         json={"type": "agent.session.input.message", "content": "first"},
     )
-    (directory / "artifacts" / "note.txt").write_text("two", encoding="utf-8")
+    (directory / "outputs" / "note.txt").write_text("two", encoding="utf-8")
     await client.post(
         f"/v1/agents/sessions/{session_id}/events",
         headers=_auth(token),
@@ -252,8 +269,8 @@ async def test_later_turn_publishes_new_artifact_for_same_path(
     )
     data = listed.json()["data"]
     assert [item["path"] for item in data] == [
-        "artifacts/note.txt",
-        "artifacts/note.txt",
+        "outputs/note.txt",
+        "outputs/note.txt",
     ]
     assert data[0]["id"] != data[1]["id"]
     first = await client.get(
@@ -274,8 +291,8 @@ async def test_workspace_ttl_wipes_dir_keeps_artifacts(
     token = _token()
     session_id, directory = await _hosted_session(client, token)
     (directory / "keep.txt").write_text("stay", encoding="utf-8")
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     await _harvest(store, settings, session_id)
     async with store.session() as db:
         row = await get_session_by_id(db, uuid.UUID(session_id))
@@ -304,8 +321,8 @@ async def test_delete_session_removes_workspace_and_artifacts(
     token = _token()
     session_id, directory = await _hosted_session(client, token)
     (directory / "keep.txt").write_text("stay", encoding="utf-8")
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     await _harvest(store, settings, session_id)
     deleted = await client.delete(
         f"/v1/agents/sessions/{session_id}", headers=_auth(token)
@@ -324,8 +341,8 @@ async def test_artifact_cap_rejects_publish(
 ) -> None:
     token = "disk-art"
     session_id, directory = await _hosted_session(client, token)
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "big.bin").write_bytes(b"x" * 64)
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "big.bin").write_bytes(b"x" * 64)
     limited = settings.model_copy(update={"max_artifact_bytes": 16})
     with pytest.raises(DiskLimitError) as exc:
         await _harvest(store, limited, session_id)
@@ -342,15 +359,15 @@ async def test_artifact_cap_allows_under_limit(
 ) -> None:
     token = "disk-ok"
     session_id, directory = await _hosted_session(client, token)
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     limited = settings.model_copy(update={"max_artifact_bytes": 64})
     await _harvest(store, limited, session_id)
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
     )
     assert listed.status_code == 200
-    assert listed.json()["data"][0]["path"] == "artifacts/note.txt"
+    assert listed.json()["data"][0]["path"] == "outputs/note.txt"
 
 
 async def test_workspace_cap_emits_error_and_can_still_publish(
@@ -359,8 +376,8 @@ async def test_workspace_cap_emits_error_and_can_still_publish(
     token = "disk-ws"
     session_id, directory = await _hosted_session(client, token)
     (directory / "scratch.bin").write_bytes(b"x" * 64)
-    (directory / "artifacts").mkdir()
-    (directory / "artifacts" / "note.txt").write_text("hi", encoding="utf-8")
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("hi", encoding="utf-8")
     limited = settings.model_copy(
         update={"max_workspace_bytes": 16, "max_artifact_bytes": 1024}
     )
@@ -371,4 +388,4 @@ async def test_workspace_cap_emits_error_and_can_still_publish(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
     )
     assert listed.status_code == 200
-    assert listed.json()["data"][0]["path"] == "artifacts/note.txt"
+    assert listed.json()["data"][0]["path"] == "outputs/note.txt"

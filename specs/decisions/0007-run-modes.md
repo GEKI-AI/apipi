@@ -41,8 +41,8 @@ only. Nested microvm inside a container is not the production path.
 The `openai_hosted` workspace is packed into a microvm guest at boot.
 Before the guest exits, the gateway pulls the workspace back to the
 host folder so the next pack still has those files. Files under
-`artifacts/` and `outputs/` are also published to the host artifact
-store when a turn completes.
+`outputs/` is also published to the host artifact store when a turn
+completes.
 
 A custom backend implements the isolation interface (`require`,
 `probe`, `spawn`, plus flags for probe, stdio placement, and the

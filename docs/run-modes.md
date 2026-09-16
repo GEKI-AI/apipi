@@ -141,10 +141,10 @@ store for one session. Over those caps, harvest emits
 `agent.session.error` with `workspace_too_large` or
 `artifact_too_large`. See [config](config.md).
 
-When a turn completes, the gateway copies files under `artifacts/` and
-`outputs/` on that computer into the host store. Copies are immutable.
-`GET` content works before Pi stops. Harvest on Pi stop is a safety
-net for files written after the last completed turn. After
+When a turn completes, the gateway copies files under `outputs/` on
+that computer into the host store. Copies are immutable. `GET` content
+works before Pi stops. Harvest on Pi stop is a safety net for files
+written after the last completed turn. After
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour) with no activity,
 Pi stops and the `openai_hosted` directory is deleted. A later turn
 rehydrates skills, packages, and setup commands into a fresh
@@ -152,9 +152,11 @@ rehydrates skills, packages, and setup commands into a fresh
 conversation. Published artifact bytes stay in the artifact store;
 they are not copied back into `/workspace`. Isolation `none` reads the session directory on the
 host. `microvm` unpacks onto guest `/workspace`. `self_hosted` reads
-`artifacts/` and `outputs/` from the runner if it is connected. A
-crash before publish can lose unpublished files. The gateway cannot
-delete files on a remote runner.
+`outputs/` from the runner if it is connected. A crash before publish
+can lose unpublished files. The gateway cannot delete files on a
+remote runner. Existing stores may still list rows whose path starts
+with `artifacts/`. Those remain readable. New publishes use
+`outputs/`.
 
 ## `none`
 

@@ -144,8 +144,8 @@ before that POST if you want the follow-up as SSE.
 
 Keep the session for more tasks, or delete it when you are done. The
 hosted workspace lasts until `APIPI_SANDBOX_TTL_OPENAI_HOSTED`,
-or until you delete the session. Files under `artifacts/` and
-`outputs/` are published when a turn completes. See
+or until you delete the session. Files under `outputs/` are published
+when a turn completes. See
 [Concepts](concepts.md).
 
 Replace the illustrative session id with the id you saved.

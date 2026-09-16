@@ -26,9 +26,8 @@ from apipi.store.repo import (
     list_artifacts,
 )
 
-WORKSPACE_ARTIFACTS = "artifacts"
 WORKSPACE_OUTPUTS = "outputs"
-PUBLISH_DIRS = (WORKSPACE_ARTIFACTS, WORKSPACE_OUTPUTS)
+PUBLISH_DIRS = (WORKSPACE_OUTPUTS,)
 
 
 def _content_type(path: str) -> str:
