@@ -39,6 +39,7 @@ from apipi.runtime import (
 )
 from apipi.sandbox import (
     mem_mib_for_size,
+    merge_playwright,
     require_size_rootfs,
     resolve_sandbox_size,
     sandbox_size_of,
@@ -472,7 +473,7 @@ async def create_agent_session(
                     )
                 connected = apply_vault_headers(connected, creds)
             stdio = await start_mcp_stdio_tools(
-                raw_tools,
+                merge_playwright(raw_tools, size=size, settings=settings),
                 on_host=execution.stdio_on_host,
             )
         except McpConnectError as exc:

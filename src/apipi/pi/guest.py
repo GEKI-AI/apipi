@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tarfile
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -26,20 +27,27 @@ def _start_mcp() -> None:
         return
     env = os.environ.copy()
     env.pop("DATABASE_URL", None)
-    for index, _label in enumerate(labels.split(",")):
+    for index, label in enumerate(labels.split(",")):
         prefix = f"APIPI_MCP_STDIO_{index}"
         command = env.get(f"{prefix}_COMMAND")
         if not command:
             continue
         raw_args = env.get(f"{prefix}_ARGS", "")
         args = raw_args.split("\x1f") if raw_args else []
-        subprocess.Popen(
-            [command, *args],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=env,
-        )
+        name = label.strip() or command
+        try:
+            process = subprocess.Popen(
+                [command, *args],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+            )
+        except OSError as exc:
+            raise RuntimeError(f"mcp {name} failed") from exc
+        time.sleep(0.05)
+        if process.poll() is not None:
+            raise RuntimeError(f"mcp {name} failed")
 
 
 def _pi_args() -> list[str]:

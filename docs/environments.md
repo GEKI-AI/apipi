@@ -78,12 +78,23 @@ not resize or reimage an already chosen size.
 | --- | --- | --- | --- |
 | `S` | `[sandbox.resources].mem_mib` (512) | `default` | Pi and light tools |
 | `M` | `APIPI_SANDBOX_M_MEM_MIB` (1024) | `default` | Heavier non-browser work |
-| `L` | `APIPI_SANDBOX_L_MEM_MIB` (2048) | `browser` | Chromium in the guest. Install the browser rootfs. Browser MCP tools are a separate step. |
+| `L` | `APIPI_SANDBOX_L_MEM_MIB` (2048) | `browser` | Chromium in the guest plus Playwright MCP tools (unless you already attached them). Install the browser rootfs. |
 
 Isolation `none` accepts the field and does not apply RAM or rootfs.
 Isolation `microvm` applies both, including when `environment.type` is
 `none` (Pi still runs in a guest). Each live lease consumes that
 size's RAM against worker `memory_mb` and still counts as one session.
+
+On `microvm`, size `L` injects a Playwright stdio MCP server
+(`npx @playwright/mcp`, headless, isolated, system Chromium at
+`/usr/bin/chromium-browser`) so the browser just works without
+`examples/playwright.yaml`. If the agent already has a Playwright MCP
+tool (`server_label` `playwright` or the same package), that tool is
+kept and nothing is duplicated. Set `[sandbox.browser].auto_playwright
+= false` to keep L RAM and rootfs but attach MCP yourself. A Playwright
+process that exits immediately fails the guest instead of booting L
+without browser tools. The platform prompt mentions Chromium only when
+those tools are attached.
 
 ### Packages and setup commands
 

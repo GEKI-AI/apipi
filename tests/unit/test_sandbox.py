@@ -1,7 +1,11 @@
 from apipi.config import Settings
 from apipi.errors import ApiError
 from apipi.sandbox import (
+    PLAYWRIGHT_LABEL,
+    has_playwright,
     image_for_size,
+    merge_playwright,
+    playwright_attached,
     resolve_sandbox_size,
     sandbox_size_of,
 )
@@ -75,3 +79,65 @@ def test_image_and_mem() -> None:
     assert settings.sandbox_mem_mib("L") == 2048
     assert sandbox_size_of({}) == "S"
     assert sandbox_size_of({"sandbox_size": "L"}) == "L"
+
+
+def _microvm() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="microvm",
+    )
+
+
+def test_merge_playwright_on_l_microvm() -> None:
+    tools = merge_playwright([], size="L", settings=_microvm())
+    assert len(tools) == 1
+    assert tools[0]["server_label"] == PLAYWRIGHT_LABEL
+    assert tools[0]["command"] == "npx"
+    assert "@playwright/mcp@latest" in tools[0]["args"]
+    assert "--executable-path=/usr/bin/chromium-browser" in tools[0]["args"]
+    assert has_playwright(tools)
+    assert playwright_attached(tools)
+
+
+def test_merge_playwright_skips_none_and_small() -> None:
+    none = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+    )
+    assert merge_playwright([], size="L", settings=none) == []
+    assert merge_playwright([], size="S", settings=_microvm()) == []
+    assert merge_playwright([], size="M", settings=_microvm()) == []
+
+
+def test_merge_playwright_respects_auto_off() -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="microvm",
+        sandbox_auto_playwright=False,
+    )
+    assert merge_playwright([], size="L", settings=settings) == []
+
+
+def test_merge_playwright_does_not_duplicate() -> None:
+    existing = [
+        {
+            "type": "mcp",
+            "server_label": "playwright",
+            "command": "npx",
+            "args": ["-y", "@playwright/mcp@1.2.3"],
+        }
+    ]
+    merged = merge_playwright(existing, size="L", settings=_microvm())
+    assert merged == existing
+
+
+def test_merge_playwright_detects_package_without_label() -> None:
+    existing = [
+        {
+            "type": "mcp",
+            "server_label": "browser",
+            "command": "npx",
+            "args": ["-y", "@playwright/mcp@latest", "--headless"],
+        }
+    ]
+    assert merge_playwright(existing, size="L", settings=_microvm()) == existing

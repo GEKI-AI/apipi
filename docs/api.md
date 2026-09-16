@@ -285,9 +285,8 @@ later PATCH metadata. Isolation `none` accepts the field and ignores
 RAM and rootfs. Isolation `microvm` uses it for guest RAM and image:
 `S`/`M` boot the default rootfs, `L` boots the browser rootfs. `L`
 without that rootfs fails clearly (combined create returns `400`;
-API-only fails when the worker spawns). See
-[environments](environments.md).
-
+API-only fails when the worker spawns). On `microvm`, `L` also injects
+Playwright MCP unless the agent already has it or auto-inject is off.
 See [environments](environments.md).
 
 ## Compatibility

@@ -83,6 +83,10 @@ _SANDBOX_TTL_TOML = {
     "openai_hosted": "workspace_ttl",
     "self_hosted": "sandbox_ttl_self_hosted",
 }
+_SANDBOX_BROWSER_TOML = {
+    "auto_playwright": "sandbox_auto_playwright",
+    "playwright_mcp": "sandbox_playwright_mcp",
+}
 _LEGACY_FLAT_TOML = {
     "run_mode": "[sandbox].backend",
     "pi_command": "[pi].command",
@@ -506,6 +510,19 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("APIPI_SANDBOX_L_MEM_MIB", "sandbox_l_mem_mib"),
     )
+    sandbox_auto_playwright: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "APIPI_SANDBOX_AUTO_PLAYWRIGHT", "sandbox_auto_playwright"
+        ),
+    )
+    sandbox_playwright_mcp: str = Field(
+        default="@playwright/mcp@latest",
+        min_length=1,
+        validation_alias=AliasChoices(
+            "APIPI_SANDBOX_PLAYWRIGHT_MCP", "sandbox_playwright_mcp"
+        ),
+    )
     microvm_vcpus: int = Field(
         default=1,
         ge=1,
@@ -751,6 +768,14 @@ def _flatten_sandbox(table: dict[str, Any]) -> dict[str, Any]:
                     "sandbox.ttl",
                 )
             )
+        elif key == "browser":
+            out.update(
+                _map_table(
+                    _require_table(value, "[sandbox.browser]"),
+                    _SANDBOX_BROWSER_TOML,
+                    "sandbox.browser",
+                )
+            )
         elif key in _SANDBOX_TOML:
             if isinstance(value, dict):
                 raise ConfigError(f"unknown setting: sandbox.{key}")
@@ -896,6 +921,10 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_SANDBOX_M_MEM_MIB must be at least 1"
         if "sandbox_l_mem_mib" in loc or "APIPI_SANDBOX_L_MEM_MIB" in loc:
             return "APIPI_SANDBOX_L_MEM_MIB must be at least 1"
+        if "sandbox_auto_playwright" in loc or "APIPI_SANDBOX_AUTO_PLAYWRIGHT" in loc:
+            return "APIPI_SANDBOX_AUTO_PLAYWRIGHT must be on or off"
+        if "sandbox_playwright_mcp" in loc or "APIPI_SANDBOX_PLAYWRIGHT_MCP" in loc:
+            return "APIPI_SANDBOX_PLAYWRIGHT_MCP must be a package name"
         if "microvm_vcpus" in loc:
             return "APIPI_MICROVM_VCPUS must be at least 1"
         if "microvm_egress_allowlist" in loc or "APIPI_MICROVM_EGRESS_ALLOWLIST" in loc:

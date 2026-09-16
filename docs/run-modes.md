@@ -117,8 +117,9 @@ fall back to the default image. `APIPI_MICROVM_IMAGE` still selects
 the image for `apipi install` and `apipi microvm shell`. To make every
 session browser-class without callers setting a size, set
 `[sandbox].default_size = "L"` (and size `worker_memory_mb` for ~2 GiB
-guests). Session `packages` and `setup_commands` still run on whichever
-image that session booted.
+guests). Size `L` also injects Playwright MCP against system Chromium
+unless `auto_playwright` is off. Session `packages` and `setup_commands`
+still run on whichever image that session booted.
 
 If the kernel download fails, get a Firecracker-compatible `vmlinux`
 from the [Firecracker getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)

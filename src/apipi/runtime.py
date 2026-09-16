@@ -13,6 +13,8 @@ from apipi.env.computer import Computer, bind_computer, computer_item_events
 from apipi.env.hub import EnvironmentHub
 from apipi.env.setup import SetupError, provision_hosted
 from apipi.errors import ApiError
+from apipi.mcp.http import McpConnectError
+from apipi.mcp.stdio import start_mcp_stdio_tools
 from apipi.metrics import Metrics, observe_turn
 from apipi.otel import Tracing, set_span, start_span
 from apipi.payload_export import export_payload
@@ -21,6 +23,7 @@ from apipi.pi.artifacts import (
     harvest_session,
     restore_pi_session,
 )
+from apipi.pi.isolation import load_isolation
 from apipi.pi.model_host import (
     listed_models,
     require_listed_model,
@@ -30,7 +33,13 @@ from apipi.pi.model_host import (
 from apipi.pi.platform_prompt import compose_instructions
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
-from apipi.sandbox import image_for_size, mem_mib_for_size, sandbox_size_of
+from apipi.sandbox import (
+    image_for_size,
+    mem_mib_for_size,
+    merge_playwright,
+    playwright_attached,
+    sandbox_size_of,
+)
 from apipi.skills import discover_skill_dirs
 from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
@@ -349,15 +358,34 @@ def _skill_dirs(environment: dict[str, Any]) -> list[str]:
     return discover_skill_dirs(workspace, directories)
 
 
+async def _stdio_for_turn(
+    mcp_stdio: list[Any] | None,
+    raw_tools: list[Any],
+    *,
+    size: str,
+    settings: Settings | None,
+) -> list[Any] | None:
+    if mcp_stdio is not None:
+        return mcp_stdio
+    if settings is None:
+        return None
+    merged = merge_playwright(raw_tools, size=size, settings=settings)
+    return await start_mcp_stdio_tools(
+        merged,
+        on_host=load_isolation(settings.run_mode).stdio_on_host,
+    )
+
+
 async def _agent_tools_and_model(
     db: AsyncSession, tenant_id: uuid.UUID, row: SessionRow
-) -> tuple[list[dict[str, Any]], str | None, str | None]:
+) -> tuple[list[dict[str, Any]], str | None, str | None, list[Any]]:
     if row.agent_id is None:
-        return [], row.model, row.instructions
+        return [], row.model, row.instructions, []
     agent = await get_agent(db, tenant_id, row.agent_id)
     if agent is None:
-        return [], row.model, row.instructions
-    return _function_tools(agent.tools), agent.model, agent.instructions
+        return [], row.model, row.instructions, []
+    raw = agent.tools if isinstance(agent.tools, list) else []
+    return _function_tools(raw), agent.model, agent.instructions, raw
 
 
 async def _emit_item(
@@ -1040,13 +1068,17 @@ async def run_turn(
         env_type: str | None
         sandbox_mem: int | None
         sandbox_image: str
+        raw_tools: list[Any]
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
                 return
-            function_tools, model, instructions = await _agent_tools_and_model(
-                db, tenant_id, row
-            )
+            (
+                function_tools,
+                model,
+                instructions,
+                raw_tools,
+            ) = await _agent_tools_and_model(db, tenant_id, row)
             model = require_model(model)
             if settings is not None and settings.model_base_url:
                 ids = listed_models(settings.model_base_url, api_key)
@@ -1117,6 +1149,19 @@ async def run_turn(
                 type="message",
                 data={"role": "user", "content": text},
             )
+        try:
+            mcp_stdio = await _stdio_for_turn(
+                mcp_stdio,
+                raw_tools,
+                size=sandbox_size,
+                settings=settings,
+            )
+        except McpConnectError as exc:
+            async with store.session() as db:
+                await fail_session(db, hub, tenant_id, session_id, str(exc))
+            return
+        browser = playwright_attached(mcp_stdio)
+        composed = compose_instructions(settings, instructions, browser=browser)
         log.info(
             "turn start",
             extra={
@@ -1155,7 +1200,7 @@ async def run_turn(
                     computer=computer,
                     tenant_id=tenant_id,
                     model=model,
-                    instructions=compose_instructions(settings, instructions),
+                    instructions=composed,
                     api_key=api_key,
                     key_id=key_id,
                     env_type=env_type,
@@ -1388,7 +1433,7 @@ async def continue_turn(
             if env_hub is not None and env_id is not None
             else None
         )
-        function_tools, model, instructions = await _agent_tools_and_model(
+        function_tools, model, instructions, raw_tools = await _agent_tools_and_model(
             db, tenant_id, row
         )
         model = require_model(model)
@@ -1410,6 +1455,19 @@ async def continue_turn(
             "error": error,
         }
     try:
+        try:
+            mcp_stdio = await _stdio_for_turn(
+                mcp_stdio,
+                raw_tools,
+                size=sandbox_size,
+                settings=settings,
+            )
+        except McpConnectError as exc:
+            async with store.session() as db:
+                await fail_session(db, hub, tenant_id, session_id, str(exc))
+            return
+        browser = playwright_attached(mcp_stdio)
+        composed = compose_instructions(settings, instructions, browser=browser)
         with start_span(
             tracing,
             "turn",
@@ -1439,7 +1497,7 @@ async def continue_turn(
                     computer=computer,
                     tenant_id=tenant_id,
                     model=model,
-                    instructions=compose_instructions(settings, instructions),
+                    instructions=composed,
                     api_key=api_key,
                     key_id=key_id,
                     env_type=env_type,

@@ -238,7 +238,9 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | `$XDG_CACHE_HOME/apipi/microvm/rootfs.ext4` when that file exists | Guest rootfs for `image = "default"`. Required when the backend is `microvm` unless the cache file exists. Build with `apipi install --microvm` or `./scripts/microvm-rootfs`. |
 | `APIPI_MICROVM_ROOTFS_BROWSER` | `[sandbox].rootfs_browser` | `$XDG_CACHE_HOME/apipi/microvm/rootfs-browser.ext4` when that file exists | Guest rootfs for `image = "browser"`. Required when that image is selected unless the cache file exists. Build with `apipi install --microvm --image browser`. |
 | `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser`. Used by `apipi install` and `apipi microvm shell`. Live session guests follow sandbox size (`S`/`M` → default rootfs, `L` → browser), not this process-wide setting. |
-| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. |
+| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. Playwright MCP is injected on `L` unless you turn that off. |
+| `APIPI_SANDBOX_AUTO_PLAYWRIGHT` | `[sandbox.browser].auto_playwright` | on | When on, size `L` on `microvm` injects Playwright MCP (system Chromium). Off keeps L RAM and rootfs but does not attach browser tools. |
+| `APIPI_SANDBOX_PLAYWRIGHT_MCP` | `[sandbox.browser].playwright_mcp` | `@playwright/mcp@latest` | npm package passed to `npx -y` for the injected server. Pin a version for reproducible guests. |
 
 ```toml
 [sandbox]
@@ -248,6 +250,9 @@ rootfs = "/var/lib/apipi/rootfs.ext4"
 rootfs_browser = "/var/lib/apipi/rootfs-browser.ext4"
 image = "default"
 default_size = "S"
+
+[sandbox.browser]
+auto_playwright = true
 ```
 
 ```
@@ -384,6 +389,9 @@ egress_mbit = 50
 [sandbox.ttl]
 openai_hosted = "1h"
 self_hosted = "0"
+
+[sandbox.browser]
+auto_playwright = true
 ```
 
 ## Compatibility
