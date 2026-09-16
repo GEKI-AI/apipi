@@ -26,6 +26,7 @@ class PiPool:
         self._instructions: dict[uuid.UUID, str | None] = {}
         self._key_ids: dict[uuid.UUID, str | None] = {}
         self._env_types: dict[uuid.UUID, str | None] = {}
+        self._held: set[uuid.UUID] = set()
         self._lock = asyncio.Lock()
 
     async def get(
@@ -153,6 +154,15 @@ class PiPool:
             await proc.terminate()
         if stdio:
             await stop_mcp_stdio(stdio)
+
+    def hold(self, session_id: uuid.UUID) -> None:
+        self._held.add(session_id)
+
+    def release(self, session_id: uuid.UUID) -> None:
+        self._held.discard(session_id)
+
+    def held(self, session_id: uuid.UUID) -> bool:
+        return session_id in self._held
 
     def alive(self, session_id: uuid.UUID) -> bool:
         proc = self._procs.get(session_id)

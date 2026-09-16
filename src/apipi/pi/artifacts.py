@@ -421,7 +421,7 @@ async def reap_workspaces(
                 session_id = uuid.UUID(session_dir.name)
             except ValueError:
                 continue
-            if pool.alive(session_id):
+            if pool.alive(session_id) or pool.held(session_id):
                 continue
             async with store.session() as db:
                 row = await get_session(db, tenant_id, session_id)
