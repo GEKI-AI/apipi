@@ -118,11 +118,37 @@ apipi serve
 `postgresql+asyncpg://`. You can put the URL in `.env` or `apipi.toml`.
 Give each process its own SQLite file, or share Postgres instead.
 
-`apipi migrate` applies a single baseline revision (`0001_initial`)
-that matches the current schema. Databases created before 0.1.0 have
-no upgrade path through the old revision chain. Recreate the database,
-then migrate. If the tables already match this schema, stamp Alembic to
-`0001_initial` instead of upgrading.
+`apipi migrate` applies Alembic revisions (`0001_initial`, then
+`0002_workers`). Databases created before 0.1.0 have no upgrade path
+through the old revision chain. Recreate the database, then migrate.
+
+## Docker API
+
+The Compose file can run Postgres and a **rootless** API container.
+The image runs `apipi serve --api-only`. It does not get `/dev/kvm`
+or TAP. Workers stay on Linux hosts:
+
+```
+export OPENAI_BASE_URL=http://your-model-host/v1
+export APIPI_WORKER_TOKEN=secret
+docker compose up --build
+```
+
+That publishes Postgres on `5432` and the API on `8000` at
+`0.0.0.0`. Set `OPENAI_BASE_URL` or serve exits. Put
+`APIPI_WORKER_TOKEN` in the environment so workers can connect.
+`self_hosted` runners still attach to `/v1/environments/{id}` on the
+API; they are not the worker.
+
+On a KVM host:
+
+```
+apipi install --role worker
+APIPI_API_URL=http://api.example:8000 APIPI_WORKER_TOKEN=secret \
+  APIPI_RUN_MODE=microvm apipi worker
+```
+
+Unit files are in `deploy/systemd/`.
 
 ## Model URL
 

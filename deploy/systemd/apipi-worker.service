@@ -1,0 +1,16 @@
+[Unit]
+Description=ApiPi worker (Firecracker)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/apipi
+EnvironmentFile=/etc/apipi.env
+ExecStart=/opt/apipi/.venv/bin/apipi worker --config /etc/apipi.toml
+Restart=on-failure
+DeviceAllow=/dev/kvm rw
+DeviceAllow=/dev/net/tun rw
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

@@ -299,12 +299,15 @@ no DeviceAllow for KVM.
 
 ## Docker
 
-The Compose file at the repo root starts Postgres and publishes it on
-the host. Start the gateway on the host with systemd.
+The Compose file at the repo root starts Postgres and an API service
+that runs `apipi serve --api-only` without privileged mode, `/dev/kvm`,
+or TAP. That is the supported container path. Firecracker stays on a
+host `apipi worker` unit (`deploy/systemd/apipi-worker.service`). Nested
+microVM inside Docker is a lab setup only.
 
-Nested user namespaces, TAP devices, and `/dev/kvm` each need extra
-capabilities inside Docker. A privileged container can be used in a
-lab. Production isolation is systemd on the host.
+The API process is public HTTP. Workers connect outbound to
+`/internal/worker`. Do not publish the worker. Tenant `self_hosted`
+runners are a different socket and a different secret.
 
 Sandbox backend, guest images, RAM, vCPUs, and TAP egress are in
 [configuration](config.md#sandbox).

@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Worker drain (`heartbeat` `"drain": true`), least-loaded placement,
   and Prometheus gauges for workers, leases, and assign latency.
   Expired leases fail closed and are not reassigned.
+- Rootless API Docker image and Compose service (`apipi serve
+  --api-only`). Worker systemd units live in `deploy/systemd/`.
 
 ### Added
 
