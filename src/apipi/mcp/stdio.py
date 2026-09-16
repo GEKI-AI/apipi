@@ -12,26 +12,36 @@ class McpStdioServer:
     command: str
     args: list[str]
     process: asyncio.subprocess.Process | None = None
+    cwd: str | None = None
 
 
-def mcp_stdio_tools(tools: list[Any] | None) -> list[tuple[str, str, list[str]]]:
-    servers: list[tuple[str, str, list[str]]] = []
+def mcp_stdio_tools(
+    tools: list[Any] | None,
+) -> list[tuple[str, str, list[str], str | None]]:
+    servers: list[tuple[str, str, list[str], str | None]] = []
     if not tools:
         return servers
     for tool in tools:
         if not isinstance(tool, dict) or tool.get("type") != "mcp":
             continue
-        command = tool.get("command")
+        transport = tool.get("transport")
+        if not isinstance(transport, dict) or transport.get("type") != "stdio":
+            continue
+        command = transport.get("command")
         label = tool.get("server_label")
         if not isinstance(command, str) or not command or not isinstance(label, str):
             continue
-        raw_args = tool.get("args")
+        raw_args = transport.get("args")
         args = [str(item) for item in raw_args] if isinstance(raw_args, list) else []
-        servers.append((label, command, args))
+        raw_cwd = transport.get("cwd")
+        cwd = raw_cwd if isinstance(raw_cwd, str) and raw_cwd else None
+        servers.append((label, command, args, cwd))
     return servers
 
 
-async def start_mcp_stdio(label: str, command: str, args: list[str]) -> McpStdioServer:
+async def start_mcp_stdio(
+    label: str, command: str, args: list[str], *, cwd: str | None = None
+) -> McpStdioServer:
     try:
         env = os.environ.copy()
         env.pop("DATABASE_URL", None)
@@ -42,6 +52,7 @@ async def start_mcp_stdio(label: str, command: str, args: list[str]) -> McpStdio
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
             env=env,
+            cwd=cwd,
         )
     except OSError as exc:
         raise McpConnectError(f"mcp {label} failed") from exc
@@ -49,7 +60,7 @@ async def start_mcp_stdio(label: str, command: str, args: list[str]) -> McpStdio
     if process.returncode is not None:
         raise McpConnectError(f"mcp {label} failed")
     return McpStdioServer(
-        server_label=label, command=command, args=args, process=process
+        server_label=label, command=command, args=args, process=process, cwd=cwd
     )
 
 
@@ -58,13 +69,17 @@ async def start_mcp_stdio_tools(
 ) -> list[McpStdioServer]:
     started: list[McpStdioServer] = []
     try:
-        for label, command, args in mcp_stdio_tools(tools):
+        for label, command, args, cwd in mcp_stdio_tools(tools):
             if on_host:
-                started.append(await start_mcp_stdio(label, command, args))
+                started.append(await start_mcp_stdio(label, command, args, cwd=cwd))
             else:
                 started.append(
                     McpStdioServer(
-                        server_label=label, command=command, args=args, process=None
+                        server_label=label,
+                        command=command,
+                        args=args,
+                        process=None,
+                        cwd=cwd,
                     )
                 )
     except McpConnectError:

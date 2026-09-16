@@ -146,7 +146,13 @@ async def test_stdio_on_host_follows_isolation() -> None:
     assert none.stdio_on_host is True
     assert microvm.stdio_on_host is False
     servers = await start_mcp_stdio_tools(
-        [{"type": "mcp", "server_label": "playwright", "command": "npx", "args": []}],
+        [
+            {
+                "type": "mcp",
+                "server_label": "playwright",
+                "transport": {"type": "stdio", "command": "npx", "args": []},
+            }
+        ],
         on_host=False,
     )
     assert servers == [

@@ -39,8 +39,11 @@ async def test_mcp_stdio_starts_with_session(settings: Settings, store: Store) -
                     {
                         "type": "mcp",
                         "server_label": "local",
-                        "command": sys.executable,
-                        "args": [str(_STDIO)],
+                        "transport": {
+                            "type": "stdio",
+                            "command": sys.executable,
+                            "args": [str(_STDIO)],
+                        },
                     }
                 ],
             },
@@ -81,8 +84,11 @@ async def test_mcp_stdio_failure_is_explicit(settings: Settings, store: Store) -
                     {
                         "type": "mcp",
                         "server_label": "broken",
-                        "command": "mcp-stdio-does-not-exist",
-                        "args": [],
+                        "transport": {
+                            "type": "stdio",
+                            "command": "mcp-stdio-does-not-exist",
+                            "args": [],
+                        },
                     }
                 ],
             },

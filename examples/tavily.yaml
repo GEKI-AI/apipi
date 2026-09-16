@@ -6,6 +6,8 @@
 tools:
   - type: mcp
     server_label: tavily
-    server_url: https://mcp.tavily.com/mcp
+    transport:
+      type: http
+      server_url: https://mcp.tavily.com/mcp
     headers:
       Authorization: Bearer ${TAVILY_API_KEY}

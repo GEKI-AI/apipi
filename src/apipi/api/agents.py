@@ -29,21 +29,37 @@ class FunctionTool(StrictModel):
     parameters: dict[str, Any] | None = None
 
 
+class McpHttpTransport(StrictModel):
+    type: Literal["http"]
+    server_url: str
+
+
+class McpStdioTransport(StrictModel):
+    type: Literal["stdio"]
+    command: str
+    args: list[str] | None = None
+    cwd: str | None = None
+
+
 class McpTool(StrictModel):
     type: Literal["mcp"]
     server_label: str
-    server_url: str | None = None
+    transport: Annotated[
+        McpHttpTransport | McpStdioTransport, Field(discriminator="type")
+    ]
     headers: dict[str, str] | None = None
-    command: str | None = None
-    args: list[str] | None = None
+    required: bool | None = None
     credential_id: str | None = None
+    connection_origin: Literal["service", "environment"] | None = None
 
     @model_validator(mode="after")
-    def http_or_stdio(self) -> Self:
-        http = self.server_url is not None
-        stdio = self.command is not None
-        if http == stdio:
-            raise ValueError("mcp tool needs server_url or command, not both")
+    def origin_supported(self) -> Self:
+        if self.connection_origin == "environment":
+            raise PydanticCustomError(
+                "not_implemented",
+                "{field} is not implemented",
+                {"field": "connection_origin"},
+            )
         return self
 
 

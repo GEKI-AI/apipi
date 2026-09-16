@@ -38,14 +38,20 @@ async def test_agent_crud(client: AsyncClient) -> None:
                 {
                     "type": "mcp",
                     "server_label": "tavily",
-                    "server_url": "https://mcp.tavily.com/mcp",
+                    "transport": {
+                        "type": "http",
+                        "server_url": "https://mcp.tavily.com/mcp",
+                    },
                     "headers": {"Authorization": "Bearer x"},
                 },
                 {
                     "type": "mcp",
                     "server_label": "playwright",
-                    "command": "npx",
-                    "args": ["-y", "@playwright/mcp@latest"],
+                    "transport": {
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@playwright/mcp@latest"],
+                    },
                 },
             ],
         },
@@ -67,8 +73,8 @@ async def test_agent_crud(client: AsyncClient) -> None:
     assert body["instructions"] == "be brief"
     assert body["metadata"] == {"k": "v"}
     assert body["tools"][0]["type"] == "function"
-    assert body["tools"][1]["server_url"] == "https://mcp.tavily.com/mcp"
-    assert body["tools"][2]["command"] == "npx"
+    assert body["tools"][1]["transport"]["server_url"] == "https://mcp.tavily.com/mcp"
+    assert body["tools"][2]["transport"]["command"] == "npx"
     agent_id = body["id"]
 
     listed = await client.get("/v1/agents", headers=_auth(token))
@@ -97,6 +103,52 @@ async def test_agent_crud(client: AsyncClient) -> None:
 
     gone = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
     assert gone.status_code == 404
+
+
+async def test_flat_mcp_fields_are_rejected(client: AsyncClient) -> None:
+    token = _token()
+    response = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={
+            "name": "one",
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server_label": "tavily",
+                    "server_url": "https://mcp.tavily.com/mcp",
+                }
+            ],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "unknown_field"
+
+
+async def test_mcp_environment_origin_not_implemented(client: AsyncClient) -> None:
+    token = _token()
+    response = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={
+            "name": "one",
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server_label": "tavily",
+                    "transport": {
+                        "type": "http",
+                        "server_url": "https://mcp.tavily.com/mcp",
+                    },
+                    "connection_origin": "environment",
+                }
+            ],
+        },
+    )
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["type"] == "not_implemented"
+    assert error["code"] == "connection_origin"
 
 
 async def test_unknown_field_is_rejected(client: AsyncClient) -> None:

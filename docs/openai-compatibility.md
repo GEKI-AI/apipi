@@ -100,8 +100,8 @@ yours.
 | --- | --- |
 | `name`, `model`, `instructions`, `metadata` | Same API |
 | `tools` type `function` | Same API |
-| `tools` type `mcp` with `server_url` | Same API (HTTP MCP) |
-| `tools` type `mcp` with `command` | Same API (stdio MCP; ApiPi extension) |
+| `tools` type `mcp` with nested `transport` (`http` or `stdio`) | Same API |
+| Top-level MCP `server_url` / `command` / `args` | Error (`unknown_field`) |
 | `multi_agent`, `tool_search`, `programmatic_tool_calling` | Error (`not_implemented`) |
 | First-party `web_search` | Error; use MCP (example: Tavily) |
 | First-party browser | Error; use MCP (example: Playwright) |
