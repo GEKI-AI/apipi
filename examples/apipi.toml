@@ -24,9 +24,12 @@ auto_compact = true
 
 [sandbox]
 backend = "none"
+default_size = "S"
 
 [sandbox.resources]
 mem_mib = 512
+m_mem_mib = 1024
+l_mem_mib = 2048
 vcpus = 1
 
 [sandbox.network]

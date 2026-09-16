@@ -204,6 +204,8 @@ async def spawn_pi(
     model: str | None = None,
     instructions: str | None = None,
     api_key: str | None = None,
+    mem_mib: int | None = None,
+    image: str | None = None,
 ) -> PiProc:
     from apipi.pi.isolation import load_isolation
 
@@ -217,4 +219,6 @@ async def spawn_pi(
         model=model,
         instructions=instructions,
         api_key=api_key,
+        mem_mib=mem_mib,
+        image=image,
     )

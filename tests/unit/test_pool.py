@@ -51,6 +51,25 @@ def test_has_capacity_ram_cap() -> None:
     assert pool.capacity_code(second) == "capacity"
 
 
+def test_has_capacity_mixed_session_mem() -> None:
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+            max_sessions=8,
+            worker_memory_mb=2560,
+            microvm_mem_mib=512,
+        )
+    )
+    first = uuid.uuid4()
+    second = uuid.uuid4()
+    pool._procs[first] = cast(PiProc, _Alive())
+    pool._mem[first] = 2048
+    assert pool.capacity_code(first, session_mem_mib=2048) is None
+    assert pool.capacity_code(second, session_mem_mib=512) is None
+    assert pool.capacity_code(second, session_mem_mib=1024) == "capacity"
+
+
 def test_has_capacity_per_tenant() -> None:
     pool = PiPool(
         Settings(

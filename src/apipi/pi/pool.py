@@ -26,6 +26,7 @@ class PiPool:
         self._instructions: dict[uuid.UUID, str | None] = {}
         self._key_ids: dict[uuid.UUID, str | None] = {}
         self._env_types: dict[uuid.UUID, str | None] = {}
+        self._mem: dict[uuid.UUID, int] = {}
         self._held: set[uuid.UUID] = set()
         self._lock = asyncio.Lock()
 
@@ -44,8 +45,11 @@ class PiPool:
         api_key: str | None = None,
         key_id: str | None = None,
         env_type: str | None = None,
+        mem_mib: int | None = None,
+        image: str | None = None,
     ) -> PiProc:
         instructions = instructions if instructions else None
+        session_mem = mem_mib if mem_mib is not None else self.settings.microvm_mem_mib
         async with self._lock:
             proc = self._procs.get(session_id)
             spawned = self._spawn_tools.get(session_id)
@@ -56,7 +60,9 @@ class PiPool:
                 await self.kill(session_id)
                 proc = None
             if proc is None or not proc.alive:
-                code = self.capacity_code(session_id, tenant_id)
+                code = self.capacity_code(
+                    session_id, tenant_id, session_mem_mib=session_mem
+                )
                 if code is not None:
                     message = (
                         "Too many live sessions for this tenant"
@@ -81,6 +87,8 @@ class PiPool:
                     model=model,
                     instructions=instructions,
                     api_key=api_key,
+                    mem_mib=mem_mib,
+                    image=image,
                 )
                 log.info("pi ready", extra={"session_id": str(session_id)})
                 self._procs[session_id] = proc
@@ -89,6 +97,7 @@ class PiPool:
                 self._instructions[session_id] = instructions
                 self._key_ids[session_id] = key_id
                 self._env_types[session_id] = env_type
+                self._mem[session_id] = session_mem
                 if tenant_id is not None:
                     self._tenants[session_id] = tenant_id
             elif env_type is not None:
@@ -107,7 +116,10 @@ class PiPool:
         )
 
     def capacity_code(
-        self, session_id: uuid.UUID, tenant_id: uuid.UUID | None = None
+        self,
+        session_id: uuid.UUID,
+        tenant_id: uuid.UUID | None = None,
+        session_mem_mib: int | None = None,
     ) -> str | None:
         proc = self._procs.get(session_id)
         if proc is not None and proc.alive:
@@ -119,15 +131,30 @@ class PiPool:
             return "capacity_tenant"
         if self.live() >= self.settings.max_sessions:
             return "capacity"
-        session_mem = self.settings.microvm_mem_mib
-        if self.live() * session_mem + session_mem > self.settings.node_memory_mb():
+        incoming = (
+            session_mem_mib
+            if session_mem_mib is not None
+            else self.settings.microvm_mem_mib
+        )
+        used = sum(
+            self._mem.get(sid, self.settings.microvm_mem_mib)
+            for sid, item in self._procs.items()
+            if item.alive
+        )
+        if used + incoming > self.settings.node_memory_mb():
             return "capacity"
         return None
 
     def has_capacity(
-        self, session_id: uuid.UUID, tenant_id: uuid.UUID | None = None
+        self,
+        session_id: uuid.UUID,
+        tenant_id: uuid.UUID | None = None,
+        session_mem_mib: int | None = None,
     ) -> bool:
-        return self.capacity_code(session_id, tenant_id) is None
+        return (
+            self.capacity_code(session_id, tenant_id, session_mem_mib=session_mem_mib)
+            is None
+        )
 
     def peek(self, session_id: uuid.UUID) -> PiProc | None:
         proc = self._procs.get(session_id)
@@ -149,6 +176,7 @@ class PiPool:
         self._instructions.pop(session_id, None)
         self._key_ids.pop(session_id, None)
         self._env_types.pop(session_id, None)
+        self._mem.pop(session_id, None)
         self._tenants.pop(session_id, None)
         stdio = self._stdio.pop(session_id, None)
         if self.on_kill is not None:

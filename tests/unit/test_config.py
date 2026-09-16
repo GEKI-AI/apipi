@@ -90,6 +90,27 @@ def test_worker_memory_mb_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.node_memory_mb() == 57344
 
 
+def test_sandbox_default_size_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.delenv("APIPI_WORKER_MEMORY_MB", raising=False)
+    monkeypatch.delenv("APIPI_MAX_SESSIONS", raising=False)
+    monkeypatch.setenv("APIPI_SANDBOX_DEFAULT_SIZE", "L")
+    settings = Settings()
+    assert settings.sandbox_default_size == "L"
+    assert settings.node_memory_mb() == 32 * 2048
+
+
+def test_sandbox_default_size_invalid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_SANDBOX_DEFAULT_SIZE", "XL")
+    with pytest.raises(ConfigError, match="APIPI_SANDBOX_DEFAULT_SIZE must be"):
+        load_settings()
+
+
 def test_worker_memory_mb_invalid(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -297,6 +318,7 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.delenv("APIPI_MAX_SESSIONS", raising=False)
     monkeypatch.delenv("APIPI_WORKER_MEMORY_MB", raising=False)
+    monkeypatch.delenv("APIPI_SANDBOX_DEFAULT_SIZE", raising=False)
     monkeypatch.delenv("APIPI_TURN_TIMEOUT", raising=False)
     settings = Settings()
     assert settings.max_sessions == 32
@@ -318,7 +340,10 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.db_pool_size == 5
     assert settings.worker_memory_mb == 16384
     assert settings.node_memory_mb() == 16384
+    assert settings.sandbox_default_size == "S"
     assert settings.microvm_mem_mib == 512
+    assert settings.sandbox_m_mem_mib == 1024
+    assert settings.sandbox_l_mem_mib == 2048
     assert settings.microvm_vcpus == 1
     assert settings.microvm_egress_allowlist is False
     assert settings.microvm_egress_hosts == ""
@@ -545,8 +570,11 @@ def test_nested_toml_sandbox_and_pi(
         'rootfs = "/tmp/rootfs.ext4"\n'
         'rootfs_browser = "/tmp/rootfs-browser.ext4"\n'
         'image = "browser"\n'
+        'default_size = "M"\n'
         "[sandbox.resources]\n"
         "mem_mib = 1024\n"
+        "m_mem_mib = 1536\n"
+        "l_mem_mib = 3072\n"
         "vcpus = 2\n"
         "[sandbox.network]\n"
         "egress_allowlist = false\n"
@@ -567,7 +595,10 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.microvm_rootfs == "/tmp/rootfs.ext4"
     assert settings.microvm_rootfs_browser == "/tmp/rootfs-browser.ext4"
     assert settings.microvm_image == "browser"
+    assert settings.sandbox_default_size == "M"
     assert settings.microvm_mem_mib == 1024
+    assert settings.sandbox_m_mem_mib == 1536
+    assert settings.sandbox_l_mem_mib == 3072
     assert settings.microvm_vcpus == 2
     assert settings.microvm_egress_allowlist is False
     assert settings.microvm_egress_hosts == "mcp.example.com"

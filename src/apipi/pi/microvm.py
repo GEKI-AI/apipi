@@ -213,7 +213,9 @@ def _resolve_image_file(configured: str | None, default: Path, name: str) -> str
     raise _image_missing(name, default)
 
 
-def microvm_images(settings: Settings | None = None) -> tuple[str, str]:
+def microvm_images(
+    settings: Settings | None = None, *, image: str | None = None
+) -> tuple[str, str]:
     if settings is not None:
         kernel = settings.microvm_kernel
         default_rootfs = settings.microvm_rootfs
@@ -225,8 +227,8 @@ def microvm_images(settings: Settings | None = None) -> tuple[str, str]:
     kernel_path = _resolve_image_file(
         kernel, default_kernel_path(), "APIPI_MICROVM_KERNEL"
     )
-    image = microvm_image_name(settings)
-    if image == "browser":
+    selected = image if image is not None else microvm_image_name(settings)
+    if selected == "browser":
         rootfs_path = _resolve_image_file(
             browser_rootfs,
             default_rootfs_browser_path(),
@@ -293,11 +295,22 @@ def require_microvm(settings: Settings | None = None) -> None:
         raise ConfigError("microvm requires /dev/kvm")
     microvm_binaries()
     microvm_net_binaries()
-    microvm_images(settings)
+    microvm_images(settings, image="default")
+    if settings is not None and settings.sandbox_default_size == "L":
+        microvm_images(settings, image="browser")
 
 
 async def probe_microvm(settings: Settings) -> None:
-    proc = await spawn_microvm_pi(settings, cwd=None, tools=False)
+    from apipi.sandbox import image_for_size
+
+    size = settings.sandbox_default_size
+    proc = await spawn_microvm_pi(
+        settings,
+        cwd=None,
+        tools=False,
+        mem_mib=settings.sandbox_mem_mib(size),
+        image=image_for_size(size),
+    )
     try:
         if not proc.alive:
             raise ConfigError("microvm cannot start")
@@ -1129,11 +1142,15 @@ async def start_microvm(
     api_key: str | None = None,
     shell: bool = False,
     inherit_stdio: bool = False,
+    mem_mib: int | None = None,
+    image: str | None = None,
 ) -> StartedMicrovm:
     require_microvm(settings)
     firecracker, jailer = microvm_binaries()
     ip_bin, iptables_bin, tc_bin = microvm_net_binaries()
-    kernel, rootfs = microvm_images(settings)
+    selected = image if image is not None else microvm_image_name(settings)
+    kernel, rootfs = microvm_images(settings, image=selected)
+    guest_mem = mem_mib if mem_mib is not None else settings.microvm_mem_mib
     vm_id = str(uuid.uuid4())
     net = tap_net(vm_id)
     uid = os.getuid()
@@ -1226,7 +1243,7 @@ async def start_microvm(
             vsock=VSOCK_UDS,
             cid=guest_cid(vm_id),
             net=net,
-            mem_mib=settings.microvm_mem_mib,
+            mem_mib=guest_mem,
             vcpus=settings.microvm_vcpus,
         )
         (chroot_dir / "config.json").write_text(json.dumps(config))
@@ -1284,6 +1301,8 @@ async def spawn_microvm_pi(
     model: str | None = None,
     instructions: str | None = None,
     api_key: str | None = None,
+    mem_mib: int | None = None,
+    image: str | None = None,
 ) -> PiProc:
     started = await start_microvm(
         settings,
@@ -1295,6 +1314,8 @@ async def spawn_microvm_pi(
         model=model,
         instructions=instructions,
         api_key=api_key,
+        mem_mib=mem_mib,
+        image=image,
     )
     process = started.process
     try:

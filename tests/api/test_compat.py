@@ -232,7 +232,7 @@ async def test_compat_environment_none(client: AsyncClient) -> None:
     created = await _session(
         client, token, agent_id=agent_id, environment={"type": "none"}
     )
-    assert created["environment"] == {"type": "none"}
+    assert created["environment"] == {"type": "none", "sandbox_size": "S"}
     assert created["status"] == "idle"
 
 

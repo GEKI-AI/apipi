@@ -13,6 +13,7 @@ from starlette.websockets import WebSocket, WebSocketState
 
 from apipi.config import ConfigError, Settings
 from apipi.runtime import PUBLIC_EVENT_TYPES, EventHub, persist_event
+from apipi.sandbox import mem_mib_for_size, sandbox_size_of
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import (
@@ -40,6 +41,7 @@ class WorkerConnection:
     capacity: int
     memory_mb: int
     leases: set[uuid.UUID] = field(default_factory=set)
+    lease_mem: dict[uuid.UUID, int] = field(default_factory=dict)
     draining: bool = False
 
 
@@ -99,22 +101,22 @@ class WorkerHub:
             if session_mem_mib is not None
             else self.settings.microvm_mem_mib
         )
-        ready = [
-            conn
-            for conn in self._conns.values()
-            if not conn.draining
-            and len(conn.leases) + 1 <= conn.capacity
-            and len(conn.leases) * session_mem + session_mem <= conn.memory_mb
-        ]
+        ready = []
+        for conn in self._conns.values():
+            if conn.draining:
+                continue
+            if len(conn.leases) + 1 > conn.capacity:
+                continue
+            used = sum(conn.lease_mem.get(lease, session_mem) for lease in conn.leases)
+            if used + session_mem > conn.memory_mb:
+                continue
+            ready.append((conn, used))
         if not ready:
             return None
         ready.sort(
-            key=lambda item: (
-                -(item.memory_mb - len(item.leases) * session_mem),
-                len(item.leases),
-            )
+            key=lambda item: (-(item[0].memory_mb - item[1]), len(item[0].leases))
         )
-        return ready[0]
+        return ready[0][0]
 
     async def acquire(
         self,
@@ -128,7 +130,12 @@ class WorkerHub:
         if op not in COMMAND_OPS:
             raise ValueError(op)
         started = time.monotonic()
-        conn = self.pick()
+        async with store.session() as db:
+            session = await get_session(db, tenant_id, session_id)
+        session_mem = mem_mib_for_size(
+            self.settings, sandbox_size_of(session.environment if session else None)
+        )
+        conn = self.pick(session_mem)
         if conn is None:
             return None
         lease_id = uuid.uuid4()
@@ -146,6 +153,7 @@ class WorkerHub:
             if row is None:
                 return None
         conn.leases.add(lease_id)
+        conn.lease_mem[lease_id] = session_mem
         command = {
             "type": "command",
             "id": str(command_id),
@@ -220,6 +228,7 @@ class WorkerHub:
             conn = self._conns.get(worker_id)
             if conn is not None:
                 conn.leases.discard(lease_id)
+                conn.lease_mem.pop(lease_id, None)
         self._observe()
 
     async def expire(self, store: Store, hub: EventHub) -> list[uuid.UUID]:
@@ -247,6 +256,7 @@ class WorkerHub:
                     conn = self._conns.get(worker_id) if worker_id is not None else None
                     if conn is not None:
                         conn.leases.discard(lease_id)
+                        conn.lease_mem.pop(lease_id, None)
                         await _send(
                             conn.websocket,
                             {
@@ -265,6 +275,9 @@ class WorkerHub:
             if row.lease_id is None:
                 continue
             conn.leases.add(row.lease_id)
+            conn.lease_mem[row.lease_id] = mem_mib_for_size(
+                self.settings, sandbox_size_of(row.environment)
+            )
             pending = self._unacked.get(row.lease_id)
             if pending is not None:
                 await _send(conn.websocket, pending)

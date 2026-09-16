@@ -30,6 +30,7 @@ from apipi.pi.model_host import (
 from apipi.pi.platform_prompt import compose_instructions
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
+from apipi.sandbox import image_for_size, mem_mib_for_size, sandbox_size_of
 from apipi.skills import discover_skill_dirs
 from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
@@ -1037,6 +1038,8 @@ async def run_turn(
         instructions: str | None
         computer: Computer | None
         env_type: str | None
+        sandbox_mem: int | None
+        sandbox_image: str
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
@@ -1068,6 +1071,13 @@ async def run_turn(
             )
             skill_dirs = _skill_dirs(row.environment)
             env_type = row.environment.get("type")
+            sandbox_size = sandbox_size_of(row.environment)
+            sandbox_mem = (
+                mem_mib_for_size(settings, sandbox_size)
+                if settings is not None
+                else None
+            )
+            sandbox_image = image_for_size(sandbox_size)
             await update_session(
                 db,
                 tenant_id,
@@ -1149,6 +1159,8 @@ async def run_turn(
                     api_key=api_key,
                     key_id=key_id,
                     env_type=env_type,
+                    mem_mib=sandbox_mem,
+                    image=sandbox_image,
                 )
                 try:
                     if turn_timeout is None:
@@ -1386,6 +1398,11 @@ async def continue_turn(
             write_pi_models_json(settings, ids)
         skill_dirs = _skill_dirs(row.environment)
         env_type = row.environment.get("type")
+        sandbox_size = sandbox_size_of(row.environment)
+        sandbox_mem = (
+            mem_mib_for_size(settings, sandbox_size) if settings is not None else None
+        )
+        sandbox_image = image_for_size(sandbox_size)
         result = {
             "call_id": call_id,
             "success": success,
@@ -1426,6 +1443,8 @@ async def continue_turn(
                     api_key=api_key,
                     key_id=key_id,
                     env_type=env_type,
+                    mem_mib=sandbox_mem,
+                    image=sandbox_image,
                 )
                 try:
                     if turn_timeout is None:
