@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from apipi.cli import main, prepare_serve
+from apipi.cli import main, prepare_serve, prepare_worker
 from apipi.config import (
     METRICS_OFF,
     METRICS_ON,
@@ -122,6 +122,37 @@ def test_worker_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.delenv("APIPI_WORKER_TOKEN", raising=False)
     assert main(["worker"]) == 1
+
+
+def test_worker_microvm_exits_without_kvm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
+    monkeypatch.setenv("APIPI_WORKER_TOKEN", "secret")
+    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: False)
+
+    async def boom(_settings: Settings, *, url: str | None = None) -> None:
+        raise AssertionError("must not connect")
+
+    monkeypatch.setattr("apipi.worker.run_worker", boom)
+    assert main(["worker"]) == 1
+
+
+def test_prepare_worker_probes_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    probed: list[str] = []
+
+    def fake_probe(settings: Settings) -> None:
+        probed.append(settings.run_mode)
+
+    monkeypatch.setattr("apipi.cli.probe_run_mode", fake_probe)
+    settings = prepare_worker(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+            worker_token="secret",
+        )
+    )
+    assert settings.run_mode == "none"
+    assert probed == ["none"]
 
 
 def test_serve_api_only_skips_kvm(monkeypatch: pytest.MonkeyPatch) -> None:
