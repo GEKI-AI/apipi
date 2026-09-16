@@ -35,7 +35,9 @@ class NoneIsolation:
     ) -> PiProc:
         session_file = None
         if cwd:
-            path = pi_session_file(Path(cwd))
+            root = Path(cwd)
+            root.mkdir(parents=True, exist_ok=True)
+            path = pi_session_file(root)
             path.parent.mkdir(parents=True, exist_ok=True)
             session_file = PI_SESSION_REL
         args = pi_command_args(

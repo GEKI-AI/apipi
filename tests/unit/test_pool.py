@@ -128,6 +128,18 @@ async def test_hosted_reap_uses_sandbox_ttl() -> None:
     assert other not in pool._procs
 
 
+def test_hold_and_release() -> None:
+    pool = PiPool(_settings())
+    sid = uuid.uuid4()
+    assert not pool.held(sid)
+    pool.hold(sid)
+    assert pool.held(sid)
+    assert not pool.alive(sid)
+    pool.release(sid)
+    assert not pool.held(sid)
+    pool.release(sid)
+
+
 async def test_hosted_reap_kills_after_sandbox_ttl() -> None:
     pool = PiPool(
         Settings(

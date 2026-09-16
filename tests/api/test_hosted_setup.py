@@ -3,12 +3,15 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
+from apipi.app import create_app
 from apipi.config import Settings
 from apipi.env.setup import SetupError
 from apipi.pi.artifacts import reap_workspaces
+from apipi.pi.isolation.none import NoneIsolation
 from apipi.pi.pool import PiPool
+from apipi.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import get_session_by_id
@@ -206,3 +209,87 @@ async def test_sandbox_ttl_wipes_scratch_and_rehydrates(
     assert not (directory / "scratch.txt").exists()
     assert (directory / "ready.txt").read_text() == "ok"
     assert (directory / ".apipi" / "setup.sh").is_file()
+
+
+async def test_reap_skips_held_hosted_workspace(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = "reap-held"
+    agent_id = await _agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {"type": "openai_hosted"},
+        },
+    )
+    assert created.status_code == 200
+    session_id = UUID(created.json()["id"])
+    directory = Path(created.json()["environment"]["directory"])
+    (directory / "scratch.txt").write_text("keep", encoding="utf-8")
+    async with store.session() as db:
+        row = await get_session_by_id(db, session_id)
+        assert row is not None
+        row.updated_at = utc_now() - timedelta(hours=2)
+    pool = PiPool(settings)
+    pool.hold(session_id)
+    await reap_workspaces(settings, store, pool)
+    assert directory.is_dir()
+    assert (directory / "scratch.txt").read_text(encoding="utf-8") == "keep"
+    pool.release(session_id)
+    await reap_workspaces(settings, store, pool)
+    assert not directory.exists()
+
+
+async def test_none_spawn_creates_missing_cwd(tmp_path: Path) -> None:
+    missing = tmp_path / "tenant" / "session"
+    assert not missing.exists()
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        pi_command="true",
+        sessions_dir=str(tmp_path / "sessions"),
+    )
+    proc = await NoneIsolation().spawn(settings, cwd=str(missing), tools=False)
+    assert missing.is_dir()
+    await proc.terminate()
+
+
+class _SpawnFailHarness(FakeHarness):
+    async def generate(self, text: str, **kwargs: object):  # type: ignore[override]
+        del text, kwargs
+        raise FileNotFoundError("No such file or directory")
+        yield  # pragma: no cover
+
+
+async def test_spawn_oserror_fails_turn_not_500(
+    settings: Settings, store: Store
+) -> None:
+    app = create_app(settings, store=store, harness=_SpawnFailHarness())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = "spawn-fail"
+        agent_id = await _agent(client, token)
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent_id,
+                "environment": {"type": "openai_hosted"},
+                "input": "hello",
+            },
+        )
+        assert created.status_code == 200
+        assert created.json()["status"] == "idle"
+        session_id = created.json()["id"]
+        events = await client.get(
+            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        )
+        body = events.json()["data"]
+        types = [event["type"] for event in body]
+        assert "agent.session.turn.failed" in types
+        assert "agent.session.error" in types
+        error = next(event for event in body if event["type"] == "agent.session.error")
+        assert error["data"]["code"] == "spawn_failed"

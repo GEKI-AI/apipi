@@ -53,9 +53,10 @@ log = logging.getLogger("apipi")
 
 
 class TurnFailed(Exception):
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, code: str = "model_host_error") -> None:
         super().__init__(message)
         self.message = message
+        self.code = code
 
 
 PUBLIC_EVENT_TYPES = frozenset(
@@ -1023,6 +1024,8 @@ async def run_turn(
     key_id: str | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
+    if pool is not None:
+        pool.hold(session_id)
     try:
         turn_id: uuid.UUID
         cwd_path: str | None
@@ -1183,6 +1186,23 @@ async def run_turn(
                             metrics=metrics,
                             tracing=tracing,
                             settings=settings,
+                            code=exc.code,
+                        )
+                    return
+                except OSError as exc:
+                    async with store.session() as db:
+                        await _fail_turn(
+                            db,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            str(exc) or "Cannot start Pi",
+                            request_id=request_id,
+                            metrics=metrics,
+                            tracing=tracing,
+                            settings=settings,
+                            code="spawn_failed",
                         )
                     return
                 except TimeoutError:
@@ -1253,6 +1273,8 @@ async def run_turn(
                     env_hub=env_hub,
                 )
     finally:
+        if pool is not None:
+            pool.release(session_id)
         hub.unwatch_turn(session_id)
 
 
@@ -1342,6 +1364,8 @@ async def continue_turn(
                 },
             )
             return
+        if pool is not None:
+            pool.hold(session_id)
         ensure_openai_workspace(row.environment)
         cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
         if settings is not None and cwd_path:
@@ -1367,131 +1391,155 @@ async def continue_turn(
             "output": output,
             "error": error,
         }
-    with start_span(
-        tracing,
-        "turn",
-        request_id=request_id,
-        session_id=session_id,
-        turn_id=turn_id,
-        model=model,
-    ):
+    try:
         with start_span(
             tracing,
-            "model",
+            "turn",
             request_id=request_id,
             session_id=session_id,
             turn_id=turn_id,
             model=model,
-        ) as model_span:
-            generate = harness.generate(
-                "",
+        ):
+            with start_span(
+                tracing,
+                "model",
+                request_id=request_id,
                 session_id=session_id,
-                cwd=cwd_path,
-                tools=tools,
-                function_tools=function_tools,
-                tool_result=result,
-                mcp_http=mcp_http,
-                mcp_stdio=mcp_stdio,
-                skill_dirs=skill_dirs,
-                computer=computer,
-                tenant_id=tenant_id,
+                turn_id=turn_id,
                 model=model,
-                instructions=instructions,
-                api_key=api_key,
-                key_id=key_id,
-                env_type=env_type,
-            )
-            try:
-                if turn_timeout is None:
-                    reply, pending, usage = await _consume_generate(
-                        store, hub, tenant_id, session_id, turn_id, generate
-                    )
-                else:
-                    async with asyncio.timeout(turn_timeout.total_seconds()):
+            ) as model_span:
+                generate = harness.generate(
+                    "",
+                    session_id=session_id,
+                    cwd=cwd_path,
+                    tools=tools,
+                    function_tools=function_tools,
+                    tool_result=result,
+                    mcp_http=mcp_http,
+                    mcp_stdio=mcp_stdio,
+                    skill_dirs=skill_dirs,
+                    computer=computer,
+                    tenant_id=tenant_id,
+                    model=model,
+                    instructions=instructions,
+                    api_key=api_key,
+                    key_id=key_id,
+                    env_type=env_type,
+                )
+                try:
+                    if turn_timeout is None:
                         reply, pending, usage = await _consume_generate(
                             store, hub, tenant_id, session_id, turn_id, generate
                         )
-            except TurnFailed as exc:
-                async with store.session() as db:
-                    await _fail_turn(
-                        db,
-                        hub,
-                        tenant_id,
-                        session_id,
-                        turn_id,
-                        exc.message,
+                    else:
+                        async with asyncio.timeout(turn_timeout.total_seconds()):
+                            reply, pending, usage = await _consume_generate(
+                                store, hub, tenant_id, session_id, turn_id, generate
+                            )
+                except TurnFailed as exc:
+                    async with store.session() as db:
+                        await _fail_turn(
+                            db,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            exc.message,
+                            request_id=request_id,
+                            metrics=metrics,
+                            tracing=tracing,
+                            settings=settings,
+                            code=exc.code,
+                        )
+                    return
+                except OSError as exc:
+                    async with store.session() as db:
+                        await _fail_turn(
+                            db,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            str(exc) or "Cannot start Pi",
+                            request_id=request_id,
+                            metrics=metrics,
+                            tracing=tracing,
+                            settings=settings,
+                            code="spawn_failed",
+                        )
+                    return
+                except CapacityError as exc:
+                    raise ApiError(
+                        "invalid_request",
+                        str(exc),
+                        code=exc.code,
+                        status_code=429,
+                    ) from exc
+                except TimeoutError:
+                    await harness.abort(session_id)
+                    async with store.session() as db:
+                        await _cancel_turn(
+                            db,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            request_id=request_id,
+                            metrics=metrics,
+                            tracing=tracing,
+                            settings=settings,
+                        )
+                    return
+                set_span(
+                    tracing,
+                    model_span,
+                    **_model_span_attrs(
                         request_id=request_id,
-                        metrics=metrics,
-                        tracing=tracing,
-                        settings=settings,
-                    )
-                return
-            except CapacityError as exc:
-                raise ApiError(
-                    "invalid_request",
-                    str(exc),
-                    code=exc.code,
-                    status_code=429,
-                ) from exc
-            except TimeoutError:
-                await harness.abort(session_id)
-                async with store.session() as db:
-                    await _cancel_turn(
-                        db,
-                        hub,
-                        tenant_id,
-                        session_id,
-                        turn_id,
-                        request_id=request_id,
-                        metrics=metrics,
-                        tracing=tracing,
-                        settings=settings,
-                    )
-                return
-            set_span(
-                tracing,
-                model_span,
-                **_model_span_attrs(
-                    request_id=request_id,
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    model=model,
-                    usage=usage,
-                    status="completed",
-                ),
-            )
-        async with store.session() as db:
-            if pending:
-                latest = await get_session(db, tenant_id, session_id)
-                current = latest.required_actions if latest is not None else []
-                actions = with_env_actions(current, pending)
-                await update_session(
-                    db,
-                    tenant_id,
-                    session_id,
-                    changes={"status": "requires_action", "required_actions": actions},
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        model=model,
+                        usage=usage,
+                        status="completed",
+                    ),
                 )
-                await persist_event(
+            async with store.session() as db:
+                if pending:
+                    latest = await get_session(db, tenant_id, session_id)
+                    current = latest.required_actions if latest is not None else []
+                    actions = with_env_actions(current, pending)
+                    await update_session(
+                        db,
+                        tenant_id,
+                        session_id,
+                        changes={
+                            "status": "requires_action",
+                            "required_actions": actions,
+                        },
+                    )
+                    await persist_event(
+                        db,
+                        hub,
+                        tenant_id,
+                        session_id,
+                        type="agent.session.requires_action",
+                        data={"turn_id": str(turn_id), "required_actions": actions},
+                    )
+                    return
+                await _complete_turn(
                     db,
                     hub,
                     tenant_id,
                     session_id,
-                    type="agent.session.requires_action",
-                    data={"turn_id": str(turn_id), "required_actions": actions},
+                    turn_id,
+                    reply,
+                    usage,
+                    request_id=request_id,
+                    metrics=metrics,
+                    tracing=tracing,
+                    settings=settings,
+                    proc=pool.peek(session_id) if pool is not None else None,
+                    env_hub=env_hub,
                 )
-                return
-            await _complete_turn(
-                db,
-                hub,
-                tenant_id,
-                session_id,
-                turn_id,
-                reply,
-                usage,
-                request_id=request_id,
-                metrics=metrics,
-                tracing=tracing,
-                settings=settings,
-                proc=pool.peek(session_id) if pool is not None else None,
-                env_hub=env_hub,
-            )
+    finally:
+        if pool is not None:
+            pool.release(session_id)
