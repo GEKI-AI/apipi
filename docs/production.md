@@ -6,11 +6,13 @@ process runs Pi (`none` or `microvm`) plus a local directory or a
 
 ## Host selection
 
-Run production under systemd on the host with `APIPI_RUN_MODE=microvm`
-so each session is a Firecracker guest with its own kernel. The host
-needs `/dev/kvm` (bare metal, or a VM that exposes KVM). Nested Docker
-or nested KVM is a lab setup. Production isolation is systemd on the
-host. The Compose file in this repo starts Postgres only.
+Run production as `apipi serve --api-only` plus `apipi worker` on
+KVM hosts with `APIPI_RUN_MODE=microvm`. Combined `apipi serve` is the
+single-host embedded worker. Nested Docker or nested KVM is a lab
+setup. The Compose file in this repo starts Postgres (and can run a
+rootless API). Drain a worker with a heartbeat `"drain": true` before
+you stop the unit so new leases go elsewhere. Expired leases fail
+closed; they are not reassigned.
 
 Isolation `none` is for local machines and CI. If the selected mode
 cannot start, `apipi serve` exits before it binds HTTP. The process

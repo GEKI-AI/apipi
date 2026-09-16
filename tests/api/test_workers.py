@@ -184,3 +184,43 @@ async def test_worker_reconnect_replays_unacked(
         assert replayed["id"] == command["id"]
         assert replayed["op"] == "turn.cancel"
         await second.close()
+
+
+async def test_draining_worker_is_not_scheduled(
+    settings: Settings, store: Store
+) -> None:
+    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    token = "t"
+    tenant_id = _tenant(token)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        agent = await client.post(
+            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        )
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
+        )
+        session_id = uuid.UUID(created.json()["id"])
+        draining = FakeWorker(app, "worker-secret")
+        hello = await draining.connect(capacity=4)
+        assert hello.get("ok") is True
+        await draining.send_json({"type": "heartbeat", "drain": True})
+        for _ in range(50):
+            if app.state.workers.pick() is None:
+                break
+            await asyncio.sleep(0.02)
+        command = await app.state.workers.acquire(
+            store, tenant_id, session_id, op="turn.start"
+        )
+        assert command is None
+        ready = FakeWorker(app, "worker-secret")
+        await ready.connect(capacity=1)
+        command = await app.state.workers.acquire(
+            store, tenant_id, session_id, op="turn.start"
+        )
+        assert command is not None
+        await ready.close()
+        await draining.close()

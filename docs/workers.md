@@ -87,4 +87,18 @@ the session to another worker in this version.
 
 Reconnect with the same worker id replaces the old socket, increments
 generation, and retransmits unacked commands for leases that worker
-still owns.
+still owns. The same `command.id` is replayed; the worker must treat
+that id as idempotent so a turn is not run twice.
+
+## Drain and expiry
+
+A heartbeat may include `"drain": true`. That worker keeps its current
+leases and heartbeats them, but the scheduler does not give it new
+sessions. Placement is least-loaded among workers that are not
+draining.
+
+When `lease_until` passes, the lease is cleared and the session gets
+`worker_lease_expired`. The turn is not moved to another worker: the
+guest and workspace were on the expired host. Start a new turn after
+that error. Heartbeats extend `lease_until` so a live worker does not
+expire mid-turn.

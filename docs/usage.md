@@ -200,6 +200,9 @@ Prometheus text format. `/health` and `/metrics` are not counted.
 | `apipi_errors_total` | counter | `tenant`, `code` |
 | `apipi_usage_export_total` | counter | `result` (`ok` or `drop`) |
 | `apipi_payload_export_total` | counter | `result` (`ok` or `drop`) |
+| `apipi_workers` | gauge | connected sandbox workers |
+| `apipi_worker_leases` | gauge | active session leases |
+| `apipi_worker_assign_seconds` | histogram | time to assign a lease |
 
 `tenant` is the tenant id. Empty when the request has no tenant.
 `path` is the route template, not the raw URL. `kind` is `prompt`,

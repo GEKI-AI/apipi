@@ -6,6 +6,7 @@ from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
     Counter,
+    Gauge,
     Histogram,
     disable_created_metrics,
     generate_latest,
@@ -95,6 +96,22 @@ class Metrics:
             "Payload export attempts",
             ["result"],
             registry=self.registry,
+        )
+        self.workers = Gauge(
+            "apipi_workers",
+            "Connected sandbox workers",
+            registry=self.registry,
+        )
+        self.worker_leases = Gauge(
+            "apipi_worker_leases",
+            "Active worker session leases",
+            registry=self.registry,
+        )
+        self.worker_assign = Histogram(
+            "apipi_worker_assign_seconds",
+            "Time to assign a worker lease",
+            registry=self.registry,
+            buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
         )
 
     def observe_request(
