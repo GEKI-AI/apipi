@@ -40,10 +40,12 @@ survive sandbox stop.
 
 Session rows live in the store. The `openai_hosted` workspace is
 ephemeral: after `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour)
-with no activity, Pi stops and the directory is deleted. Transcript
-and published artifacts stay. The next turn creates an empty
-`/workspace` and re-applies skills, packages, and setup commands. The
-directory is bounded by `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB).
+with no activity, Pi stops and the directory is deleted. Transcript,
+published artifacts, and the harness session cache stay. The next turn
+creates an empty `/workspace`, re-applies skills, packages, and setup
+commands, and reloads the cached session file so Pi continues the
+conversation. Published files are not copied back into `/workspace`.
+The directory is bounded by `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB).
 Artifact bytes are copied to the gateway host when a turn completes,
 up to `APIPI_MAX_ARTIFACT_BYTES` (default 512MiB) per session. See
 [run modes](run-modes.md#storage) and [config](config.md).

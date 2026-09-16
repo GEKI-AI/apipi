@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.blobs import ArtifactBlobs, blob_store
 from apipi.config import ConfigError, DiskLimitError, Settings
 from apipi.env.hub import EnvDisconnected, EnvironmentHub
-from apipi.pi.dirs import sessions_root
+from apipi.pi.dirs import pi_session_file, sessions_root
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
 from apipi.skills import copy_capability_directories
@@ -189,7 +189,9 @@ async def _persist_files(
         to_write.append((rel, data))
         incoming += len(data)
     used = await store.used_bytes(tenant_id, key_id, session_id)
-    if to_write and used + incoming > settings.max_artifact_bytes:
+    row = await get_session_by_id(db, session_id)
+    cache = row.pi_session_bytes if row is not None else 0
+    if to_write and used - cache + incoming > settings.max_artifact_bytes:
         raise DiskLimitError("Artifact store too large", code="artifact_too_large")
     for rel, data in to_write:
         artifact = await create_artifact(
@@ -323,7 +325,76 @@ async def harvest_session(
             )
         except DiskLimitError as exc:
             persist_error = exc
+    await persist_pi_session(
+        db,
+        settings,
+        row,
+        proc,
+        dest=_hosted_dest(row),
+        blobs=blobs,
+    )
     return row, persist_error or workspace_error
+
+
+def _hosted_dest(row: SessionRow) -> Path | None:
+    if row.environment.get("type") != "openai_hosted":
+        return None
+    directory = row.environment.get("directory")
+    if not isinstance(directory, str) or directory == "":
+        return None
+    return Path(directory)
+
+
+async def read_pi_session_bytes(proc: PiProc | None, dest: Path | None) -> bytes:
+    if proc is not None and proc.pull_session is not None:
+        try:
+            return await proc.pull_session()
+        except (OSError, TimeoutError, ConfigError):
+            pass
+    if dest is None:
+        return b""
+    path = pi_session_file(dest)
+    if not path.is_file():
+        return b""
+    return path.read_bytes()
+
+
+async def persist_pi_session(
+    db: AsyncSession,
+    settings: Settings,
+    row: SessionRow,
+    proc: PiProc | None,
+    dest: Path | None,
+    *,
+    blobs: ArtifactBlobs | None = None,
+) -> None:
+    data = await read_pi_session_bytes(proc, dest)
+    if not data:
+        return
+    store = blobs if blobs is not None else blob_store(settings)
+    blob_id = row.pi_session_id if row.pi_session_id is not None else uuid.uuid4()
+    await store.put(row.tenant_id, row.key_id, row.id, blob_id, data)
+    row.pi_session_id = blob_id
+    row.pi_session_bytes = len(data)
+    await db.flush()
+
+
+async def restore_pi_session(
+    settings: Settings,
+    row: SessionRow,
+    dest: Path,
+    *,
+    blobs: ArtifactBlobs | None = None,
+) -> None:
+    if row.pi_session_id is None:
+        return
+    store = blobs if blobs is not None else blob_store(settings)
+    data = await store.get(row.tenant_id, row.key_id, row.id, row.pi_session_id)
+    if not data:
+        return
+    path = pi_session_file(dest)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
 
 
 async def reap_workspaces(

@@ -11,7 +11,7 @@ from apipi.pi.artifacts import (
     unpack_workspace_tar,
     wipe_workspace,
 )
-from apipi.pi.guest import artifacts_tar_bytes, workspace_tar_bytes
+from apipi.pi.guest import artifacts_tar_bytes, session_file_bytes, workspace_tar_bytes
 
 
 def test_read_workspace_artifacts(tmp_path: Path) -> None:
@@ -71,6 +71,14 @@ def test_unpack_workspace_tar_skips_apipi(tmp_path: Path) -> None:
     assert (dest / "note.txt").read_text(encoding="utf-8") == "hello"
     assert (dest / "dir" / "a.bin").read_bytes() == b"abc"
     assert not (dest / ".apipi").exists()
+
+
+def test_session_file_bytes(tmp_path: Path) -> None:
+    assert session_file_bytes(tmp_path) == b""
+    nested = tmp_path / ".apipi"
+    nested.mkdir()
+    (nested / "pi-session.jsonl").write_bytes(b'["stay"]')
+    assert session_file_bytes(tmp_path) == b'["stay"]'
 
 
 def test_wipe_workspace(tmp_path: Path) -> None:

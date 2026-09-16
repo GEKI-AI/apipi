@@ -23,6 +23,7 @@ class PiProc:
         on_stop: Callable[[], None] | None = None,
         pull_artifacts: Callable[[], Awaitable[bytes]] | None = None,
         pull_workspace: Callable[[], Awaitable[bytes]] | None = None,
+        pull_session: Callable[[], Awaitable[bytes]] | None = None,
     ) -> None:
         self.process = process
         self._stdin = process.stdin if stdin is None else stdin
@@ -30,6 +31,7 @@ class PiProc:
         self._on_stop = on_stop
         self.pull_artifacts = pull_artifacts
         self.pull_workspace = pull_workspace
+        self.pull_session = pull_session
         self._buf = b""
 
     @property
@@ -152,11 +154,16 @@ def pi_command_args(
     skill_dirs: list[str] | None = None,
     model: str | None = None,
     instructions: str | None = None,
+    session_file: str | None = None,
 ) -> list[str]:
     from apipi.pi.model_host import PI_PROVIDER
 
     command = settings.pi_command.split()
-    args = [*command, "--mode", "rpc", "--no-session"]
+    args = [*command, "--mode", "rpc"]
+    if session_file:
+        args.extend(["--session", session_file])
+    else:
+        args.append("--no-session")
     if model:
         args.extend(["--provider", PI_PROVIDER, "--model", model])
     if instructions:

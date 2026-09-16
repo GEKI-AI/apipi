@@ -123,13 +123,14 @@ the live microvm tests is in [tests](tests.md).
 
 ## Storage
 
-Session state, environment files, and artifacts are three different
-stores. Mixing them up leads to the wrong lifetime and the wrong
-machine.
+Session state, environment files, artifacts, and the harness session
+cache are different stores. Mixing them up leads to the wrong lifetime
+and the wrong machine.
 
 | Store | What | Where it lives | Lifetime |
 | --- | --- | --- | --- |
 | **Session** | Transcript: events, turns, items, artifact metadata | SQLite for one process; Postgres when the store is shared | Until the session is deleted. A session [export](api.md#export) is the thread. |
+| **Harness session cache** | Pi's conversation file so a new process can continue the thread | Bytes in `APIPI_ARTIFACT_STORE` under the same session prefix as artifacts. The session row holds a pointer (id and size), not the file. Not listed on `GET …/artifacts`. | Until the session is deleted. Reloaded into a fresh `/workspace` on the next turn. |
 | **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. Guest cwd is `/workspace`. `self_hosted`: the runner. `none`: no files. | `openai_hosted` is ephemeral: sandbox TTL (default 1 hour) stops Pi and deletes scratch files, or the session is deleted. Runner files stay on the runner. |
 | **Artifacts** | Named outputs the API can fetch | Metadata in the store. Bytes in `APIPI_ARTIFACT_STORE`: local files under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`, or an S3-compatible bucket with the same key layout. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
 
@@ -147,7 +148,9 @@ net for files written after the last completed turn. After
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour) with no activity,
 Pi stops and the `openai_hosted` directory is deleted. A later turn
 rehydrates skills, packages, and setup commands into a fresh
-`/workspace`. Isolation `none` reads the session directory on the
+`/workspace`, and reloads the harness session cache so Pi keeps the
+conversation. Published artifact bytes stay in the artifact store;
+they are not copied back into `/workspace`. Isolation `none` reads the session directory on the
 host. `microvm` unpacks onto guest `/workspace`. `self_hosted` reads
 `artifacts/` and `outputs/` from the runner if it is connected. A
 crash before publish can lose unpublished files. The gateway cannot

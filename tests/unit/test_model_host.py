@@ -75,6 +75,15 @@ def test_pi_command_args_include_provider_and_model(tmp_path: Path) -> None:
     args = pi_command_args(_settings(tmp_path), tools=True, model="m1")
     assert args[args.index("--provider") + 1] == PI_PROVIDER
     assert args[args.index("--model") + 1] == "m1"
+    assert "--no-session" in args
+
+
+def test_pi_command_args_session_file(tmp_path: Path) -> None:
+    args = pi_command_args(
+        _settings(tmp_path), tools=True, session_file=".apipi/pi-session.jsonl"
+    )
+    assert args[args.index("--session") + 1] == ".apipi/pi-session.jsonl"
+    assert "--no-session" not in args
 
 
 def test_pi_command_args_append_system_prompt(tmp_path: Path) -> None:

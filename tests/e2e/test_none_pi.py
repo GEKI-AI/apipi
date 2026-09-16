@@ -10,8 +10,12 @@ from httpx import ASGITransport, AsyncClient
 
 from apipi.app import create_app
 from apipi.config import Settings
+from apipi.pi.artifacts import reap_workspaces
+from apipi.pi.dirs import pi_session_file
+from apipi.pi.pool import PiPool
 from apipi.store.engine import Store
-from apipi.store.repo import get_session_turn
+from apipi.store.models import utc_now
+from apipi.store.repo import get_session_by_id, get_session_turn
 from apipi.tokens import hash_token
 
 pytestmark = pytest.mark.e2e
@@ -185,4 +189,59 @@ async def test_idle_ttl_kills_pi_session_stays(
         for event in events.json()["data"]
         if event["type"] == "agent.session.turn.output_text.done"
     ]
-    assert texts == ["stay", "resume"]
+    assert texts[0] == "stay"
+    assert "stay" in texts[1]
+    assert "resume" in texts[1]
+
+
+async def test_pi_session_restored_after_workspace_wipe(
+    none_client: AsyncClient, none_app: FastAPI, none_settings: Settings, store: Store
+) -> None:
+    token = "restore"
+    created_agent = await none_client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={"name": "bot", "model": "test"},
+    )
+    created = await none_client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": created_agent.json()["id"],
+            "environment": {"type": "openai_hosted"},
+            "input": "stay",
+        },
+    )
+    assert created.status_code == 200
+    session_id = uuid.UUID(created.json()["id"])
+    directory = Path(created.json()["environment"]["directory"])
+    (directory / "scratch.txt").write_text("gone", encoding="utf-8")
+    pool = none_app.state.pi_pool
+    await pool.kill(session_id)
+    async with store.session() as db:
+        row = await get_session_by_id(db, session_id)
+        assert row is not None
+        assert row.pi_session_id is not None
+        row.updated_at = utc_now() - timedelta(hours=2)
+    await reap_workspaces(none_settings, store, PiPool(none_settings))
+    assert not directory.exists()
+    again = await none_client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(token),
+        json={"type": "agent.session.input.message", "content": "resume"},
+    )
+    assert again.status_code == 200
+    assert directory.is_dir()
+    assert not (directory / "scratch.txt").exists()
+    assert pi_session_file(directory).is_file()
+    events = await none_client.get(
+        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+    )
+    texts = [
+        event["data"]["text"]
+        for event in events.json()["data"]
+        if event["type"] == "agent.session.turn.output_text.done"
+    ]
+    assert texts[0] == "stay"
+    assert "stay" in texts[1]
+    assert "resume" in texts[1]

@@ -33,9 +33,10 @@ on combined serve as an embedded worker.
 
 The durable store holds tenants, agents, sessions, turns, items, the
 event log, usage (never prompt text), and artifact metadata. Artifact
-bytes sit in the configured artifact store. Pi JSONL is a cache.
-Cross-tenant IDs return `404`, not `403`. SQLite is one process.
-Postgres is shared.
+bytes sit in the configured artifact store. Pi JSONL is a cache in
+that same blob store; the session row keeps a pointer, not the file.
+The event log is the transcript. Cross-tenant IDs return `404`, not
+`403`. SQLite is one process. Postgres is shared.
 
 Auth is a callback on the bearer. See [auth](auth.md). Tools, MCP, and
 skills are in [tools](tools.md). Environments are in

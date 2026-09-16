@@ -81,12 +81,14 @@ An `openai_hosted` computer lasts until
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour): Pi stops and the
 workspace is deleted. The session row stays. The next message starts
 Pi again, rebuilds `/workspace` from stored config (skills, packages,
-setup commands), and continues from the event log.
+setup commands), reloads the cached harness session file so the model
+keeps the conversation, and continues the event log.
 `GET /v1/agents/sessions/{id}/export` returns the transcript as JSON.
 A session export is enough to leave.
 
 `DELETE` removes the session for that tenant, including the workspace
-directory, artifact metadata, and stored bytes.
+directory, artifact metadata, stored bytes, and the harness session
+cache.
 
 ## The computer and files
 
@@ -103,9 +105,11 @@ On `openai_hosted`, the path is
 `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}`. In a microVM the guest
 cwd is `/workspace`. Read, write, edit, and bash run against that
 folder. After `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour) with
-no activity, Pi stops and the directory is deleted. The transcript and
-published artifacts stay. The next turn rebuilds `/workspace` from
-stored config. That directory is bounded by
+no activity, Pi stops and the directory is deleted. The transcript,
+published artifacts, and the harness session cache stay. The next turn
+rebuilds `/workspace` from stored config and reloads that cache so Pi
+continues the conversation. Scratch files and published artifact bytes
+are not copied back into `/workspace`. That directory is bounded by
 `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB).
 
 On `self_hosted`, files stay on the runner. The gateway also copies

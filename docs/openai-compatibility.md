@@ -72,7 +72,7 @@ yours.
 | Isolation | OpenAI's managed sandbox | Run mode `none` or `microvm` ([run modes](run-modes.md)) |
 | Auth | OpenAI account keys | A callback maps the bearer to a tenant. The gateway does not mint keys. See [auth](auth.md). |
 | `self_hosted` | OpenAI `codex exec-server` | ApiPi runner WebSocket at `/v1/environments/{environment_id}`. Create returns `environment_id` and a one-time `key`. |
-| Hosted files | Last until OpenAI's sandbox idle expiry | Last until `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour). Then Pi stops and `/workspace` is deleted. The next turn rebuilds skills, packages, and setup commands. The session transcript stays. |
+| Hosted files | Last until OpenAI's sandbox idle expiry | Last until `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour). Then Pi stops and `/workspace` is deleted. The next turn rebuilds skills, packages, and setup commands, and reloads the harness session cache. The session transcript stays. |
 | `output_text.delta` | May be durable on their side | Live SSE only. Reconnect and export use `output_text.done` and items. |
 | SSE events | Typed OpenAI stream objects | `{type, seq, data, …}`. Extra OpenAI fields such as `delta` at the top level are omitted. Use raw SSE / `with_streaming_response`. |
 
@@ -122,7 +122,7 @@ yours.
 | --- | --- | --- |
 | Session / transcript | Durable on their side | Durable in SQLite or Postgres until you delete the session. Export is enough to leave. |
 | Computer / files | Cloud sandbox, about an hour idle | Hosted directory until sandbox TTL (default 1 hour), then a fresh `/workspace`. `none` has no files. `self_hosted` files stay on the runner. |
-| Idle Pi | Their sandbox runtime | `none` and `self_hosted`: `APIPI_IDLE_TTL` (default 15 minutes) stops Pi. Hosted computers use sandbox TTL. The session row stays. |
+| Idle Pi | Their sandbox runtime | `none` and `self_hosted`: `APIPI_IDLE_TTL` (default 15 minutes) stops Pi. Hosted computers use sandbox TTL. The session row stays. The next turn starts a new Pi and reloads the cached session file. |
 | Artifacts | `/workspace/outputs` published on turn complete | `artifacts/` and `outputs/` copied to the host store on turn complete. Immutable. Downloadable after the workspace expires. |
 | Follow-up affinity | OpenAI's fleet | API-only plus workers: any API replica. Combined `apipi serve`: sticky to the node that holds Pi. See [multiple nodes](scale.md). |
 

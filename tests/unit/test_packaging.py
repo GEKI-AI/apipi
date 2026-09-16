@@ -19,4 +19,4 @@ def test_pyproject_ships_cli_and_s3_extra() -> None:
 def test_alembic_revisions_chain() -> None:
     versions = Path("src/apipi/store/migrations/versions")
     files = sorted(path.name for path in versions.glob("*.py"))
-    assert files == ["0001_initial.py", "0002_workers.py"]
+    assert files == ["0001_initial.py", "0002_workers.py", "0003_pi_session.py"]
