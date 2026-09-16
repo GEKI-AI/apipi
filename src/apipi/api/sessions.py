@@ -20,7 +20,11 @@ from apipi.env.setup import SetupError, prepare_workspace
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.errors import ApiError, gone
 from apipi.execution import Execution
-from apipi.mcp.http import McpConnectError, connect_mcp_http_tools
+from apipi.mcp.http import (
+    McpConnectError,
+    apply_vault_headers,
+    connect_mcp_http_tools,
+)
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.otel import set_span, start_span
 from apipi.pi.artifacts import wipe_artifact_store, wipe_workspace
@@ -47,7 +51,9 @@ from apipi.store.repo import (
     get_session,
     get_session_artifact,
     get_session_turn,
+    get_vault,
     list_artifacts,
+    list_credentials_for_vault_ids,
     list_items,
     list_sessions,
     list_turns,
@@ -86,6 +92,7 @@ class SessionCreate(StrictModel):
     input: str | dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
     stream: bool = False
+    vault_ids: list[uuid.UUID] | None = None
 
 
 class SessionUpdate(StrictModel):
@@ -235,6 +242,7 @@ def session_body(row: SessionRow) -> dict[str, Any]:
         "required_actions": row.required_actions,
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
+        "vault_ids": [str(item) for item in (row.vault_ids or [])],
     }
 
 
@@ -348,6 +356,10 @@ async def create_agent_session(
                     tool.model_dump(exclude_none=True) for tool in body.agent.tools
                 ]
         key_id = getattr(request.state, "key_id", "")
+        vault_ids = [str(item) for item in (body.vault_ids or [])]
+        for vault_id in body.vault_ids or []:
+            if await get_vault(db, tenant.id, vault_id) is None:
+                not_found()
         row = await create_session(
             db,
             tenant.id,
@@ -357,6 +369,7 @@ async def create_agent_session(
             environment=environment,
             metadata=body.metadata,
             key_id=key_id if isinstance(key_id, str) else "",
+            vault_ids=vault_ids,
         )
         if environment.get("type") == "openai_hosted":
             directory = session_workspace(request.app.state.settings, tenant.id, row.id)
@@ -424,6 +437,14 @@ async def create_agent_session(
     ):
         try:
             connected = await connect_mcp_http_tools(raw_tools)
+            if vault_ids:
+                async with store.session() as db:
+                    creds = await list_credentials_for_vault_ids(
+                        db,
+                        tenant.id,
+                        [uuid.UUID(item) for item in vault_ids],
+                    )
+                connected = apply_vault_headers(connected, creds)
             stdio = await start_mcp_stdio_tools(
                 raw_tools,
                 on_host=execution.stdio_on_host,

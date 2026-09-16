@@ -22,10 +22,11 @@ file rarely. Edit in place. Do not keep an amendment log.
 4. **Pi is the harness we ship.**
    Small loop, RPC. A second adapter later must not change the public API.
 
-5. **We do not mint or store tenant API keys.**
-   Browsers do not hold them.
-   Production clients send a bearer the gateway does not keep.
-   Auth is a callback; default hashes the key (`docs/auth.md`).
+5. **We do not mint or store the gateway auth bearer.**
+   Browsers do not hold it. Production clients send a bearer the
+   gateway does not keep. Auth is a callback; default hashes the key
+   (`docs/auth.md`). MCP vault credentials may be stored tenant-scoped.
+   GET never returns token values. Guests and browsers never see them.
 
 6. **Compatible where it helps, honest where it does not.**
    Official OpenAI clients should work for the subset we implement. Unknown

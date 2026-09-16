@@ -46,9 +46,13 @@ the host in `none` mode, inside the guest in `microvm` mode):
 
 An MCP tool must have `server_url` or `command`, not both. The gateway
 connects HTTP servers when the session is created, then hands them to
-Pi. Stdio servers start next to Pi: on the host in `none` mode, and
-inside the same guest in `microvm` mode. Credentials stay in
-environment variables or a secret store, not in git.
+Pi through a host credential broker. The guest does not receive MCP
+bearers. Prefer a [vault](api.md#vaults) (`static_bearer` bound to
+`mcp_server_url`, attach `vault_ids` on the session). Tool `headers`
+with `${ENV}` still expand on the host. Stdio servers start next to
+Pi: on the host in `none` mode, and inside the same guest in
+`microvm` mode. Stdio credentials stay in environment variables, not
+in git.
 
 Search goes through MCP.
 

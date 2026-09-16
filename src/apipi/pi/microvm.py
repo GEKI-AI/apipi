@@ -17,7 +17,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
 from apipi.config import ConfigError, Settings
@@ -78,6 +78,7 @@ class StartedMicrovm(NamedTuple):
     process: asyncio.subprocess.Process
     chroot_dir: Path
     cleanup: Callable[[], None]
+    broker: Any | None = None
 
     @property
     def vsock(self) -> Path:
@@ -431,8 +432,9 @@ def guest_env(
     mcp_stdio: list[McpStdioServer] | None = None,
     *,
     api_key: str | None = None,
+    broker: object | None = None,
 ) -> dict[str, str]:
-    env = pi_env(settings, mcp_http, mcp_stdio, api_key=api_key)
+    env = pi_env(settings, mcp_http, mcp_stdio, api_key=api_key, broker=broker)
     env["PI_CODING_AGENT_DIR"] = f"{GUEST_WORKSPACE}/.pi/agent"
     return {
         key: value
@@ -512,6 +514,7 @@ def write_workspace_image(
     net: TapNet | None = None,
     extra_dirs: list[tuple[Path, str]] | None = None,
     shell: bool = False,
+    models_json: bytes | None = None,
 ) -> None:
     guest_py = Path(__file__).with_name("guest.py").read_bytes()
     guest_sh = Path(__file__).with_name("guest.sh").read_bytes()
@@ -528,6 +531,8 @@ def write_workspace_image(
         _add_bytes(tar, ".apipi/pi-cmd", shlex.join(pi_args).encode(), mode=0o644)
         _add_bytes(tar, ".apipi/guest.py", guest_py, mode=0o755)
         _add_bytes(tar, ".apipi/guest.sh", guest_sh, mode=0o755)
+        if models_json is not None:
+            _add_bytes(tar, ".pi/agent/models.json", models_json, mode=0o644)
         _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
         if shell:
             _add_bytes(tar, ".apipi/shell", b"", mode=0o644)
@@ -1165,6 +1170,7 @@ async def start_microvm(
         )
         shutil.rmtree(work, ignore_errors=True)
 
+    broker = None
     try:
         setup_tap(
             net,
@@ -1177,6 +1183,17 @@ async def start_microvm(
             allowed_ips=allowed_ips,
             egress_mbit=settings.microvm_egress_mbit,
         )
+        from apipi.broker import start_broker
+        from apipi.pi.model_host import models_json_for_base_url
+
+        broker = await start_broker(
+            settings,
+            api_key=api_key,
+            mcp_http=mcp_http,
+            host="0.0.0.0",
+            port=0,
+            public_host=net.host_ip,
+        )
         _link_or_copy(Path(kernel), chroot_dir / "vmlinux")
         _link_or_copy(Path(rootfs), chroot_dir / "rootfs.ext4")
         if cwd:
@@ -1184,7 +1201,9 @@ async def start_microvm(
         write_workspace_image(
             chroot_dir / "workspace.tar",
             cwd=cwd,
-            env=guest_env(settings, mcp_http, mcp_stdio, api_key=api_key),
+            env=guest_env(
+                settings, mcp_http, mcp_stdio, api_key=api_key, broker=broker
+            ),
             pi_args=pi_command_args(
                 settings,
                 tools=tools,
@@ -1198,6 +1217,7 @@ async def start_microvm(
             net=net,
             extra_dirs=extra_dirs,
             shell=shell,
+            models_json=models_json_for_base_url(settings, broker.openai_base_url),
         )
         config = microvm_config(
             kernel="vmlinux",
@@ -1224,10 +1244,14 @@ async def start_microvm(
             stdout=stdio_out,
             stderr=stdio_out,
         )
-    except (OSError, ConfigError) as exc:
+    except (OSError, ConfigError, RuntimeError, ValueError) as exc:
+        if broker is not None:
+            await broker.stop()
         cleanup()
         if isinstance(exc, ConfigError):
             raise
+        if isinstance(exc, (RuntimeError, ValueError)):
+            raise ConfigError(str(exc)) from exc
         detail = _exc_detail(exc)
         if _permission_denied(detail, exc):
             raise ConfigError(
@@ -1238,13 +1262,15 @@ async def start_microvm(
     if pid is None:
         process.kill()
         await process.wait()
+        if broker is not None:
+            await broker.stop()
         cleanup()
         raise ConfigError("microvm cannot start jailer")
     log.info("jailer", extra={"vm_id": vm_id, "pid": pid})
     if not inherit_stdio:
         console_tasks.append(asyncio.create_task(_log_console(process.stdout)))
         console_tasks.append(asyncio.create_task(_log_console(process.stderr)))
-    return StartedMicrovm(process, chroot_dir, cleanup)
+    return StartedMicrovm(process, chroot_dir, cleanup, broker)
 
 
 async def spawn_microvm_pi(
@@ -1282,6 +1308,9 @@ async def spawn_microvm_pi(
             process.kill()
             await process.wait()
         started.cleanup()
+        extra = started.broker
+        if extra is not None:
+            await extra.stop()
         if isinstance(exc, ConfigError):
             raise
         raise ConfigError("microvm cannot start") from exc
@@ -1311,6 +1340,7 @@ async def spawn_microvm_pi(
         stdin=writer,
         stdout=reader,
         on_stop=started.cleanup,
+        broker=started.broker,
         pull_artifacts=pull_artifacts,
         pull_workspace=pull_workspace,
         pull_session=pull_session,

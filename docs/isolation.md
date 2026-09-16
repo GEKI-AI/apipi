@@ -39,7 +39,9 @@ fall back to `none`. `host` and `jail` are not valid.
 In `microvm`, one guest holds Pi, stdio MCP, and the local computer
 (`environment.openai_hosted` or the `hosted` alias). They share
 `/workspace`. The gateway, Postgres, and tenant secrets stay on the
-host.
+host. The model key and HTTP MCP bearers are injected by a per-session
+credential broker on the TAP host IP (or loopback in `none`). Guest
+`.apipi/env` does not contain those values.
 
 ```
   API / worker process          never enters the guest
@@ -56,8 +58,10 @@ host.
 RPC is JSON lines over vsock. The host does not pipe stdin into the
 guest process tree. Guest localhost works (loopback inside the guest).
 The guest cannot use **host** loopback, so it cannot open Postgres on
-the worker's `localhost`. Model calls and HTTP MCP go through a TAP
-device and NAT. By default that TAP may reach the public internet. It
+the worker's `localhost`. Model calls and HTTP MCP from Pi go to the
+host broker on the TAP gateway address. The broker forwards to the
+real model host and MCP servers. By default the TAP may also reach
+the public internet. It
 is rate-limited with `tc`. An optional destination allowlist can lock
 the guest to named hosts; the model host is always included. See
 [configuration](config.md#networking).

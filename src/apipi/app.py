@@ -11,6 +11,7 @@ from apipi.api.environments import router as environments_router
 from apipi.api.models import router as models_router
 from apipi.api.sessions import router as sessions_router
 from apipi.api.usage import router as usage_router
+from apipi.api.vaults import router as vaults_router
 from apipi.api.workers import router as workers_router
 from apipi.auth import AuthCache, load_authenticate
 from apipi.blobs import ArtifactBlobs, blob_store
@@ -266,6 +267,7 @@ def create_app(
     app.state.blobs = resolved_blobs
     register_exception_handlers(app)
     app.include_router(sessions_router)
+    app.include_router(vaults_router)
     app.include_router(agents_router)
     app.include_router(environments_router)
     app.include_router(usage_router)

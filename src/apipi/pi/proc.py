@@ -21,6 +21,7 @@ class PiProc:
         stdin: asyncio.StreamWriter | None = None,
         stdout: asyncio.StreamReader | None = None,
         on_stop: Callable[[], None] | None = None,
+        broker: Any | None = None,
         pull_artifacts: Callable[[], Awaitable[bytes]] | None = None,
         pull_workspace: Callable[[], Awaitable[bytes]] | None = None,
         pull_session: Callable[[], Awaitable[bytes]] | None = None,
@@ -29,6 +30,7 @@ class PiProc:
         self._stdin = process.stdin if stdin is None else stdin
         self._stdout = process.stdout if stdout is None else stdout
         self._on_stop = on_stop
+        self.broker = broker
         self.pull_artifacts = pull_artifacts
         self.pull_workspace = pull_workspace
         self.pull_session = pull_session
@@ -104,6 +106,9 @@ class PiProc:
             if self._on_stop is not None:
                 self._on_stop()
                 self._on_stop = None
+            if self.broker is not None:
+                await self.broker.stop()
+                self.broker = None
 
 
 def pi_env(
@@ -112,18 +117,24 @@ def pi_env(
     mcp_stdio: list[McpStdioServer] | None = None,
     *,
     api_key: str | None = None,
+    broker: Any | None = None,
 ) -> dict[str, str]:
+    from apipi.broker import DUMMY_KEY
     from apipi.pi.model_host import pi_agent_dir
 
     env = os.environ.copy()
     env.pop("DATABASE_URL", None)
     key = api_key if api_key else settings.model_api_key_overwrite
-    if key:
-        env["OPENAI_API_KEY"] = key
+    if broker is not None:
+        env["OPENAI_API_KEY"] = DUMMY_KEY
+        env["OPENAI_BASE_URL"] = broker.openai_base_url
     else:
-        env.pop("OPENAI_API_KEY", None)
-    if settings.model_base_url:
-        env["OPENAI_BASE_URL"] = settings.model_base_url
+        if key:
+            env["OPENAI_API_KEY"] = key
+        else:
+            env.pop("OPENAI_API_KEY", None)
+        if settings.model_base_url:
+            env["OPENAI_BASE_URL"] = settings.model_base_url
     env["PI_CODING_AGENT_DIR"] = str(pi_agent_dir(settings))
     env["APIPI_PINNED_PI"] = PINNED_PI
     if mcp_http:
@@ -131,10 +142,13 @@ def pi_env(
         for index, server in enumerate(mcp_http):
             prefix = f"APIPI_MCP_{index}"
             env[f"{prefix}_LABEL"] = server.server_label
-            env[f"{prefix}_URL"] = server.server_url
-            for key, value in server.headers.items():
-                safe = key.upper().replace("-", "_")
-                env[f"{prefix}_{safe}"] = value
+            if broker is not None:
+                env[f"{prefix}_URL"] = broker.mcp_url(str(index))
+            else:
+                env[f"{prefix}_URL"] = server.server_url
+                for header, value in server.headers.items():
+                    safe = header.upper().replace("-", "_")
+                    env[f"{prefix}_{safe}"] = value
     if mcp_stdio:
         env["APIPI_MCP_STDIO"] = ",".join(server.server_label for server in mcp_stdio)
         for index, server in enumerate(mcp_stdio):
