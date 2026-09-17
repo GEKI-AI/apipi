@@ -25,16 +25,16 @@ into a tenant id. The same key always maps to the same tenant. See
 ```
 export OPENAI_API_KEY=dev-token
 export OPENAI_BASE_URL=http://localhost:8000/v1
-uv run --with openai python examples/openai_sdk.py
+uv run --with openai python examples/sessions/openai_sdk.py
 ```
 
 Isolation `none` is enough for this tutorial. Production usually uses
 `APIPI_RUN_MODE=microvm`. A size `L` browser capture is
-`examples/browser_screenshot.py`.
+`examples/sessions/browser_screenshot.py`.
 
 ## 1. Run a task
 
-Save the example as `examples/openai_sdk.py`, or run the copy in this
+Save the example as `examples/sessions/openai_sdk.py`, or run the copy in this
 repo. The request creates a session with an inline agent, uses the
 local sandbox, submits a coding task, and streams progress. Those
 instructions reach the model through Pi, not only the agent JSON.
@@ -101,7 +101,7 @@ turn outcome.
 Run it:
 
 ```
-uv run --with openai python examples/openai_sdk.py
+uv run --with openai python examples/sessions/openai_sdk.py
 ```
 
 ## 2. Follow progress

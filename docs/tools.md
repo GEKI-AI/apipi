@@ -89,7 +89,7 @@ not to install browsers. Save screenshots under `outputs/`.
 
 The browser follows Pi (`none` or `microvm`). Inside a `microvm`,
 Chromium can use its own sandbox in the guest. A small client is
-`examples/browser_screenshot.py`.
+`examples/sessions/browser_screenshot.py`.
 
 ## Skills
 

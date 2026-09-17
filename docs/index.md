@@ -78,8 +78,8 @@ package yourself if you want the official client:
 ```
 export OPENAI_API_KEY=dev-token
 export OPENAI_BASE_URL=http://localhost:8000/v1
-uv run --with openai python examples/openai_sdk.py
+uv run --with openai python examples/sessions/openai_sdk.py
 ```
 
-A full script is `examples/openai_sdk.py`. The same flow as OpenAI's
+A full script is `examples/sessions/openai_sdk.py`. The same flow as OpenAI's
 Agents API quickstart is on [Using the API](using.md).
