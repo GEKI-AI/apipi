@@ -11,13 +11,13 @@ from apipi.env.setup import (
     session_env_from,
     session_network_from,
     setup_commands_from,
+    skill_refs_from,
 )
 from apipi.errors import ApiError, not_implemented
 from apipi.schemas import StrictModel
 
 _UNIMPLEMENTED = (
     "environment_template_id",
-    "skills",
     "plugins",
 )
 
@@ -38,6 +38,11 @@ class FileIdFileSpec(StrictModel):
     type: Literal["file_id"]
     file_id: str
     path: str
+
+
+class SkillReferenceSpec(StrictModel):
+    type: Literal["skill_reference"]
+    skill_id: str
 
 
 class NetworkSpec(StrictModel):
@@ -64,6 +69,7 @@ class EnvironmentSpec(StrictModel):
     sandbox_size: Literal["S", "M", "L"] | None = None
     env: dict[str, str] | None = None
     files: list[InlineFileSpec | FileIdFileSpec] | None = None
+    skills: list[SkillReferenceSpec] | None = None
     network: NetworkSpec | None = None
 
     @model_validator(mode="before")
@@ -89,6 +95,15 @@ class EnvironmentSpec(StrictModel):
                             "{field} is not implemented",
                             {"field": "files"},
                         )
+            raw_skills = data.get("skills")
+            if isinstance(raw_skills, list):
+                for item in raw_skills:
+                    if isinstance(item, dict) and item.get("type") != "skill_reference":
+                        raise PydanticCustomError(
+                            "not_implemented",
+                            "{field} is not implemented",
+                            {"field": "skills"},
+                        )
         return data
 
 
@@ -106,11 +121,12 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
         or spec.setup_commands is not None
         or spec.env is not None
         or spec.files is not None
+        or spec.skills is not None
     )
     if hosted_only and env_type != "openai_hosted":
         raise ApiError(
             "invalid_request",
-            "packages, setup_commands, env, and files need openai_hosted",
+            "packages, setup_commands, env, files, and skills need openai_hosted",
             code="invalid_request",
         )
     if spec.capability_directories is not None:
@@ -129,6 +145,8 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
         payload["env"] = spec.env
     if spec.files is not None:
         payload["files"] = [item.model_dump() for item in spec.files]
+    if spec.skills is not None:
+        payload["skills"] = [item.model_dump() for item in spec.skills]
     if spec.network is not None:
         if env_type == "self_hosted":
             raise ApiError(
@@ -151,9 +169,16 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
         session_env_from(payload)
         inline = inline_files_from(payload)
         refs = file_id_refs_from(payload)
+        skill_ids = skill_refs_from(payload)
         session_network_from(payload)
     except SetupError as exc:
         raise ApiError("invalid_request", exc.message, code="invalid_request") from exc
+    if len(skill_ids) > 32:
+        raise ApiError(
+            "invalid_request",
+            "skills is at most 32",
+            code="invalid_request",
+        )
     if len(inline) + len(refs) > 50:
         raise ApiError(
             "invalid_request",

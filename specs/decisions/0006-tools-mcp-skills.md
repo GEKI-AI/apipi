@@ -9,10 +9,12 @@ Extend with:
 - **MCP** -- HTTP (OpenAI shape) or stdio (local servers)
 - **Skills** -- `SKILL.md` directories on the computer, same as the
   [Agent Skills](https://agentskills.io/home) standard and OpenAI's
-  `environment.capability_directories`
+  `environment.capability_directories`. Hosted packs upload to
+  `/v1/skills` and attach with `environment.skills`
+  `skill_reference`. Discovery is still from directories in the
+  workspace after the pack is unpacked.
 
 Search and browser are not built in. Examples: Tavily MCP, Playwright
 MCP (`examples/`). Any other MCP server or skill pack is valid.
 
-No first-party `web_search`. No browser engine in the gateway. No
-`/v1/skills` store -- discovery is from directories in the workspace.
+No first-party `web_search`. No browser engine in the gateway.

@@ -90,8 +90,8 @@ yours.
 | `WS /v1/environments/{environment_id}` | Same shape, different backend (ApiPi runner protocol) |
 | `GET /health`, `GET /metrics` | ApiPi operator routes |
 | `POST/GET/DELETE /v1/files`, `GET /v1/files/{id}/content` | Same API (purpose `user_data` or `assistants`; max `APIPI_MAX_FILE_BYTES`) |
+| `POST/GET/DELETE /v1/skills` | Same shape, zip upload (no version endpoints). Max `APIPI_MAX_FILE_BYTES`. |
 | `/v1/chat/completions` | Error (no such route) |
-| `/v1/skills` hosted store | Error (skills are files on the computer) |
 | ChatKit | Error (no such routes) |
 | Vaults | `/v1/agents/vaults` and credentials. `static_bearer` only. GET omits token values. `mcp_oauth` is `not_implemented`. |
 
@@ -119,7 +119,8 @@ yours.
 | `env` | Same API on `openai_hosted` only; reserved names `400`; `400` on `none` or `self_hosted` |
 | `files` with `type: "inline"` or `type: "file_id"` | Same API on `openai_hosted` only. `file_id` mounts a Files API object. Other file types are `not_implemented`. |
 | `network` | Same API on `openai_hosted` only. Session policy cannot widen `[sandbox.network]`. Isolation `none` cannot enforce `disabled` / `restricted`. |
-| `environment_template_id`, `skills`, `plugins` | Error (`not_implemented`) |
+| `skills` with `type: "skill_reference"` | Same API on `openai_hosted` only. Zip unpacks under `.agents/skills/`. Other skill types are `not_implemented`. |
+| `environment_template_id`, `plugins` | Error (`not_implemented`) |
 | Unknown JSON keys | Error (`unknown_field`) |
 
 ## Lifecycle

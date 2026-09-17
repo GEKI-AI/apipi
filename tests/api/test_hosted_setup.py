@@ -148,7 +148,6 @@ async def test_unimplemented_env_fields(client: AsyncClient) -> None:
     agent_id = await _agent(client, token)
     for field, value in (
         ("environment_template_id", "tpl"),
-        ("skills", []),
         ("plugins", []),
     ):
         response = await client.post(
