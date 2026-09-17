@@ -200,6 +200,7 @@ function waitForSpawn(proc: ChildProcessWithoutNullStreams): Promise<void> {
       done = true;
       clearInterval(timer);
       proc.stderr.off("data", onErr);
+      proc.stdout.off("data", onErr);
       if (err) {
         reject(err);
         return;
@@ -213,13 +214,14 @@ function waitForSpawn(proc: ChildProcessWithoutNullStreams): Promise<void> {
       }
     };
     proc.stderr.on("data", onErr);
+    proc.stdout.on("data", onErr);
     const timer = setInterval(() => {
       if (proc.exitCode !== null) {
         finish(new Error("mcp process exited"));
         return;
       }
       const idle = Date.now() - last;
-      if ((saw && idle >= 1500) || idle >= 8000) {
+      if ((saw && idle >= 2000) || idle >= 20000) {
         finish();
       }
     }, 200);
@@ -236,7 +238,13 @@ function startServer(server: {
   return new Promise((resolve, reject) => {
     const proc = spawn(server.command, server.args, {
       cwd: server.cwd,
-      env: { ...process.env, PLAYWRIGHT_CHROMIUM_SANDBOX: "0" },
+      env: {
+        ...process.env,
+        PLAYWRIGHT_CHROMIUM_SANDBOX: "0",
+        NPM_CONFIG_LOGLEVEL: "silent",
+        npm_config_progress: "false",
+        npm_config_fund: "false",
+      },
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
     const fail = (err: Error) => {
@@ -266,13 +274,31 @@ function startServer(server: {
 async function attachStdio(pi: ExtensionAPI): Promise<void> {
   for (const server of stdioServers()) {
     const proc = await startServer(server);
-    const client = new McpClient(proc);
     await waitForSpawn(proc);
-    await client.request("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "apipi", version: "0.2.0" },
-    });
+    const client = new McpClient(proc);
+    const deadline = Date.now() + MCP_TIMEOUT_MS;
+    let last = new Error(`mcp ${server.label} initialize failed`);
+    while (Date.now() < deadline) {
+      try {
+        await client.request(
+          "initialize",
+          {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "apipi", version: "0.2.0" },
+          },
+          8000,
+        );
+        last = new Error("");
+        break;
+      } catch (err) {
+        last = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+    if (last.message) {
+      proc.kill();
+      throw last;
+    }
     client.notify("notifications/initialized");
     const listed = (await client.request("tools/list", {})) as {
       tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
