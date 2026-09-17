@@ -4,9 +4,9 @@ from pathlib import Path
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
-from apipi.pi.dirs import PI_SESSION_REL, pi_session_file
-from apipi.pi.extension import host_mcp_extension
-from apipi.pi.proc import PiProc, pi_command_args, pi_env
+from apipi.worker.pi.dirs import PI_SESSION_REL, pi_session_file
+from apipi.worker.pi.extension import host_mcp_extension
+from apipi.worker.pi.proc import PiProc, pi_command_args, pi_env
 
 
 class NoneIsolation:
@@ -45,8 +45,8 @@ class NoneIsolation:
             path = pi_session_file(root)
             path.parent.mkdir(parents=True, exist_ok=True)
             session_file = PI_SESSION_REL
-        from apipi.pi.broker import start_broker
-        from apipi.pi.model_host import models_json_for_base_url
+        from apipi.worker.pi.broker import start_broker
+        from apipi.worker.pi.model_host import models_json_for_base_url
 
         args = pi_command_args(
             settings,

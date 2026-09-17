@@ -5,7 +5,7 @@ import pytest
 
 from apipi.config import ConfigError, Settings
 from apipi.gateway.errors import ApiError
-from apipi.pi.model_host import (
+from apipi.worker.pi.model_host import (
     PI_PROVIDER,
     fetch_model_ids,
     fetch_models_json,
@@ -17,8 +17,8 @@ from apipi.pi.model_host import (
     require_model,
     write_pi_models_json,
 )
-from apipi.pi.proc import pi_command_args, pi_env
-from apipi.pi.version import PINNED_PI
+from apipi.worker.pi.proc import pi_command_args, pi_env
+from apipi.worker.pi.version import PINNED_PI
 
 
 def _settings(
@@ -132,13 +132,13 @@ def test_fetch_model_ids_ok(monkeypatch: pytest.MonkeyPatch) -> None:
         assert url.endswith("/models")
         return httpx.Response(200, json={"data": [{"id": "m1"}]})
 
-    monkeypatch.setattr("apipi.pi.model_host.httpx.get", fake_get)
+    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
     assert fetch_model_ids("http://model.test/v1", "k") == ["m1"]
 
 
 def test_listed_models_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "apipi.pi.model_host.httpx.get",
+        "apipi.worker.pi.model_host.httpx.get",
         lambda *_args, **_kwargs: httpx.Response(401, json={"error": "no"}),
     )
     with pytest.raises(ApiError) as exc:
@@ -156,7 +156,7 @@ def test_fetch_models_json_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
         assert headers["Authorization"] == "Bearer k"
         return httpx.Response(200, json=payload)
 
-    monkeypatch.setattr("apipi.pi.model_host.httpx.get", fake_get)
+    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
     assert fetch_models_json("http://model.test/v1", "k") == payload
 
 
@@ -169,7 +169,7 @@ def test_probe_model_host_requires_base_url(tmp_path: Path) -> None:
 def test_probe_model_host_requires_pi(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("apipi.pi.model_host.shutil.which", lambda _name: None)
+    monkeypatch.setattr("apipi.worker.pi.model_host.shutil.which", lambda _name: None)
     with pytest.raises(ConfigError, match="pi is not on PATH"):
         probe_model_host(_settings(tmp_path))
 
@@ -177,13 +177,15 @@ def test_probe_model_host_requires_pi(
 def test_probe_model_host_writes_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("apipi.pi.model_host.shutil.which", lambda _name: "/bin/pi")
     monkeypatch.setattr(
-        "apipi.pi.model_host.subprocess.check_output",
+        "apipi.worker.pi.model_host.shutil.which", lambda _name: "/bin/pi"
+    )
+    monkeypatch.setattr(
+        "apipi.worker.pi.model_host.subprocess.check_output",
         lambda *_args, **_kwargs: PINNED_PI + "\n",
     )
     monkeypatch.setattr(
-        "apipi.pi.model_host.fetch_model_ids",
+        "apipi.worker.pi.model_host.fetch_model_ids",
         lambda *_args, **_kwargs: ["m1"],
     )
     settings = _settings(tmp_path)

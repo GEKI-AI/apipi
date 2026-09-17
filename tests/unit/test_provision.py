@@ -131,7 +131,7 @@ def test_run_host_setup_nonzero_is_setup_error(tmp_path: Path) -> None:
 
 
 def test_guest_run_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from apipi.pi.guest import _run_setup
+    from apipi.worker.pi.guest import _run_setup
 
     workspace = tmp_path / "guest"
     workspace.mkdir()

@@ -80,7 +80,7 @@ async def test_remote_turn_via_worker(settings: Settings, store: Store) -> None:
                     "lease_id": message.get("lease_id"),
                 }
             )
-            from apipi.worker import dispatch_command
+            from apipi.worker.hub import dispatch_command
 
             await dispatch_command(local, message)
 

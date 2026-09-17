@@ -12,9 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.config import ConfigError, DiskLimitError, Settings
 from apipi.env.hub import EnvDisconnected, EnvironmentHub
-from apipi.pi.dirs import pi_session_file, sessions_root
-from apipi.pi.pool import PiPool
-from apipi.pi.proc import PiProc
 from apipi.services.skills import copy_capability_directories
 from apipi.store.blobs import ArtifactBlobs, blob_store
 from apipi.store.engine import Store
@@ -25,6 +22,9 @@ from apipi.store.repo import (
     get_session_by_id,
     list_artifacts,
 )
+from apipi.worker.pi.dirs import pi_session_file, sessions_root
+from apipi.worker.pi.pool import PiPool
+from apipi.worker.pi.proc import PiProc
 
 WORKSPACE_OUTPUTS = "outputs"
 PUBLISH_DIRS = (WORKSPACE_OUTPUTS,)

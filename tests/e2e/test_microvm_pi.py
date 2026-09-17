@@ -12,9 +12,9 @@ from httpx import ASGITransport, AsyncClient
 
 from apipi.config import ConfigError, Settings
 from apipi.gateway import create_app
-from apipi.pi.microvm import microvm_images, require_microvm
-from apipi.pi.probe import probe_run_mode
 from apipi.store.engine import Store
+from apipi.worker.pi.microvm import microvm_images, require_microvm
+from apipi.worker.pi.probe import probe_run_mode
 
 pytestmark = [pytest.mark.e2e, pytest.mark.microvm]
 

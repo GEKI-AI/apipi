@@ -5,8 +5,8 @@ from typing import Any
 from apipi.env.computer import Computer
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
-from apipi.pi.map import map_pi_event
-from apipi.pi.pool import PiPool
+from apipi.worker.pi.map import map_pi_event
+from apipi.worker.pi.pool import PiPool
 
 
 class PiHarness:

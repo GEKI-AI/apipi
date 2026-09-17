@@ -4,10 +4,10 @@ from httpx import ASGITransport, AsyncClient
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.pi.platform_prompt import BROWSER_HINT
-from apipi.pi.sandbox import PLAYWRIGHT_LABEL
 from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
+from apipi.worker.pi.platform_prompt import BROWSER_HINT
+from apipi.worker.pi.sandbox import PLAYWRIGHT_LABEL
 
 
 def _auth(token: str) -> dict[str, str]:

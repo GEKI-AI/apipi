@@ -17,28 +17,6 @@ from apipi.gateway.metrics import Metrics, observe_turn
 from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.mcp.http import McpConnectError
 from apipi.mcp.stdio import start_mcp_stdio_tools
-from apipi.pi.artifacts import (
-    ensure_openai_workspace,
-    harvest_session,
-    restore_pi_session,
-)
-from apipi.pi.isolation import load_isolation
-from apipi.pi.model_host import (
-    listed_models,
-    require_listed_model,
-    require_model,
-    write_pi_models_json,
-)
-from apipi.pi.platform_prompt import compose_instructions
-from apipi.pi.pool import PiPool
-from apipi.pi.proc import PiProc
-from apipi.pi.sandbox import (
-    image_for_size,
-    mem_mib_for_size,
-    merge_playwright,
-    playwright_attached,
-    sandbox_size_of,
-)
 from apipi.services.files import FileService
 from apipi.services.payload_export import export_payload
 from apipi.services.skill_store import SkillService
@@ -61,6 +39,28 @@ from apipi.store.repo import (
     list_items,
     list_turns,
     update_session,
+)
+from apipi.worker.pi.artifacts import (
+    ensure_openai_workspace,
+    harvest_session,
+    restore_pi_session,
+)
+from apipi.worker.pi.isolation import load_isolation
+from apipi.worker.pi.model_host import (
+    listed_models,
+    require_listed_model,
+    require_model,
+    write_pi_models_json,
+)
+from apipi.worker.pi.platform_prompt import compose_instructions
+from apipi.worker.pi.pool import PiPool
+from apipi.worker.pi.proc import PiProc
+from apipi.worker.pi.sandbox import (
+    image_for_size,
+    mem_mib_for_size,
+    merge_playwright,
+    playwright_attached,
+    sandbox_size_of,
 )
 
 log = logging.getLogger("apipi")
@@ -592,7 +592,7 @@ async def _write_turn_log(
     )
     latency_ms = _latency_ms(turn.created_at)
     if settings is not None:
-        from apipi.pi.isolation import isolation_name
+        from apipi.worker.pi.isolation import isolation_name
 
         run_mode = isolation_name(settings.run_mode)
     else:
@@ -1098,7 +1098,7 @@ async def run_turn(
                 if settings is not None:
                     gateway_allowlist = settings.microvm_egress_allowlist
                     if settings.run_mode == "microvm":
-                        from apipi.pi.microvm import microvm_egress_hosts
+                        from apipi.worker.pi.microvm import microvm_egress_hosts
 
                         gateway_hosts = tuple(microvm_egress_hosts(settings))
                     if backend is None:

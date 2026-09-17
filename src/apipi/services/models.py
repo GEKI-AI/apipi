@@ -2,7 +2,7 @@ from typing import Any
 
 from apipi.config import Settings
 from apipi.gateway.errors import ApiError, not_implemented
-from apipi.pi.model_host import fetch_models_json
+from apipi.worker.pi.model_host import fetch_models_json
 
 
 class ModelsService:

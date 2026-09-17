@@ -4,7 +4,7 @@ import pytest
 
 from apipi.cli import main
 from apipi.config import ConfigError, Settings
-from apipi.pi.microvm import SHELL_WARNING
+from apipi.worker.pi.microvm import SHELL_WARNING
 
 
 class _Tty:

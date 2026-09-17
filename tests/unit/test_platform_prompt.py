@@ -1,5 +1,5 @@
 from apipi.config import Settings
-from apipi.pi.platform_prompt import (
+from apipi.worker.pi.platform_prompt import (
     BROWSER_HINT,
     DEFAULT_PLATFORM_PROMPT,
     compose_instructions,

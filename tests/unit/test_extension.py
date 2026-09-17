@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from apipi.config import Settings
-from apipi.pi.extension import (
+from apipi.worker.pi.extension import (
     GUEST_MCP_EXTENSION,
     MCP_EXTENSION_REL,
     host_mcp_extension,

@@ -29,9 +29,8 @@ Code comments stay omitted unless asked.
 | `src/apipi/api/` | HTTP routes |
 | `src/apipi/gateway/` | Gateway handle, auth, errors, middleware, schemas |
 | `src/apipi/services/` | Session/Agent/Vault/File/Skill/Model/Usage services and EventHub |
-| `src/apipi/worker/` | Trusted worker control and session execution adapters |
+| `src/apipi/worker/` | Worker control, execution adapters, Pi harness, isolation |
 | `src/apipi/store/` | Durable store and object blobs |
-| `src/apipi/pi/` | Harness adapter, isolation, sandbox sizes, credential broker |
 | `src/apipi/env/` | Computer and hosted/self_hosted environments |
 | `src/apipi/mcp/` | HTTP and stdio MCP |
 | `docs/` | Product and operator docs. Read the page for the part you are changing. |

@@ -9,12 +9,6 @@ from apipi.gateway.errors import ApiError
 from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing
 from apipi.mcp.stdio import McpStdioServer
-from apipi.pi.artifacts import harvest_session, reap_workspace_loop
-from apipi.pi.harness import PiHarness
-from apipi.pi.isolation import load_isolation
-from apipi.pi.isolation.base import Isolation
-from apipi.pi.pool import PiPool
-from apipi.pi.proc import PiProc
 from apipi.services.runtime import (
     EventHub,
     continue_turn,
@@ -28,6 +22,12 @@ from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
 from apipi.store.repo import get_session, get_session_by_id, get_worker
+from apipi.worker.pi.artifacts import harvest_session, reap_workspace_loop
+from apipi.worker.pi.harness import PiHarness
+from apipi.worker.pi.isolation import load_isolation
+from apipi.worker.pi.isolation.base import Isolation
+from apipi.worker.pi.pool import PiPool
+from apipi.worker.pi.proc import PiProc
 
 log = logging.getLogger("apipi.worker")
 

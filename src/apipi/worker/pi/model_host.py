@@ -7,8 +7,8 @@ import httpx
 
 from apipi.config import ConfigError, Settings
 from apipi.gateway.errors import ApiError
-from apipi.pi.dirs import sessions_root
-from apipi.pi.version import PINNED_PI
+from apipi.worker.pi.dirs import sessions_root
+from apipi.worker.pi.version import PINNED_PI
 
 PI_PROVIDER = "apipi"
 

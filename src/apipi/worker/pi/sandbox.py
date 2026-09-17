@@ -160,7 +160,7 @@ def require_size_rootfs(settings: Settings, size: str) -> None:
     if size != "L" or settings.api_only or settings.run_mode != "microvm":
         return
     from apipi.config import ConfigError
-    from apipi.pi.microvm import microvm_images
+    from apipi.worker.pi.microvm import microvm_images
 
     try:
         microvm_images(settings, image="browser")

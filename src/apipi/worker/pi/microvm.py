@@ -29,14 +29,14 @@ from apipi.env.setup import (
 )
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
-from apipi.pi.dirs import PI_SESSION_REL, pi_session_file
-from apipi.pi.extension import (
+from apipi.worker.pi.dirs import PI_SESSION_REL, pi_session_file
+from apipi.worker.pi.extension import (
     GUEST_MCP_EXTENSION,
     MCP_EXTENSION_REL,
     mcp_extension_source,
 )
-from apipi.pi.model_host import pi_agent_dir
-from apipi.pi.proc import PiProc, pi_command_args, pi_env
+from apipi.worker.pi.model_host import pi_agent_dir
+from apipi.worker.pi.proc import PiProc, pi_command_args, pi_env
 
 VSOCK_PORT = 52
 VSOCK_ARTIFACT_PORT = 53
@@ -311,7 +311,7 @@ def require_microvm(settings: Settings | None = None) -> None:
 
 
 async def probe_microvm(settings: Settings) -> None:
-    from apipi.pi.sandbox import image_for_size
+    from apipi.worker.pi.sandbox import image_for_size
 
     size = settings.sandbox_default_size
     proc = await spawn_microvm_pi(
@@ -1236,8 +1236,8 @@ async def start_microvm(
             allowed_ips=allowed_ips,
             egress_mbit=settings.microvm_egress_mbit,
         )
-        from apipi.pi.broker import start_broker
-        from apipi.pi.model_host import models_json_for_base_url
+        from apipi.worker.pi.broker import start_broker
+        from apipi.worker.pi.model_host import models_json_for_base_url
 
         broker = await start_broker(
             settings,

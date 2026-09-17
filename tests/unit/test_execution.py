@@ -7,12 +7,12 @@ from apipi.config import Settings
 from apipi.env.hub import EnvironmentHub
 from apipi.gateway import create_app
 from apipi.gateway.errors import ApiError
-from apipi.pi.isolation import load_isolation
-from apipi.pi.pool import PiPool
-from apipi.pi.proc import PiProc
 from apipi.services.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store
 from apipi.worker.execution import LocalExecution
+from apipi.worker.pi.isolation import load_isolation
+from apipi.worker.pi.pool import PiPool
+from apipi.worker.pi.proc import PiProc
 
 
 class _Alive:

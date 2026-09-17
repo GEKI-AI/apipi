@@ -8,7 +8,7 @@ from apipi.cli import main
 from apipi.config import ConfigError, Settings
 from apipi.gateway import ready
 from apipi.gateway.ready import check_ready, run_checks
-from apipi.pi.version import PINNED_PI
+from apipi.worker.pi.version import PINNED_PI
 
 
 def _settings(

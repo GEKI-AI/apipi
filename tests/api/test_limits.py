@@ -9,10 +9,10 @@ from httpx import ASGITransport, AsyncClient
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import authenticate
-from apipi.pi.pool import PiPool
-from apipi.pi.proc import PiProc
 from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
+from apipi.worker.pi.pool import PiPool
+from apipi.worker.pi.proc import PiProc
 
 
 class _Alive:

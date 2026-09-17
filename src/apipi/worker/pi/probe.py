@@ -1,7 +1,7 @@
 import asyncio
 
 from apipi.config import Settings
-from apipi.pi.isolation import load_isolation
+from apipi.worker.pi.isolation import load_isolation
 
 
 def probe_run_mode(settings: Settings) -> None:

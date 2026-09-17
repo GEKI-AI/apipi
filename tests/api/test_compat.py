@@ -355,7 +355,7 @@ async def test_compat_artifacts(
     directory = Path(created["environment"]["directory"])
     (directory / "outputs").mkdir()
     (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
-    from apipi.pi.artifacts import harvest_session
+    from apipi.worker.pi.artifacts import harvest_session
 
     async with store.session() as db:
         await harvest_session(db, settings, uuid.UUID(session_id), None)

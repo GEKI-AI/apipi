@@ -11,12 +11,12 @@ from httpx import ASGITransport, AsyncClient
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.pi.artifacts import reap_workspaces
-from apipi.pi.dirs import pi_session_file
-from apipi.pi.pool import PiPool
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import get_session_by_id, get_session_turn
+from apipi.worker.pi.artifacts import reap_workspaces
+from apipi.worker.pi.dirs import pi_session_file
+from apipi.worker.pi.pool import PiPool
 
 pytestmark = pytest.mark.e2e
 

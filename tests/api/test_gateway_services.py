@@ -94,7 +94,7 @@ async def test_in_process_models_list(
         assert url.endswith("/models")
         return httpx.Response(200, json=payload)
 
-    monkeypatch.setattr("apipi.pi.model_host.httpx.get", fake_get)
+    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
     gateway = Gateway.create(
         settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
         store=store,

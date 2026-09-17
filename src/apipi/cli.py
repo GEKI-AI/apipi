@@ -31,17 +31,17 @@ from apipi.config import (
 from apipi.gateway import create_app
 from apipi.gateway.logutil import configure_logging, uvicorn_log_config
 from apipi.gateway.ready import check_ready
-from apipi.pi.install import run_install
-from apipi.pi.isolation import load_isolation
-from apipi.pi.microvm import (
+from apipi.store.migrate import migrate
+from apipi.worker.pi.install import run_install
+from apipi.worker.pi.isolation import load_isolation
+from apipi.worker.pi.microvm import (
     SHELL_WARNING,
     microvm_shell_needs_sudo,
     reexec_microvm_shell,
     run_microvm_shell,
 )
-from apipi.pi.model_host import probe_model_host
-from apipi.pi.probe import probe_run_mode
-from apipi.store.migrate import migrate
+from apipi.worker.pi.model_host import probe_model_host
+from apipi.worker.pi.probe import probe_run_mode
 
 log = logging.getLogger("apipi")
 
@@ -300,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.command == "worker":
-            from apipi.worker import run_worker
+            from apipi.worker.hub import run_worker
 
             settings = prepare_worker(config_path=args.config)
             asyncio.run(run_worker(settings, url=args.url))

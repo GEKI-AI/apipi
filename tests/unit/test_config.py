@@ -15,7 +15,7 @@ from apipi.config import (
     postgres_url,
     store_url,
 )
-from apipi.pi.proc import pi_command_args
+from apipi.worker.pi.proc import pi_command_args
 
 
 def test_postgres_url_accepts_postgresql() -> None:

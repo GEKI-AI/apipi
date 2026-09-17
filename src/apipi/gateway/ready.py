@@ -17,11 +17,15 @@ from apipi.config import (
 )
 from apipi.gateway.auth import load_authenticate
 from apipi.gateway.logutil import configure_logging
-from apipi.pi.isolation import load_isolation
-from apipi.pi.model_host import fetch_model_ids, installed_pi_version, require_pinned_pi
-from apipi.pi.probe import probe_run_mode
-from apipi.pi.version import PINNED_PI
 from apipi.store.engine import create_engine
+from apipi.worker.pi.isolation import load_isolation
+from apipi.worker.pi.model_host import (
+    fetch_model_ids,
+    installed_pi_version,
+    require_pinned_pi,
+)
+from apipi.worker.pi.probe import probe_run_mode
+from apipi.worker.pi.version import PINNED_PI
 
 
 @dataclass(frozen=True)

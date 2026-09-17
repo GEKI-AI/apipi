@@ -8,9 +8,9 @@ from typing import Any
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
-from apipi.pi.version import PINNED_PI
+from apipi.worker.pi.version import PINNED_PI
 
-log = logging.getLogger("apipi.pi")
+log = logging.getLogger("apipi.worker.pi")
 
 
 class PiProc:
@@ -120,8 +120,8 @@ def pi_env(
     broker: Any | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    from apipi.pi.broker import DUMMY_KEY
-    from apipi.pi.model_host import pi_agent_dir
+    from apipi.worker.pi.broker import DUMMY_KEY
+    from apipi.worker.pi.model_host import pi_agent_dir
 
     env = os.environ.copy()
     env.pop("DATABASE_URL", None)
@@ -176,7 +176,7 @@ def pi_command_args(
     session_file: str | None = None,
     extension: str | None = None,
 ) -> list[str]:
-    from apipi.pi.model_host import PI_PROVIDER
+    from apipi.worker.pi.model_host import PI_PROVIDER
 
     command = settings.pi_command.split()
     args = [*command, "--mode", "rpc"]
@@ -216,7 +216,7 @@ async def spawn_pi(
     image: str | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> PiProc:
-    from apipi.pi.isolation import load_isolation
+    from apipi.worker.pi.isolation import load_isolation
 
     return await load_isolation(settings.run_mode).spawn(
         settings,

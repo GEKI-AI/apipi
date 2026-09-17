@@ -1,5 +1,5 @@
 from apipi.env.hub import VERBS
-from apipi.worker import COMMAND_OPS, WORKER_IN, worker_ws_url
+from apipi.worker.hub import COMMAND_OPS, WORKER_IN, worker_ws_url
 
 
 def test_worker_protocol_is_not_self_hosted() -> None:

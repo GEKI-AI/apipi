@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from apipi.config import ConfigError, Settings
-from apipi.pi.dirs import blob_user, sessions_root
+from apipi.worker.pi.dirs import blob_user, sessions_root
 
 Namespace = Literal["artifacts", "files", "skills"]
 

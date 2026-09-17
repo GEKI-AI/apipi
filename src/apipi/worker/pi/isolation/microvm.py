@@ -1,8 +1,8 @@
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
-from apipi.pi.microvm import probe_microvm, require_microvm, spawn_microvm_pi
-from apipi.pi.proc import PiProc
+from apipi.worker.pi.microvm import probe_microvm, require_microvm, spawn_microvm_pi
+from apipi.worker.pi.proc import PiProc
 
 
 class MicrovmIsolation:

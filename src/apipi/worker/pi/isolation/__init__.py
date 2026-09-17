@@ -1,7 +1,7 @@
 import importlib
 
 from apipi.config import ConfigError
-from apipi.pi.isolation.base import Isolation
+from apipi.worker.pi.isolation.base import Isolation
 
 _cache: dict[str, Isolation] = {}
 
@@ -25,11 +25,11 @@ def _resolve(mode: str) -> Isolation:
     if mode == "jail":
         raise ConfigError("APIPI_RUN_MODE=jail is not valid")
     if mode == "none":
-        from apipi.pi.isolation.none import NoneIsolation
+        from apipi.worker.pi.isolation.none import NoneIsolation
 
         return NoneIsolation()
     if mode == "microvm":
-        from apipi.pi.isolation.microvm import MicrovmIsolation
+        from apipi.worker.pi.isolation.microvm import MicrovmIsolation
 
         return MicrovmIsolation()
     if ":" not in mode:

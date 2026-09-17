@@ -26,10 +26,6 @@ from apipi.gateway.metrics import Metrics, mount_metrics
 from apipi.gateway.middleware import InstanceMiddleware, MaxBodyMiddleware
 from apipi.gateway.otel import Tracing
 from apipi.gateway.request_id import RequestIdMiddleware
-from apipi.pi.harness import PiHarness
-from apipi.pi.isolation import load_isolation
-from apipi.pi.isolation.base import Isolation
-from apipi.pi.pool import PiPool
 from apipi.services.agents import AgentService
 from apipi.services.files import FileService
 from apipi.services.models import ModelsService
@@ -45,8 +41,12 @@ from apipi.store.engine import Store, create_engine
 from apipi.store.models import Tenant, utc_now
 from apipi.store.repo import ensure_tenant as store_ensure_tenant
 from apipi.store.repo import purge_turn_logs
-from apipi.worker import WorkerHub
 from apipi.worker.execution import LocalExecution, RemoteExecution
+from apipi.worker.hub import WorkerHub
+from apipi.worker.pi.harness import PiHarness
+from apipi.worker.pi.isolation import load_isolation
+from apipi.worker.pi.isolation.base import Isolation
+from apipi.worker.pi.pool import PiPool
 
 
 async def _purge_usage_loop(settings: Settings, store: Store) -> None:

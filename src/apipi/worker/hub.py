@@ -12,7 +12,6 @@ import websockets
 from starlette.websockets import WebSocket, WebSocketState
 
 from apipi.config import ConfigError, Settings
-from apipi.pi.sandbox import mem_mib_for_size, sandbox_size_of
 from apipi.services.runtime import PUBLIC_EVENT_TYPES, EventHub, persist_event
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
@@ -27,6 +26,7 @@ from apipi.store.repo import (
     touch_worker,
     upsert_worker,
 )
+from apipi.worker.pi.sandbox import mem_mib_for_size, sandbox_size_of
 
 COMMAND_OPS = frozenset({"turn.start", "turn.cancel", "turn.continue"})
 WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})

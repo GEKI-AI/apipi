@@ -16,16 +16,16 @@ from apipi.config import (
 )
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
-from apipi.pi.artifacts import unpack_workspace_tar
-from apipi.pi.guest import (
+from apipi.worker.pi.artifacts import unpack_workspace_tar
+from apipi.worker.pi.guest import (
     RNDADDENTROPY,
     _pi_args,
     _seed_rng,
     _start_mcp,
     workspace_tar_bytes,
 )
-from apipi.pi.guest import main as guest_main
-from apipi.pi.microvm import (
+from apipi.worker.pi.guest import main as guest_main
+from apipi.worker.pi.microvm import (
     BOOT_ARGS,
     GUEST_DNS,
     GUEST_WORKSPACE,
@@ -57,7 +57,7 @@ from apipi.pi.microvm import (
     tap_teardown_argv,
     write_workspace_image,
 )
-from apipi.pi.proc import PiProc, spawn_pi
+from apipi.worker.pi.proc import PiProc, spawn_pi
 
 
 def _settings(
@@ -99,8 +99,8 @@ def test_microvm_is_implemented() -> None:
 
 
 def test_require_microvm_missing_kvm(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: False)
-    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: False)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
     with pytest.raises(ConfigError, match="/dev/kvm"):
         require_microvm()
     with pytest.raises(ConfigError, match="/dev/kvm"):
@@ -112,9 +112,9 @@ def test_require_microvm_missing_firecracker(
 ) -> None:
     _images(tmp_path)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr(
-        "apipi.pi.microvm.shutil.which",
+        "apipi.worker.pi.microvm.shutil.which",
         lambda name: None if name == "firecracker" else _which_ok(name),
     )
     with pytest.raises(ConfigError, match="firecracker"):
@@ -126,9 +126,9 @@ def test_require_microvm_missing_jailer(
 ) -> None:
     _images(tmp_path)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr(
-        "apipi.pi.microvm.shutil.which",
+        "apipi.worker.pi.microvm.shutil.which",
         lambda name: None if name == "jailer" else _which_ok(name),
     )
     with pytest.raises(ConfigError, match="jailer"):
@@ -138,8 +138,8 @@ def test_require_microvm_missing_jailer(
 def test_require_microvm_missing_kernel(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
     rootfs = tmp_path / "rootfs.ext4"
     rootfs.write_bytes(b"r")
     with pytest.raises(ConfigError, match="APIPI_MICROVM_KERNEL"):
@@ -151,8 +151,8 @@ def test_require_microvm_missing_kernel(
 def test_require_microvm_missing_rootfs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
     kernel = tmp_path / "vmlinux"
     kernel.write_bytes(b"k")
     with pytest.raises(ConfigError, match="APIPI_MICROVM_ROOTFS"):
@@ -183,8 +183,8 @@ def test_microvm_images_browser_missing_file(
 ) -> None:
     _images(tmp_path)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "empty-cache"))
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
     with pytest.raises(ConfigError, match="APIPI_MICROVM_ROOTFS_BROWSER"):
         require_microvm(_settings(tmp_path, sandbox_default_size="L"))
 
@@ -239,7 +239,7 @@ def test_microvm_binaries_uses_install_prefix(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr("apipi.pi.microvm.shutil.which", lambda _name: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", lambda _name: None)
     prefix = tmp_path / "apipi" / "firecracker"
     prefix.mkdir(parents=True)
     firecracker = prefix / "firecracker"
@@ -280,14 +280,14 @@ def test_microvm_shell_sudo_argv_preserves_path_and_home(
 def test_microvm_shell_needs_sudo_skips_when_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("apipi.pi.microvm.os.geteuid", lambda: 0)
+    monkeypatch.setattr("apipi.worker.pi.microvm.os.geteuid", lambda: 0)
     assert microvm_shell_needs_sudo() is False
 
 
 def test_microvm_shell_needs_sudo_skips_after_reexec(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("apipi.pi.microvm.os.geteuid", lambda: 1000)
+    monkeypatch.setattr("apipi.worker.pi.microvm.os.geteuid", lambda: 1000)
     monkeypatch.setenv(SHELL_SUDO_MARK, "1")
     assert microvm_shell_needs_sudo() is False
 
@@ -296,9 +296,9 @@ def test_require_microvm_missing_ip(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr(
-        "apipi.pi.microvm.shutil.which",
+        "apipi.worker.pi.microvm.shutil.which",
         lambda name: None if name == "ip" else _which_ok(name),
     )
     with pytest.raises(ConfigError, match="requires ip"):
@@ -309,9 +309,9 @@ def test_require_microvm_missing_iptables(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr(
-        "apipi.pi.microvm.shutil.which",
+        "apipi.worker.pi.microvm.shutil.which",
         lambda name: None if name == "iptables" else _which_ok(name),
     )
     with pytest.raises(ConfigError, match="requires iptables"):
@@ -322,9 +322,9 @@ def test_require_microvm_missing_tc(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr(
-        "apipi.pi.microvm.shutil.which",
+        "apipi.worker.pi.microvm.shutil.which",
         lambda name: None if name == "tc" else _which_ok(name),
     )
     with pytest.raises(ConfigError, match="requires tc"):
@@ -425,7 +425,7 @@ def test_seed_rng_credits_host_random(
         called.append((request, arg))
         return 0
 
-    monkeypatch.setattr("apipi.pi.guest.fcntl.ioctl", fake_ioctl)
+    monkeypatch.setattr("apipi.worker.pi.guest.fcntl.ioctl", fake_ioctl)
     _seed_rng()
     assert called
     assert called[0][0] == RNDADDENTROPY
@@ -577,7 +577,7 @@ def test_egress_host_and_session_hosts(tmp_path: Path) -> None:
 
 def test_resolve_host_ips(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "apipi.pi.microvm.socket.getaddrinfo",
+        "apipi.worker.pi.microvm.socket.getaddrinfo",
         lambda *_a, **_k: [
             (0, 0, 0, "", ("203.0.113.10", 0)),
             (0, 0, 0, "", ("203.0.113.10", 0)),
@@ -695,10 +695,10 @@ async def test_spawn_pi_microvm_uses_jailer_and_vsock(
     _images(tmp_path)
     cwd = tmp_path / "session"
     cwd.mkdir()
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
-    monkeypatch.setattr("apipi.pi.microvm.setup_tap", lambda *_a, **_k: None)
-    monkeypatch.setattr("apipi.pi.microvm.teardown_tap", lambda *_a, **_k: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.worker.pi.microvm.setup_tap", lambda *_a, **_k: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm.teardown_tap", lambda *_a, **_k: None)
     captured: dict[str, Any] = {}
     writer = _Writer()
 
@@ -713,8 +713,10 @@ async def test_spawn_pi_microvm_uses_jailer_and_vsock(
         reader.feed_eof()
         return reader, writer
 
-    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
-    monkeypatch.setattr("apipi.pi.microvm.connect_vsock", fake_connect)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", fake_connect)
     proc = await spawn_pi(_settings(tmp_path), cwd=str(cwd), tools=True)
     assert proc.process.pid == 4242
     args = captured["args"]
@@ -733,7 +735,7 @@ async def test_spawn_pi_microvm_uses_jailer_and_vsock(
 async def test_spawn_microvm_does_not_fallback_to_host(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: False)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: False)
     called = False
 
     async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
@@ -741,7 +743,9 @@ async def test_spawn_microvm_does_not_fallback_to_host(
         called = True
         return _Process()
 
-    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
     with pytest.raises(ConfigError, match="/dev/kvm"):
         await spawn_pi(_settings(tmp_path), cwd=None, tools=True)
@@ -753,8 +757,8 @@ async def test_spawn_microvm_missing_firecracker_does_not_fallback(
 ) -> None:
     _images(tmp_path)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr("apipi.pi.microvm.shutil.which", lambda _name: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", lambda _name: None)
     called = False
 
     async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
@@ -762,7 +766,9 @@ async def test_spawn_microvm_missing_firecracker_does_not_fallback(
         called = True
         return _Process()
 
-    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
     with pytest.raises(ConfigError, match="firecracker"):
         await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
@@ -773,9 +779,9 @@ async def test_spawn_microvm_missing_ip_does_not_fallback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr(
-        "apipi.pi.microvm.shutil.which",
+        "apipi.worker.pi.microvm.shutil.which",
         lambda name: None if name == "ip" else _which_ok(name),
     )
     called = False
@@ -785,7 +791,9 @@ async def test_spawn_microvm_missing_ip_does_not_fallback(
         called = True
         return _Process()
 
-    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
     with pytest.raises(ConfigError, match="requires ip"):
         await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
@@ -796,13 +804,13 @@ async def test_spawn_microvm_sets_up_tap(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
     taps: list[object] = []
     monkeypatch.setattr(
-        "apipi.pi.microvm.setup_tap", lambda net, **_k: taps.append(net)
+        "apipi.worker.pi.microvm.setup_tap", lambda net, **_k: taps.append(net)
     )
-    monkeypatch.setattr("apipi.pi.microvm.teardown_tap", lambda *_a, **_k: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm.teardown_tap", lambda *_a, **_k: None)
 
     async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
         return _Process()
@@ -812,8 +820,10 @@ async def test_spawn_microvm_sets_up_tap(
         reader.feed_eof()
         return reader, _Writer()
 
-    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
-    monkeypatch.setattr("apipi.pi.microvm.connect_vsock", fake_connect)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", fake_connect)
     await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
     assert len(taps) == 1
 
@@ -824,8 +834,8 @@ def test_setup_tap_runs_ip_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(argv: list[str], **_kwargs: Any) -> None:
         ran.append(list(argv))
 
-    monkeypatch.setattr("apipi.pi.microvm._enable_forward", lambda: None)
-    monkeypatch.setattr("apipi.pi.microvm._run", fake_run)
+    monkeypatch.setattr("apipi.worker.pi.microvm._enable_forward", lambda: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm._run", fake_run)
     net = tap_net("551e7604-e35c-42b3-b825-416853441234")
     setup_tap(
         net,
@@ -852,7 +862,7 @@ def test_run_tap_permission_names_rights(monkeypatch: pytest.MonkeyPatch) -> Non
             stderr=b"ioctl(TUNSETIFF): Operation not permitted\n",
         )
 
-    monkeypatch.setattr("apipi.pi.microvm.subprocess.run", fake_run)
+    monkeypatch.setattr("apipi.worker.pi.microvm.subprocess.run", fake_run)
     with pytest.raises(ConfigError, match="TAP device") as err:
         _run(["/sbin/ip", "tuntap", "add", "dev", "apipix", "mode", "tap"])
     text = str(err.value)
@@ -864,7 +874,7 @@ def test_run_iptables_permission_names_rights(monkeypatch: pytest.MonkeyPatch) -
     def fake_run(argv: list[str], **_kwargs: Any) -> None:
         raise subprocess.CalledProcessError(1, argv, stderr=b"Permission denied\n")
 
-    monkeypatch.setattr("apipi.pi.microvm.subprocess.run", fake_run)
+    monkeypatch.setattr("apipi.worker.pi.microvm.subprocess.run", fake_run)
     with pytest.raises(ConfigError, match="iptables") as err:
         _run(["/sbin/iptables", "-w", "-A", "FORWARD"])
     text = str(err.value)
@@ -878,7 +888,7 @@ def test_run_other_failure_includes_stderr(monkeypatch: pytest.MonkeyPatch) -> N
             1, argv, stderr=b'Cannot find device "apipix"\n'
         )
 
-    monkeypatch.setattr("apipi.pi.microvm.subprocess.run", fake_run)
+    monkeypatch.setattr("apipi.worker.pi.microvm.subprocess.run", fake_run)
     with pytest.raises(ConfigError, match="Cannot find device") as err:
         _run(["/sbin/ip", "link", "set", "apipix", "up"])
     assert "CAP_NET_ADMIN" not in str(err.value)
@@ -894,7 +904,7 @@ def test_enable_forward_permission_names_rights(
         def write_text(self, *_a: object, **_k: object) -> None:
             raise OSError(errno.EACCES, "Permission denied")
 
-    monkeypatch.setattr("apipi.pi.microvm.Path", lambda *_a, **_k: Denied())
+    monkeypatch.setattr("apipi.worker.pi.microvm.Path", lambda *_a, **_k: Denied())
     with pytest.raises(ConfigError, match="ip_forward") as err:
         _enable_forward()
     text = str(err.value)
@@ -910,7 +920,9 @@ async def test_start_microvm_jailer_permission(
     async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
         raise PermissionError("Permission denied")
 
-    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
     with pytest.raises(ConfigError, match="jailer") as err:
         await start_microvm(_settings(tmp_path), cwd=None, tools=True)
     text = str(err.value)
@@ -922,10 +934,10 @@ async def test_spawn_microvm_stdio_stays_in_guest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _images(tmp_path)
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
-    monkeypatch.setattr("apipi.pi.microvm.setup_tap", lambda *_a, **_k: None)
-    monkeypatch.setattr("apipi.pi.microvm.teardown_tap", lambda *_a, **_k: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.worker.pi.microvm.setup_tap", lambda *_a, **_k: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm.teardown_tap", lambda *_a, **_k: None)
     captured: dict[str, Any] = {}
 
     async def fake_exec(*args: str, **_kwargs: Any) -> _Process:
@@ -937,8 +949,10 @@ async def test_spawn_microvm_stdio_stays_in_guest(
         reader.feed_eof()
         return reader, _Writer()
 
-    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
-    monkeypatch.setattr("apipi.pi.microvm.connect_vsock", fake_connect)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", fake_connect)
     stdio = [
         McpStdioServer(
             server_label="local", command="npx", args=["-y", "mcp"], process=None
@@ -975,8 +989,8 @@ def test_guest_shell_execs_sh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
         called.append((file, list(args)))
         raise SystemExit(0)
 
-    monkeypatch.setattr("apipi.pi.guest.os.execvp", fake_execvp)
-    monkeypatch.setattr("apipi.pi.guest.os.chdir", lambda _path: None)
+    monkeypatch.setattr("apipi.worker.pi.guest.os.execvp", fake_execvp)
+    monkeypatch.setattr("apipi.worker.pi.guest.os.chdir", lambda _path: None)
     with pytest.raises(SystemExit):
         guest_main([])
     assert called == [("sh", ["sh", "-i"])]
@@ -984,10 +998,10 @@ def test_guest_shell_execs_sh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 def _microvm_spawn_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _images(tmp_path)
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr("apipi.pi.microvm.shutil.which", _which_ok)
-    monkeypatch.setattr("apipi.pi.microvm.setup_tap", lambda *_a, **_k: None)
-    monkeypatch.setattr("apipi.pi.microvm.teardown_tap", lambda *_a, **_k: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
+    monkeypatch.setattr("apipi.worker.pi.microvm.setup_tap", lambda *_a, **_k: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm.teardown_tap", lambda *_a, **_k: None)
 
 
 async def test_start_microvm_shell_inherits_stdio_and_skips_vsock(
@@ -1010,9 +1024,11 @@ async def test_start_microvm_shell_inherits_stdio_and_skips_vsock(
     async def boom(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("shell boot must not wait on vsock")
 
-    monkeypatch.setattr("apipi.pi.microvm.write_workspace_image", fake_write)
-    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
-    monkeypatch.setattr("apipi.pi.microvm.connect_vsock", boom)
+    monkeypatch.setattr("apipi.worker.pi.microvm.write_workspace_image", fake_write)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", boom)
     started = await start_microvm(
         _settings(tmp_path),
         cwd=None,
@@ -1047,9 +1063,11 @@ async def test_spawn_microvm_pi_does_not_set_shell(
         reader.feed_eof()
         return reader, _Writer()
 
-    monkeypatch.setattr("apipi.pi.microvm.write_workspace_image", fake_write)
-    monkeypatch.setattr("apipi.pi.microvm.asyncio.create_subprocess_exec", fake_exec)
-    monkeypatch.setattr("apipi.pi.microvm.connect_vsock", fake_connect)
+    monkeypatch.setattr("apipi.worker.pi.microvm.write_workspace_image", fake_write)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", fake_connect)
     await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
     assert packed.get("shell") is False
 
@@ -1073,7 +1091,7 @@ async def test_run_microvm_shell_waits_and_cleans(
             lambda: cleaned.append(1),
         )
 
-    monkeypatch.setattr("apipi.pi.microvm.start_microvm", fake_start)
+    monkeypatch.setattr("apipi.worker.pi.microvm.start_microvm", fake_start)
     assert await run_microvm_shell(_settings(tmp_path), cwd=str(tmp_path)) == 0
     assert captured["shell"] is True
     assert captured["inherit_stdio"] is True
@@ -1098,8 +1116,8 @@ def test_guest_starts_mcp_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
         started.append(cmd)
         return _Alive()
 
-    monkeypatch.setattr("apipi.pi.guest.subprocess.Popen", fake_popen)
-    monkeypatch.setattr("apipi.pi.guest.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("apipi.worker.pi.guest.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("apipi.worker.pi.guest.time.sleep", lambda _seconds: None)
     monkeypatch.setenv("APIPI_MCP_STDIO", "local")
     monkeypatch.setenv("APIPI_MCP_STDIO_0_COMMAND", "npx")
     monkeypatch.setenv("APIPI_MCP_STDIO_0_ARGS", "-y\x1fmcp")
@@ -1115,9 +1133,9 @@ def test_guest_mcp_fails_when_process_exits(
             return 1
 
     monkeypatch.setattr(
-        "apipi.pi.guest.subprocess.Popen", lambda *_args, **_kwargs: _Dead()
+        "apipi.worker.pi.guest.subprocess.Popen", lambda *_args, **_kwargs: _Dead()
     )
-    monkeypatch.setattr("apipi.pi.guest.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("apipi.worker.pi.guest.time.sleep", lambda _seconds: None)
     monkeypatch.setenv("APIPI_MCP_STDIO", "playwright")
     monkeypatch.setenv("APIPI_MCP_STDIO_0_COMMAND", "npx")
     with pytest.raises(RuntimeError, match="mcp playwright failed"):

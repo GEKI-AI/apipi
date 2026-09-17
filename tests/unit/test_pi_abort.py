@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import cast
 
 from apipi.config import Settings
-from apipi.pi.harness import PiHarness
-from apipi.pi.pool import PiPool
-from apipi.pi.proc import PiProc
+from apipi.worker.pi.harness import PiHarness
+from apipi.worker.pi.pool import PiPool
+from apipi.worker.pi.proc import PiProc
 
 
 class _Stdin:

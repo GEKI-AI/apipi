@@ -57,7 +57,7 @@ async def test_models_proxies_host(
         assert headers["Authorization"] == "Bearer t"
         return httpx.Response(200, json=_PAYLOAD)
 
-    monkeypatch.setattr("apipi.pi.model_host.httpx.get", fake_get)
+    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
     response = await model_client.get("/v1/models", headers=_auth("t"))
     assert response.status_code == 200
     assert response.json() == _PAYLOAD
@@ -80,7 +80,7 @@ async def test_models_uses_overwrite_key(
         assert headers["Authorization"] == "Bearer operator-key"
         return httpx.Response(200, json=_PAYLOAD)
 
-    monkeypatch.setattr("apipi.pi.model_host.httpx.get", fake_get)
+    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
     app = create_app(settings, store=store, harness=FakeHarness())
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -94,7 +94,7 @@ async def test_models_host_unauthorized(
     model_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "apipi.pi.model_host.httpx.get",
+        "apipi.worker.pi.model_host.httpx.get",
         lambda *_args, **_kwargs: httpx.Response(401, json={"error": "no"}),
     )
     response = await model_client.get("/v1/models", headers=_auth("t"))
@@ -108,7 +108,7 @@ async def test_models_host_unreachable(
     def boom(*_args: object, **_kwargs: object) -> httpx.Response:
         raise httpx.ConnectError("down")
 
-    monkeypatch.setattr("apipi.pi.model_host.httpx.get", boom)
+    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", boom)
     response = await model_client.get("/v1/models", headers=_auth("t"))
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "model_host_unreachable"

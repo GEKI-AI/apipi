@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TextIO
 
 from apipi.config import ConfigError, Settings
-from apipi.pi.microvm import (
+from apipi.worker.pi.microvm import (
     default_kernel_path,
     default_rootfs_browser_path,
     default_rootfs_path,
@@ -18,8 +18,8 @@ from apipi.pi.microvm import (
     microvm_image_dir,
     microvm_net_binaries,
 )
-from apipi.pi.model_host import installed_pi_version
-from apipi.pi.version import PI_NPM_PACKAGE, PINNED_FIRECRACKER, PINNED_PI
+from apipi.worker.pi.model_host import installed_pi_version
+from apipi.worker.pi.version import PI_NPM_PACKAGE, PINNED_FIRECRACKER, PINNED_PI
 
 _FIRECRACKER_ARCH = frozenset({"x86_64", "aarch64"})
 
@@ -63,7 +63,7 @@ def rootfs_script_path() -> Path:
     packaged = here / "microvm-rootfs"
     if packaged.is_file():
         return packaged
-    repo = here.parents[2] / "scripts" / "microvm-rootfs"
+    repo = here.parents[3] / "scripts" / "microvm-rootfs"
     if repo.is_file():
         return repo
     raise ConfigError("apipi install --microvm cannot find the rootfs script")

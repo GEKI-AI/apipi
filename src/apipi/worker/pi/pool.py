@@ -7,10 +7,10 @@ from collections.abc import Awaitable, Callable
 from apipi.config import CapacityError, Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer, stop_mcp_stdio
-from apipi.pi.proc import PiProc, spawn_pi
+from apipi.worker.pi.proc import PiProc, spawn_pi
 
 OnKill = Callable[[uuid.UUID, PiProc | None], Awaitable[None]]
-log = logging.getLogger("apipi.pi")
+log = logging.getLogger("apipi.worker.pi")
 
 
 class PiPool:

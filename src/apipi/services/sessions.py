@@ -19,15 +19,6 @@ from apipi.mcp.http import (
     connect_mcp_http_tools,
 )
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
-from apipi.pi.artifacts import wipe_artifact_store, wipe_workspace
-from apipi.pi.dirs import session_workspace
-from apipi.pi.sandbox import (
-    mem_mib_for_size,
-    merge_playwright,
-    require_size_rootfs,
-    resolve_sandbox_size,
-    sandbox_size_of,
-)
 from apipi.services.agents import AgentWrite
 from apipi.services.files import FileService
 from apipi.services.runtime import (
@@ -62,6 +53,15 @@ from apipi.store.repo import (
     update_session,
 )
 from apipi.worker.execution import LocalExecution, RemoteExecution
+from apipi.worker.pi.artifacts import wipe_artifact_store, wipe_workspace
+from apipi.worker.pi.dirs import session_workspace
+from apipi.worker.pi.sandbox import (
+    mem_mib_for_size,
+    merge_playwright,
+    require_size_rootfs,
+    resolve_sandbox_size,
+    sandbox_size_of,
+)
 
 
 def turn_body(turn: Turn) -> dict[str, Any]:
