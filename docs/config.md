@@ -49,7 +49,8 @@ and `examples/auth_callback.py`.
 Extension points use the same import-path idea: `APIPI_AUTH` for the
 callback, `[sandbox].backend = "package.mod:Class"` for a custom
 isolation backend, `usage_sinks` / `payload_sinks` for extra export
-handlers, and `artifact_store` for local or S3 artifact bytes.
+handlers, and `artifact_store` for local or S3 object bytes (artifacts, and
+hosted files and skills).
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
@@ -77,11 +78,11 @@ handlers, and `artifact_store` for local or S3 artifact bytes.
 | `APIPI_MAX_REQUEST_BYTES` | `max_request_bytes` | `1MiB` | Reject larger request bodies with `413` and code `payload_too_large`. |
 | `APIPI_MAX_WORKSPACE_BYTES` | `max_workspace_bytes` | `1GiB` | Size of one `openai_hosted` session directory. An oversized microvm pull is not unpacked. Over the cap, harvest emits `agent.session.error` with code `workspace_too_large`. |
 | `APIPI_MAX_ARTIFACT_BYTES` | `max_artifact_bytes` | `512MiB` | Published artifact bytes per session. Publishing more is refused with code `artifact_too_large`. The harness session cache uses the same blob store and does not count toward this cap. |
-| `APIPI_ARTIFACT_STORE` | `artifact_store` | `local` | `local` (files under `APIPI_SESSIONS_DIR/.artifacts`) or `s3` (S3-compatible object storage). |
+| `APIPI_ARTIFACT_STORE` | `artifact_store` | `local` | `local` or `s3`. Published artifacts, hosted file uploads, and hosted skill bundles share this backend. Local artifacts stay under `APIPI_SESSIONS_DIR/.artifacts`. Local files and skills stay under `APIPI_SESSIONS_DIR/.store/files` and `.store/skills`. |
 | `APIPI_S3_BUCKET` | `s3_bucket` | required if s3 | Bucket. |
 | `APIPI_S3_ENDPOINT` | `s3_endpoint` | unset | Base URL for S3-compatible APIs (Hetzner, MinIO, R2). Unset talks to AWS. |
 | `APIPI_S3_REGION` | `s3_region` | `us-east-1` | Region (`hel1`, `fsn1`, `nbg1` on Hetzner). |
-| `APIPI_S3_PREFIX` | `s3_prefix` | `apipi/artifacts` | Key prefix. Objects are `{prefix}/{tenant_id}/{key_id}/{session_id}/{artifact_id}`. |
+| `APIPI_S3_PREFIX` | `s3_prefix` | `apipi/artifacts` | Artifact key prefix. Artifact objects are `{prefix}/{tenant_id}/{key_id}/{session_id}/{artifact_id}`. When the prefix ends with `/artifacts` (the default), files and skills use sibling prefixes `…/files` and `…/skills`. Otherwise they are `{prefix}/files` and `{prefix}/skills`. |
 | `APIPI_S3_ADDRESSING` | `s3_addressing` | `auto` | `auto` \| `path` \| `virtual`. `auto` uses path-style when `s3_endpoint` is set. |
 | `OPENAI_BASE_URL` | `model_base_url` | required for serve | Model host passed to Pi. Not the gateway URL. Put this in `.env`. |
 | `OPENAI_API_KEY_OVERWRITE` | `model_api_key_overwrite` | unset | Optional operator model key. When unset, Pi gets the request bearer. A process `OPENAI_API_KEY` is ignored. |
@@ -166,7 +167,9 @@ files that are already on disk stay until workspace TTL.
 gateway still count toward `max_artifact_bytes`.
 
 Artifact metadata stays in Postgres. Bytes default to local files.
-Set `artifact_store = "s3"` for any S3-compatible API. Put access keys
+Set `artifact_store = "s3"` for any S3-compatible API. Hosted file and
+skill bytes use the same setting. Production that serves those bytes
+from more than one node should use S3. Put access keys
 in the process environment (`AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`), not in TOML. Install the extra with
 `uv sync --extra s3`.
@@ -181,8 +184,8 @@ AWS_SECRET_ACCESS_KEY=...
 ```
 
 The live `openai_hosted` workspace stays on the node. Published
-artifact content can be read from any gateway process that shares the
-bucket.
+artifact content, and hosted file and skill bytes, can be read from any
+gateway process that shares the bucket.
 
 ## Pi
 

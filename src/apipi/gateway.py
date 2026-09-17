@@ -17,7 +17,7 @@ from apipi.api.usage import router as usage_router
 from apipi.api.vaults import router as vaults_router
 from apipi.api.workers import router as workers_router
 from apipi.auth import AuthCache, Authenticate, load_authenticate
-from apipi.blobs import ArtifactBlobs, blob_store
+from apipi.blobs import ArtifactAdapter, ArtifactBlobs, ObjectStore, object_store
 from apipi.config import Settings, load_settings
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import register_exception_handlers
@@ -83,6 +83,7 @@ class Gateway:
         pool: PiPool,
         harness: FakeHarness | PiHarness,
         blobs: ArtifactBlobs,
+        objects: ObjectStore,
         metrics: Metrics | None,
         tracing: Tracing | None,
     ) -> None:
@@ -97,6 +98,7 @@ class Gateway:
         self.pool = pool
         self.harness = harness
         self.blobs = blobs
+        self.objects = objects
         self.metrics = metrics
         self.tracing = tracing
         self.mcp_http: dict[uuid.UUID, Any] = {}
@@ -164,7 +166,10 @@ class Gateway:
         resolved_harness = harness if harness is not None else PiHarness(resolved_pool)
         hub = event_hub if event_hub is not None else EventHub()
         env_hub = EnvironmentHub()
-        resolved_blobs = blobs if blobs is not None else blob_store(resolved)
+        resolved_objects = object_store(resolved)
+        resolved_blobs = (
+            blobs if blobs is not None else ArtifactAdapter(resolved_objects)
+        )
         resolved_metrics = Metrics() if resolved.metrics else None
         if tracing is not None:
             resolved_tracing = tracing
@@ -214,6 +219,7 @@ class Gateway:
             pool=resolved_pool,
             harness=resolved_harness,
             blobs=resolved_blobs,
+            objects=resolved_objects,
             metrics=resolved_metrics,
             tracing=resolved_tracing,
         )
@@ -247,6 +253,7 @@ class Gateway:
         app.state.execution = self.execution
         app.state.workers = self.workers
         app.state.blobs = self.blobs
+        app.state.objects = self.objects
         register_exception_handlers(app)
 
     async def startup(self) -> None:

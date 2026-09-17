@@ -6,13 +6,25 @@ from typing import Literal
 import pytest
 
 from apipi.blobs import (
+    NS_ARTIFACTS,
+    NS_FILES,
+    NS_SKILLS,
     LocalBlobs,
+    LocalStore,
     MemoryBlobs,
+    MemoryStore,
     S3Blobs,
+    S3Store,
     blob_key,
+    blob_prefix,
     blob_store,
+    file_object_id,
+    object_store,
     s3_addressing,
     s3_client_kwargs,
+    s3_namespace_prefix,
+    s3_object_key,
+    skill_object_id,
 )
 from apipi.config import ConfigError, Settings, load_settings
 
@@ -162,6 +174,86 @@ async def test_s3_blobs_with_fake_client(tmp_path: Path) -> None:
 
 def test_blob_store_local_default(tmp_path: Path) -> None:
     assert isinstance(blob_store(_settings(tmp_path)), LocalBlobs)
+    assert isinstance(object_store(_settings(tmp_path)), LocalStore)
+
+
+async def test_local_store_namespaces(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    store = LocalStore(settings)
+    tenant = uuid.uuid4()
+    file_id = "file-abc"
+    skill_id = "skill-xyz"
+    await store.put(NS_FILES, file_object_id(tenant, file_id), b"file-bytes")
+    await store.put(NS_SKILLS, skill_object_id(tenant, skill_id), b"skill-bytes")
+    root = tmp_path / "sessions"
+    assert (
+        root / ".store" / "files" / str(tenant) / file_id
+    ).read_bytes() == b"file-bytes"
+    assert (
+        root / ".store" / "skills" / str(tenant) / skill_id
+    ).read_bytes() == b"skill-bytes"
+    assert (root / ".artifacts").exists() is False
+    assert await store.get(NS_FILES, file_object_id(tenant, file_id)) == b"file-bytes"
+    await store.delete_prefix(NS_FILES, str(tenant))
+    assert await store.get(NS_FILES, file_object_id(tenant, file_id)) is None
+    assert (
+        await store.get(NS_SKILLS, skill_object_id(tenant, skill_id)) == b"skill-bytes"
+    )
+
+
+async def test_memory_store_namespaces_isolated() -> None:
+    store = MemoryStore()
+    tenant = uuid.uuid4()
+    object_id = f"{tenant}/same"
+    await store.put(NS_FILES, object_id, b"file")
+    await store.put(NS_SKILLS, object_id, b"skill")
+    assert await store.get(NS_FILES, object_id) == b"file"
+    assert await store.get(NS_SKILLS, object_id) == b"skill"
+    await store.delete_prefix(NS_FILES, str(tenant))
+    assert await store.get(NS_FILES, object_id) is None
+    assert await store.get(NS_SKILLS, object_id) == b"skill"
+
+
+def test_s3_namespace_prefix_siblings(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, s3_prefix="apipi/artifacts")
+    assert s3_namespace_prefix(settings, NS_ARTIFACTS) == "apipi/artifacts"
+    assert s3_namespace_prefix(settings, NS_FILES) == "apipi/files"
+    assert s3_namespace_prefix(settings, NS_SKILLS) == "apipi/skills"
+
+
+def test_s3_namespace_prefix_without_artifacts_suffix(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, s3_prefix="bucket-root")
+    assert s3_namespace_prefix(settings, NS_ARTIFACTS) == "bucket-root"
+    assert s3_namespace_prefix(settings, NS_FILES) == "bucket-root/files"
+    assert s3_namespace_prefix(settings, NS_SKILLS) == "bucket-root/skills"
+
+
+async def test_s3_store_key_layout(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        artifact_store="s3",
+        s3_bucket="bucket",
+        s3_prefix="apipi/artifacts",
+    )
+    client = FakeS3()
+    store = S3Store(settings, client=client)
+    tenant = uuid.uuid4()
+    session = uuid.uuid4()
+    artifact = uuid.uuid4()
+    file_id = "file-abc"
+    key = blob_key(tenant, "user-a", session, artifact)
+    await store.put(NS_ARTIFACTS, key, b"art")
+    await store.put(NS_FILES, file_object_id(tenant, file_id), b"file")
+    assert f"apipi/artifacts/{key}" in client.objects
+    assert f"apipi/files/{tenant}/{file_id}" in client.objects
+    assert s3_object_key(settings, NS_FILES, file_object_id(tenant, file_id)) == (
+        f"apipi/files/{tenant}/{file_id}"
+    )
+    assert await store.get(NS_ARTIFACTS, key) == b"art"
+    assert await store.used_bytes(NS_FILES, str(tenant)) == 4
+    await store.delete_prefix(NS_ARTIFACTS, blob_prefix(tenant, "user-a", session))
+    assert await store.get(NS_ARTIFACTS, key) is None
+    assert await store.get(NS_FILES, file_object_id(tenant, file_id)) == b"file"
 
 
 def test_s3_bucket_required(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
