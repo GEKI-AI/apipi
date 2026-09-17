@@ -361,6 +361,8 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.max_request_bytes == 1024 * 1024
     assert settings.max_workspace_bytes == 1024 * 1024 * 1024
     assert settings.max_artifact_bytes == 512 * 1024 * 1024
+    assert settings.max_file_bytes == 50 * 1024 * 1024
+    assert settings.max_file_bytes == 50 * 1024 * 1024
     assert settings.artifact_store == "local"
     assert settings.s3_bucket is None
     assert settings.s3_region == "us-east-1"
@@ -405,6 +407,7 @@ def test_limit_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.max_sessions_per_tenant == 4
     assert settings.max_workspace_bytes == 1024 * 1024 * 1024
     assert settings.max_artifact_bytes == 512 * 1024 * 1024
+    assert settings.max_file_bytes == 50 * 1024 * 1024
 
 
 def test_instance_id_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

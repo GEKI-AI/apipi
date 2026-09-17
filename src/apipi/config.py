@@ -569,6 +569,11 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("APIPI_MAX_ARTIFACT_BYTES", "max_artifact_bytes"),
     )
+    max_file_bytes: ByteSize = Field(
+        default=50 * 1024 * 1024,
+        ge=1,
+        validation_alias=AliasChoices("APIPI_MAX_FILE_BYTES", "max_file_bytes"),
+    )
     artifact_store: ArtifactStore = Field(
         default="local",
         validation_alias=AliasChoices("APIPI_ARTIFACT_STORE", "artifact_store"),
@@ -926,6 +931,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_MAX_WORKSPACE_BYTES must be like 1GiB"
         if "max_artifact_bytes" in loc:
             return "APIPI_MAX_ARTIFACT_BYTES must be like 512MiB"
+        if "max_file_bytes" in loc:
+            return "APIPI_MAX_FILE_BYTES must be like 50MiB"
         if "log_level" in loc:
             return "APIPI_LOG_LEVEL must be debug, info, warning, error, or critical"
         if "log_format" in loc or "APIPI_LOG_FORMAT" in loc:

@@ -5,6 +5,7 @@ from pydantic_core import PydanticCustomError
 
 from apipi.env.setup import (
     SetupError,
+    file_id_refs_from,
     inline_files_from,
     packages_from,
     session_env_from,
@@ -33,6 +34,12 @@ class InlineFileSpec(StrictModel):
     data: str
 
 
+class FileIdFileSpec(StrictModel):
+    type: Literal["file_id"]
+    file_id: str
+    path: str
+
+
 class NetworkSpec(StrictModel):
     access: Literal["enabled", "disabled", "restricted"]
     allowed_domains: list[str] | None = None
@@ -56,7 +63,7 @@ class EnvironmentSpec(StrictModel):
     setup_commands: list[SetupCommandSpec] | None = None
     sandbox_size: Literal["S", "M", "L"] | None = None
     env: dict[str, str] | None = None
-    files: list[InlineFileSpec] | None = None
+    files: list[InlineFileSpec | FileIdFileSpec] | None = None
     network: NetworkSpec | None = None
 
     @model_validator(mode="before")
@@ -73,7 +80,10 @@ class EnvironmentSpec(StrictModel):
             raw_files = data.get("files")
             if isinstance(raw_files, list):
                 for item in raw_files:
-                    if isinstance(item, dict) and item.get("type") != "inline":
+                    if isinstance(item, dict) and item.get("type") not in {
+                        "inline",
+                        "file_id",
+                    }:
                         raise PydanticCustomError(
                             "not_implemented",
                             "{field} is not implemented",
@@ -139,8 +149,15 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
         packages_from(payload)
         setup_commands_from(payload)
         session_env_from(payload)
-        inline_files_from(payload)
+        inline = inline_files_from(payload)
+        refs = file_id_refs_from(payload)
         session_network_from(payload)
     except SetupError as exc:
         raise ApiError("invalid_request", exc.message, code="invalid_request") from exc
+    if len(inline) + len(refs) > 50:
+        raise ApiError(
+            "invalid_request",
+            "files is at most 50",
+            code="invalid_request",
+        )
     return payload

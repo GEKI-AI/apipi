@@ -101,16 +101,19 @@ attached, and it tells the model not to install Playwright or browsers.
 ### Packages, files, env, network, and setup commands
 
 Session create may include `environment.packages`,
-`environment.setup_commands`, `environment.env`, inline
+`environment.setup_commands`, `environment.env`,
 `environment.files`, and `environment.network` on `openai_hosted`.
 Those fields are stored on the session. Prep runs before the first
 agent turn that needs the computer:
 
-1. Write inline `files` into the session directory. Paths use the same
+1. Write `files` into the session directory. Paths use the same
    `/workspace` and `/tmp/workspace` mapping as setup `cwd`. Other
    absolute paths, `..` escapes, and writes under `.apipi/` are
-   rejected. `data` is standard base64. The decoded total must fit
-   `APIPI_MAX_WORKSPACE_BYTES`.
+   rejected. `type: "inline"` uses standard base64 `data`.
+   `type: "file_id"` copies bytes from a Files API upload owned by
+   this tenant. The decoded total must fit
+   `APIPI_MAX_WORKSPACE_BYTES`. At most 50 files per create. A missing
+   or foreign `file_id` is `404`.
 2. Apply `env` (string keys and values) to that session's Pi process
    and to prep. Reserved names are rejected: `PATH`, `HOME`, `USER`,
    `SHELL`, `PWD`, `LD_LIBRARY_PATH`, `LD_PRELOAD`, `OPENAI_API_KEY`,
@@ -134,8 +137,8 @@ add a host that `[sandbox.network]` forbids. Model and HTTP MCP calls
 go through the host broker, so they still work when TAP is locked.
 
 After a sandbox TTL wipe, the next turn recreates `/workspace` and
-re-applies the stored files, env, packages, setup commands, and
-network policy.
+re-applies the stored files (inline and Files API ids), env, packages,
+setup commands, and network policy.
 
 Isolation `none` runs that script in the session directory on the host
 (`uv pip` or `python3 -m pip`, `apk` or `apt-get` if present, `npm`).

@@ -72,6 +72,28 @@ Create a vault with `name` and `metadata`. Add a credential with
 get omit `token`. `auth.type` `mcp_oauth` is `not_implemented`. Every
 query is tenant-scoped. A vault from another tenant is `404`.
 
+## Files
+
+| Method | Path |
+| --- | --- |
+| `POST` | `/v1/files` |
+| `GET` | `/v1/files` |
+| `GET` | `/v1/files/{file_id}` |
+| `GET` | `/v1/files/{file_id}/content` |
+| `DELETE` | `/v1/files/{file_id}` |
+
+Upload is multipart form data with `file` and `purpose`. Accepted
+purposes are `user_data` and `assistants`. Other purposes return
+`not_implemented`. The object is `{ id, object: "file", bytes,
+created_at, filename, purpose, status }`. `created_at` is a Unix
+timestamp. Ids look like `file-` plus hex. Bytes live in the same
+object store as artifacts (`APIPI_ARTIFACT_STORE`). Metadata is in
+Postgres. The upload cap is `APIPI_MAX_FILE_BYTES` (default 50 MiB).
+A larger body returns `413` with code `payload_too_large`. A file
+from another tenant is `404`. Attach an uploaded file on session
+create with `environment.files` `{ "type": "file_id", "file_id":
+"…", "path": "/workspace/…" }`.
+
 ## Models
 
 | Method | Path |
@@ -270,11 +292,14 @@ lists of package names (pin versions when you need to, such as
 `{ "command": "…", "cwd": "…" }` objects. `cwd` is optional and
 defaults to the session workspace. `env` is an object of string
 environment variables for that session. `files` entries are
-`{ "type": "inline", "path": "/workspace/…", "data": "<base64>" }`.
+`{ "type": "inline", "path": "/workspace/…", "data": "<base64>" }`
+or `{ "type": "file_id", "file_id": "file-…", "path": "/workspace/…" }`.
+`file_id` must be a Files API object owned by this tenant. Other
+`files` types return `not_implemented`. At most 50 files per create.
 `network` is `{ "access": "enabled"|"disabled"|"restricted",
 "allowed_domains": ["api.example.com"] }`. `allowed_domains` is
 required for `restricted` (1–100 exact hostnames, no wildcards,
-schemes, paths, or ports) and is otherwise rejected. Inline files are
+schemes, paths, or ports) and is otherwise rejected. Files are
 written first, then packages install, then setup commands run, before
 the first agent turn. A nonzero install or setup exit emits
 `agent.session.environment.failed` and fails the session; Pi does not
@@ -284,12 +309,11 @@ On environment type `none` it is ignored. Isolation `none` cannot
 enforce `disabled` or `restricted` and fails the environment instead.
 Session `network` cannot open hosts that `[sandbox.network]` forbids.
 `environment_template_id`, `skills`, and `plugins` return `400` with
-type `not_implemented`. Non-inline `files` (Files API ids) are
-`not_implemented`. Reserved `env` names (`PATH`, `HOME`,
+type `not_implemented`. Reserved `env` names (`PATH`, `HOME`,
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `DATABASE_URL`,
 `PI_CODING_AGENT_DIR`, and `APIPI_` / `CODEX_` / `PI_` prefixes)
-return `400`. Decoded inline files must fit
-`APIPI_MAX_WORKSPACE_BYTES`.
+return `400`. Decoded files must fit
+`APIPI_MAX_WORKSPACE_BYTES`. A missing or foreign `file_id` is `404`.
 
 `environment.sandbox_size` is an ApiPi extension: `S`, `M`, or `L`.
 Unknown values return `400`. A top-level `sandbox_size` on the session

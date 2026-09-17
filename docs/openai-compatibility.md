@@ -89,6 +89,7 @@ yours.
 | `GET /v1/usage` | ApiPi operator route (tokens and turn counts) |
 | `WS /v1/environments/{environment_id}` | Same shape, different backend (ApiPi runner protocol) |
 | `GET /health`, `GET /metrics` | ApiPi operator routes |
+| `POST/GET/DELETE /v1/files`, `GET /v1/files/{id}/content` | Same API (purpose `user_data` or `assistants`; max `APIPI_MAX_FILE_BYTES`) |
 | `/v1/chat/completions` | Error (no such route) |
 | `/v1/skills` hosted store | Error (skills are files on the computer) |
 | ChatKit | Error (no such routes) |
@@ -116,7 +117,7 @@ yours.
 | `packages`, `setup_commands` | Same API on `openai_hosted` only; `400` on `none` or `self_hosted` |
 | `sandbox_size` | ApiPi extension (`S` \| `M` \| `L`). Stock SDKs can set `metadata["apipi.sandbox_size"]`. Top-level session `sandbox_size` is `unknown_field`. |
 | `env` | Same API on `openai_hosted` only; reserved names `400`; `400` on `none` or `self_hosted` |
-| `files` with `type: "inline"` | Same API on `openai_hosted` only; Files API ids `not_implemented` |
+| `files` with `type: "inline"` or `type: "file_id"` | Same API on `openai_hosted` only. `file_id` mounts a Files API object. Other file types are `not_implemented`. |
 | `network` | Same API on `openai_hosted` only. Session policy cannot widen `[sandbox.network]`. Isolation `none` cannot enforce `disabled` / `restricted`. |
 | `environment_template_id`, `skills`, `plugins` | Error (`not_implemented`) |
 | Unknown JSON keys | Error (`unknown_field`) |

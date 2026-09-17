@@ -14,6 +14,7 @@ from apipi.env.setup import SetupError, prepare_workspace
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.errors import ApiError, gone
 from apipi.execution import LocalExecution, RemoteExecution
+from apipi.files import FileService
 from apipi.mcp.http import (
     McpConnectError,
     apply_vault_headers,
@@ -181,6 +182,7 @@ class SessionService:
         env_hub: EnvironmentHub,
         execution: LocalExecution | RemoteExecution,
         blobs: ArtifactBlobs,
+        files: FileService,
         tracing: Tracing | None,
         mcp_http: dict[uuid.UUID, Any],
         mcp_stdio: dict[uuid.UUID, Any],
@@ -191,6 +193,7 @@ class SessionService:
         self.env_hub = env_hub
         self.execution = execution
         self.blobs = blobs
+        self.files = files
         self.tracing = tracing
         self.mcp_http = mcp_http
         self.mcp_stdio = mcp_stdio
@@ -240,6 +243,9 @@ class SessionService:
                 code="invalid_request",
             )
         env = environment_payload(environment)
+        extra_files: list[tuple[str, bytes]] = []
+        if env.get("type") == "openai_hosted":
+            extra_files = await self.files.workspace_files(tenant_id, env)
         raw_tools: list[Any] = []
         env_key: str | None = None
         env_id: uuid.UUID | None = None
@@ -299,6 +305,7 @@ class SessionService:
                         directory,
                         env,
                         max_bytes=self.settings.max_workspace_bytes,
+                        extra_files=extra_files,
                     )
                 except SetupError as exc:
                     raise ApiError(

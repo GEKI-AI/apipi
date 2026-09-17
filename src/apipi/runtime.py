@@ -8,11 +8,13 @@ from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apipi.blobs import ObjectStore, object_store
 from apipi.config import CapacityError, Settings
 from apipi.env.computer import Computer, bind_computer, computer_item_events
 from apipi.env.hub import EnvironmentHub
 from apipi.env.setup import SetupError, provision_hosted, session_env_from
 from apipi.errors import ApiError
+from apipi.files import FileService
 from apipi.mcp.http import McpConnectError
 from apipi.mcp.stdio import start_mcp_stdio_tools
 from apipi.metrics import Metrics, observe_turn
@@ -1052,6 +1054,7 @@ async def run_turn(
     pool: PiPool | None = None,
     api_key: str | None = None,
     key_id: str | None = None,
+    objects: ObjectStore | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
     if pool is not None:
@@ -1089,12 +1092,17 @@ async def run_turn(
             try:
                 gateway_allowlist = False
                 gateway_hosts: tuple[str, ...] = ()
+                extra_files: list[tuple[str, bytes]] = []
                 if settings is not None:
                     gateway_allowlist = settings.microvm_egress_allowlist
                     if settings.run_mode == "microvm":
                         from apipi.pi.microvm import microvm_egress_hosts
 
                         gateway_hosts = tuple(microvm_egress_hosts(settings))
+                    backend = objects if objects is not None else object_store(settings)
+                    extra_files = await FileService(
+                        store, backend, settings
+                    ).workspace_files(tenant_id, row.environment)
                 provision_hosted(
                     row.environment,
                     run_mode=settings.run_mode if settings is not None else "none",
@@ -1103,8 +1111,9 @@ async def run_turn(
                     ),
                     gateway_allowlist=gateway_allowlist,
                     gateway_hosts=gateway_hosts,
+                    extra_files=extra_files,
                 )
-            except SetupError as exc:
+            except (SetupError, ApiError) as exc:
                 await fail_environment(db, hub, tenant_id, session_id, exc.message)
                 return
             cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
