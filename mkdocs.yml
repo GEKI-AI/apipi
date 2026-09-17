@@ -73,6 +73,7 @@ nav:
       - Production: production.md
       - Multiple nodes: scale.md
       - Using the API: using.md
+      - Extending ApiPi: extending.md
       - OpenAI compatibility: openai-compatibility.md
   - Concepts:
       - How it fits together: concepts.md
