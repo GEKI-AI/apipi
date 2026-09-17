@@ -26,10 +26,14 @@ The explanation of the system is under [Concepts](concepts.md):
 | **Run mode** | Where Pi (and stdio MCP) run |
 | **Environment** | Where file/shell tools run |
 
-HTTP routes do not spawn Pi themselves. They call a session execution
-service. Combined `apipi serve` uses the in-process adapter. `apipi
-serve --api-only` leases a worker. Firecracker stays on the worker, or
-on combined serve as an embedded worker.
+HTTP routes do not spawn Pi themselves. They call `SessionService`,
+which sits above the session execution adapter. Extenders use the same
+service in-process (`gateway.sessions`), including `stream()` for
+catch-up from the store plus live EventHub events (and a store poll,
+the same as SSE). Combined `apipi serve` uses the in-process adapter.
+`apipi serve --api-only` leases a worker. Firecracker stays on the
+worker, or on combined serve as an embedded worker. EventHub is per
+API process; `stream()` is not a multi-replica bus.
 
 To run the Agents API and your own routes in one process, build a
 `Gateway` with `Gateway.create`, call `startup` and `shutdown` from
