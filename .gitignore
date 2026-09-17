@@ -21,3 +21,4 @@ build/
 node_modules/
 .playwright-cli/
 .apipi/
+keep.txt
