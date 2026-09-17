@@ -10,7 +10,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from apipi.api.agents import AgentWrite
+from apipi.agents import AgentWrite
 from apipi.config import extend_settings
 from apipi.env.spec import EnvironmentSpec
 from apipi.errors import ApiError

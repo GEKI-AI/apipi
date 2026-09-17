@@ -140,7 +140,8 @@ iterator does not yield them.
 You still authenticate and map a bearer to `tenant_id` yourself when
 you call the service from your own route. HTTP routes use
 `require_tenant`. In-process callers should `ensure_tenant` (or
-equivalent) before `create`.
+equivalent) before `create`. Inline agents on `sessions.create` use
+`AgentWrite` from `apipi.agents`, not from `apipi.api`.
 
 ## Lifespan and store ownership
 
@@ -234,6 +235,7 @@ Supported for extenders (also listed on `apipi.__all__`):
 | `Settings` | Operator settings type |
 | `Store` | Durable store around an `AsyncEngine` |
 | `SessionService` | In-process session CRUD, `post_event`, `stream` |
+| `AgentWrite` | Inline or saved-agent write body. Import from `apipi.agents`. |
 | `EventHub` | In-process live events |
 | `Authenticate`, `AuthIdentity`, `AuthReject` | Auth callback types |
 
