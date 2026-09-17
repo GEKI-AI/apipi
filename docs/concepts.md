@@ -127,9 +127,11 @@ A crash before publish can lose unpublished files under `outputs/`.
 An artifact is a named output the API can fetch after a turn
 completes. Metadata is in the store, including `turn_id` when the file
 was published at turn complete, plus `key_id` and byte size. Bytes
-live in the configured artifact store: local files under
+live in the configured object store: local files under
 `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`,
-or S3-compatible object storage with the same key layout.
+or S3-compatible object storage with the same key layout. Hosted file
+and skill uploads share that backend (local or S3) under separate key
+namespaces; see [config](config.md).
 `GET .../artifacts/{id}/content` reads that store in every run mode.
 `410` if nothing was published. `DELETE` removes the metadata and the
 file. The live file on the computer is unchanged. Artifacts last until

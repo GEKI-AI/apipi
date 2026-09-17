@@ -52,7 +52,8 @@ for workers must include that prefix. The full page is
 
 The durable store holds tenants, agents, sessions, turns, items, the
 event log, usage (never prompt text), and artifact metadata. Artifact
-bytes sit in the configured artifact store. Pi JSONL is a cache in
+bytes sit in the configured object store (local or S3). Hosted file and
+skill bytes use the same backends. Pi JSONL is a cache in
 that same blob store; the session row keeps a pointer, not the file.
 The event log is the transcript. Cross-tenant IDs return `404`, not
 `403`. SQLite is one process. Postgres is shared.

@@ -152,7 +152,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_DB_POOL_SIZE` | Postgres connections from this process (default 5). |
 | `APIPI_MAX_REQUEST_BYTES` | HTTP body cap (`413` `payload_too_large`). |
 | `APIPI_MAX_WORKSPACE_BYTES` / `APIPI_MAX_ARTIFACT_BYTES` | Directory and published-artifact caps. |
-| `APIPI_ARTIFACT_STORE` | `local` or `s3`. Use `s3` when more than one node serves artifact bytes. |
+| `APIPI_ARTIFACT_STORE` | `local` or `s3`. Use `s3` when more than one node serves artifact, hosted file, or skill bytes. |
 | `APIPI_MICROVM_EGRESS_ALLOWLIST` / `HOSTS` / `MBIT` | Optional destination allowlist (off by default) and 50 Mbit TAP rate. |
 | `APIPI_INSTANCE_ID` | Sets `X-ApiPi-Instance` so you can confirm stickiness. |
 
@@ -164,7 +164,8 @@ returns `tenant_id`. You map that tenant to the pool outside the
 gateway. The public Agents API does not change.
 
 Isolated in a dedicated pool: Pi and `APIPI_SESSIONS_DIR`. Shared
-across pools: Postgres, and artifact bytes when the store is `s3`.
+across pools: Postgres, and object-store bytes (artifacts, hosted files,
+skills) when the store is `s3`.
 Sticky rules still apply inside the pool. See
 [tenant pools](scale.md#tenant-pools).
 
