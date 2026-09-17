@@ -2,7 +2,22 @@ from uuid import UUID
 
 import pytest
 
-from apipi.gateway.auth import UNAUTHORIZED, AuthIdentity, AuthReject, auth_from_result
+from apipi.gateway.auth import (
+    UNAUTHORIZED,
+    AuthIdentity,
+    AuthReject,
+    auth_from_result,
+    authenticate,
+    tenant_from_key,
+)
+from apipi.gateway.tokens import hash_token
+
+
+def test_tenant_from_key_matches_default_authenticate() -> None:
+    identity = authenticate("secret")
+    assert identity.key_id == hash_token("secret")
+    assert identity.tenant_id == tenant_from_key("secret")
+    assert tenant_from_key("secret") != tenant_from_key("other")
 
 
 def test_none_is_unauthorized() -> None:

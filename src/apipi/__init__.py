@@ -7,7 +7,7 @@ __version__ = "0.2.0"
 
 from apipi.config import Settings, extend_settings
 from apipi.gateway import Gateway, create_app
-from apipi.gateway.auth import Authenticate, AuthIdentity, AuthReject
+from apipi.gateway.auth import Authenticate, AuthIdentity, AuthReject, tenant_from_key
 from apipi.services.agents import AgentWrite
 from apipi.services.runtime import EventHub
 from apipi.services.sessions import SessionService
@@ -26,4 +26,5 @@ __all__ = [
     "__version__",
     "create_app",
     "extend_settings",
+    "tenant_from_key",
 ]
