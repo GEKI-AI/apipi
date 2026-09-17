@@ -139,8 +139,7 @@ def webpage_check_router() -> APIRouter:
 
 def build_app(gateway: Gateway) -> FastAPI:
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        del app
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await gateway.startup()
         try:
             yield

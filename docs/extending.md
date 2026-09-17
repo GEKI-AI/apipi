@@ -64,7 +64,7 @@ gateway = Gateway.create(settings, store=store)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     await gateway.startup()
     try:
         yield

@@ -325,8 +325,7 @@ def create_app(
     )
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        del app
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await gateway.startup()
         try:
             yield
