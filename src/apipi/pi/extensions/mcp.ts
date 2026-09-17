@@ -39,7 +39,12 @@ class McpClient {
       this.buf = Buffer.concat([this.buf, chunk]);
       this.drain();
     });
-    proc.stderr.on("data", () => {});
+    proc.stderr.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8").trim();
+      if (text) {
+        console.error(`mcp: ${text.slice(0, 500)}`);
+      }
+    });
     proc.on("exit", () => {
       for (const [, waiter] of this.pending) {
         waiter.reject(new Error("mcp process exited"));
@@ -98,7 +103,7 @@ class McpClient {
     return JSON.parse(line) as JsonRpc;
   }
 
-  request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown, timeoutMs = MCP_TIMEOUT_MS): Promise<unknown> {
     const id = this.nextId++;
     const msg = { jsonrpc: "2.0", id, method, params };
     return new Promise((resolve, reject) => {
@@ -107,7 +112,7 @@ class McpClient {
           this.pending.delete(id);
           reject(new Error(`mcp timeout ${method}`));
         }
-      }, MCP_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);
@@ -183,6 +188,45 @@ function stdioServers(): Array<{ label: string; command: string; args: string[];
   return servers;
 }
 
+function waitForSpawn(proc: ChildProcessWithoutNullStreams): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let last = Date.now();
+    let saw = false;
+    let done = false;
+    const finish = (err?: Error) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      clearInterval(timer);
+      proc.stderr.off("data", onErr);
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    };
+    const onErr = (chunk: Buffer) => {
+      if (chunk.length) {
+        saw = true;
+        last = Date.now();
+      }
+    };
+    proc.stderr.on("data", onErr);
+    const timer = setInterval(() => {
+      if (proc.exitCode !== null) {
+        finish(new Error("mcp process exited"));
+        return;
+      }
+      const idle = Date.now() - last;
+      if ((saw && idle >= 1500) || idle >= 8000) {
+        finish();
+      }
+    }, 200);
+    setTimeout(() => finish(), MCP_TIMEOUT_MS);
+  });
+}
+
 function startServer(server: {
   label: string;
   command: string;
@@ -223,6 +267,7 @@ async function attachStdio(pi: ExtensionAPI): Promise<void> {
   for (const server of stdioServers()) {
     const proc = await startServer(server);
     const client = new McpClient(proc);
+    await waitForSpawn(proc);
     await client.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
