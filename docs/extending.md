@@ -229,13 +229,19 @@ Supported for extenders (also listed on `apipi.__all__`):
 
 | Export | Role |
 | --- | --- |
-| `Gateway` | `create`, `configure`, `startup`, `shutdown`, `sessions`, `routers`, `store`, `event_hub`, `execution`, `workers`, `authenticate`, `settings` |
+| `Gateway` | `create`, `configure`, `startup`, `shutdown`, `sessions`, `agents`, `vaults`, `usage`, `models`, `routers`, `store`, `event_hub`, `execution`, `workers`, `env_hub`, `authenticate`, `settings` |
 | `create_app` | Standalone FastAPI app (CLI and tests) |
 | `extend_settings` | `Settings` from arguments only; no env bleed |
 | `Settings` | Operator settings type |
 | `Store` | Durable store around an `AsyncEngine` |
-| `SessionService` | In-process session CRUD, `post_event`, `stream` |
+| `SessionService` | In-process session CRUD, `post_event`, `stream` (`gateway.sessions`) |
 | `AgentWrite` | Inline or saved-agent write body. Import from `apipi.agents`. |
+
+`gateway.agents`, `gateway.vaults`, `gateway.usage`, and `gateway.models`
+are the same functions as `/v1/agents`, `/v1/agents/vaults`, `/v1/usage`,
+and `/v1/models`. Vault get/list never returns credential token values.
+Worker and environment WebSockets stay `gateway.workers` and
+`gateway.env_hub`.
 | `EventHub` | In-process live events |
 | `Authenticate`, `AuthIdentity`, `AuthReject` | Auth callback types |
 
