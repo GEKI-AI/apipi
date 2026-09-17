@@ -242,6 +242,8 @@ function startServer(server: {
         ...process.env,
         PLAYWRIGHT_CHROMIUM_SANDBOX: "0",
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
+        npm_config_yes: "true",
+        CI: "true",
         NPM_CONFIG_LOGLEVEL: "error",
         npm_config_progress: "false",
         npm_config_fund: "false",
