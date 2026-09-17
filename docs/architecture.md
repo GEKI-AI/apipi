@@ -47,7 +47,8 @@ you own the engine; Gateway does not dispose an injected store. Pass
 `authenticate=` to inject the auth callback without `APIPI_AUTH`. Mounting
 `create_app()` under a path does not run its lifespan; call `startup` on
 the host app. If the Agents API is not at the domain root, `APIPI_API_URL`
-for workers must include that prefix.
+for workers must include that prefix. The full page is
+[Extending ApiPi](extending.md).
 
 The durable store holds tenants, agents, sessions, turns, items, the
 event log, usage (never prompt text), and artifact metadata. Artifact
