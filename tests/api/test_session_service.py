@@ -1,6 +1,6 @@
 import uuid
 
-from apipi.api.agents import AgentWrite
+from apipi.agents import AgentWrite
 from apipi.config import Settings
 from apipi.env.spec import EnvironmentSpec
 from apipi.gateway import Gateway

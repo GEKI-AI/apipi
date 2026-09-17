@@ -29,6 +29,7 @@ Code comments stay omitted unless asked.
 | `src/apipi/api/` | HTTP routes |
 | `src/apipi/gateway.py` | In-process Gateway handle |
 | `src/apipi/sessions.py` | SessionService (create, events, stream) |
+| `src/apipi/agents.py` | Agent write types (not HTTP) |
 | `src/apipi/execution.py` | Session execution contract and in-process adapter |
 | `src/apipi/worker.py` | Trusted worker control protocol (not self_hosted) |
 | `src/apipi/schemas.py` | Public types |

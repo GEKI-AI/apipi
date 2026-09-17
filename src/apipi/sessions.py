@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from apipi.api.agents import AgentWrite
+from apipi.agents import AgentWrite
 from apipi.auth import not_found
 from apipi.blobs import ArtifactBlobs
 from apipi.config import Settings

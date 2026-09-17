@@ -8,7 +8,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
 
-from apipi.api.agents import AgentWrite
+from apipi.agents import AgentWrite
 from apipi.api.deps import model_key
 from apipi.auth import require_tenant
 from apipi.env.spec import EnvironmentSpec
