@@ -9,6 +9,7 @@ from apipi.config import (
     ConfigError,
     Settings,
     default_sqlite_url,
+    extend_settings,
     load_settings,
     parse_bytes,
     postgres_url,
@@ -41,6 +42,34 @@ def test_unset_database_url_defaults_to_sqlite(
     settings = Settings()
     assert settings.database_url == default_sqlite_url()
     assert settings.database_url.endswith("/.apipi/apipi.db")
+
+
+def test_extend_settings_ignores_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://hijack:hijack@localhost:5432/hijack"
+    )
+    monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
+    monkeypatch.chdir(tmp_path)
+    settings = extend_settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        run_mode="none",
+    )
+    assert settings.database_url == "sqlite+aiosqlite:///:memory:"
+    assert settings.run_mode == "none"
+
+
+def test_extend_settings_defaults_ignore_database_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://hijack:hijack@localhost:5432/hijack"
+    )
+    monkeypatch.chdir(tmp_path)
+    settings = extend_settings(run_mode="none")
+    assert "hijack" not in settings.database_url
+    assert settings.database_url == default_sqlite_url()
 
 
 def test_migrate_defaults_to_sqlite(

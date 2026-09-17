@@ -25,6 +25,12 @@ fail at startup. Nested tables are `[pi]`, `[sandbox]`,
 `[sandbox.resources]`, `[sandbox.network]`, and `[sandbox.ttl]`. A setting that would
 store prompt or completion bodies is rejected at startup.
 
+`load_settings()` is the CLI path and still reads the process
+environment and `.env`. `extend_settings(...)` builds `Settings` from
+the arguments only. It does not read `DATABASE_URL`, `OPENAI_*`, or
+other host environment values. Use it when another app in the same
+process already owns those names.
+
 `--host` and `--port` on `apipi serve` override the bind from config.
 
 Durations are like `15m`, `30s`, `2h`, `15d`. Sizes are like `512M` or

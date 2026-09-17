@@ -31,6 +31,20 @@ service. Combined `apipi serve` uses the in-process adapter. `apipi
 serve --api-only` leases a worker. Firecracker stays on the worker, or
 on combined serve as an embedded worker.
 
+To run the Agents API and your own routes in one process, build a
+`Gateway` with `Gateway.create`, call `startup` and `shutdown` from
+your FastAPI lifespan, call `configure` so `app.state`, middleware, and
+exception handlers are installed, then `include_router` for each
+`gateway.routers.*` you want. `apipi serve` does that wiring for
+standalone. `startup` attaches the store and starts the idle-Pi, workspace,
+usage, and worker-lease reap loops. Pass `extend_settings(...)` so host
+`DATABASE_URL` and `OPENAI_*` values do not leak in. Pass your `Store` if
+you own the engine; Gateway does not dispose an injected store. Pass
+`authenticate=` to inject the auth callback without `APIPI_AUTH`. Mounting
+`create_app()` under a path does not run its lifespan; call `startup` on
+the host app. If the Agents API is not at the domain root, `APIPI_API_URL`
+for workers must include that prefix.
+
 The durable store holds tenants, agents, sessions, turns, items, the
 event log, usage (never prompt text), and artifact metadata. Artifact
 bytes sit in the configured artifact store. Pi JSONL is a cache in

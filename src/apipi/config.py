@@ -811,6 +811,20 @@ def _toml_values(path: Path) -> dict[str, Any]:
     return values
 
 
+class _ExtendSettings(Settings):
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        del settings_cls, env_settings, dotenv_settings, file_secret_settings
+        return (init_settings,)
+
+
 def load_settings(*, config_path: str | None = None) -> Settings:
     path = resolve_config_path(config_path)
     values = _toml_values(path) if path is not None else {}
@@ -850,6 +864,13 @@ def load_settings(*, config_path: str | None = None) -> Settings:
         raise ConfigError(_settings_message(exc)) from exc
     reject_prompt_body_logging()
     return settings
+
+
+def extend_settings(**values: Any) -> Settings:
+    try:
+        return _ExtendSettings(**values)
+    except ValidationError as exc:
+        raise ConfigError(_settings_message(exc)) from exc
 
 
 def _settings_message(exc: ValidationError) -> str:

@@ -1,0 +1,417 @@
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+
+from fastapi import APIRouter, FastAPI
+from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from apipi.api.agents import router as agents_router
+from apipi.api.environments import router as environments_router
+from apipi.api.models import router as models_router
+from apipi.api.sessions import router as sessions_router
+from apipi.api.usage import router as usage_router
+from apipi.api.vaults import router as vaults_router
+from apipi.api.workers import router as workers_router
+from apipi.auth import AuthCache, Authenticate, load_authenticate
+from apipi.blobs import ArtifactBlobs, blob_store
+from apipi.config import Settings, load_settings
+from apipi.env.hub import EnvironmentHub
+from apipi.errors import error_body, register_exception_handlers
+from apipi.execution import LocalExecution, RemoteExecution
+from apipi.http_path import skip_request_path
+from apipi.logutil import RequestLogMiddleware
+from apipi.metrics import Metrics, mount_metrics
+from apipi.otel import Tracing, current_trace_id
+from apipi.payload_export import load_payload_sinks
+from apipi.pi.harness import PiHarness
+from apipi.pi.isolation import load_isolation
+from apipi.pi.isolation.base import Isolation
+from apipi.pi.pool import PiPool
+from apipi.request_id import RequestIdMiddleware
+from apipi.runtime import EventHub, FakeHarness
+from apipi.store.engine import Store, create_engine
+from apipi.store.models import utc_now
+from apipi.store.repo import purge_turn_logs
+from apipi.usage_export import load_usage_sinks
+from apipi.worker import WorkerHub
+
+_SKIP_CONTEXT = frozenset({"/health", "/metrics"})
+_CONTEXT_HEADERS = frozenset(
+    {b"x-apipi-instance", b"x-tenant-id", b"x-user-id", b"x-trace-id"}
+)
+
+health_router = APIRouter()
+
+
+@health_router.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+def _ascii_header(value: object) -> bytes | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if (
+        not text
+        or len(text) > 512
+        or not text.isascii()
+        or "\r" in text
+        or "\n" in text
+    ):
+        return None
+    return text.encode("ascii")
+
+
+def _trace_id_from_parent(value: str | None) -> str | None:
+    if value is None:
+        return None
+    parts = value.strip().split("-")
+    if len(parts) != 4:
+        return None
+    trace_id = parts[1].lower()
+    if len(trace_id) != 32 or trace_id == "0" * 32:
+        return None
+    try:
+        int(trace_id, 16)
+    except ValueError:
+        return None
+    return trace_id
+
+
+def _header_value(scope: Scope, name: bytes) -> str | None:
+    for key, value in scope.get("headers", []):
+        if key == name:
+            try:
+                return value.decode("ascii")
+            except UnicodeDecodeError:
+                return None
+    return None
+
+
+class InstanceMiddleware:
+    def __init__(self, app: ASGIApp, instance_id: str | None) -> None:
+        self.app = app
+        self.instance_id = instance_id.encode("ascii") if instance_id else None
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or skip_request_path(scope, _SKIP_CONTEXT):
+            await self.app(scope, receive, send)
+            return
+        state = scope.setdefault("state", {})
+        incoming = _trace_id_from_parent(_header_value(scope, b"traceparent"))
+        if incoming is not None:
+            state["trace_id"] = incoming
+
+        async def send_with_context(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = [
+                    (name, value)
+                    for name, value in message.get("headers", [])
+                    if name not in _CONTEXT_HEADERS
+                ]
+                extra: list[tuple[bytes, bytes]] = []
+                if self.instance_id is not None:
+                    extra.append((b"x-apipi-instance", self.instance_id))
+                tenant = _ascii_header(state.get("tenant_id"))
+                if tenant is not None:
+                    extra.append((b"x-tenant-id", tenant))
+                user = _ascii_header(state.get("key_id"))
+                if user is not None:
+                    extra.append((b"x-user-id", user))
+                trace = current_trace_id() or state.get("trace_id")
+                encoded = _ascii_header(trace) if trace is not None else None
+                if encoded is not None:
+                    extra.append((b"x-trace-id", encoded))
+                headers.extend(extra)
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_context)
+
+
+class MaxBodyMiddleware:
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            for key, value in scope.get("headers", []):
+                if key == b"content-length":
+                    try:
+                        length = int(value)
+                    except ValueError:
+                        length = 0
+                    if length > self.max_bytes:
+                        response = JSONResponse(
+                            status_code=413,
+                            content=error_body(
+                                "invalid_request",
+                                "Request body too large",
+                                "payload_too_large",
+                            ),
+                        )
+                        await response(scope, receive, send)
+                        return
+                    break
+        await self.app(scope, receive, send)
+
+
+async def _purge_usage_loop(settings: Settings, store: Store) -> None:
+    while True:
+        await asyncio.sleep(3600)
+        if settings.usage_retention is None:
+            continue
+        cutoff = utc_now() - settings.usage_retention
+        async with store.session() as db:
+            await purge_turn_logs(db, cutoff)
+
+
+@dataclass(frozen=True)
+class GatewayRouters:
+    sessions: APIRouter
+    agents: APIRouter
+    vaults: APIRouter
+    environments: APIRouter
+    usage: APIRouter
+    models: APIRouter
+    workers: APIRouter
+    health: APIRouter
+
+
+class Gateway:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        store: Store,
+        store_owned: bool,
+        event_hub: EventHub,
+        env_hub: EnvironmentHub,
+        execution: LocalExecution | RemoteExecution,
+        workers: WorkerHub,
+        authenticate: Authenticate,
+        isolation: Isolation,
+        pool: PiPool,
+        harness: FakeHarness | PiHarness,
+        blobs: ArtifactBlobs,
+        metrics: Metrics | None,
+        tracing: Tracing | None,
+    ) -> None:
+        self.settings = settings
+        self.store = store
+        self.event_hub = event_hub
+        self.env_hub = env_hub
+        self.execution = execution
+        self.workers = workers
+        self.authenticate = authenticate
+        self.isolation = isolation
+        self.pool = pool
+        self.harness = harness
+        self.blobs = blobs
+        self.metrics = metrics
+        self.tracing = tracing
+        self.routers = GatewayRouters(
+            sessions=sessions_router,
+            agents=agents_router,
+            vaults=vaults_router,
+            environments=environments_router,
+            usage=usage_router,
+            models=models_router,
+            workers=workers_router,
+            health=health_router,
+        )
+        self._store_owned = store_owned
+        self._auth_cache = AuthCache(settings.auth_cache_ttl)
+        self._usage_sinks = load_usage_sinks(settings, metrics)
+        self._payload_sinks = load_payload_sinks(settings, metrics)
+        self._tasks: list[asyncio.Task[None]] = []
+
+    @classmethod
+    def create(
+        cls,
+        settings: Settings | None = None,
+        store: Store | None = None,
+        harness: FakeHarness | PiHarness | None = None,
+        pool: PiPool | None = None,
+        tracing: Tracing | None = None,
+        blobs: ArtifactBlobs | None = None,
+        *,
+        authenticate: Authenticate | None = None,
+        event_hub: EventHub | None = None,
+        execution: LocalExecution | RemoteExecution | None = None,
+        workers: WorkerHub | None = None,
+    ) -> "Gateway":
+        resolved = settings if settings is not None else load_settings()
+        store_owned = store is None
+        resolved_store = (
+            store
+            if store is not None
+            else Store(
+                create_engine(
+                    resolved.database_url,
+                    pool_size=resolved.db_pool_size,
+                )
+            )
+        )
+        resolved_pool = pool if pool is not None else PiPool(resolved)
+        isolation = load_isolation(resolved.run_mode)
+        resolved_harness = harness if harness is not None else PiHarness(resolved_pool)
+        hub = event_hub if event_hub is not None else EventHub()
+        env_hub = EnvironmentHub()
+        resolved_blobs = blobs if blobs is not None else blob_store(resolved)
+        resolved_metrics = Metrics() if resolved.metrics else None
+        if tracing is not None:
+            resolved_tracing = tracing
+        elif resolved.otel_endpoint:
+            resolved_tracing = Tracing(endpoint=resolved.otel_endpoint)
+        else:
+            resolved_tracing = None
+        resolved_workers = (
+            workers
+            if workers is not None
+            else WorkerHub(resolved, metrics=resolved_metrics)
+        )
+        if execution is not None:
+            resolved_execution = execution
+        elif resolved.api_only:
+            resolved_execution = RemoteExecution(
+                resolved, workers=resolved_workers, store=resolved_store, hub=hub
+            )
+        else:
+            resolved_execution = LocalExecution(
+                resolved,
+                pool=resolved_pool,
+                harness=resolved_harness,
+                isolation=isolation,
+                hub=hub,
+                env_hub=env_hub,
+                store=resolved_store,
+                blobs=resolved_blobs,
+                metrics=resolved_metrics,
+                tracing=resolved_tracing,
+            )
+        auth = (
+            authenticate
+            if authenticate is not None
+            else load_authenticate(resolved.auth)
+        )
+        return cls(
+            settings=resolved,
+            store=resolved_store,
+            store_owned=store_owned,
+            event_hub=hub,
+            env_hub=env_hub,
+            execution=resolved_execution,
+            workers=resolved_workers,
+            authenticate=auth,
+            isolation=isolation,
+            pool=resolved_pool,
+            harness=resolved_harness,
+            blobs=resolved_blobs,
+            metrics=resolved_metrics,
+            tracing=resolved_tracing,
+        )
+
+    def configure(self, app: FastAPI) -> None:
+        app.add_middleware(RequestIdMiddleware)
+        app.add_middleware(InstanceMiddleware, instance_id=self.settings.instance_id)
+        app.add_middleware(MaxBodyMiddleware, max_bytes=self.settings.max_request_bytes)
+        app.add_middleware(RequestLogMiddleware)
+        app.state.gateway = self
+        app.state.settings = self.settings
+        app.state.isolation = self.isolation
+        app.state.metrics = self.metrics
+        app.state.tracing = self.tracing
+        app.state.store = self.store
+        app.state.mcp_http = {}
+        app.state.mcp_stdio = {}
+        app.state.authenticate = self.authenticate
+        app.state.auth_cache = self._auth_cache
+        app.state.usage_sinks = self._usage_sinks
+        app.state.payload_sinks = self._payload_sinks
+        app.state.event_hub = self.event_hub
+        app.state.env_hub = self.env_hub
+        app.state.pi_pool = self.pool
+        app.state.harness = self.harness
+        app.state.execution = self.execution
+        app.state.workers = self.workers
+        app.state.blobs = self.blobs
+        register_exception_handlers(app)
+
+    async def startup(self) -> None:
+        self.execution.attach_store(self.store)
+        self._tasks = [
+            asyncio.create_task(self.execution.reap_loop()),
+            asyncio.create_task(self.execution.reap_workspace_loop()),
+            asyncio.create_task(_purge_usage_loop(self.settings, self.store)),
+            asyncio.create_task(self._expire_worker_leases()),
+        ]
+
+    async def shutdown(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        self._tasks = []
+        await self.execution.close()
+        if isinstance(self.tracing, Tracing):
+            self.tracing.shutdown()
+        if self._store_owned:
+            await self.store.dispose()
+
+    async def _expire_worker_leases(self) -> None:
+        while True:
+            await asyncio.sleep(1)
+            await self.workers.expire(self.store, self.event_hub)
+
+
+def create_app(
+    settings: Settings | None = None,
+    store: Store | None = None,
+    harness: FakeHarness | PiHarness | None = None,
+    pool: PiPool | None = None,
+    tracing: Tracing | None = None,
+    blobs: ArtifactBlobs | None = None,
+    *,
+    authenticate: Authenticate | None = None,
+    event_hub: EventHub | None = None,
+    execution: LocalExecution | RemoteExecution | None = None,
+    workers: WorkerHub | None = None,
+) -> FastAPI:
+    gateway = Gateway.create(
+        settings,
+        store=store,
+        harness=harness,
+        pool=pool,
+        tracing=tracing,
+        blobs=blobs,
+        authenticate=authenticate,
+        event_hub=event_hub,
+        execution=execution,
+        workers=workers,
+    )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        del app
+        await gateway.startup()
+        try:
+            yield
+        finally:
+            await gateway.shutdown()
+
+    app = FastAPI(title="ApiPi", version="0.0.0", lifespan=lifespan)
+    gateway.configure(app)
+    app.include_router(gateway.routers.sessions)
+    app.include_router(gateway.routers.vaults)
+    app.include_router(gateway.routers.agents)
+    app.include_router(gateway.routers.environments)
+    app.include_router(gateway.routers.usage)
+    app.include_router(gateway.routers.models)
+    app.include_router(gateway.routers.workers)
+    app.include_router(gateway.routers.health)
+    if isinstance(gateway.metrics, Metrics):
+        mount_metrics(app, gateway.metrics)
+    return app

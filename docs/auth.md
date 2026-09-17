@@ -28,7 +28,9 @@ this package. You can set it in the environment, `.env`, or
 `apipi.toml`. See [config](config.md). A small example is
 `examples/auth_callback.py`. Isolation backends use the same import
 style (`package.mod:Class` on `APIPI_RUN_MODE`); see
-[run modes](run-modes.md#custom-isolation).
+[run modes](run-modes.md#custom-isolation). When you construct a
+`Gateway` in process, pass `authenticate=` (the same callable). That
+does not use `APIPI_AUTH`.
 
 Default: any non-empty bearer is accepted. `key_id` is the SHA-256 hex
 of the bearer. `tenant_id` is UUID5 of that hex (URL namespace). The
