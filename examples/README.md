@@ -7,6 +7,7 @@ chat playground. Keys come from the environment, not from these files.
 | --- | --- |
 | [sessions/](sessions/) | Python scripts that create a session and stream a turn |
 | [extend_fastapi.py](extend_fastapi.py) | Extend ApiPi: Agents API plus `GET /ok` in one FastAPI app. Run `apipi migrate` on that SQLite file first. See [Extending ApiPi](../docs/extending.md). |
+| [webpage-check/](webpage-check/) | Extend ApiPi: `POST /examples/webpage-check` fetches a URL with bash and streams plain text |
 | [playground/](playground/) | Vite React playground (agents, sessions, turns, artifacts) |
 | [self_hosted_runner.py](self_hosted_runner.py) | Local directory as a `self_hosted` computer |
 | [apipi.toml](apipi.toml) | Gateway settings file |

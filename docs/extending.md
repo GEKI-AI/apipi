@@ -10,7 +10,9 @@ Wiring stays explicit. There is no `attach_everything(app)` helper.
 `apipi serve` remains the standalone CLI; it does this same wiring for
 operators. Copy the verbose pattern when you extend.
 
-A minimal ASGI skeleton is `examples/extend_fastapi.py`.
+A minimal ASGI skeleton is `examples/extend_fastapi.py`. A concrete
+extension that fetches a page with bash and streams plain text is
+`examples/webpage-check/`.
 
 ## Extending vs standalone
 
