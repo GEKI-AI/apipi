@@ -229,6 +229,31 @@ function waitForSpawn(proc: ChildProcessWithoutNullStreams): Promise<void> {
   });
 }
 
+function npxName(raw: string): string {
+  const scoped = raw.match(/^(@[^/]+\/[^@]+)(?:@.*)?$/);
+  if (scoped) {
+    return scoped[1];
+  }
+  return raw.replace(/@[^@]+$/, "") || raw;
+}
+
+function spawnArgv(server: {
+  command: string;
+  args: string[];
+}): { command: string; args: string[] } {
+  if (server.command !== "npx") {
+    return { command: server.command, args: server.args };
+  }
+  const args = server.args.filter((item) => item !== "-y" && item !== "--yes");
+  const pkgIdx = args.findIndex((item) => item.includes("mcp") || item.startsWith("@"));
+  if (pkgIdx < 0) {
+    return { command: "npx", args };
+  }
+  const name = npxName(args[pkgIdx]);
+  const rest = [...args.slice(0, pkgIdx), ...args.slice(pkgIdx + 1)];
+  return { command: "npx", args: ["--no-install", name, ...rest] };
+}
+
 function startServer(server: {
   label: string;
   command: string;
@@ -236,7 +261,8 @@ function startServer(server: {
   cwd?: string;
 }): Promise<ChildProcessWithoutNullStreams> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(server.command, server.args, {
+    const argv = spawnArgv(server);
+    const proc = spawn(argv.command, argv.args, {
       cwd: server.cwd,
       env: {
         ...process.env,
