@@ -272,8 +272,45 @@ function startServer(server: {
   });
 }
 
+function warmupPackage(pkg: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("npx", ["-y", `--package=${pkg}`, "node", "-e", "process.exit(0)"], {
+      env: {
+        ...process.env,
+        npm_config_yes: "true",
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
+        NPM_CONFIG_LOGLEVEL: "error",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const fail = (err: Error) => {
+      proc.kill();
+      reject(err);
+    };
+    proc.stderr.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8").trim();
+      if (text) {
+        console.error(`mcp warmup: ${text.slice(0, 500)}`);
+      }
+    });
+    proc.once("error", (err) => fail(err instanceof Error ? err : new Error(String(err))));
+    proc.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      fail(new Error(`npx warmup failed (${code})`));
+    });
+    setTimeout(() => fail(new Error("npx warmup timeout")), MCP_TIMEOUT_MS);
+  });
+}
+
 async function attachStdio(pi: ExtensionAPI): Promise<void> {
   for (const server of stdioServers()) {
+    const pkg = server.args.find((item) => item.includes("mcp") || item.startsWith("@"));
+    if (server.command === "npx" && pkg) {
+      await warmupPackage(pkg);
+    }
     const proc = await startServer(server);
     await waitForSpawn(proc);
     const client = new McpClient(proc);
