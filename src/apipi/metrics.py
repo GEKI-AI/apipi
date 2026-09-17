@@ -13,6 +13,8 @@ from prometheus_client import (
 )
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from apipi.http_path import skip_request_path
+
 disable_created_metrics()
 
 _SKIP = frozenset({"/health", "/metrics"})
@@ -172,7 +174,7 @@ class MetricsMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope.get("path") in _SKIP:
+        if scope["type"] != "http" or skip_request_path(scope, _SKIP):
             await self.app(scope, receive, send)
             return
         app = scope.get("app")

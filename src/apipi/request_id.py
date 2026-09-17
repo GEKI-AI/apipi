@@ -3,10 +3,12 @@ import uuid
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from apipi.http_path import skip_request_path
+
 _HEADER = b"x-request-id"
 _CLIENT_HEADER = b"x-client-request-id"
 _MAX_LEN = 512
-_HEALTH = "/health"
+_SKIP = frozenset({"/health"})
 
 
 def _decode(value: bytes) -> str | None:
@@ -45,7 +47,7 @@ class RequestIdMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope.get("path") == _HEALTH:
+        if scope["type"] != "http" or skip_request_path(scope, _SKIP):
             await self.app(scope, receive, send)
             return
         request_id = resolve_request_id(
