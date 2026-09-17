@@ -14,12 +14,16 @@ from apipi.env.setup import (
     package_egress_hosts,
     packages_from,
     prepare_workspace,
+    provision_hosted,
     render_setup_script,
     resolve_setup_cwd,
     run_host_setup,
     session_env_from,
+    session_network_from,
     setup_commands_from,
+    tap_policy_from,
     workspace_egress_hosts,
+    workspace_network_policy,
 )
 
 
@@ -199,4 +203,107 @@ def test_inline_file_rejects_escape(tmp_path: Path) -> None:
                     }
                 ],
             },
+        )
+
+
+def test_session_network_from_shapes() -> None:
+    assert session_network_from({}) is None
+    disabled = session_network_from({"network": {"access": "disabled"}})
+    assert disabled is not None
+    assert disabled.access == "disabled"
+    policy = session_network_from(
+        {"network": {"access": "restricted", "allowed_domains": ["api.example.com"]}}
+    )
+    assert policy is not None
+    assert policy.allowed_domains == ("api.example.com",)
+    with pytest.raises(SetupError, match="allowed_domains"):
+        session_network_from({"network": {"access": "restricted"}})
+    with pytest.raises(SetupError, match="only valid with restricted"):
+        session_network_from(
+            {"network": {"access": "enabled", "allowed_domains": ["api.example.com"]}}
+        )
+    with pytest.raises(SetupError, match="invalid network host"):
+        session_network_from(
+            {
+                "network": {
+                    "access": "restricted",
+                    "allowed_domains": ["https://api.example.com"],
+                }
+            }
+        )
+    with pytest.raises(SetupError, match="invalid network host"):
+        session_network_from(
+            {"network": {"access": "restricted", "allowed_domains": ["*.example.com"]}}
+        )
+
+
+def test_tap_policy_gateway_floor() -> None:
+    restricted = session_network_from(
+        {"network": {"access": "restricted", "allowed_domains": ["api.example.com"]}}
+    )
+    assert restricted is not None
+    open_tap = tap_policy_from(
+        restricted, gateway_allowlist=False, extra_hosts=PYPI_HOSTS
+    )
+    assert open_tap.allowlist is True
+    assert "api.example.com" in open_tap.hosts
+    assert "pypi.org" in open_tap.hosts
+    with pytest.raises(SetupError, match="not allowed"):
+        tap_policy_from(
+            restricted,
+            gateway_allowlist=True,
+            gateway_hosts=("mcp.tavily.com",),
+        )
+    ok = tap_policy_from(
+        restricted,
+        gateway_allowlist=True,
+        gateway_hosts=("api.example.com",),
+    )
+    assert ok.hosts == ("api.example.com",)
+    disabled = session_network_from({"network": {"access": "disabled"}})
+    assert disabled is not None
+    locked = tap_policy_from(disabled, gateway_allowlist=False, extra_hosts=PYPI_HOSTS)
+    assert locked.allowlist is True
+    assert locked.hosts == ()
+    enabled_policy = session_network_from({"network": {"access": "enabled"}})
+    enabled = tap_policy_from(
+        enabled_policy,
+        gateway_allowlist=True,
+        gateway_hosts=("api.openai.com",),
+        extra_hosts=("pypi.org",),
+    )
+    assert enabled.allowlist is True
+    assert enabled.hosts == ("api.openai.com", "pypi.org")
+    assert tap_policy_from(None, gateway_allowlist=False).allowlist is False
+
+
+def test_prepare_writes_network_policy(tmp_path: Path) -> None:
+    workspace = tmp_path / "session"
+    prepare_workspace(
+        workspace,
+        {
+            "type": "openai_hosted",
+            "network": {
+                "access": "restricted",
+                "allowed_domains": ["api.example.com"],
+            },
+        },
+    )
+    policy = workspace_network_policy(str(workspace))
+    assert policy is not None
+    assert policy.access == "restricted"
+    assert policy.allowed_domains == ("api.example.com",)
+
+
+def test_provision_network_disabled_on_none(tmp_path: Path) -> None:
+    workspace = tmp_path / "session"
+    workspace.mkdir()
+    with pytest.raises(SetupError, match="microvm isolation"):
+        provision_hosted(
+            {
+                "type": "openai_hosted",
+                "directory": str(workspace),
+                "network": {"access": "disabled"},
+            },
+            run_mode="none",
         )

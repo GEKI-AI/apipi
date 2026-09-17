@@ -42,8 +42,9 @@ Session rows live in the store. The `openai_hosted` workspace is
 ephemeral: after `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour)
 with no activity, Pi stops and the directory is deleted. Transcript,
 published artifacts, and the harness session cache stay. The next turn
-creates an empty `/workspace`, re-applies skills, packages, and setup
-commands, and reloads the cached session file so Pi continues the
+creates an empty `/workspace`, re-applies skills, packages, setup
+commands, files, env, and network policy, and reloads the cached
+session file so Pi continues the
 conversation. Published files are not copied back into `/workspace`.
 The directory is bounded by `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB).
 Artifact bytes are copied to the gateway host when a turn completes,
@@ -96,12 +97,13 @@ process that exits immediately fails the guest instead of booting L
 without browser tools. The platform prompt mentions Chromium only when
 those tools are attached.
 
-### Packages, files, env, and setup commands
+### Packages, files, env, network, and setup commands
 
 Session create may include `environment.packages`,
-`environment.setup_commands`, `environment.env`, and inline
-`environment.files` on `openai_hosted`. Those fields are stored on the
-session. Prep runs before the first agent turn that needs the computer:
+`environment.setup_commands`, `environment.env`, inline
+`environment.files`, and `environment.network` on `openai_hosted`.
+Those fields are stored on the session. Prep runs before the first
+agent turn that needs the computer:
 
 1. Write inline `files` into the session directory. Paths use the same
    `/workspace` and `/tmp/workspace` mapping as setup `cwd`. Other
@@ -120,21 +122,35 @@ session. Prep runs before the first agent turn that needs the computer:
    directory. Absolute OpenAI paths `/workspace` and `/tmp/workspace`
    map to that directory. Other absolute paths are rejected.
 
+`network.access` is `enabled`, `disabled`, or `restricted`.
+`restricted` requires `allowed_domains` (1–100 exact hostnames).
+`enabled` allows outbound traffic unless the process-wide TAP
+allowlist is on; then the gateway list still wins. `disabled` blocks
+guest TAP egress (DNS and the host broker on the TAP subnet still
+work). `restricted` allows only those hostnames, plus package
+registries when `packages` is set so install can run. A session cannot
+add a host that `[sandbox.network]` forbids. Model and HTTP MCP calls
+go through the host broker, so they still work when TAP is locked.
+
 After a sandbox TTL wipe, the next turn recreates `/workspace` and
-re-applies the stored files, env, packages, and setup commands.
+re-applies the stored files, env, packages, setup commands, and
+network policy.
 
 Isolation `none` runs that script in the session directory on the host
 (`uv pip` or `python3 -m pip`, `apk` or `apt-get` if present, `npm`).
-Missing tools fail the session. Isolation `microvm` packs the same
+Missing tools fail the session. Isolation `none` cannot enforce TAP
+policy: `disabled` and `restricted` fail the environment with a clear
+error; `enabled` is a no-op. Isolation `microvm` packs the same
 script into the guest and runs it after unpack, before Pi, in the same
-guest. When the optional TAP allowlist is on, install hosts (PyPI,
-npm, Alpine) are added for that session if the matching package list
-is set.
+guest, and applies `network` on that guest TAP. When the optional TAP
+allowlist is on, install hosts (PyPI, npm, Alpine) are added for that
+session if the matching package list is set.
 
 A nonzero exit emits `agent.session.environment.failed` and
 `agent.session.failed`. Pi does not start. Successful prep is visible
 in the workspace before the turn. `none` and `self_hosted` environment
-types reject these fields.
+types reject packages, setup commands, env, and files. `self_hosted`
+also rejects `network`. Environment type `none` ignores `network`.
 
 ## `none`
 

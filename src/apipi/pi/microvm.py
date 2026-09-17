@@ -21,7 +21,12 @@ from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
 from apipi.config import ConfigError, Settings
-from apipi.env.setup import workspace_egress_hosts
+from apipi.env.setup import (
+    SetupError,
+    tap_policy_from,
+    workspace_egress_hosts,
+    workspace_network_policy,
+)
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.dirs import PI_SESSION_REL, pi_session_file
@@ -1171,13 +1176,27 @@ async def start_microvm(
     chroot_dir.mkdir(parents=True)
     guest_skills, extra_dirs = guest_skill_dirs(cwd, skill_dirs)
     extra_dirs = [*(extra_dirs or []), (pi_agent_dir(settings), ".pi/agent")]
-    allowlist = settings.microvm_egress_allowlist
     extra_hosts = workspace_egress_hosts(cwd)
-    allowed_ips = (
-        allowed_egress_ips(settings, mcp_http, extra_hosts=extra_hosts)
-        if allowlist
-        else []
-    )
+    try:
+        policy = workspace_network_policy(cwd)
+        tap = tap_policy_from(
+            policy,
+            gateway_allowlist=settings.microvm_egress_allowlist,
+            gateway_hosts=tuple(microvm_egress_hosts(settings, mcp_http)),
+            extra_hosts=tuple(extra_hosts),
+        )
+    except SetupError as exc:
+        raise ConfigError(exc.message) from exc
+    allowlist = tap.allowlist
+    allowed_ips: list[str] = []
+    if allowlist:
+        seen_ips: set[str] = set()
+        for host in tap.hosts:
+            for ip in resolve_host_ips(host):
+                if ip in seen_ips:
+                    continue
+                seen_ips.add(ip)
+                allowed_ips.append(ip)
     stdio_in = None if inherit_stdio else asyncio.subprocess.DEVNULL
     stdio_out = None if inherit_stdio else asyncio.subprocess.PIPE
     console_tasks: list[asyncio.Task[None]] = []

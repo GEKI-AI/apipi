@@ -147,7 +147,6 @@ async def test_unimplemented_env_fields(client: AsyncClient) -> None:
     token = "setup-unimpl"
     agent_id = await _agent(client, token)
     for field, value in (
-        ("network", {"access": "disabled"}),
         ("environment_template_id", "tpl"),
         ("skills", []),
         ("plugins", []),
@@ -377,3 +376,116 @@ async def test_non_inline_files_not_implemented(client: AsyncClient) -> None:
     error = response.json()["error"]
     assert error["type"] == "not_implemented"
     assert error["code"] == "files"
+
+
+async def test_network_is_stored(client: AsyncClient) -> None:
+    token = "net-store"
+    agent_id = await _agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {
+                "type": "openai_hosted",
+                "network": {
+                    "access": "restricted",
+                    "allowed_domains": ["api.example.com"],
+                },
+            },
+        },
+    )
+    assert created.status_code == 200
+    env = created.json()["environment"]
+    assert env["network"] == {
+        "access": "restricted",
+        "allowed_domains": ["api.example.com"],
+    }
+    policy = Path(env["directory"]) / ".apipi" / "network"
+    assert "api.example.com" in policy.read_text()
+
+
+async def test_network_disabled_fails_on_none_isolation(client: AsyncClient) -> None:
+    token = "net-none"
+    agent_id = await _agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {
+                "type": "openai_hosted",
+                "network": {"access": "disabled"},
+            },
+            "input": "hello",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["status"] == "failed"
+    session_id = created.json()["id"]
+    events = await client.get(
+        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+    )
+    failed = next(
+        event
+        for event in events.json()["data"]
+        if event["type"] == "agent.session.environment.failed"
+    )
+    assert "microvm" in failed["data"]["error"]
+
+
+async def test_network_ignored_on_type_none(client: AsyncClient) -> None:
+    token = "net-type-none"
+    agent_id = await _agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {
+                "type": "none",
+                "network": {"access": "disabled"},
+            },
+        },
+    )
+    assert created.status_code == 200
+    assert "network" not in created.json()["environment"]
+
+
+async def test_network_rejected_on_self_hosted(client: AsyncClient) -> None:
+    token = "net-self"
+    agent_id = await _agent(client, token)
+    response = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {
+                "type": "self_hosted",
+                "network": {"access": "disabled"},
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
+async def test_network_bad_host_rejected(client: AsyncClient) -> None:
+    token = "net-bad"
+    agent_id = await _agent(client, token)
+    response = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {
+                "type": "openai_hosted",
+                "network": {
+                    "access": "restricted",
+                    "allowed_domains": ["https://api.example.com"],
+                },
+            },
+        },
+    )
+    assert response.status_code == 400
+    assert "invalid network host" in response.json()["error"]["message"]

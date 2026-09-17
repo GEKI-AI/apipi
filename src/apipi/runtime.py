@@ -1087,12 +1087,22 @@ async def run_turn(
                 write_pi_models_json(settings, ids)
             ensure_openai_workspace(row.environment)
             try:
+                gateway_allowlist = False
+                gateway_hosts: tuple[str, ...] = ()
+                if settings is not None:
+                    gateway_allowlist = settings.microvm_egress_allowlist
+                    if settings.run_mode == "microvm":
+                        from apipi.pi.microvm import microvm_egress_hosts
+
+                        gateway_hosts = tuple(microvm_egress_hosts(settings))
                 provision_hosted(
                     row.environment,
                     run_mode=settings.run_mode if settings is not None else "none",
                     max_bytes=(
                         settings.max_workspace_bytes if settings is not None else None
                     ),
+                    gateway_allowlist=gateway_allowlist,
+                    gateway_hosts=gateway_hosts,
                 )
             except SetupError as exc:
                 await fail_environment(db, hub, tenant_id, session_id, exc.message)
