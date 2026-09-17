@@ -26,7 +26,7 @@ The beta header `OpenAI-Beta: agents=v1` is accepted and ignored.
 Point the official OpenAI Python client at this gateway
 (`OPENAI_BASE_URL=http://localhost:8000/v1` on the **client**, with a
 bearer). Create an agent, open a session, stream events, send a
-follow-up, cancel, and delete. `examples/openai_sdk.py` and
+follow-up, cancel, and delete. `examples/sessions/openai_sdk.py` and
 [Using the API](using.md) walk through that flow.
 
 You can:
@@ -181,7 +181,7 @@ SSE events use ApiPi public types (`agent.session.created`,
 ## How to verify
 
 1. Install and serve the gateway ([Install](install.md)).
-2. Run `examples/openai_sdk.py` as on [Using the API](using.md).
+2. Run `examples/sessions/openai_sdk.py` as on [Using the API](using.md).
 3. Send a follow-up with the nested `events` body (SDK
    `sessions.events.create`) or the flat curl example on that page.
 4. Confirm unknown keys return `unknown_field` and `multi_agent` returns

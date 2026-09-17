@@ -22,7 +22,7 @@ def main() -> None:
     ) as client:
         with client.beta.agents.sessions.with_streaming_response.create(
             agent={
-                "model": "gpt-4.1",
+                "model": os.environ.get("APIPI_MODEL", "gpt-4.1"),
                 "instructions": "Write clean code, run it, and report the actual output.",
             },
             environment={"type": "openai_hosted"},

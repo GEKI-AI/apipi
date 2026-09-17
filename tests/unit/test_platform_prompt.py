@@ -3,6 +3,7 @@ from apipi.pi.platform_prompt import (
     BROWSER_HINT,
     DEFAULT_PLATFORM_PROMPT,
     compose_instructions,
+    sandbox_size_hint,
 )
 
 
@@ -74,3 +75,19 @@ def test_browser_hint_only_when_requested() -> None:
     assert with_browser is not None
     assert with_browser.endswith(BROWSER_HINT)
     assert DEFAULT_PLATFORM_PROMPT in with_browser
+
+
+def test_sandbox_size_hint_l_forbids_install() -> None:
+    text = sandbox_size_hint("L")
+    assert "Sandbox size is L" in text
+    assert "Do not install Playwright" in text
+    composed = compose_instructions(_settings(), None, sandbox_size="L", browser=True)
+    assert composed is not None
+    assert "Sandbox size is L" in composed
+    assert BROWSER_HINT in composed
+
+
+def test_sandbox_size_hint_s_has_no_browser() -> None:
+    text = sandbox_size_hint("S")
+    assert "Sandbox size is S" in text
+    assert "no browser" in text

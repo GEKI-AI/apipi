@@ -100,6 +100,17 @@ def test_pi_command_args_omit_empty_instructions(tmp_path: Path) -> None:
     assert "--append-system-prompt" not in args
 
 
+def test_pi_command_args_include_extension(tmp_path: Path) -> None:
+    args = pi_command_args(
+        _settings(tmp_path),
+        tools=True,
+        extension="/workspace/.pi/agent/extensions/apipi-mcp.ts",
+    )
+    assert args[args.index("--extension") + 1] == (
+        "/workspace/.pi/agent/extensions/apipi-mcp.ts"
+    )
+
+
 def test_pi_env_uses_request_key_not_openai_api_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

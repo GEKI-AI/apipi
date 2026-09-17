@@ -1,96 +1,28 @@
 # Examples
 
-MCP configs, gateway config samples, a small OpenAI Python SDK
-script, a self_hosted runner, and a local chat playground. Keys come
-from the environment, not from these files.
+Copy-paste configs, operator samples, session clients, and a local
+chat playground. Keys come from the environment, not from these files.
 
-| File | What |
+| Path | What |
 | --- | --- |
-| [openai_sdk.py](openai_sdk.py) | Official OpenAI Python client against this API |
-| [self_hosted_runner.py](self_hosted_runner.py) | Local directory as a `self_hosted` computer |
+| [sessions/](sessions/) | Python scripts that create a session and stream a turn |
 | [playground/](playground/) | Vite React playground (agents, sessions, turns, artifacts) |
+| [self_hosted_runner.py](self_hosted_runner.py) | Local directory as a `self_hosted` computer |
 | [apipi.toml](apipi.toml) | Gateway settings file |
-| [env.example](env.example) | Dotenv template; copy to `.env` |
+| [env.example](env.example) | Dotenv template; copy to `.env` at the repo root |
 | [auth_callback.py](auth_callback.py) | Auth callback (`APIPI_AUTH`) |
 | [isolation.py](isolation.py) | Custom isolation backend (`APIPI_RUN_MODE`) |
 | [tavily.yaml](tavily.yaml) | Web search (Tavily hosted MCP) |
 | [playwright.yaml](playwright.yaml) | Browser (Playwright MCP, headless) |
 
+Session clients live in [sessions/](sessions/). How to start a split
+`microvm` API plus worker and run every session script is in
+[sessions/README.md](sessions/README.md) and
+[Manual microvm examples](../docs/tests.md#manual-microvm-examples).
+GitHub CI does not run that suite.
+
 Skills are `SKILL.md` directories on the computer. Point at them with
 `environment.capability_directories`. See [docs/tools.md](../docs/tools.md).
-
-## OpenAI Python SDK
-
-[openai_sdk.py](openai_sdk.py) uses the official `OpenAI` client with
-`base_url` pointed at this gateway. It creates a session with an inline
-agent, `environment={"type": "openai_hosted"}` (a local session
-directory, not OpenAI's cloud), and streams the first turn. The input
-asks the agent to write `tree.py`, run it, and show the output. The
-script prints SSE `data:` lines and stops after the first turn outcome.
-The stream stays open across idle, so a loop without that stop would
-wait on keepalives.
-
-It only sends fields this API implements, so the SDK does not add
-`multi_agent`, `vault_ids`, or other unknown keys that would return
-`400`.
-
-The `openai` package is not an ApiPi dependency. Install it for this
-script only:
-
-```
-uv run --with openai python examples/openai_sdk.py
-```
-
-The gateway must already be running. Isolation `none` is the default.
-`microvm` starts when `/dev/kvm`, Firecracker, jailer, guest images,
-`ip`, and `iptables` are present; otherwise that mode exits. Send a
-bearer the client will send:
-
-```
-APIPI_RUN_MODE=none uv run apipi serve
-```
-
-Default auth accepts any non-empty bearer and hashes it into a tenant
-id. Set the same value on the client. For this script,
-`OPENAI_BASE_URL` is the ApiPi gateway, not the model host that Pi
-uses. If you omit it, the default is `http://localhost:8000/v1`.
-
-```
-export OPENAI_API_KEY=dev-token
-export OPENAI_BASE_URL=http://localhost:8000/v1
-uv run --with openai python examples/openai_sdk.py
-```
-
-The product [Using the API](../docs/using.md) page walks through the same
-client: run a task, follow progress, continue, and delete.
-
-## self_hosted runner
-
-[self_hosted_runner.py](self_hosted_runner.py) attaches a local
-directory as the session computer. Create a session with
-`environment.type` `self_hosted`. The create response includes
-`environment_id` and a one-time `key`. The runner opens
-`/v1/environments/{environment_id}` as a WebSocket and sends `hello`
-with that key. After that it serves `exec`, `read`, `write`, `edit`,
-`list`, `artifact`, `ping`, and `close` against the directory. The
-protocol is in [docs/environments.md](../docs/environments.md).
-
-The `websockets` package is not an ApiPi dependency. Install it for
-this script only. The gateway must already be running. `OPENAI_BASE_URL`
-is the ApiPi gateway, the same meaning as in [openai_sdk.py](openai_sdk.py).
-If you omit it, the default is `http://localhost:8000/v1`. Put the
-one-time key in the environment, not in the file:
-
-```
-export OPENAI_BASE_URL=http://localhost:8000/v1
-export APIPI_ENVIRONMENT_ID=...
-export APIPI_ENVIRONMENT_KEY=...
-uv run --with websockets python examples/self_hosted_runner.py --dir ./workspace
-```
-
-`--dir` is the workspace. You can also set `APIPI_RUNNER_DIR`. File
-and shell tools reach that folder over the socket once the runner is
-connected.
 
 ## Playground
 
@@ -99,7 +31,8 @@ through a Vite proxy. It lists models, creates a saved agent with a
 model and instructions, lists sessions, creates a session with a saved
 agent, streams turns, shows tool and command activity, deletes a
 session, and downloads artifacts. It is an example client, not a
-first-party UI. GitHub CI does not run it.
+first-party UI. GitHub CI does not run it. It is not part of
+`sessions/run-microvm.sh`.
 
 The proxy injects `Authorization: Bearer` from `API_KEY`. That value is
 the gateway bearer (a local token, or a Geki tenant key), not the model
@@ -126,6 +59,35 @@ session. `GET /v1/models` on the gateway must be enabled
 (`APIPI_FORWARD_MODELS`, on by default).
 
 Artifact bytes exist after a turn completes. Files under `outputs/`
-are copied into the host store then. Idle Pi TTL for `none` and `self_hosted` is `APIPI_IDLE_TTL`
-(default 15 minutes). A hosted workspace lasts until
-`APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour).
+are copied into the host store then. Idle Pi TTL for `none` and
+`self_hosted` is `APIPI_IDLE_TTL` (default 15 minutes). A hosted
+workspace lasts until `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1
+hour).
+
+## self_hosted runner
+
+[self_hosted_runner.py](self_hosted_runner.py) attaches a local
+directory as the session computer. Create a session with
+`environment.type` `self_hosted`. The create response includes
+`environment_id` and a one-time `key`. The runner opens
+`/v1/environments/{environment_id}` as a WebSocket and sends `hello`
+with that key. After that it serves `exec`, `read`, `write`, `edit`,
+`list`, `artifact`, `ping`, and `close` against the directory. The
+protocol is in [docs/environments.md](../docs/environments.md).
+
+The `websockets` package is not an ApiPi dependency. Install it for
+this script only. The gateway must already be running. `OPENAI_BASE_URL`
+is the ApiPi gateway. If you omit it, the default is
+`http://localhost:8000/v1`. Put the one-time key in the environment,
+not in the file:
+
+```
+export OPENAI_BASE_URL=http://localhost:8000/v1
+export APIPI_ENVIRONMENT_ID=...
+export APIPI_ENVIRONMENT_KEY=...
+uv run --with websockets python examples/self_hosted_runner.py --dir ./workspace
+```
+
+`--dir` is the workspace. You can also set `APIPI_RUNNER_DIR`. File
+and shell tools reach that folder over the socket once the runner is
+connected.

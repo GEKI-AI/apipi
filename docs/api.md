@@ -310,7 +310,7 @@ See [environments](environments.md).
 
 The official client surface, backend differences, and error matrix are
 on [OpenAI compatibility](openai-compatibility.md). The OpenAI Python
-example is `examples/openai_sdk.py`. Create-and-stream steps are in
+example is `examples/sessions/openai_sdk.py`. Create-and-stream steps are in
 [Using the API](using.md).
 
 ## Errors

@@ -27,6 +27,7 @@ From a checkout after `uv sync`:
 | Lint, types, and tests | `./scripts/check` |
 | Like GitHub (skip slow) | `./scripts/check --fast` |
 | Also build the docs site | `./scripts/check --docs` |
+| Manual live examples (microvm API + worker) | `./examples/sessions/run-microvm.sh` |
 
 If a live suite cannot start, those tests skip. The suite still
 requires the mode it asked for.
@@ -128,4 +129,72 @@ uv run --with openai pytest tests/e2e/test_openai_sdk.py
 ```
 
 The runnable client script against a live gateway is
-`examples/openai_sdk.py`; see [Using the API](using.md).
+`examples/sessions/openai_sdk.py`; see [Using the API](using.md).
+
+## Manual microvm examples
+
+This is a live run against a real model host. It is not pytest. GitHub
+CI does not run it. `./scripts/check` does not run it.
+
+The suite starts one `apipi serve --api-only` process and one
+`apipi worker` with `APIPI_RUN_MODE=microvm`, then runs every script in
+`examples/sessions/` (write-and-run `tree.py`, inject-and-sort a file,
+size `L` browser screenshot). The playground and
+`examples/self_hosted_runner.py` are separate; they are not in this
+script.
+
+### Requirements
+
+| Need | What |
+| --- | --- |
+| Checkout | `uv sync` already done |
+| Model host | `OPENAI_BASE_URL` in `.env` or the environment is the **model** URL Pi calls, not the gateway |
+| Model key | `OPENAI_API_KEY_OVERWRITE` in `.env` if you want one operator key; otherwise the client bearer is passed through to the model host |
+| Model id | `APIPI_MODEL` must be an id from that host (`GET /v1/models` once the API is up) |
+| Client bearer | `APIPI_EXAMPLE_TOKEN` or default `dev-token`. Default auth accepts any non-empty bearer |
+| Postgres | Compose `postgres` service, or `DATABASE_URL` pointing at a migrated database |
+| KVM | `/dev/kvm` readable and writable; Firecracker, jailer, `ip`, `iptables`, `tc` |
+| Images | `uv run apipi install --microvm --image browser` so both rootfs files exist |
+| sudo | Passwordless sudo for TAP and jailer on the worker |
+| Port 8000 | Free. The script exits if something already listens there |
+
+Copy `examples/env.example` to `.env` at the repo root and set the
+model host. Do not put the worker token or model key in the browser or
+in git.
+
+```
+# .env (gateway and worker)
+OPENAI_BASE_URL=https://your-model-host/v1
+# OPENAI_API_KEY_OVERWRITE=...
+```
+
+```
+export APIPI_MODEL=your-model-id
+# optional:
+# export APIPI_EXAMPLE_TOKEN=dev-token
+# export APIPI_WORKER_TOKEN=local-worker
+# export DATABASE_URL=postgresql+asyncpg://apipi:apipi@127.0.0.1:5432/apipi
+./examples/sessions/run-microvm.sh
+```
+
+The script migrates Postgres, starts the API on `0.0.0.0:8000`, starts
+the worker, waits for `GET /health` and a worker `hello`, then runs
+`examples/sessions/run.sh`. Logs and downloaded artifacts go to
+`/tmp/opencode/apipi-examples` unless you set `APIPI_EXAMPLES_OUT`.
+On this machine the API is also reachable at
+`http://192.168.0.49:8000`. Ctrl-C stops the API and worker the
+script started.
+
+If the API is already running, skip `run-microvm.sh` and point the
+clients at it:
+
+```
+export OPENAI_API_KEY=dev-token
+export OPENAI_BASE_URL=http://127.0.0.1:8000/v1
+export APIPI_MODEL=your-model-id
+./examples/sessions/run.sh
+```
+
+On the **scripts**, `OPENAI_BASE_URL` is the ApiPi gateway. On the
+**gateway process**, `OPENAI_BASE_URL` is the model host. Do not mix
+those two meanings in the same shell without resetting the variable.

@@ -236,7 +236,6 @@ def main(argv: list[str] | None = None) -> None:
     _run_setup()
     if (_workspace() / ".apipi" / "shell").is_file():
         _exec_shell()
-    _start_mcp()
     threading.Thread(
         target=_serve_artifacts, args=(ARTIFACT_PORT,), daemon=True
     ).start()
