@@ -139,13 +139,15 @@ poll when the hub is quiet (the same poll SSE uses for `api_only`
 cross-process). SSE comment pings (`: ping`) are HTTP-only; the
 iterator does not yield them.
 
-You still authenticate and map a bearer to `tenant_id` yourself when
-you call the service from your own route. HTTP routes use
-`require_tenant`. In-process callers should
-`await gateway.ensure_tenant(tenant_id)` before `create`. Inline agents
-on `sessions.create` use `AgentWrite` from `apipi.services.agents`. Do not import
-`apipi.api` or `store.repo` for product functions; `apipi.api` is HTTP
-only.
+You still map a key to `tenant_id` yourself when you call the service
+from your own route. HTTP routes use `require_tenant`. When you already
+have a key and are not going through HTTP auth, `tenant_from_key(key)`
+is the default tenant UUID (the same mapping default authenticate
+uses). Then `await gateway.ensure_tenant(tenant_id)` before `create`.
+A custom `authenticate=` plugin may still return its own `tenant_id`.
+Inline agents on `sessions.create` use `AgentWrite` from
+`apipi.services.agents`. Do not import `apipi.api` or `store.repo` for
+product functions; `apipi.api` is HTTP only.
 
 ## Lifespan and store ownership
 
@@ -240,6 +242,7 @@ Supported for extenders (also listed on `apipi.__all__`):
 | `Store` | Durable store around an `AsyncEngine` |
 | `SessionService` | In-process session CRUD, `post_event`, `stream` (`gateway.sessions`) |
 | `AgentWrite` | Inline or saved-agent write body. Import from `apipi.services.agents`. |
+| `tenant_from_key` | Default tenant UUID from a key. Same mapping as default authenticate. |
 
 `gateway.agents`, `gateway.vaults`, `gateway.usage`, and `gateway.models`
 are the same functions as `/v1/agents`, `/v1/agents/vaults`, `/v1/usage`,

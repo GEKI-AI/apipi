@@ -80,9 +80,13 @@ def not_found() -> NoReturn:
     raise ApiError("invalid_request", "Not found", code="not_found", status_code=404)
 
 
+def tenant_from_key(key: str) -> UUID:
+    return uuid5(NAMESPACE_URL, hash_token(key))
+
+
 def authenticate(bearer: str) -> AuthIdentity:
     key_id = hash_token(bearer)
-    return AuthIdentity(key_id=key_id, tenant_id=uuid5(NAMESPACE_URL, key_id))
+    return AuthIdentity(key_id=key_id, tenant_id=tenant_from_key(bearer))
 
 
 def load_authenticate(path: str | None) -> Authenticate:

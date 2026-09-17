@@ -10,6 +10,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from apipi import tenant_from_key
 from apipi.config import extend_settings
 from apipi.env.spec import EnvironmentSpec
 from apipi.gateway import Gateway
@@ -29,9 +30,6 @@ _TERMINAL = frozenset(
         "agent.session.error",
     }
 )
-_DEMO_TENANT = uuid.uuid5(uuid.NAMESPACE_URL, "apipi-webpage-check")
-
-
 class PageCheck(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
 
@@ -87,9 +85,10 @@ def webpage_check_router() -> APIRouter:
         gateway: Gateway = request.app.state.gateway
         model = os.environ.get("APIPI_EXAMPLE_MODEL", "test")
         api_key = gateway.settings.model_api_key_overwrite or "example"
-        await gateway.ensure_tenant(_DEMO_TENANT)
+        tenant_id = tenant_from_key(api_key)
+        await gateway.ensure_tenant(tenant_id)
         created = await gateway.sessions.create(
-            _DEMO_TENANT,
+            tenant_id,
             agent=AgentWrite(
                 name="webpage-check",
                 model=model,
@@ -102,7 +101,7 @@ def webpage_check_router() -> APIRouter:
         session_id = uuid.UUID(created["id"])
         turn = asyncio.create_task(
             gateway.sessions.post_event(
-                _DEMO_TENANT,
+                tenant_id,
                 session_id,
                 type="agent.session.input.message",
                 content=url,
@@ -115,7 +114,7 @@ def webpage_check_router() -> APIRouter:
             seen_delta = [False]
             started = False
             try:
-                async for event in gateway.sessions.stream(_DEMO_TENANT, session_id):
+                async for event in gateway.sessions.stream(tenant_id, session_id):
                     text = flatten_event(event, seen_delta)
                     if text:
                         yield text.encode()

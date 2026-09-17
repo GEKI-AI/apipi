@@ -33,12 +33,16 @@ style (`package.mod:Class` on `APIPI_RUN_MODE`); see
 does not use `APIPI_AUTH`.
 
 Default: any non-empty bearer is accepted. `key_id` is the SHA-256 hex
-of the bearer. `tenant_id` is UUID5 of that hex (URL namespace). The
-same key always maps to the same tenant. Different keys are different
-tenants.
+of the bearer. `tenant_id` is `tenant_from_key(bearer)`: UUID5 of that
+hex (URL namespace). The same key always maps to the same tenant.
+Different keys are different tenants. Import `tenant_from_key` from
+`apipi` when you already have a key and are not going through HTTP
+auth, then `await gateway.ensure_tenant(tenant_id)` before
+`sessions.create`.
 
-A plugin returns `tenant_id` and `key_id`, or a typed reject. `key_id`
-is for logs and metrics. Queries stay tenant-scoped. The plugin must
+A plugin returns `tenant_id` and `key_id`, or a typed reject. It may
+set its own `tenant_id` (many keys to one tenant). `key_id` is for
+logs and metrics. Queries stay tenant-scoped. The plugin must
 not expect the gateway to persist the raw bearer. After a successful
 callback, HTTP responses include `X-Tenant-Id` and `X-User-Id`
 (`key_id`). Incoming values of those headers are not trusted for auth.
