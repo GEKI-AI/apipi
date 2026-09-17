@@ -28,6 +28,7 @@ Code comments stay omitted unless asked.
 | --- | --- |
 | `src/apipi/api/` | HTTP routes |
 | `src/apipi/gateway.py` | In-process Gateway handle |
+| `src/apipi/middleware.py` | HTTP middleware |
 | `src/apipi/sessions.py` | SessionService (create, events, stream) |
 | `src/apipi/agents.py` | AgentService and write types (not HTTP) |
 | `src/apipi/vaults.py` | VaultService and write types (not HTTP) |

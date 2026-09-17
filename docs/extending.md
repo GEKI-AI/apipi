@@ -139,9 +139,11 @@ iterator does not yield them.
 
 You still authenticate and map a bearer to `tenant_id` yourself when
 you call the service from your own route. HTTP routes use
-`require_tenant`. In-process callers should `ensure_tenant` (or
-equivalent) before `create`. Inline agents on `sessions.create` use
-`AgentWrite` from `apipi.agents`, not from `apipi.api`.
+`require_tenant`. In-process callers should
+`await gateway.ensure_tenant(tenant_id)` before `create`. Inline agents
+on `sessions.create` use `AgentWrite` from `apipi.agents`. Do not import
+`apipi.api` or `store.repo` for product functions; `apipi.api` is HTTP
+only.
 
 ## Lifespan and store ownership
 
@@ -229,7 +231,7 @@ Supported for extenders (also listed on `apipi.__all__`):
 
 | Export | Role |
 | --- | --- |
-| `Gateway` | `create`, `configure`, `startup`, `shutdown`, `sessions`, `agents`, `vaults`, `usage`, `models`, `routers`, `store`, `event_hub`, `execution`, `workers`, `env_hub`, `authenticate`, `settings` |
+| `Gateway` | `create`, `configure`, `startup`, `shutdown`, `ensure_tenant`, `sessions`, `agents`, `vaults`, `usage`, `models`, `routers`, `store`, `event_hub`, `execution`, `workers`, `env_hub`, `authenticate`, `settings` |
 | `create_app` | Standalone FastAPI app (CLI and tests) |
 | `extend_settings` | `Settings` from arguments only; no env bleed |
 | `Settings` | Operator settings type |

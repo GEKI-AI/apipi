@@ -16,7 +16,6 @@ from apipi.env.spec import EnvironmentSpec
 from apipi.errors import ApiError
 from apipi.gateway import Gateway
 from apipi.store.engine import Store, create_engine
-from apipi.store.repo import ensure_tenant
 
 INSTRUCTIONS = (
     "Fetch the URL in the user message with bash using curl -fsSL. "
@@ -88,8 +87,7 @@ def webpage_check_router() -> APIRouter:
         gateway: Gateway = request.app.state.gateway
         model = os.environ.get("APIPI_EXAMPLE_MODEL", "test")
         api_key = gateway.settings.model_api_key_overwrite or "example"
-        async with gateway.store.session() as db:
-            await ensure_tenant(db, _DEMO_TENANT)
+        await gateway.ensure_tenant(_DEMO_TENANT)
         created = await gateway.sessions.create(
             _DEMO_TENANT,
             agent=AgentWrite(

@@ -6,7 +6,6 @@ from apipi.env.spec import EnvironmentSpec
 from apipi.gateway import Gateway
 from apipi.runtime import FakeHarness
 from apipi.store.engine import Store
-from apipi.store.repo import ensure_tenant
 
 
 async def test_in_process_create_and_stream(settings: Settings, store: Store) -> None:
@@ -14,8 +13,7 @@ async def test_in_process_create_and_stream(settings: Settings, store: Store) ->
     await gateway.startup()
     try:
         tenant_id = uuid.uuid4()
-        async with store.session() as db:
-            await ensure_tenant(db, tenant_id)
+        await gateway.ensure_tenant(tenant_id)
         created = await gateway.sessions.create(
             tenant_id,
             agent=AgentWrite(name="bot", model="test"),
