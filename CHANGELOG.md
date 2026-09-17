@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Files API: `POST/GET/DELETE /v1/files` and content download. Purpose
   `user_data` or `assistants`. Bytes in the shared object store. Cap
   `APIPI_MAX_FILE_BYTES` (50 MiB).
+- Skills API: `POST/GET/DELETE /v1/skills` zip upload. Attach with
+  `environment.skills` `skill_reference`. Unpacks under
+  `.agents/skills/`. Same 50 MiB upload cap.
 - Hosted sessions accept `environment.network` (`enabled`, `disabled`,
   `restricted` with exact `allowed_domains`). Session policy cannot
   widen `[sandbox.network]`. Isolation `none` cannot enforce

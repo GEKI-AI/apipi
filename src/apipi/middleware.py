@@ -113,7 +113,7 @@ class MaxBodyMiddleware:
             method = scope.get("method", "")
             limit = (
                 self.file_max_bytes
-                if method == "POST" and path == "/v1/files"
+                if method == "POST" and path in {"/v1/files", "/v1/skills"}
                 else self.max_bytes
             )
             for key, value in scope.get("headers", []):

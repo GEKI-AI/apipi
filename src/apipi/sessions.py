@@ -38,6 +38,7 @@ from apipi.sandbox import (
     resolve_sandbox_size,
     sandbox_size_of,
 )
+from apipi.skill_store import SkillService
 from apipi.skills import copy_capability_directories
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -183,6 +184,7 @@ class SessionService:
         execution: LocalExecution | RemoteExecution,
         blobs: ArtifactBlobs,
         files: FileService,
+        skill_store: SkillService,
         tracing: Tracing | None,
         mcp_http: dict[uuid.UUID, Any],
         mcp_stdio: dict[uuid.UUID, Any],
@@ -194,6 +196,7 @@ class SessionService:
         self.execution = execution
         self.blobs = blobs
         self.files = files
+        self.skill_store = skill_store
         self.tracing = tracing
         self.mcp_http = mcp_http
         self.mcp_stdio = mcp_stdio
@@ -307,6 +310,7 @@ class SessionService:
                         max_bytes=self.settings.max_workspace_bytes,
                         extra_files=extra_files,
                     )
+                    await self.skill_store.install(tenant_id, env, directory)
                 except SetupError as exc:
                     raise ApiError(
                         "invalid_request",

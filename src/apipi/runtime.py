@@ -42,6 +42,7 @@ from apipi.sandbox import (
     playwright_attached,
     sandbox_size_of,
 )
+from apipi.skill_store import SkillService
 from apipi.skills import discover_skill_dirs
 from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
@@ -1093,13 +1094,15 @@ async def run_turn(
                 gateway_allowlist = False
                 gateway_hosts: tuple[str, ...] = ()
                 extra_files: list[tuple[str, bytes]] = []
+                backend = objects
                 if settings is not None:
                     gateway_allowlist = settings.microvm_egress_allowlist
                     if settings.run_mode == "microvm":
                         from apipi.pi.microvm import microvm_egress_hosts
 
                         gateway_hosts = tuple(microvm_egress_hosts(settings))
-                    backend = objects if objects is not None else object_store(settings)
+                    if backend is None:
+                        backend = object_store(settings)
                     extra_files = await FileService(
                         store, backend, settings
                     ).workspace_files(tenant_id, row.environment)
@@ -1113,6 +1116,12 @@ async def run_turn(
                     gateway_hosts=gateway_hosts,
                     extra_files=extra_files,
                 )
+                if settings is not None and backend is not None:
+                    directory = row.environment.get("directory")
+                    if isinstance(directory, str) and directory:
+                        await SkillService(store, backend, settings).install(
+                            tenant_id, row.environment, Path(directory)
+                        )
             except (SetupError, ApiError) as exc:
                 await fail_environment(db, hub, tenant_id, session_id, exc.message)
                 return

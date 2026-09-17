@@ -94,6 +94,25 @@ from another tenant is `404`. Attach an uploaded file on session
 create with `environment.files` `{ "type": "file_id", "file_id":
 "…", "path": "/workspace/…" }`.
 
+## Skills
+
+| Method | Path |
+| --- | --- |
+| `POST` | `/v1/skills` |
+| `GET` | `/v1/skills` |
+| `GET` | `/v1/skills/{skill_id}` |
+| `DELETE` | `/v1/skills/{skill_id}` |
+
+Upload is multipart form data with field `files` (a zip). The zip must
+contain exactly one `SKILL.md`. The object is `{ id, object: "skill",
+name, bytes, created_at }`. Ids look like `skill-` plus hex. Bytes
+live in the shared object store. The upload cap is
+`APIPI_MAX_FILE_BYTES`. A skill from another tenant is `404`. Attach
+on session create with `environment.skills` `{ "type":
+"skill_reference", "skill_id": "…" }`. ApiPi unpacks under
+`.agents/skills/`. At most 32 skills per create. There are no version
+endpoints.
+
 ## Models
 
 | Method | Path |
@@ -285,7 +304,7 @@ these. See [multiple nodes](scale.md).
 `SKILL.md` trees. See [tools](tools.md).
 
 On `openai_hosted` (and the `hosted` alias), create also accepts
-`packages`, `setup_commands`, `env`, inline `files`, and `network`.
+`packages`, `setup_commands`, `env`, `files`, `skills`, and `network`.
 `packages` is an object with optional `python`, `system`, and `npm`
 lists of package names (pin versions when you need to, such as
 `pandas==2.2.3`). `setup_commands` is an ordered list of
@@ -296,6 +315,9 @@ environment variables for that session. `files` entries are
 or `{ "type": "file_id", "file_id": "file-…", "path": "/workspace/…" }`.
 `file_id` must be a Files API object owned by this tenant. Other
 `files` types return `not_implemented`. At most 50 files per create.
+`skills` entries are `{ "type": "skill_reference", "skill_id": "…" }`.
+Other skill types return `not_implemented`. At most 32 skills per
+create. A missing or foreign `skill_id` is `404`.
 `network` is `{ "access": "enabled"|"disabled"|"restricted",
 "allowed_domains": ["api.example.com"] }`. `allowed_domains` is
 required for `restricted` (1–100 exact hostnames, no wildcards,
@@ -303,12 +325,13 @@ schemes, paths, or ports) and is otherwise rejected. Files are
 written first, then packages install, then setup commands run, before
 the first agent turn. A nonzero install or setup exit emits
 `agent.session.environment.failed` and fails the session; Pi does not
-start. `packages`, `setup_commands`, `env`, and `files` on `none` or
-`self_hosted` return `400`. `network` on `self_hosted` returns `400`.
+start. `packages`, `setup_commands`, `env`, `files`, and `skills` on
+`none` or `self_hosted` return `400`. `network` on `self_hosted`
+returns `400`.
 On environment type `none` it is ignored. Isolation `none` cannot
 enforce `disabled` or `restricted` and fails the environment instead.
 Session `network` cannot open hosts that `[sandbox.network]` forbids.
-`environment_template_id`, `skills`, and `plugins` return `400` with
+`environment_template_id` and `plugins` return `400` with
 type `not_implemented`. Reserved `env` names (`PATH`, `HOME`,
 `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `DATABASE_URL`,
 `PI_CODING_AGENT_DIR`, and `APIPI_` / `CODEX_` / `PI_` prefixes)

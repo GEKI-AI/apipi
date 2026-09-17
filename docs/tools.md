@@ -114,11 +114,18 @@ Also discovered, if present on the workspace:
 - `.agents/skills/`
 - `.pi/skills/`
 
-There is no `/v1/skills` upload API. Skills are files on the computer.
+Upload a skill zip with `POST /v1/skills` (multipart field `files`,
+same 50 MiB cap as Files API). Attach it on session create with
+`environment.skills`: `{ "type": "skill_reference", "skill_id": "…" }`.
+ApiPi unpacks the zip under `.agents/skills/` so discovery works as
+above. The zip must contain exactly one `SKILL.md`. Path traversal is
+rejected. `capability_directories` still work for trees already on the
+computer.
 
 ## Per agent
 
 MCP and function tools live on the saved agent (or the inline session
 `agent`). Skills live on the computer, pointed at by
-`capability_directories`. Changing tools later means updating the
+`capability_directories` or unpacked from `environment.skills`.
+Changing tools later means updating the
 saved agent; it does not rewrite history on existing sessions.

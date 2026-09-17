@@ -27,4 +27,5 @@ def test_alembic_revisions_chain() -> None:
         "0005_leases.py",
         "0006_worker_memory.py",
         "0007_files.py",
+        "0008_skills.py",
     ]

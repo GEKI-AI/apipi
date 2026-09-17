@@ -14,6 +14,7 @@ from apipi.store.models import (
     FileRow,
     Item,
     SessionRow,
+    SkillRow,
     Tenant,
     Turn,
     TurnLog,
@@ -1042,6 +1043,46 @@ async def list_files(db: AsyncSession, tenant_id: uuid.UUID) -> list[FileRow]:
 
 async def delete_file(db: AsyncSession, tenant_id: uuid.UUID, file_id: str) -> bool:
     row = await get_file(db, tenant_id, file_id)
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.flush()
+    return True
+
+
+async def create_skill(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    skill_id: str,
+    name: str,
+    size: int,
+) -> SkillRow:
+    row = SkillRow(id=skill_id, tenant_id=tenant_id, name=name, size=size)
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def get_skill(
+    db: AsyncSession, tenant_id: uuid.UUID, skill_id: str
+) -> SkillRow | None:
+    return await db.scalar(
+        select(SkillRow).where(SkillRow.tenant_id == tenant_id, SkillRow.id == skill_id)
+    )
+
+
+async def list_skills(db: AsyncSession, tenant_id: uuid.UUID) -> list[SkillRow]:
+    result = await db.scalars(
+        select(SkillRow)
+        .where(SkillRow.tenant_id == tenant_id)
+        .order_by(SkillRow.created_at.desc())
+    )
+    return list(result)
+
+
+async def delete_skill(db: AsyncSession, tenant_id: uuid.UUID, skill_id: str) -> bool:
+    row = await get_skill(db, tenant_id, skill_id)
     if row is None:
         return False
     await db.delete(row)

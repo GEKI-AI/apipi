@@ -14,6 +14,7 @@ from apipi.api.files import router as files_router
 from apipi.api.health import router as health_router
 from apipi.api.models import router as models_router
 from apipi.api.sessions import router as sessions_router
+from apipi.api.skills import router as skills_router
 from apipi.api.usage import router as usage_router
 from apipi.api.vaults import router as vaults_router
 from apipi.api.workers import router as workers_router
@@ -37,6 +38,7 @@ from apipi.pi.pool import PiPool
 from apipi.request_id import RequestIdMiddleware
 from apipi.runtime import EventHub, FakeHarness
 from apipi.sessions import SessionService
+from apipi.skill_store import SkillService
 from apipi.store.engine import Store, create_engine
 from apipi.store.models import Tenant, utc_now
 from apipi.store.repo import ensure_tenant as store_ensure_tenant
@@ -63,6 +65,7 @@ class GatewayRouters:
     agents: APIRouter
     vaults: APIRouter
     files: APIRouter
+    skills: APIRouter
     environments: APIRouter
     usage: APIRouter
     models: APIRouter
@@ -107,6 +110,7 @@ class Gateway:
         self.mcp_http: dict[uuid.UUID, Any] = {}
         self.mcp_stdio: dict[uuid.UUID, Any] = {}
         self.files = FileService(store, objects, settings)
+        self.skill_store = SkillService(store, objects, settings)
         self.sessions = SessionService(
             settings=settings,
             store=store,
@@ -115,6 +119,7 @@ class Gateway:
             execution=execution,
             blobs=blobs,
             files=self.files,
+            skill_store=self.skill_store,
             tracing=tracing,
             mcp_http=self.mcp_http,
             mcp_stdio=self.mcp_stdio,
@@ -128,6 +133,7 @@ class Gateway:
             agents=agents_router,
             vaults=vaults_router,
             files=files_router,
+            skills=skills_router,
             environments=environments_router,
             usage=usage_router,
             models=models_router,
@@ -332,6 +338,7 @@ def create_app(
     app.include_router(gateway.routers.sessions)
     app.include_router(gateway.routers.vaults)
     app.include_router(gateway.routers.files)
+    app.include_router(gateway.routers.skills)
     app.include_router(gateway.routers.agents)
     app.include_router(gateway.routers.environments)
     app.include_router(gateway.routers.usage)

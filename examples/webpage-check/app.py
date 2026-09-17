@@ -152,6 +152,7 @@ def build_app(gateway: Gateway) -> FastAPI:
     app.include_router(gateway.routers.sessions)
     app.include_router(gateway.routers.vaults)
     app.include_router(gateway.routers.files)
+    app.include_router(gateway.routers.skills)
     app.include_router(gateway.routers.agents)
     app.include_router(gateway.routers.environments)
     app.include_router(gateway.routers.usage)

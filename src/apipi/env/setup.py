@@ -218,6 +218,25 @@ def file_id_refs_from(environment: dict[str, Any]) -> list[tuple[str, str]]:
     return refs
 
 
+def skill_refs_from(environment: dict[str, Any]) -> list[str]:
+    raw = environment.get("skills")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise SetupError("skills must be a list")
+    refs: list[str] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise SetupError("skills entries must be objects")
+        if item.get("type") != "skill_reference":
+            raise SetupError("skills entries must have type skill_reference")
+        skill_id = item.get("skill_id")
+        if not isinstance(skill_id, str) or not skill_id.strip():
+            raise SetupError("skills need a skill_id")
+        refs.append(skill_id.strip())
+    return refs
+
+
 def session_network_from(environment: dict[str, Any]) -> NetworkPolicy | None:
     raw = environment.get("network")
     if raw is None:

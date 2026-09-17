@@ -1,6 +1,16 @@
+import io
+import zipfile
 from pathlib import Path
 
-from apipi.skills import copy_capability_directories, discover_skill_dirs
+import pytest
+
+from apipi.env.setup import SetupError
+from apipi.skills import (
+    copy_capability_directories,
+    discover_skill_dirs,
+    inspect_skill_zip,
+    unpack_skill_zip,
+)
 
 
 def _plant(root: Path, name: str) -> Path:
@@ -36,3 +46,37 @@ def test_copy_skips_missing_and_relative(tmp_path: Path) -> None:
 
 def test_discover_empty_without_workspace() -> None:
     assert discover_skill_dirs(None, ["/tmp"]) == []
+
+
+def _zip_bytes(entries: dict[str, str]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        for name, text in entries.items():
+            archive.writestr(name, text)
+    return buf.getvalue()
+
+
+def test_unpack_skill_zip_into_agents_skills(tmp_path: Path) -> None:
+    data = _zip_bytes(
+        {
+            "demo/SKILL.md": "---\nname: demo\n---\nHi\n",
+            "demo/scripts/run.sh": "echo ok\n",
+        }
+    )
+    assert inspect_skill_zip(data) == "demo"
+    dest = unpack_skill_zip(tmp_path, data)
+    assert dest == tmp_path / ".agents" / "skills" / "demo"
+    assert (dest / "SKILL.md").is_file()
+    assert (dest / "scripts" / "run.sh").is_file()
+
+
+def test_inspect_rejects_path_traversal() -> None:
+    data = _zip_bytes({"../SKILL.md": "---\nname: x\n---\n"})
+    with pytest.raises(SetupError, match="inside the package"):
+        inspect_skill_zip(data)
+
+
+def test_inspect_rejects_missing_manifest() -> None:
+    data = _zip_bytes({"demo/readme.txt": "nope\n"})
+    with pytest.raises(SetupError, match="exactly one"):
+        inspect_skill_zip(data)

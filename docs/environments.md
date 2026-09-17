@@ -231,7 +231,10 @@ environment, not in the file. Setup is in `examples/README.md`.
 
 `environment.capability_directories` lists paths on this computer that
 contain skill directories (`SKILL.md`). They are discovered when the
-session starts. See [tools](tools.md).
+session starts. Hosted packs upload at `/v1/skills` and attach with
+`environment.skills` `{ "type": "skill_reference", "skill_id": "…" }`.
+Those zips unpack under `.agents/skills/` in the session workspace.
+See [tools](tools.md).
 
 Stdio MCP (for example Playwright) follows Pi, not the remote runner.
 HTTP MCP is reached from the gateway and handed to Pi.
