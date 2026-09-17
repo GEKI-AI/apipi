@@ -3,7 +3,7 @@ from asyncio.streams import StreamReader
 from asyncio.subprocess import Process
 from typing import cast
 
-from apipi.pi.proc import PiProc
+from apipi.worker.pi.proc import PiProc
 
 
 class _Stdout:

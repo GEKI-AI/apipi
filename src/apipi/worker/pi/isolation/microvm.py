@@ -1,0 +1,49 @@
+from apipi.config import Settings
+from apipi.mcp.http import McpHttpServer
+from apipi.mcp.stdio import McpStdioServer
+from apipi.worker.pi.microvm import probe_microvm, require_microvm, spawn_microvm_pi
+from apipi.worker.pi.proc import PiProc
+
+
+class MicrovmIsolation:
+    name = "microvm"
+    needs_probe = True
+    stdio_on_host = False
+    warn_not_production = False
+
+    def require(self, settings: Settings | None) -> None:
+        require_microvm(settings)
+
+    async def probe(self, settings: Settings) -> None:
+        await probe_microvm(settings)
+
+    async def spawn(
+        self,
+        settings: Settings,
+        *,
+        cwd: str | None,
+        tools: bool,
+        mcp_http: list[McpHttpServer] | None = None,
+        mcp_stdio: list[McpStdioServer] | None = None,
+        skill_dirs: list[str] | None = None,
+        model: str | None = None,
+        instructions: str | None = None,
+        api_key: str | None = None,
+        mem_mib: int | None = None,
+        image: str | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> PiProc:
+        return await spawn_microvm_pi(
+            settings,
+            cwd=cwd,
+            tools=tools,
+            mcp_http=mcp_http,
+            mcp_stdio=mcp_stdio,
+            skill_dirs=skill_dirs,
+            model=model,
+            instructions=instructions,
+            api_key=api_key,
+            mem_mib=mem_mib,
+            image=image,
+            extra_env=extra_env,
+        )

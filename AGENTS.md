@@ -27,19 +27,12 @@ Code comments stay omitted unless asked.
 | Path | What |
 | --- | --- |
 | `src/apipi/api/` | HTTP routes |
-| `src/apipi/gateway.py` | In-process Gateway handle |
-| `src/apipi/middleware.py` | HTTP middleware |
-| `src/apipi/sessions.py` | SessionService (create, events, stream) |
-| `src/apipi/agents.py` | AgentService and write types (not HTTP) |
-| `src/apipi/vaults.py` | VaultService and write types (not HTTP) |
-| `src/apipi/usage_service.py` | UsageService |
-| `src/apipi/models.py` | ModelsService |
-| `src/apipi/execution.py` | Session execution contract and in-process adapter |
-| `src/apipi/worker.py` | Trusted worker control protocol (not self_hosted) |
-| `src/apipi/schemas.py` | Public types |
-| `src/apipi/store/` | Durable store |
-| `src/apipi/pi/` | Harness adapter |
-| `src/apipi/auth.py` | Auth callback |
+| `src/apipi/gateway/` | Gateway handle, auth, errors, middleware, schemas |
+| `src/apipi/services/` | Session/Agent/Vault/File/Skill/Model/Usage services and EventHub |
+| `src/apipi/worker/` | Worker control, execution adapters, Pi harness, isolation |
+| `src/apipi/store/` | Durable store and object blobs |
+| `src/apipi/env/` | Computer and hosted/self_hosted environments |
+| `src/apipi/mcp/` | HTTP and stdio MCP |
 | `docs/` | Product and operator docs. Read the page for the part you are changing. |
 | `specs/decisions/` | ADRs. Read when the architecture changes. |
 | `tests/api/` | Public HTTP |

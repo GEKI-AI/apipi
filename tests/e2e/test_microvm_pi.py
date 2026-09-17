@@ -10,11 +10,11 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
 from apipi.config import ConfigError, Settings
-from apipi.pi.microvm import microvm_images, require_microvm
-from apipi.pi.probe import probe_run_mode
+from apipi.gateway import create_app
 from apipi.store.engine import Store
+from apipi.worker.pi.microvm import microvm_images, require_microvm
+from apipi.worker.pi.probe import probe_run_mode
 
 pytestmark = [pytest.mark.e2e, pytest.mark.microvm]
 

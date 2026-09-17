@@ -4,14 +4,18 @@ from pathlib import Path
 import pytest
 
 from apipi.config import DiskLimitError, Settings
-from apipi.pi.artifacts import (
+from apipi.worker.pi.artifacts import (
     dir_bytes,
     read_workspace_artifacts,
     unpack_artifact_tar,
     unpack_workspace_tar,
     wipe_workspace,
 )
-from apipi.pi.guest import artifacts_tar_bytes, session_file_bytes, workspace_tar_bytes
+from apipi.worker.pi.guest import (
+    artifacts_tar_bytes,
+    session_file_bytes,
+    workspace_tar_bytes,
+)
 
 
 def test_read_workspace_artifacts(tmp_path: Path) -> None:
@@ -92,7 +96,7 @@ def test_wipe_workspace(tmp_path: Path) -> None:
 
 
 def test_settings_artifact_blob_path(tmp_path: Path) -> None:
-    from apipi.pi.dirs import artifact_blob_path
+    from apipi.worker.pi.dirs import artifact_blob_path
 
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",

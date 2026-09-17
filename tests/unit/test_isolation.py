@@ -5,10 +5,10 @@ from tests.support.fake_isolation import FakeIsolation
 
 from apipi.config import ConfigError, Settings, require_run_mode
 from apipi.mcp.stdio import McpStdioServer, start_mcp_stdio_tools
-from apipi.pi.isolation import load_isolation
-from apipi.pi.isolation.microvm import MicrovmIsolation
-from apipi.pi.isolation.none import NoneIsolation
-from apipi.pi.proc import spawn_pi
+from apipi.worker.pi.isolation import load_isolation
+from apipi.worker.pi.isolation.microvm import MicrovmIsolation
+from apipi.worker.pi.isolation.none import NoneIsolation
+from apipi.worker.pi.proc import spawn_pi
 
 
 def _settings(run_mode: str = "none") -> Settings:
@@ -103,7 +103,7 @@ async def test_custom_backend_probe_and_spawn(
         return Process()
 
     monkeypatch.setattr(
-        "apipi.pi.isolation.none.asyncio.create_subprocess_exec", fake_exec
+        "apipi.worker.pi.isolation.none.asyncio.create_subprocess_exec", fake_exec
     )
     await backend.probe(_settings(path))
     assert FakeIsolation.probed is True
@@ -130,7 +130,7 @@ async def test_spawn_pi_none_starts_child(monkeypatch: pytest.MonkeyPatch) -> No
         return Process()
 
     monkeypatch.setattr(
-        "apipi.pi.isolation.none.asyncio.create_subprocess_exec", fake_exec
+        "apipi.worker.pi.isolation.none.asyncio.create_subprocess_exec", fake_exec
     )
     proc = await spawn_pi(_settings(), cwd="/tmp/session", tools=False)
     assert proc.alive

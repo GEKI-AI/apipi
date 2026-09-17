@@ -5,12 +5,12 @@ from collections.abc import AsyncIterator
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.runtime import FAKE_USAGE, FakeHarness
+from apipi.gateway import create_app
+from apipi.gateway.tokens import hash_token
+from apipi.services.runtime import FAKE_USAGE, FakeHarness
 from apipi.store.engine import Store
 from apipi.store.turn_logs import get_turn_log, list_turn_logs
-from apipi.tokens import hash_token
 
 
 def _token(name: str = "t") -> str:

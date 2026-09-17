@@ -3,13 +3,13 @@ import uuid
 import httpx
 import pytest
 
-from apipi.agents import AgentWrite
 from apipi.config import Settings
-from apipi.errors import ApiError
 from apipi.gateway import Gateway
-from apipi.runtime import FakeHarness
+from apipi.gateway.errors import ApiError
+from apipi.services.agents import AgentWrite
+from apipi.services.runtime import FakeHarness
+from apipi.services.vaults import CredentialWrite, VaultWrite
 from apipi.store.engine import Store
-from apipi.vaults import CredentialWrite, VaultWrite
 
 
 async def test_ensure_tenant(settings: Settings, store: Store) -> None:
@@ -94,7 +94,7 @@ async def test_in_process_models_list(
         assert url.endswith("/models")
         return httpx.Response(200, json=payload)
 
-    monkeypatch.setattr("apipi.pi.model_host.httpx.get", fake_get)
+    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
     gateway = Gateway.create(
         settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
         store=store,

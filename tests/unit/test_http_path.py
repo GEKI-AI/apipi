@@ -1,4 +1,4 @@
-from apipi.http_path import request_path, skip_request_path
+from apipi.gateway.http_path import request_path, skip_request_path
 
 _SKIP = frozenset({"/health", "/metrics"})
 

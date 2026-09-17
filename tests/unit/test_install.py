@@ -5,7 +5,8 @@ import pytest
 
 from apipi.cli import main
 from apipi.config import ConfigError, Settings
-from apipi.pi.install import (
+from apipi.worker.pi import install as pi_install
+from apipi.worker.pi.install import (
     firecracker_release_url,
     install_microvm,
     install_pi,
@@ -14,7 +15,7 @@ from apipi.pi.install import (
     resolve_install_targets,
     run_install,
 )
-from apipi.pi.version import PI_NPM_PACKAGE, PINNED_FIRECRACKER, PINNED_PI
+from apipi.worker.pi.version import PI_NPM_PACKAGE, PINNED_FIRECRACKER, PINNED_PI
 
 
 def _settings() -> Settings:
@@ -37,8 +38,8 @@ def test_install_dry_run_prints_npm(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr("apipi.pi.install.installed_pi_version", lambda _s: None)
-    monkeypatch.setattr("apipi.pi.install.shutil.which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(pi_install, "installed_pi_version", lambda _s: None)
+    monkeypatch.setattr(pi_install.shutil, "which", lambda _name: "/usr/bin/npm")
     out = StringIO()
     assert install_pi(_settings(), dry_run=True, out=out) == 0
     text = out.getvalue()
@@ -48,10 +49,10 @@ def test_install_dry_run_prints_npm(
 
 
 def test_install_skips_when_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("apipi.pi.install.installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(pi_install, "installed_pi_version", lambda _s: PINNED_PI)
     ran: list[object] = []
     monkeypatch.setattr(
-        "apipi.pi.install.subprocess.run", lambda *_a, **_k: ran.append(1)
+        "apipi.worker.pi.install.subprocess.run", lambda *_a, **_k: ran.append(1)
     )
     out = StringIO()
     assert install_pi(_settings(), out=out) == 0
@@ -61,8 +62,8 @@ def test_install_skips_when_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_install_force_reruns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr("apipi.pi.install.installed_pi_version", lambda _s: PINNED_PI)
-    monkeypatch.setattr("apipi.pi.install.shutil.which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(pi_install, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(pi_install.shutil, "which", lambda _name: "/usr/bin/npm")
 
     def fake_run(args: list[str], check: bool) -> None:
         del check
@@ -71,7 +72,7 @@ def test_install_force_reruns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
         binary.write_text("#!/bin/sh\n")
         assert "--force" in args
 
-    monkeypatch.setattr("apipi.pi.install.subprocess.run", fake_run)
+    monkeypatch.setattr("apipi.worker.pi.install.subprocess.run", fake_run)
     out = StringIO()
     assert install_pi(_settings(), force=True, out=out) == 0
     assert f"Installed Pi {PINNED_PI}" in out.getvalue()
@@ -79,8 +80,8 @@ def test_install_force_reruns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
 
 def test_install_requires_npm(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("apipi.pi.install.installed_pi_version", lambda _s: None)
-    monkeypatch.setattr("apipi.pi.install.shutil.which", lambda _name: None)
+    monkeypatch.setattr(pi_install, "installed_pi_version", lambda _s: None)
+    monkeypatch.setattr(pi_install.shutil, "which", lambda _name: None)
     with pytest.raises(ConfigError, match="npm is not on PATH"):
         install_pi(_settings())
 
@@ -89,8 +90,8 @@ def test_cli_install_dry_run(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setattr("apipi.pi.install.installed_pi_version", lambda _s: None)
-    monkeypatch.setattr("apipi.pi.install.shutil.which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(pi_install, "installed_pi_version", lambda _s: None)
+    monkeypatch.setattr(pi_install.shutil, "which", lambda _name: "/usr/bin/npm")
     assert main(["install", "--dry-run"]) == 0
     assert "npm install" in capsys.readouterr().out
 
@@ -156,9 +157,9 @@ def test_install_microvm_skips_when_present(
 ) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    monkeypatch.setattr("apipi.pi.install.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.install.kvm_available", lambda: True)
     monkeypatch.setattr(
-        "apipi.pi.install.microvm_net_binaries", lambda: ("ip", "iptables", "tc")
+        "apipi.worker.pi.install.microvm_net_binaries", lambda: ("ip", "iptables", "tc")
     )
     dest = tmp_path / "apipi" / "firecracker"
     dest.mkdir(parents=True)
@@ -169,14 +170,16 @@ def test_install_microvm_skips_when_present(
     (cache / "vmlinux").write_bytes(b"k")
     (cache / "rootfs.ext4").write_bytes(b"r")
     monkeypatch.setattr(
-        "apipi.pi.install._firecracker_version", lambda _path: PINNED_FIRECRACKER
+        "apipi.worker.pi.install._firecracker_version", lambda _path: PINNED_FIRECRACKER
     )
     ran: list[object] = []
     monkeypatch.setattr(
-        "apipi.pi.install.subprocess.run", lambda *_a, **_k: ran.append(1)
+        "apipi.worker.pi.install.subprocess.run", lambda *_a, **_k: ran.append(1)
     )
     monkeypatch.setattr(
-        "apipi.pi.install._download_firecracker", lambda *_a, **_k: ran.append("dl")
+        pi_install,
+        "_download_firecracker",
+        lambda *_a, **_k: ran.append("dl"),
     )
     out = StringIO()
     assert install_microvm(out=out) == 0

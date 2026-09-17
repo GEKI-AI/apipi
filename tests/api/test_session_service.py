@@ -1,10 +1,10 @@
 import uuid
 
-from apipi.agents import AgentWrite
 from apipi.config import Settings
 from apipi.env.spec import EnvironmentSpec
 from apipi.gateway import Gateway
-from apipi.runtime import FakeHarness
+from apipi.services.agents import AgentWrite
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 

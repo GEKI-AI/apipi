@@ -8,14 +8,14 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
 
-from apipi.agents import AgentWrite
 from apipi.api.deps import model_key
-from apipi.auth import require_tenant
 from apipi.env.spec import EnvironmentSpec
-from apipi.request_id import request_id_of
-from apipi.runtime import EventHub
-from apipi.schemas import StrictModel
-from apipi.sessions import SessionService, iter_session_events
+from apipi.gateway.auth import require_tenant
+from apipi.gateway.request_id import request_id_of
+from apipi.gateway.schemas import StrictModel
+from apipi.services.agents import AgentWrite
+from apipi.services.runtime import EventHub
+from apipi.services.sessions import SessionService, iter_session_events
 from apipi.store.engine import Store
 from apipi.store.models import Tenant
 

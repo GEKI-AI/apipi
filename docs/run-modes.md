@@ -66,7 +66,7 @@ tools, and point at operator-provided guest images:
 | `ip` and `tc` | `iproute2` |
 | `iptables` | `iptables` |
 | Guest kernel | `APIPI_MICROVM_KERNEL` (a `vmlinux` file) |
-| Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4) for `APIPI_MICROVM_IMAGE=default`. Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/pi/guest.sh`. Optional `APIPI_MICROVM_ROOTFS_BROWSER` when `image` is `browser`. |
+| Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4) for `APIPI_MICROVM_IMAGE=default`. Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/worker/pi/guest.sh`. Optional `APIPI_MICROVM_ROOTFS_BROWSER` when `image` is `browser`. |
 | TAP / NAT | Permission to create a TAP device, set `ip_forward`, and add iptables rules. Root or `CAP_NET_ADMIN` is the usual setup. |
 
 `apipi install --microvm` downloads Firecracker and jailer and builds
@@ -85,7 +85,7 @@ overwrite each other. The script needs `curl`, `tar`, `mkfs.ext4`,
 `mount`, and root (or `sudo`) for the loop mount and chroot.
 
 `default` installs Alpine, Node, the pinned Pi CLI, Python 3, `ip`,
-`socat`, and copies `src/apipi/pi/guest.sh` to `/sbin/apipi-guest`.
+`socat`, and copies `src/apipi/worker/pi/guest.sh` to `/sbin/apipi-guest`.
 `browser` is that image plus Alpine Chromium and font/NSS packages so
 stdio MCP such as Playwright can drive a **system** browser
 (`/usr/bin/chromium-browser`). Playwright's own glibc browser builds

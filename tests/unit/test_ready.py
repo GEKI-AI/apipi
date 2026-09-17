@@ -6,8 +6,9 @@ import pytest
 from apipi import __version__
 from apipi.cli import main
 from apipi.config import ConfigError, Settings
-from apipi.pi.version import PINNED_PI
-from apipi.ready import check_ready, run_checks
+from apipi.gateway import ready
+from apipi.gateway.ready import check_ready, run_checks
+from apipi.worker.pi.version import PINNED_PI
 
 
 def _settings(
@@ -23,10 +24,10 @@ def _settings(
 
 
 def test_run_checks_pass(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("apipi.ready.require_pinned_pi", lambda _s: None)
-    monkeypatch.setattr("apipi.ready.installed_pi_version", lambda _s: PINNED_PI)
-    monkeypatch.setattr("apipi.ready.ping_store", lambda _url: None)
-    monkeypatch.setattr("apipi.ready.fetch_model_ids", lambda *_a, **_k: ["m1"])
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "ping_store", lambda _url: None)
+    monkeypatch.setattr(ready, "fetch_model_ids", lambda *_a, **_k: ["m1"])
     rows = run_checks(_settings())
     by_name = {row.name: row for row in rows}
     assert by_name["apipi"].status == "ok"
@@ -43,9 +44,9 @@ def test_run_checks_pi_fail(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_settings: Settings) -> None:
         raise ConfigError("pi is not on PATH")
 
-    monkeypatch.setattr("apipi.ready.require_pinned_pi", boom)
-    monkeypatch.setattr("apipi.ready.ping_store", lambda _url: None)
-    monkeypatch.setattr("apipi.ready.fetch_model_ids", lambda *_a, **_k: [])
+    monkeypatch.setattr(ready, "require_pinned_pi", boom)
+    monkeypatch.setattr(ready, "ping_store", lambda _url: None)
+    monkeypatch.setattr(ready, "fetch_model_ids", lambda *_a, **_k: [])
     rows = run_checks(_settings())
     pi = next(row for row in rows if row.name == "pi")
     assert pi.status == "fail"
@@ -53,8 +54,8 @@ def test_run_checks_pi_fail(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_run_checks_skip_flags(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("apipi.ready.require_pinned_pi", lambda _s: None)
-    monkeypatch.setattr("apipi.ready.installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
     rows = run_checks(_settings(), skip_db=True, skip_model=True)
     by_name = {row.name: row for row in rows}
     assert by_name["database"].status == "skip"
@@ -68,12 +69,12 @@ def test_run_checks_fast_skips_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
         nonlocal probed
         probed = True
 
-    monkeypatch.setattr("apipi.ready.require_pinned_pi", lambda _s: None)
-    monkeypatch.setattr("apipi.ready.installed_pi_version", lambda _s: PINNED_PI)
-    monkeypatch.setattr("apipi.ready.ping_store", lambda _url: None)
-    monkeypatch.setattr("apipi.ready.fetch_model_ids", lambda *_a, **_k: [])
-    monkeypatch.setattr("apipi.ready.probe_run_mode", fake_probe)
-    monkeypatch.setattr("apipi.ready.require_run_mode", lambda *_a, **_k: None)
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "ping_store", lambda _url: None)
+    monkeypatch.setattr(ready, "fetch_model_ids", lambda *_a, **_k: [])
+    monkeypatch.setattr(ready, "probe_run_mode", fake_probe)
+    monkeypatch.setattr(ready, "require_run_mode", lambda *_a, **_k: None)
     settings = _settings(run_mode="tests.support.fake_isolation:FakeIsolation")
     rows = run_checks(settings, fast=True)
     assert probed is False
@@ -95,8 +96,8 @@ def test_cli_check_skip(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setattr("apipi.ready.require_pinned_pi", lambda _s: None)
-    monkeypatch.setattr("apipi.ready.installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
     assert main(["check", "--skip-db", "--skip-model"]) == 0
     text = capsys.readouterr().out
     assert "apipi" in text
@@ -106,9 +107,9 @@ def test_cli_check_skip(
 
 
 def test_run_checks_role_api_skips_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("apipi.ready.require_pinned_pi", lambda _s: None)
-    monkeypatch.setattr("apipi.ready.ping_store", lambda _url: None)
-    monkeypatch.setattr("apipi.ready.fetch_model_ids", lambda *_a, **_k: ["m1"])
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "ping_store", lambda _url: None)
+    monkeypatch.setattr(ready, "fetch_model_ids", lambda *_a, **_k: ["m1"])
     rows = run_checks(_settings(), role="api")
     by_name = {row.name: row for row in rows}
     assert by_name["pi"].status == "skip"
@@ -118,9 +119,9 @@ def test_run_checks_role_api_skips_sandbox(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_run_checks_role_worker_needs_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("apipi.ready.require_pinned_pi", lambda _s: None)
-    monkeypatch.setattr("apipi.ready.installed_pi_version", lambda _s: PINNED_PI)
-    monkeypatch.setattr("apipi.ready.require_run_mode", lambda *_a, **_k: None)
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "require_run_mode", lambda *_a, **_k: None)
     settings = _settings()
     rows = run_checks(settings, role="worker")
     by_name = {row.name: row for row in rows}

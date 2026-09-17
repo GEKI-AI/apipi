@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from httpx import AsyncClient
 
-from apipi.broker import DUMMY_KEY, start_broker
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer, apply_vault_headers
-from apipi.pi.proc import pi_env
+from apipi.worker.pi.broker import DUMMY_KEY, start_broker
+from apipi.worker.pi.proc import pi_env
 
 
 def _settings(tmp_path: Path, base: str) -> Settings:

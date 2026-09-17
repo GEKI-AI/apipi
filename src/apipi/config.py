@@ -985,6 +985,6 @@ def _settings_message(exc: ValidationError) -> str:
 
 
 def require_run_mode(mode: str, settings: Settings | None = None) -> None:
-    from apipi.pi.isolation import load_isolation
+    from apipi.worker.pi.isolation import load_isolation
 
     load_isolation(mode).require(settings)

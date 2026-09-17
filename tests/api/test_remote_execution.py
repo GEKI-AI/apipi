@@ -4,11 +4,11 @@ import uuid
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.execution import RemoteExecution, local_execution
-from apipi.runtime import FakeHarness
+from apipi.gateway import create_app
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
+from apipi.worker.execution import RemoteExecution, local_execution
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -80,7 +80,7 @@ async def test_remote_turn_via_worker(settings: Settings, store: Store) -> None:
                     "lease_id": message.get("lease_id"),
                 }
             )
-            from apipi.worker import dispatch_command
+            from apipi.worker.hub import dispatch_command
 
             await dispatch_command(local, message)
 

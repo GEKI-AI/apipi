@@ -1,6 +1,6 @@
 import uuid
 
-from apipi.request_id import resolve_request_id, valid_request_id
+from apipi.gateway.request_id import resolve_request_id, valid_request_id
 
 
 def test_generates_when_missing() -> None:

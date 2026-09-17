@@ -1,7 +1,7 @@
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from apipi.otel import Tracing, span_attributes, traces_endpoint
-from apipi.runtime import FAKE_USAGE
+from apipi.gateway.otel import Tracing, span_attributes, traces_endpoint
+from apipi.services.runtime import FAKE_USAGE
 
 
 def test_traces_endpoint_appends_path() -> None:

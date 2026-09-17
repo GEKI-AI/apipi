@@ -37,7 +37,7 @@ def _skip_model_host(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_probe_run_mode_skips_none() -> None:
-    from apipi.pi.probe import probe_run_mode
+    from apipi.worker.pi.probe import probe_run_mode
 
     probe_run_mode(_none_settings())
 
@@ -113,7 +113,7 @@ def test_prepare_serve_warns_on_sqlite(caplog: pytest.LogCaptureFixture) -> None
 def test_microvm_run_mode_exits_without_kvm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: False)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: False)
     with pytest.raises(ConfigError, match="/dev/kvm"):
         require_run_mode("microvm")
 
@@ -128,12 +128,12 @@ def test_worker_microvm_exits_without_kvm(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
     monkeypatch.setenv("APIPI_WORKER_TOKEN", "secret")
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: False)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: False)
 
     async def boom(_settings: Settings, *, url: str | None = None) -> None:
         raise AssertionError("must not connect")
 
-    monkeypatch.setattr("apipi.worker.run_worker", boom)
+    monkeypatch.setattr("apipi.worker.hub.run_worker", boom)
     assert main(["worker"]) == 1
 
 
@@ -158,7 +158,7 @@ def test_prepare_worker_probes_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_serve_api_only_skips_kvm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: False)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: False)
     called: dict[str, object] = {}
 
     def fake_run(app: object, *, host: str, port: int, **_kwargs: object) -> None:
@@ -173,7 +173,7 @@ def test_serve_api_only_skips_kvm(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_serve_microvm_does_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: False)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: False)
 
     def boom(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("must not start")
@@ -193,9 +193,9 @@ def test_serve_microvm_starts_when_tools_present(
     monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
     monkeypatch.setenv("APIPI_MICROVM_KERNEL", str(kernel))
     monkeypatch.setenv("APIPI_MICROVM_ROOTFS", str(rootfs))
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr(
-        "apipi.pi.microvm.shutil.which", lambda name: f"/usr/bin/{name}"
+        "apipi.worker.pi.microvm.shutil.which", lambda name: f"/usr/bin/{name}"
     )
     monkeypatch.setattr("apipi.cli.probe_run_mode", _noop_probe)
     caplog.set_level(logging.WARNING)
@@ -246,9 +246,9 @@ def test_serve_microvm_probe_fail_does_not_listen(
     monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
     monkeypatch.setenv("APIPI_MICROVM_KERNEL", str(kernel))
     monkeypatch.setenv("APIPI_MICROVM_ROOTFS", str(rootfs))
-    monkeypatch.setattr("apipi.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
     monkeypatch.setattr(
-        "apipi.pi.microvm.shutil.which", lambda name: f"/usr/bin/{name}"
+        "apipi.worker.pi.microvm.shutil.which", lambda name: f"/usr/bin/{name}"
     )
 
     def fail(_settings: Settings) -> None:

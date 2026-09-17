@@ -5,10 +5,10 @@ from typing import Any
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from apipi.runtime import EventHub
+from apipi.services.runtime import EventHub
 from apipi.store.engine import Store
 from apipi.store.repo import clear_worker_api_instance, get_session_by_lease
-from apipi.worker import (
+from apipi.worker.hub import (
     WORKER_IN,
     WorkerHub,
     heartbeat_worker,

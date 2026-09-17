@@ -6,11 +6,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.prom import metric_line
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.runtime import FAKE_USAGE, FakeHarness
+from apipi.gateway import create_app
+from apipi.gateway.tokens import hash_token
+from apipi.services.runtime import FAKE_USAGE, FakeHarness
 from apipi.store.engine import Store
-from apipi.tokens import hash_token
 
 
 def _auth(token: str) -> dict[str, str]:

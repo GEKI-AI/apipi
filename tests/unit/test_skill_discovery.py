@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from apipi.env.setup import SetupError
-from apipi.skills import (
+from apipi.services.skills import (
     copy_capability_directories,
     discover_skill_dirs,
     inspect_skill_zip,

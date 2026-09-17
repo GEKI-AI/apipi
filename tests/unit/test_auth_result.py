@@ -2,7 +2,7 @@ from uuid import UUID
 
 import pytest
 
-from apipi.auth import UNAUTHORIZED, AuthIdentity, AuthReject, auth_from_result
+from apipi.gateway.auth import UNAUTHORIZED, AuthIdentity, AuthReject, auth_from_result
 
 
 def test_none_is_unauthorized() -> None:

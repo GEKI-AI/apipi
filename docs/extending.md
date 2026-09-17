@@ -143,7 +143,7 @@ You still authenticate and map a bearer to `tenant_id` yourself when
 you call the service from your own route. HTTP routes use
 `require_tenant`. In-process callers should
 `await gateway.ensure_tenant(tenant_id)` before `create`. Inline agents
-on `sessions.create` use `AgentWrite` from `apipi.agents`. Do not import
+on `sessions.create` use `AgentWrite` from `apipi.services.agents`. Do not import
 `apipi.api` or `store.repo` for product functions; `apipi.api` is HTTP
 only.
 
@@ -239,7 +239,7 @@ Supported for extenders (also listed on `apipi.__all__`):
 | `Settings` | Operator settings type |
 | `Store` | Durable store around an `AsyncEngine` |
 | `SessionService` | In-process session CRUD, `post_event`, `stream` (`gateway.sessions`) |
-| `AgentWrite` | Inline or saved-agent write body. Import from `apipi.agents`. |
+| `AgentWrite` | Inline or saved-agent write body. Import from `apipi.services.agents`. |
 
 `gateway.agents`, `gateway.vaults`, `gateway.usage`, and `gateway.models`
 are the same functions as `/v1/agents`, `/v1/agents/vaults`, `/v1/usage`,

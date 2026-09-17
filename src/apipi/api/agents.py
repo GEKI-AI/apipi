@@ -3,8 +3,8 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
-from apipi.agents import AgentWrite
-from apipi.auth import require_tenant
+from apipi.gateway.auth import require_tenant
+from apipi.services.agents import AgentWrite
 from apipi.store.models import Tenant
 
 router = APIRouter()

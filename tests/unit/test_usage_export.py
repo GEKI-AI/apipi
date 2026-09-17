@@ -5,7 +5,7 @@ import pytest
 from tests.support import fake_sink
 
 from apipi.config import ConfigError, Settings
-from apipi.usage_export import UsageExporter, export_usage, load_usage_sinks
+from apipi.services.usage_export import UsageExporter, export_usage, load_usage_sinks
 
 _OriginalClient = httpx.AsyncClient
 
@@ -39,7 +39,7 @@ async def test_usage_export_posts_json(monkeypatch: pytest.MonkeyPatch) -> None:
 
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(
-        "apipi.usage_export.httpx.AsyncClient",
+        "apipi.services.usage_export.httpx.AsyncClient",
         lambda **_kwargs: _Client(transport),
     )
     await UsageExporter(_settings())._post({"tenant_id": "t", "status": "completed"})
@@ -58,7 +58,7 @@ async def test_usage_export_drop_does_not_raise(
 
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(
-        "apipi.usage_export.httpx.AsyncClient",
+        "apipi.services.usage_export.httpx.AsyncClient",
         lambda **_kwargs: _Client(transport),
     )
     await UsageExporter(_settings(retries=0))._post({"turn_id": "x"})

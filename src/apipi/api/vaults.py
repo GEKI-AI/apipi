@@ -3,9 +3,9 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
-from apipi.auth import require_tenant
+from apipi.gateway.auth import require_tenant
+from apipi.services.vaults import CredentialUpdate, CredentialWrite, VaultWrite
 from apipi.store.models import Tenant
-from apipi.vaults import CredentialUpdate, CredentialWrite, VaultWrite
 
 router = APIRouter()
 

@@ -9,10 +9,10 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
-from apipi.auth import AuthIdentity
 from apipi.config import Settings, extend_settings
 from apipi.gateway import Gateway, create_app
-from apipi.runtime import FakeHarness
+from apipi.gateway.auth import AuthIdentity
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 

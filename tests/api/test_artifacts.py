@@ -7,11 +7,11 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from apipi.config import DiskLimitError, Settings
-from apipi.pi.artifacts import harvest_session, reap_workspaces
-from apipi.pi.pool import PiPool
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import create_artifact, get_session_by_id
+from apipi.worker.pi.artifacts import harvest_session, reap_workspaces
+from apipi.worker.pi.pool import PiPool
 
 
 def _token(name: str = "t") -> str:

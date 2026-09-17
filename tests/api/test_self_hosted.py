@@ -5,9 +5,9 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_runner import AsgiWebsocket, connect_runner
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.runtime import FakeHarness
+from apipi.gateway import create_app
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -318,7 +318,7 @@ async def test_self_hosted_tool_use_then_harvest(
             )
             assert turned.status_code == 200
             assert runner.files["outputs/note.txt"] == "hello"
-            from apipi.pi.artifacts import harvest_session
+            from apipi.worker.pi.artifacts import harvest_session
 
             async with store.session() as db:
                 await harvest_session(
@@ -362,7 +362,7 @@ async def test_self_hosted_artifact_content_via_runner(
         async with connect_runner(app, env_id, body["key"]) as runner:
             runner.files["artifacts/note.txt"] = "skip"
             runner.files["outputs/note.txt"] = "hello"
-            from apipi.pi.artifacts import harvest_session
+            from apipi.worker.pi.artifacts import harvest_session
 
             async with store.session() as db:
                 await harvest_session(

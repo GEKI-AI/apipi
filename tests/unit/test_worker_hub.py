@@ -2,7 +2,7 @@ import uuid
 from unittest.mock import MagicMock
 
 from apipi.config import Settings
-from apipi.worker import WorkerConnection, WorkerHub
+from apipi.worker.hub import WorkerConnection, WorkerHub
 
 
 def _settings() -> Settings:

@@ -9,14 +9,19 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from apipi.api.sessions import _event_stream
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.runtime import PUBLIC_EVENT_TYPES, EventHub, FakeHarness, persist_event
+from apipi.gateway import create_app
+from apipi.gateway.tokens import hash_token
+from apipi.services.runtime import (
+    PUBLIC_EVENT_TYPES,
+    EventHub,
+    FakeHarness,
+    persist_event,
+)
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import SessionRow
 from apipi.store.repo import create_session, create_tenant, create_turn, update_session
-from apipi.tokens import hash_token
 
 
 def _token(name: str = "t") -> str:

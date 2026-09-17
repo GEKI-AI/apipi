@@ -1,6 +1,6 @@
 from fastapi import Request
 
-from apipi.errors import ApiError
+from apipi.gateway.errors import ApiError
 
 
 def model_key(request: Request) -> str:

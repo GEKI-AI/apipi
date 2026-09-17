@@ -4,7 +4,7 @@ from alembic import command
 from alembic.config import Config
 
 from apipi.config import load_settings, store_url
-from apipi.logutil import configure_logging
+from apipi.gateway.logutil import configure_logging
 
 
 def alembic_config(url: str) -> Config:

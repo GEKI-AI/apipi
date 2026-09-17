@@ -3,7 +3,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request
 
 from apipi.api.deps import model_key
-from apipi.auth import require_tenant
+from apipi.gateway.auth import require_tenant
 from apipi.store.models import Tenant
 
 router = APIRouter()

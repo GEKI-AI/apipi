@@ -1,9 +1,9 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.runtime import FakeHarness
+from apipi.gateway import create_app
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -36,7 +36,7 @@ async def test_unknown_model_on_host(
     )
     app = create_app(host_settings, store=store, harness=FakeHarness())
     monkeypatch.setattr(
-        "apipi.runtime.listed_models", lambda *_args, **_kwargs: ["other"]
+        "apipi.services.runtime.listed_models", lambda *_args, **_kwargs: ["other"]
     )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

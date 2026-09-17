@@ -1,4 +1,5 @@
-from apipi.auth import AuthIdentity, AuthReject, authenticate as default_authenticate
+from apipi.gateway.auth import AuthIdentity, AuthReject
+from apipi.gateway.auth import authenticate as default_authenticate
 
 
 def authenticate(bearer: str) -> AuthIdentity | AuthReject:

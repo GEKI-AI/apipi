@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from apipi.auth import AuthReject
+from apipi.gateway.auth import AuthReject
 
 calls: list[str] = []
 

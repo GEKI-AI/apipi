@@ -1,8 +1,8 @@
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
-from apipi.pi.isolation.none import NoneIsolation
-from apipi.pi.proc import PiProc
+from apipi.worker.pi.isolation.none import NoneIsolation
+from apipi.worker.pi.proc import PiProc
 
 
 class FakeIsolation:

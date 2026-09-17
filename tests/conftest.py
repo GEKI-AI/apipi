@@ -9,9 +9,9 @@ from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.runtime import FakeHarness
+from apipi.gateway import create_app
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import Base
 

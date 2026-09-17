@@ -6,8 +6,8 @@ from typing import Any, cast
 import pytest
 
 from apipi.config import Settings
-from apipi.pi.pool import PiPool
-from apipi.pi.proc import PiProc
+from apipi.worker.pi.pool import PiPool
+from apipi.worker.pi.proc import PiProc
 
 
 class _Alive:
@@ -118,7 +118,7 @@ async def test_pool_respawns_when_instructions_change(
         spawned.append(kwargs.get("instructions"))
         return _Proc()
 
-    monkeypatch.setattr("apipi.pi.pool.spawn_pi", fake_spawn)
+    monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
     pool = PiPool(_settings())
     session_id = uuid.uuid4()
     await pool.get(session_id, cwd=None, tools=True, instructions="a")
@@ -136,7 +136,7 @@ async def test_pool_treats_empty_instructions_as_none(
         spawned.append(kwargs.get("instructions"))
         return _Proc()
 
-    monkeypatch.setattr("apipi.pi.pool.spawn_pi", fake_spawn)
+    monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
     pool = PiPool(_settings())
     session_id = uuid.uuid4()
     await pool.get(session_id, cwd=None, tools=True, instructions=None)

@@ -13,8 +13,8 @@ from apipi.env.setup import (
     setup_commands_from,
     skill_refs_from,
 )
-from apipi.errors import ApiError, not_implemented
-from apipi.schemas import StrictModel
+from apipi.gateway.errors import ApiError, not_implemented
+from apipi.gateway.schemas import StrictModel
 
 _UNIMPLEMENTED = (
     "environment_template_id",

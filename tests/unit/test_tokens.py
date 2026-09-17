@@ -2,9 +2,9 @@ from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
-from apipi.auth import authenticate, load_authenticate
 from apipi.config import ConfigError
-from apipi.tokens import hash_token
+from apipi.gateway.auth import authenticate, load_authenticate
+from apipi.gateway.tokens import hash_token
 
 
 def test_hash_token_is_sha256_hex() -> None:
