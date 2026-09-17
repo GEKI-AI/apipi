@@ -1,0 +1,98 @@
+import uuid
+
+import httpx
+import pytest
+
+from apipi.agents import AgentWrite
+from apipi.config import Settings
+from apipi.errors import ApiError
+from apipi.gateway import Gateway
+from apipi.runtime import FakeHarness
+from apipi.store.engine import Store
+from apipi.store.repo import ensure_tenant
+from apipi.vaults import CredentialWrite, VaultWrite
+
+
+async def test_in_process_agents_crud(settings: Settings, store: Store) -> None:
+    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    tenant_id = uuid.uuid4()
+    async with store.session() as db:
+        await ensure_tenant(db, tenant_id)
+    created = await gateway.agents.create(
+        tenant_id, AgentWrite(name="one", model="test")
+    )
+    assert created["name"] == "one"
+    agent_id = uuid.UUID(created["id"])
+    listed = await gateway.agents.list(tenant_id)
+    assert [row["id"] for row in listed["data"]] == [created["id"]]
+    got = await gateway.agents.get(tenant_id, agent_id)
+    assert got["model"] == "test"
+    updated = await gateway.agents.update(tenant_id, agent_id, AgentWrite(name="two"))
+    assert updated["name"] == "two"
+    deleted = await gateway.agents.delete(tenant_id, agent_id)
+    assert deleted == {"id": str(agent_id), "deleted": True}
+    with pytest.raises(ApiError) as exc:
+        await gateway.agents.get(tenant_id, agent_id)
+    assert exc.value.status_code == 404
+
+
+async def test_in_process_vaults_omit_token(settings: Settings, store: Store) -> None:
+    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    tenant_id = uuid.uuid4()
+    async with store.session() as db:
+        await ensure_tenant(db, tenant_id)
+    vault = await gateway.vaults.create(tenant_id, VaultWrite(name="GitHub"))
+    vault_id = uuid.UUID(vault["id"])
+    cred = await gateway.vaults.create_credential(
+        tenant_id,
+        vault_id,
+        CredentialWrite(
+            name="pat",
+            auth={
+                "type": "static_bearer",
+                "mcp_server_url": "https://mcp.example.com/mcp",
+                "token": "secret-token",
+            },
+        ),
+    )
+    assert "token" not in cred["auth"]
+    assert "secret-token" not in str(cred)
+    got = await gateway.vaults.get_credential(
+        tenant_id, vault_id, uuid.UUID(cred["id"])
+    )
+    assert "token" not in got["auth"]
+    listed = await gateway.vaults.list_credentials(tenant_id, vault_id)
+    assert "token" not in listed["data"][0]["auth"]
+
+
+async def test_in_process_usage_needs_one_filter(
+    settings: Settings, store: Store
+) -> None:
+    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    tenant_id = uuid.uuid4()
+    async with store.session() as db:
+        await ensure_tenant(db, tenant_id)
+    with pytest.raises(ApiError) as exc:
+        await gateway.usage.get(tenant_id)
+    assert exc.value.code == "invalid_request"
+
+
+async def test_in_process_models_list(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {
+        "object": "list",
+        "data": [{"id": "gpt-4.1", "object": "model", "owned_by": "host"}],
+    }
+
+    def fake_get(url: str, **kwargs: object) -> httpx.Response:
+        assert url.endswith("/models")
+        return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr("apipi.pi.model_host.httpx.get", fake_get)
+    gateway = Gateway.create(
+        settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
+        store=store,
+        harness=FakeHarness(),
+    )
+    assert gateway.models.list("t") == payload

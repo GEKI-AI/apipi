@@ -9,6 +9,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from apipi.agents import AgentService
 from apipi.api.agents import router as agents_router
 from apipi.api.environments import router as environments_router
 from apipi.api.models import router as models_router
@@ -25,6 +26,7 @@ from apipi.execution import LocalExecution, RemoteExecution
 from apipi.http_path import skip_request_path
 from apipi.logutil import RequestLogMiddleware
 from apipi.metrics import Metrics, mount_metrics
+from apipi.models import ModelsService
 from apipi.otel import Tracing, current_trace_id
 from apipi.payload_export import load_payload_sinks
 from apipi.pi.harness import PiHarness
@@ -38,6 +40,8 @@ from apipi.store.engine import Store, create_engine
 from apipi.store.models import utc_now
 from apipi.store.repo import purge_turn_logs
 from apipi.usage_export import load_usage_sinks
+from apipi.usage_service import UsageService
+from apipi.vaults import VaultService
 from apipi.worker import WorkerHub
 
 _SKIP_CONTEXT = frozenset({"/health", "/metrics"})
@@ -230,6 +234,10 @@ class Gateway:
             mcp_http=self.mcp_http,
             mcp_stdio=self.mcp_stdio,
         )
+        self.agents = AgentService(store)
+        self.vaults = VaultService(store)
+        self.usage = UsageService(store)
+        self.models = ModelsService(settings)
         self.routers = GatewayRouters(
             sessions=sessions_router,
             agents=agents_router,
