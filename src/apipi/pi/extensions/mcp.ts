@@ -241,7 +241,8 @@ function startServer(server: {
       env: {
         ...process.env,
         PLAYWRIGHT_CHROMIUM_SANDBOX: "0",
-        NPM_CONFIG_LOGLEVEL: "silent",
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
+        NPM_CONFIG_LOGLEVEL: "error",
         npm_config_progress: "false",
         npm_config_fund: "false",
       },
@@ -355,7 +356,7 @@ export default function (pi: ExtensionAPI) {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(message);
-      process.exit(1);
+      throw err;
     }
   });
 }

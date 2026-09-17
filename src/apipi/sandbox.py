@@ -83,6 +83,8 @@ def playwright_tool(settings: Settings) -> dict[str, Any]:
                 settings.sandbox_playwright_mcp,
                 "--headless",
                 "--isolated",
+                "--no-sandbox",
+                "--output-dir=/workspace/outputs",
                 f"--executable-path={PLAYWRIGHT_CHROMIUM}",
             ],
         },

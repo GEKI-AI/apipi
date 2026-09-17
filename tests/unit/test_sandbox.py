@@ -97,6 +97,8 @@ def test_merge_playwright_on_l_microvm() -> None:
     assert (
         "--executable-path=/usr/bin/chromium-browser" in tools[0]["transport"]["args"]
     )
+    assert "--no-sandbox" in tools[0]["transport"]["args"]
+    assert "--output-dir=/workspace/outputs" in tools[0]["transport"]["args"]
     assert has_playwright(tools)
     assert playwright_attached(tools)
 
