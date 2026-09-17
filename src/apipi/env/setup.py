@@ -178,6 +178,8 @@ def inline_files_from(environment: dict[str, Any]) -> list[tuple[str, bytes]]:
     for item in raw:
         if not isinstance(item, dict):
             raise SetupError("files entries must be objects")
+        if item.get("type") == "file_id":
+            continue
         if item.get("type") != "inline":
             raise SetupError("files entries must have type inline")
         path = item.get("path")
@@ -192,6 +194,28 @@ def inline_files_from(environment: dict[str, Any]) -> list[tuple[str, bytes]]:
             raise SetupError("files data must be base64") from exc
         files.append((path.strip(), decoded))
     return files
+
+
+def file_id_refs_from(environment: dict[str, Any]) -> list[tuple[str, str]]:
+    raw = environment.get("files")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise SetupError("files must be a list")
+    refs: list[tuple[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise SetupError("files entries must be objects")
+        if item.get("type") != "file_id":
+            continue
+        path = item.get("path")
+        file_id = item.get("file_id")
+        if not isinstance(path, str) or not path.strip():
+            raise SetupError("files need a path")
+        if not isinstance(file_id, str) or not file_id.strip():
+            raise SetupError("files need a file_id")
+        refs.append((path.strip(), file_id.strip()))
+    return refs
 
 
 def session_network_from(environment: dict[str, Any]) -> NetworkPolicy | None:
@@ -305,6 +329,7 @@ def needs_setup(environment: dict[str, Any]) -> bool:
         or bool(setup_commands_from(environment))
         or bool(session_env_from(environment))
         or bool(inline_files_from(environment))
+        or bool(file_id_refs_from(environment))
     )
 
 
@@ -473,12 +498,18 @@ def write_inline_files(
 
 
 def prepare_workspace(
-    workspace: Path, environment: dict[str, Any], *, max_bytes: int | None = None
+    workspace: Path,
+    environment: dict[str, Any],
+    *,
+    max_bytes: int | None = None,
+    extra_files: list[tuple[str, bytes]] | None = None,
 ) -> None:
     if environment.get("type") != "openai_hosted":
         return
     values = session_env_from(environment)
     files = inline_files_from(environment)
+    if extra_files:
+        files = [*files, *extra_files]
     packages = packages_from(environment)
     commands = setup_commands_from(environment)
     policy = session_network_from(environment)
@@ -547,6 +578,7 @@ def provision_hosted(
     max_bytes: int | None = None,
     gateway_allowlist: bool = False,
     gateway_hosts: tuple[str, ...] = (),
+    extra_files: list[tuple[str, bytes]] | None = None,
 ) -> None:
     if environment.get("type") != "openai_hosted":
         return
@@ -554,7 +586,9 @@ def provision_hosted(
     if not isinstance(directory, str) or directory == "":
         return
     workspace = Path(directory)
-    prepare_workspace(workspace, environment, max_bytes=max_bytes)
+    prepare_workspace(
+        workspace, environment, max_bytes=max_bytes, extra_files=extra_files
+    )
     policy = session_network_from(environment)
     if policy is not None and policy.access in {"disabled", "restricted"}:
         if run_mode == "none":

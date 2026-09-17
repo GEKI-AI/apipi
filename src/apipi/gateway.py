@@ -10,6 +10,7 @@ from fastapi import APIRouter, FastAPI
 from apipi.agents import AgentService
 from apipi.api.agents import router as agents_router
 from apipi.api.environments import router as environments_router
+from apipi.api.files import router as files_router
 from apipi.api.health import router as health_router
 from apipi.api.models import router as models_router
 from apipi.api.sessions import router as sessions_router
@@ -22,6 +23,7 @@ from apipi.config import Settings, load_settings
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import register_exception_handlers
 from apipi.execution import LocalExecution, RemoteExecution
+from apipi.files import FileService
 from apipi.logutil import RequestLogMiddleware
 from apipi.metrics import Metrics, mount_metrics
 from apipi.middleware import InstanceMiddleware, MaxBodyMiddleware
@@ -60,6 +62,7 @@ class GatewayRouters:
     sessions: APIRouter
     agents: APIRouter
     vaults: APIRouter
+    files: APIRouter
     environments: APIRouter
     usage: APIRouter
     models: APIRouter
@@ -103,6 +106,7 @@ class Gateway:
         self.tracing = tracing
         self.mcp_http: dict[uuid.UUID, Any] = {}
         self.mcp_stdio: dict[uuid.UUID, Any] = {}
+        self.files = FileService(store, objects, settings)
         self.sessions = SessionService(
             settings=settings,
             store=store,
@@ -110,6 +114,7 @@ class Gateway:
             env_hub=env_hub,
             execution=execution,
             blobs=blobs,
+            files=self.files,
             tracing=tracing,
             mcp_http=self.mcp_http,
             mcp_stdio=self.mcp_stdio,
@@ -122,6 +127,7 @@ class Gateway:
             sessions=sessions_router,
             agents=agents_router,
             vaults=vaults_router,
+            files=files_router,
             environments=environments_router,
             usage=usage_router,
             models=models_router,
@@ -198,6 +204,7 @@ class Gateway:
                 env_hub=env_hub,
                 store=resolved_store,
                 blobs=resolved_blobs,
+                objects=resolved_objects,
                 metrics=resolved_metrics,
                 tracing=resolved_tracing,
             )
@@ -231,7 +238,11 @@ class Gateway:
     def configure(self, app: FastAPI) -> None:
         app.add_middleware(RequestIdMiddleware)
         app.add_middleware(InstanceMiddleware, instance_id=self.settings.instance_id)
-        app.add_middleware(MaxBodyMiddleware, max_bytes=self.settings.max_request_bytes)
+        app.add_middleware(
+            MaxBodyMiddleware,
+            max_bytes=self.settings.max_request_bytes,
+            file_max_bytes=int(self.settings.max_file_bytes),
+        )
         app.add_middleware(RequestLogMiddleware)
         app.state.gateway = self
         app.state.settings = self.settings
@@ -320,6 +331,7 @@ def create_app(
     gateway.configure(app)
     app.include_router(gateway.routers.sessions)
     app.include_router(gateway.routers.vaults)
+    app.include_router(gateway.routers.files)
     app.include_router(gateway.routers.agents)
     app.include_router(gateway.routers.environments)
     app.include_router(gateway.routers.usage)

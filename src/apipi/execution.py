@@ -3,7 +3,7 @@ import logging
 import uuid
 from typing import Any, NoReturn, Protocol
 
-from apipi.blobs import ArtifactBlobs
+from apipi.blobs import ArtifactBlobs, ObjectStore, blob_store, object_store
 from apipi.config import Settings
 from apipi.env.hub import EnvironmentHub
 from apipi.errors import ApiError
@@ -107,6 +107,7 @@ class LocalExecution:
         env_hub: EnvironmentHub,
         store: Store | None = None,
         blobs: ArtifactBlobs | None = None,
+        objects: ObjectStore | None = None,
         metrics: Metrics | None = None,
         tracing: Tracing | None = None,
     ) -> None:
@@ -118,6 +119,7 @@ class LocalExecution:
         self.env_hub = env_hub
         self.store = store
         self.blobs = blobs
+        self.objects = objects
         self.metrics = metrics
         self.tracing = tracing
         if pool.on_kill is None:
@@ -181,6 +183,7 @@ class LocalExecution:
             pool=self.pool,
             api_key=api_key,
             key_id=key_id,
+            objects=self.objects,
         )
 
     async def continue_turn(
@@ -287,6 +290,8 @@ def local_execution(
         hub=hub if hub is not None else EventHub(),
         env_hub=env_hub if env_hub is not None else EnvironmentHub(),
         store=store,
+        blobs=blob_store(settings),
+        objects=object_store(settings),
     )
 
 

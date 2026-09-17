@@ -358,7 +358,7 @@ async def test_env_rejected_on_none(client: AsyncClient) -> None:
     assert response.json()["error"]["code"] == "invalid_request"
 
 
-async def test_non_inline_files_not_implemented(client: AsyncClient) -> None:
+async def test_unknown_files_type_not_implemented(client: AsyncClient) -> None:
     token = "files-id"
     agent_id = await _agent(client, token)
     response = await client.post(

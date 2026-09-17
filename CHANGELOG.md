@@ -45,9 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workers advertise `capacity` (max sessions) and `memory_mb` (RAM
   budget in MiB). The API will not lease a worker that would pass
   either cap. Among eligible workers it prefers more free RAM.
-- Hosted sessions accept `environment.env` and inline `environment.files`
-  (`type: "inline"`, base64 under `/workspace`). Reserved names and
-  Files API ids are rejected. Values persist for sandbox TTL rebuild.
+- Hosted sessions accept `environment.env` and `environment.files`
+  (`type: "inline"` base64, or `type: "file_id"` from the Files API)
+  under `/workspace`. Reserved env names are rejected. Values persist
+  for sandbox TTL rebuild.
+- Files API: `POST/GET/DELETE /v1/files` and content download. Purpose
+  `user_data` or `assistants`. Bytes in the shared object store. Cap
+  `APIPI_MAX_FILE_BYTES` (50 MiB).
 - Hosted sessions accept `environment.network` (`enabled`, `disabled`,
   `restricted` with exact `allowed_domains`). Session policy cannot
   widen `[sandbox.network]`. Isolation `none` cannot enforce

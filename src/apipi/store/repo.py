@@ -11,6 +11,7 @@ from apipi.store.models import (
     Artifact,
     EnvironmentRow,
     Event,
+    FileRow,
     Item,
     SessionRow,
     Tenant,
@@ -997,3 +998,52 @@ async def list_credentials_for_vault_ids(
         )
     )
     return list(result)
+
+
+async def create_file(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    file_id: str,
+    filename: str,
+    purpose: str,
+    size: int,
+    content_type: str | None = None,
+) -> FileRow:
+    row = FileRow(
+        id=file_id,
+        tenant_id=tenant_id,
+        filename=filename,
+        purpose=purpose,
+        size=size,
+        content_type=content_type,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def get_file(
+    db: AsyncSession, tenant_id: uuid.UUID, file_id: str
+) -> FileRow | None:
+    return await db.scalar(
+        select(FileRow).where(FileRow.tenant_id == tenant_id, FileRow.id == file_id)
+    )
+
+
+async def list_files(db: AsyncSession, tenant_id: uuid.UUID) -> list[FileRow]:
+    result = await db.scalars(
+        select(FileRow)
+        .where(FileRow.tenant_id == tenant_id)
+        .order_by(FileRow.created_at.desc())
+    )
+    return list(result)
+
+
+async def delete_file(db: AsyncSession, tenant_id: uuid.UUID, file_id: str) -> bool:
+    row = await get_file(db, tenant_id, file_id)
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.flush()
+    return True
