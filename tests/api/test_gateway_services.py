@@ -9,15 +9,22 @@ from apipi.errors import ApiError
 from apipi.gateway import Gateway
 from apipi.runtime import FakeHarness
 from apipi.store.engine import Store
-from apipi.store.repo import ensure_tenant
 from apipi.vaults import CredentialWrite, VaultWrite
+
+
+async def test_ensure_tenant(settings: Settings, store: Store) -> None:
+    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    tenant_id = uuid.uuid4()
+    first = await gateway.ensure_tenant(tenant_id)
+    again = await gateway.ensure_tenant(tenant_id)
+    assert first.id == tenant_id
+    assert again.id == tenant_id
 
 
 async def test_in_process_agents_crud(settings: Settings, store: Store) -> None:
     gateway = Gateway.create(settings, store=store, harness=FakeHarness())
     tenant_id = uuid.uuid4()
-    async with store.session() as db:
-        await ensure_tenant(db, tenant_id)
+    await gateway.ensure_tenant(tenant_id)
     created = await gateway.agents.create(
         tenant_id, AgentWrite(name="one", model="test")
     )
@@ -39,8 +46,7 @@ async def test_in_process_agents_crud(settings: Settings, store: Store) -> None:
 async def test_in_process_vaults_omit_token(settings: Settings, store: Store) -> None:
     gateway = Gateway.create(settings, store=store, harness=FakeHarness())
     tenant_id = uuid.uuid4()
-    async with store.session() as db:
-        await ensure_tenant(db, tenant_id)
+    await gateway.ensure_tenant(tenant_id)
     vault = await gateway.vaults.create(tenant_id, VaultWrite(name="GitHub"))
     vault_id = uuid.UUID(vault["id"])
     cred = await gateway.vaults.create_credential(
@@ -70,8 +76,7 @@ async def test_in_process_usage_needs_one_filter(
 ) -> None:
     gateway = Gateway.create(settings, store=store, harness=FakeHarness())
     tenant_id = uuid.uuid4()
-    async with store.session() as db:
-        await ensure_tenant(db, tenant_id)
+    await gateway.ensure_tenant(tenant_id)
     with pytest.raises(ApiError) as exc:
         await gateway.usage.get(tenant_id)
     assert exc.value.code == "invalid_request"

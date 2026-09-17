@@ -203,5 +203,8 @@ async def require_tenant(
     request.state.tenant_id = identity.tenant_id
     request.state.key_id = identity.key_id
     request.state.bearer = token
+    gateway = getattr(request.app.state, "gateway", None)
+    if gateway is not None:
+        return await gateway.ensure_tenant(identity.tenant_id)
     async with _store(request).session() as db:
         return await ensure_tenant(db, identity.tenant_id)
