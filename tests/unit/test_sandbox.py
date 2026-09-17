@@ -1,6 +1,6 @@
 from apipi.config import Settings
-from apipi.errors import ApiError
-from apipi.sandbox import (
+from apipi.gateway.errors import ApiError
+from apipi.pi.sandbox import (
     PLAYWRIGHT_LABEL,
     has_playwright,
     image_for_size,

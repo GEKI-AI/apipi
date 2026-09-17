@@ -10,13 +10,13 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apipi.blobs import ArtifactBlobs, blob_store
 from apipi.config import ConfigError, DiskLimitError, Settings
 from apipi.env.hub import EnvDisconnected, EnvironmentHub
 from apipi.pi.dirs import pi_session_file, sessions_root
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
-from apipi.skills import copy_capability_directories
+from apipi.services.skills import copy_capability_directories
+from apipi.store.blobs import ArtifactBlobs, blob_store
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import (

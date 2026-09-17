@@ -6,13 +6,13 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
 from apipi.config import Settings
 from apipi.env.setup import SetupError
+from apipi.gateway import create_app
 from apipi.pi.artifacts import reap_workspaces
 from apipi.pi.isolation.none import NoneIsolation
 from apipi.pi.pool import PiPool
-from apipi.runtime import FakeHarness
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import get_session_by_id

@@ -3,7 +3,7 @@ import logging
 
 import pytest
 
-from apipi.logutil import FlushStreamHandler, JsonFormatter, extra_fields
+from apipi.gateway.logutil import FlushStreamHandler, JsonFormatter, extra_fields
 
 
 def _record(msg: str = "hello", **extra: object) -> logging.LogRecord:

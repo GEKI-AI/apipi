@@ -8,7 +8,8 @@ from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from apipi.env.hub import EnvironmentHub, RunnerConnection
-from apipi.runtime import EventHub, persist_event, with_env_actions
+from apipi.gateway.tokens import hash_token
+from apipi.services.runtime import EventHub, persist_event, with_env_actions
 from apipi.store.engine import Store
 from apipi.store.errors import NotFoundError
 from apipi.store.repo import (
@@ -17,7 +18,6 @@ from apipi.store.repo import (
     update_environment,
     update_session,
 )
-from apipi.tokens import hash_token
 
 router = APIRouter()
 

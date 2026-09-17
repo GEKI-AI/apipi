@@ -3,7 +3,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
-from apipi.auth import require_tenant
+from apipi.gateway.auth import require_tenant
 from apipi.store.models import Tenant
 
 router = APIRouter()

@@ -2,11 +2,11 @@ from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
 from apipi.config import Settings
+from apipi.gateway import create_app
 from apipi.pi.platform_prompt import BROWSER_HINT
-from apipi.runtime import FakeHarness
-from apipi.sandbox import PLAYWRIGHT_LABEL
+from apipi.pi.sandbox import PLAYWRIGHT_LABEL
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 

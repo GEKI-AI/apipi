@@ -10,8 +10,8 @@ from uuid import UUID
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from apipi.http_path import skip_request_path
-from apipi.metrics import route_path
+from apipi.gateway.http_path import skip_request_path
+from apipi.gateway.metrics import route_path
 
 SERVICE = "apipi"
 TEXT_FORMAT = "%(levelname)s %(name)s: %(message)s"
@@ -96,14 +96,14 @@ def uvicorn_log_config(*, level: str, format: str) -> dict[str, Any]:
     if format == "text":
         formatter = {"format": TEXT_FORMAT}
     else:
-        formatter = {"()": "apipi.logutil.JsonFormatter"}
+        formatter = {"()": "apipi.gateway.logutil.JsonFormatter"}
     return {
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {"default": formatter},
         "handlers": {
             "default": {
-                "class": "apipi.logutil.FlushStreamHandler",
+                "class": "apipi.gateway.logutil.FlushStreamHandler",
                 "formatter": "default",
                 "stream": "ext://sys.stderr",
             }

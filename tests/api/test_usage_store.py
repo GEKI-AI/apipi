@@ -5,13 +5,13 @@ from collections.abc import AsyncIterator
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.runtime import FakeHarness
+from apipi.gateway import create_app
+from apipi.gateway.tokens import hash_token
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import get_turn_log, list_turn_logs, usage_day
-from apipi.tokens import hash_token
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -140,7 +140,7 @@ async def test_usage_export_receives_event(
         del settings, metrics
         captured.append(event)
 
-    monkeypatch.setattr("apipi.runtime.export_usage", capture)
+    monkeypatch.setattr("apipi.services.runtime.export_usage", capture)
     app = create_app(export_settings, store=store, harness=FakeHarness())
     token = "export"
     async with AsyncClient(
@@ -163,7 +163,7 @@ async def test_usage_export_failure_does_not_break_turn(
     def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("export down")
 
-    monkeypatch.setattr("apipi.runtime.export_usage", boom)
+    monkeypatch.setattr("apipi.services.runtime.export_usage", boom)
     app = create_app(export_settings, store=store, harness=FakeHarness())
     token = "export-fail"
     async with AsyncClient(

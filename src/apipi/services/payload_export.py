@@ -3,9 +3,14 @@ import uuid
 from typing import Any
 
 from apipi.config import Settings
-from apipi.metrics import Metrics
+from apipi.gateway.metrics import Metrics
+from apipi.services.usage_export import (
+    EventSink,
+    HttpExporter,
+    emit_all,
+    load_custom_sinks,
+)
 from apipi.store.models import Item
-from apipi.usage_export import EventSink, HttpExporter, emit_all, load_custom_sinks
 
 _BEARER = re.compile(r"(?i)(authorization:\s*bearer\s+)\S+")
 

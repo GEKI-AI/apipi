@@ -10,11 +10,11 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from apipi.agents import AgentWrite
 from apipi.config import extend_settings
 from apipi.env.spec import EnvironmentSpec
-from apipi.errors import ApiError
 from apipi.gateway import Gateway
+from apipi.gateway.errors import ApiError
+from apipi.services.agents import AgentWrite
 from apipi.store.engine import Store, create_engine
 
 INSTRUCTIONS = (

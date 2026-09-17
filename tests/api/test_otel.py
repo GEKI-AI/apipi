@@ -5,10 +5,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.otel import Tracing
-from apipi.runtime import FAKE_USAGE, FakeHarness
+from apipi.gateway import create_app
+from apipi.gateway.otel import Tracing
+from apipi.services.runtime import FAKE_USAGE, FakeHarness
 from apipi.store.engine import Store
 
 

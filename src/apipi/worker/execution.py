@@ -3,20 +3,19 @@ import logging
 import uuid
 from typing import Any, NoReturn, Protocol
 
-from apipi.blobs import ArtifactBlobs, ObjectStore, blob_store, object_store
 from apipi.config import Settings
 from apipi.env.hub import EnvironmentHub
-from apipi.errors import ApiError
+from apipi.gateway.errors import ApiError
+from apipi.gateway.metrics import Metrics
+from apipi.gateway.otel import Tracing
 from apipi.mcp.stdio import McpStdioServer
-from apipi.metrics import Metrics
-from apipi.otel import Tracing
 from apipi.pi.artifacts import harvest_session, reap_workspace_loop
 from apipi.pi.harness import PiHarness
 from apipi.pi.isolation import load_isolation
 from apipi.pi.isolation.base import Isolation
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
-from apipi.runtime import (
+from apipi.services.runtime import (
     EventHub,
     continue_turn,
     fail_stale_in_progress,
@@ -24,6 +23,7 @@ from apipi.runtime import (
     request_cancel,
     run_turn,
 )
+from apipi.store.blobs import ArtifactBlobs, ObjectStore, blob_store, object_store
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now

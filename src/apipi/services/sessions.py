@@ -5,41 +5,42 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from apipi.agents import AgentWrite
-from apipi.auth import not_found
-from apipi.blobs import ArtifactBlobs
 from apipi.config import Settings
 from apipi.env.hub import EnvironmentHub
 from apipi.env.setup import SetupError, prepare_workspace
 from apipi.env.spec import EnvironmentSpec, environment_payload
-from apipi.errors import ApiError, gone
-from apipi.execution import LocalExecution, RemoteExecution
-from apipi.files import FileService
+from apipi.gateway.auth import not_found
+from apipi.gateway.errors import ApiError, gone
+from apipi.gateway.otel import Tracing, set_span, start_span
+from apipi.gateway.tokens import hash_token
 from apipi.mcp.http import (
     McpConnectError,
     apply_vault_headers,
     connect_mcp_http_tools,
 )
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
-from apipi.otel import Tracing, set_span, start_span
 from apipi.pi.artifacts import wipe_artifact_store, wipe_workspace
 from apipi.pi.dirs import session_workspace
-from apipi.runtime import (
-    EventHub,
-    event_body,
-    fail_session,
-    fail_stale_in_progress,
-    persist_event,
-)
-from apipi.sandbox import (
+from apipi.pi.sandbox import (
     mem_mib_for_size,
     merge_playwright,
     require_size_rootfs,
     resolve_sandbox_size,
     sandbox_size_of,
 )
-from apipi.skill_store import SkillService
-from apipi.skills import copy_capability_directories
+from apipi.services.agents import AgentWrite
+from apipi.services.files import FileService
+from apipi.services.runtime import (
+    EventHub,
+    event_body,
+    fail_session,
+    fail_stale_in_progress,
+    persist_event,
+)
+from apipi.services.skill_store import SkillService
+from apipi.services.skills import copy_capability_directories
+from apipi.services.usage import usage_from
+from apipi.store.blobs import ArtifactBlobs
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import Artifact, Item, SessionRow, Turn
@@ -60,8 +61,7 @@ from apipi.store.repo import (
     list_turns,
     update_session,
 )
-from apipi.tokens import hash_token
-from apipi.usage import usage_from
+from apipi.worker.execution import LocalExecution, RemoteExecution
 
 
 def turn_body(turn: Turn) -> dict[str, Any]:

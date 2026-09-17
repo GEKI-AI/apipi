@@ -11,11 +11,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.config import ConfigError
-from apipi.errors import ApiError
+from apipi.gateway.errors import ApiError
+from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.models import Tenant
 from apipi.store.repo import ensure_tenant
-from apipi.tokens import hash_token
 
 _bearer = HTTPBearer(auto_error=False)
 _MISS = object()

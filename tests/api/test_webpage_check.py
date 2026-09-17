@@ -6,7 +6,7 @@ from httpx import ASGITransport, AsyncClient
 
 from apipi.config import Settings
 from apipi.gateway import Gateway
-from apipi.runtime import FakeHarness
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 _APP = Path(__file__).resolve().parents[2] / "examples" / "webpage-check" / "app.py"

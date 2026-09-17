@@ -7,10 +7,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.prom import metric_line
 
-from apipi.app import create_app
 from apipi.config import Settings
+from apipi.gateway import create_app
+from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
-from apipi.tokens import hash_token
 
 pytestmark = pytest.mark.e2e
 

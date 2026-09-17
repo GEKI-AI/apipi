@@ -45,7 +45,7 @@ class NoneIsolation:
             path = pi_session_file(root)
             path.parent.mkdir(parents=True, exist_ok=True)
             session_file = PI_SESSION_REL
-        from apipi.broker import start_broker
+        from apipi.pi.broker import start_broker
         from apipi.pi.model_host import models_json_for_base_url
 
         args = pi_command_args(

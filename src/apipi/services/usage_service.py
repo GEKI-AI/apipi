@@ -1,8 +1,8 @@
 import uuid
 from datetime import date
 
-from apipi.auth import not_found
-from apipi.errors import ApiError
+from apipi.gateway.auth import not_found
+from apipi.gateway.errors import ApiError
 from apipi.store.engine import Store
 from apipi.store.repo import (
     get_session,

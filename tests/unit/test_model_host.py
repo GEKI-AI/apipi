@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from apipi.config import ConfigError, Settings
-from apipi.errors import ApiError
+from apipi.gateway.errors import ApiError
 from apipi.pi.model_host import (
     PI_PROVIDER,
     fetch_model_ids,

@@ -3,13 +3,13 @@ import uuid
 import httpx
 import pytest
 
-from apipi.agents import AgentWrite
 from apipi.config import Settings
-from apipi.errors import ApiError
 from apipi.gateway import Gateway
-from apipi.runtime import FakeHarness
+from apipi.gateway.errors import ApiError
+from apipi.services.agents import AgentWrite
+from apipi.services.runtime import FakeHarness
+from apipi.services.vaults import CredentialWrite, VaultWrite
 from apipi.store.engine import Store
-from apipi.vaults import CredentialWrite, VaultWrite
 
 
 async def test_ensure_tenant(settings: Settings, store: Store) -> None:

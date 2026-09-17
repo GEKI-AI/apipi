@@ -13,7 +13,7 @@ from prometheus_client import (
 )
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from apipi.http_path import skip_request_path
+from apipi.gateway.http_path import skip_request_path
 
 disable_created_metrics()
 

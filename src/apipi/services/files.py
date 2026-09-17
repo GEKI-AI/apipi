@@ -1,11 +1,11 @@
 import uuid
 from typing import Any
 
-from apipi.auth import not_found
-from apipi.blobs import NS_FILES, ObjectStore, file_object_id
 from apipi.config import Settings
 from apipi.env.setup import SetupError, file_id_refs_from
-from apipi.errors import ApiError, not_implemented
+from apipi.gateway.auth import not_found
+from apipi.gateway.errors import ApiError, not_implemented
+from apipi.store.blobs import NS_FILES, ObjectStore, file_object_id
 from apipi.store.engine import Store
 from apipi.store.models import FileRow
 from apipi.store.repo import create_file, delete_file, get_file, list_files

@@ -5,14 +5,14 @@ from datetime import timedelta
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.runtime import FakeHarness
+from apipi.gateway import create_app
+from apipi.gateway.tokens import hash_token
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import Event, utc_now
 from apipi.store.repo import get_session, get_worker
-from apipi.tokens import hash_token
 
 
 def _auth(token: str) -> dict[str, str]:

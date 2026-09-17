@@ -1,10 +1,10 @@
 import uuid
 from pathlib import Path
 
-from apipi.blobs import MemoryBlobs
 from apipi.config import Settings
 from apipi.pi.artifacts import restore_pi_session
 from apipi.pi.dirs import pi_session_file
+from apipi.store.blobs import MemoryBlobs
 from apipi.store.models import SessionRow
 
 

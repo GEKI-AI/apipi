@@ -2,10 +2,10 @@ import uuid
 
 from httpx import AsyncClient
 
-from apipi.runtime import FAKE_USAGE
+from apipi.gateway.tokens import hash_token
+from apipi.services.runtime import FAKE_USAGE
 from apipi.store.engine import Store
 from apipi.store.repo import get_session_turn
-from apipi.tokens import hash_token
 
 
 def _token(name: str = "t") -> str:

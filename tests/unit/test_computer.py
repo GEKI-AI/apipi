@@ -6,7 +6,7 @@ from apipi.env.computer import (
     tool_payload,
 )
 from apipi.env.hub import EnvironmentHub
-from apipi.runtime import _cwd_and_tools
+from apipi.services.runtime import _cwd_and_tools
 
 
 def test_tool_payload_maps_pi_names() -> None:

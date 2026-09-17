@@ -6,12 +6,12 @@ from typing import cast
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
-from apipi.auth import authenticate
 from apipi.config import Settings
+from apipi.gateway import create_app
+from apipi.gateway.auth import authenticate
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
-from apipi.runtime import FakeHarness
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 

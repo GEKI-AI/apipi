@@ -12,8 +12,8 @@ import websockets
 from starlette.websockets import WebSocket, WebSocketState
 
 from apipi.config import ConfigError, Settings
-from apipi.runtime import PUBLIC_EVENT_TYPES, EventHub, persist_event
-from apipi.sandbox import mem_mib_for_size, sandbox_size_of
+from apipi.pi.sandbox import mem_mib_for_size, sandbox_size_of
+from apipi.services.runtime import PUBLIC_EVENT_TYPES, EventHub, persist_event
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import (
@@ -478,8 +478,8 @@ def worker_ws_url(base: str) -> str:
 
 
 async def run_worker(settings: Settings, *, url: str | None = None) -> None:
-    from apipi.execution import local_execution
     from apipi.store.engine import Store, create_engine
+    from apipi.worker.execution import local_execution
 
     token = settings.worker_token
     if token is None or token == "":

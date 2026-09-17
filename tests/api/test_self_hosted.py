@@ -5,9 +5,9 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_runner import AsgiWebsocket, connect_runner
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.runtime import FakeHarness
+from apipi.gateway import create_app
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 

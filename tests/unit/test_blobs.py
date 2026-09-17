@@ -5,7 +5,8 @@ from typing import Literal
 
 import pytest
 
-from apipi.blobs import (
+from apipi.config import ConfigError, Settings, load_settings
+from apipi.store.blobs import (
     NS_ARTIFACTS,
     NS_FILES,
     NS_SKILLS,
@@ -26,7 +27,6 @@ from apipi.blobs import (
     s3_object_key,
     skill_object_id,
 )
-from apipi.config import ConfigError, Settings, load_settings
 
 
 def _settings(

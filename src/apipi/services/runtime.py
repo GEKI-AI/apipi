@@ -8,18 +8,15 @@ from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apipi.blobs import ObjectStore, object_store
 from apipi.config import CapacityError, Settings
 from apipi.env.computer import Computer, bind_computer, computer_item_events
 from apipi.env.hub import EnvironmentHub
 from apipi.env.setup import SetupError, provision_hosted, session_env_from
-from apipi.errors import ApiError
-from apipi.files import FileService
+from apipi.gateway.errors import ApiError
+from apipi.gateway.metrics import Metrics, observe_turn
+from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.mcp.http import McpConnectError
 from apipi.mcp.stdio import start_mcp_stdio_tools
-from apipi.metrics import Metrics, observe_turn
-from apipi.otel import Tracing, set_span, start_span
-from apipi.payload_export import export_payload
 from apipi.pi.artifacts import (
     ensure_openai_workspace,
     harvest_session,
@@ -35,15 +32,20 @@ from apipi.pi.model_host import (
 from apipi.pi.platform_prompt import compose_instructions
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
-from apipi.sandbox import (
+from apipi.pi.sandbox import (
     image_for_size,
     mem_mib_for_size,
     merge_playwright,
     playwright_attached,
     sandbox_size_of,
 )
-from apipi.skill_store import SkillService
-from apipi.skills import discover_skill_dirs
+from apipi.services.files import FileService
+from apipi.services.payload_export import export_payload
+from apipi.services.skill_store import SkillService
+from apipi.services.skills import discover_skill_dirs
+from apipi.services.usage import add_usage, empty_usage, usage_event, usage_from
+from apipi.services.usage_export import export_usage
+from apipi.store.blobs import ObjectStore, object_store
 from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
 from apipi.store.models import Event, SessionRow, utc_now
@@ -60,8 +62,6 @@ from apipi.store.repo import (
     list_turns,
     update_session,
 )
-from apipi.usage import add_usage, empty_usage, usage_event, usage_from
-from apipi.usage_export import export_usage
 
 log = logging.getLogger("apipi")
 

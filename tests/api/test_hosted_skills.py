@@ -4,7 +4,7 @@ from pathlib import Path
 
 from httpx import AsyncClient
 
-from apipi.skills import discover_skill_dirs
+from apipi.services.skills import discover_skill_dirs
 
 
 def _auth(token: str) -> dict[str, str]:

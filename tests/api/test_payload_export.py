@@ -4,14 +4,14 @@ import uuid
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.payload_export import payload_event, redact_payload
-from apipi.runtime import FakeHarness
+from apipi.gateway import create_app
+from apipi.gateway.tokens import hash_token
+from apipi.services.payload_export import payload_event, redact_payload
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import Item
 from apipi.store.turn_logs import get_turn_log
-from apipi.tokens import hash_token
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -54,7 +54,7 @@ async def test_payload_export_off_does_not_emit(
 ) -> None:
     emitted: list[object] = []
     monkeypatch.setattr(
-        "apipi.usage_export.HttpExporter.emit",
+        "apipi.services.usage_export.HttpExporter.emit",
         lambda self, event: emitted.append(event),
     )
     token = "off-payload"
@@ -96,7 +96,7 @@ async def test_payload_export_sends_items_not_turn_log(
         )
         captured.append(redact_payload(event, secrets))
 
-    monkeypatch.setattr("apipi.runtime.export_payload", record)
+    monkeypatch.setattr("apipi.services.runtime.export_payload", record)
     payload_settings = settings.model_copy(
         update={"payload_export_url": "http://export.test/payloads"}
     )
@@ -130,7 +130,7 @@ async def test_payload_export_failure_does_not_break_turn(
     def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("payload export down")
 
-    monkeypatch.setattr("apipi.runtime.export_payload", boom)
+    monkeypatch.setattr("apipi.services.runtime.export_payload", boom)
     payload_settings = settings.model_copy(
         update={"payload_export_url": "http://export.test/payloads"}
     )

@@ -7,7 +7,6 @@ import sys
 import uvicorn
 
 from apipi import __version__
-from apipi.app import create_app
 from apipi.config import (
     METRICS_OFF,
     METRICS_ON,
@@ -29,7 +28,9 @@ from apipi.config import (
     usage_retention_log,
     usage_store_log,
 )
-from apipi.logutil import configure_logging, uvicorn_log_config
+from apipi.gateway import create_app
+from apipi.gateway.logutil import configure_logging, uvicorn_log_config
+from apipi.gateway.ready import check_ready
 from apipi.pi.install import run_install
 from apipi.pi.isolation import load_isolation
 from apipi.pi.microvm import (
@@ -40,7 +41,6 @@ from apipi.pi.microvm import (
 )
 from apipi.pi.model_host import probe_model_host
 from apipi.pi.probe import probe_run_mode
-from apipi.ready import check_ready
 from apipi.store.migrate import migrate
 
 log = logging.getLogger("apipi")

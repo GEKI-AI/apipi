@@ -8,9 +8,9 @@ from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import select
 
 from apipi.api.sessions import _event_stream
-from apipi.app import create_app
 from apipi.config import Settings
-from apipi.runtime import FAKE_USAGE, PUBLIC_EVENT_TYPES, EventHub, FakeHarness
+from apipi.gateway import create_app
+from apipi.services.runtime import FAKE_USAGE, PUBLIC_EVENT_TYPES, EventHub, FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow
 

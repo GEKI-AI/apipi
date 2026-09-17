@@ -7,7 +7,6 @@ import asyncpg
 from sqlalchemy import text
 
 from apipi import __version__
-from apipi.auth import load_authenticate
 from apipi.config import (
     ConfigError,
     Settings,
@@ -16,7 +15,8 @@ from apipi.config import (
     postgres_url,
     require_run_mode,
 )
-from apipi.logutil import configure_logging
+from apipi.gateway.auth import load_authenticate
+from apipi.gateway.logutil import configure_logging
 from apipi.pi.isolation import load_isolation
 from apipi.pi.model_host import fetch_model_ids, installed_pi_version, require_pinned_pi
 from apipi.pi.probe import probe_run_mode

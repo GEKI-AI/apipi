@@ -120,7 +120,7 @@ def pi_env(
     broker: Any | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    from apipi.broker import DUMMY_KEY
+    from apipi.pi.broker import DUMMY_KEY
     from apipi.pi.model_host import pi_agent_dir
 
     env = os.environ.copy()

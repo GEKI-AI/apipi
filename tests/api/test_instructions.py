@@ -2,10 +2,10 @@ from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
 from apipi.config import Settings
+from apipi.gateway import create_app
 from apipi.pi.platform_prompt import compose_instructions
-from apipi.runtime import FakeHarness
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 

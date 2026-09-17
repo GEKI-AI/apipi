@@ -1,6 +1,6 @@
 from apipi.pi.map import map_pi_event
 from apipi.pi.version import PINNED_PI
-from apipi.runtime import PUBLIC_EVENT_TYPES
+from apipi.services.runtime import PUBLIC_EVENT_TYPES
 
 
 def test_pinned_pi() -> None:

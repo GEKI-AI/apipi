@@ -1,7 +1,7 @@
 from typing import Any
 
 from apipi.config import Settings
-from apipi.errors import ApiError
+from apipi.gateway.errors import ApiError
 
 SANDBOX_SIZES = frozenset({"S", "M", "L"})
 SANDBOX_SIZE_KEY = "apipi.sandbox_size"

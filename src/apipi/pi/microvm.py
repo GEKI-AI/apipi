@@ -311,7 +311,7 @@ def require_microvm(settings: Settings | None = None) -> None:
 
 
 async def probe_microvm(settings: Settings) -> None:
-    from apipi.sandbox import image_for_size
+    from apipi.pi.sandbox import image_for_size
 
     size = settings.sandbox_default_size
     proc = await spawn_microvm_pi(
@@ -1236,7 +1236,7 @@ async def start_microvm(
             allowed_ips=allowed_ips,
             egress_mbit=settings.microvm_egress_mbit,
         )
-        from apipi.broker import start_broker
+        from apipi.pi.broker import start_broker
         from apipi.pi.model_host import models_json_for_base_url
 
         broker = await start_broker(

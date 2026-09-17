@@ -3,7 +3,7 @@ import uuid
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from apipi.http_path import skip_request_path
+from apipi.gateway.http_path import skip_request_path
 
 _HEADER = b"x-request-id"
 _CLIENT_HEADER = b"x-client-request-id"

@@ -4,8 +4,8 @@ from typing import Any, Literal
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
 
-from apipi.auth import not_found
-from apipi.schemas import StrictModel
+from apipi.gateway.auth import not_found
+from apipi.gateway.schemas import StrictModel
 from apipi.store.engine import Store
 from apipi.store.models import Vault, VaultCredential
 from apipi.store.repo import (

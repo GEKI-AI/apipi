@@ -7,7 +7,6 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI
 
-from apipi.agents import AgentService
 from apipi.api.agents import router as agents_router
 from apipi.api.environments import router as environments_router
 from apipi.api.files import router as files_router
@@ -18,35 +17,36 @@ from apipi.api.skills import router as skills_router
 from apipi.api.usage import router as usage_router
 from apipi.api.vaults import router as vaults_router
 from apipi.api.workers import router as workers_router
-from apipi.auth import AuthCache, Authenticate, load_authenticate
-from apipi.blobs import ArtifactAdapter, ArtifactBlobs, ObjectStore, object_store
 from apipi.config import Settings, load_settings
 from apipi.env.hub import EnvironmentHub
-from apipi.errors import register_exception_handlers
-from apipi.execution import LocalExecution, RemoteExecution
-from apipi.files import FileService
-from apipi.logutil import RequestLogMiddleware
-from apipi.metrics import Metrics, mount_metrics
-from apipi.middleware import InstanceMiddleware, MaxBodyMiddleware
-from apipi.models import ModelsService
-from apipi.otel import Tracing
-from apipi.payload_export import load_payload_sinks
+from apipi.gateway.auth import AuthCache, Authenticate, load_authenticate
+from apipi.gateway.errors import register_exception_handlers
+from apipi.gateway.logutil import RequestLogMiddleware
+from apipi.gateway.metrics import Metrics, mount_metrics
+from apipi.gateway.middleware import InstanceMiddleware, MaxBodyMiddleware
+from apipi.gateway.otel import Tracing
+from apipi.gateway.request_id import RequestIdMiddleware
 from apipi.pi.harness import PiHarness
 from apipi.pi.isolation import load_isolation
 from apipi.pi.isolation.base import Isolation
 from apipi.pi.pool import PiPool
-from apipi.request_id import RequestIdMiddleware
-from apipi.runtime import EventHub, FakeHarness
-from apipi.sessions import SessionService
-from apipi.skill_store import SkillService
+from apipi.services.agents import AgentService
+from apipi.services.files import FileService
+from apipi.services.models import ModelsService
+from apipi.services.payload_export import load_payload_sinks
+from apipi.services.runtime import EventHub, FakeHarness
+from apipi.services.sessions import SessionService
+from apipi.services.skill_store import SkillService
+from apipi.services.usage_export import load_usage_sinks
+from apipi.services.usage_service import UsageService
+from apipi.services.vaults import VaultService
+from apipi.store.blobs import ArtifactAdapter, ArtifactBlobs, ObjectStore, object_store
 from apipi.store.engine import Store, create_engine
 from apipi.store.models import Tenant, utc_now
 from apipi.store.repo import ensure_tenant as store_ensure_tenant
 from apipi.store.repo import purge_turn_logs
-from apipi.usage_export import load_usage_sinks
-from apipi.usage_service import UsageService
-from apipi.vaults import VaultService
 from apipi.worker import WorkerHub
+from apipi.worker.execution import LocalExecution, RemoteExecution
 
 
 async def _purge_usage_loop(settings: Settings, store: Store) -> None:

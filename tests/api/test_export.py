@@ -2,7 +2,7 @@ import uuid
 
 from httpx import AsyncClient
 
-from apipi.runtime import PUBLIC_EVENT_TYPES
+from apipi.services.runtime import PUBLIC_EVENT_TYPES
 
 
 def _token(name: str = "t") -> str:

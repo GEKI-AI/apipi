@@ -1,6 +1,6 @@
 from typing import Any
 
-from apipi.usage import usage_from_messages
+from apipi.services.usage import usage_from_messages
 
 
 def _tool_item_type(name: object) -> str:

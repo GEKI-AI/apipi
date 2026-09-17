@@ -1,9 +1,9 @@
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from apipi.errors import error_body
-from apipi.http_path import request_path, skip_request_path
-from apipi.otel import current_trace_id
+from apipi.gateway.errors import error_body
+from apipi.gateway.http_path import request_path, skip_request_path
+from apipi.gateway.otel import current_trace_id
 
 _SKIP_CONTEXT = frozenset({"/health", "/metrics"})
 _CONTEXT_HEADERS = frozenset(

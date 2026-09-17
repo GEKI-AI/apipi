@@ -2,12 +2,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from apipi.auth import not_found
-from apipi.blobs import NS_SKILLS, ObjectStore, skill_object_id
 from apipi.config import Settings
 from apipi.env.setup import SetupError, skill_refs_from
-from apipi.errors import ApiError
-from apipi.skills import inspect_skill_zip, unpack_skill_zip
+from apipi.gateway.auth import not_found
+from apipi.gateway.errors import ApiError
+from apipi.services.skills import inspect_skill_zip, unpack_skill_zip
+from apipi.store.blobs import NS_SKILLS, ObjectStore, skill_object_id
 from apipi.store.engine import Store
 from apipi.store.models import SkillRow
 from apipi.store.repo import create_skill, delete_skill, get_skill, list_skills

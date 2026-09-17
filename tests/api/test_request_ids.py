@@ -3,13 +3,13 @@ from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
-from apipi.auth import authenticate
 from apipi.config import Settings
-from apipi.runtime import FakeHarness
+from apipi.gateway import create_app
+from apipi.gateway.auth import authenticate
+from apipi.gateway.tokens import hash_token
+from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.turn_logs import get_turn_log
-from apipi.tokens import hash_token
 
 
 def _auth(token: str) -> dict[str, str]:

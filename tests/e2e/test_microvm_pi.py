@@ -10,8 +10,8 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from apipi.app import create_app
 from apipi.config import ConfigError, Settings
+from apipi.gateway import create_app
 from apipi.pi.microvm import microvm_images, require_microvm
 from apipi.pi.probe import probe_run_mode
 from apipi.store.engine import Store

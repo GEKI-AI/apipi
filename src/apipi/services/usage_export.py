@@ -7,7 +7,7 @@ from typing import Any, Protocol
 import httpx
 
 from apipi.config import ConfigError, Settings
-from apipi.metrics import Metrics
+from apipi.gateway.metrics import Metrics
 
 log = logging.getLogger("apipi")
 

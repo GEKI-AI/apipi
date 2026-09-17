@@ -3,16 +3,16 @@ from typing import cast
 
 import pytest
 
-from apipi.app import create_app
 from apipi.config import Settings
 from apipi.env.hub import EnvironmentHub
-from apipi.errors import ApiError
-from apipi.execution import LocalExecution
+from apipi.gateway import create_app
+from apipi.gateway.errors import ApiError
 from apipi.pi.isolation import load_isolation
 from apipi.pi.pool import PiPool
 from apipi.pi.proc import PiProc
-from apipi.runtime import EventHub, FakeHarness
+from apipi.services.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store
+from apipi.worker.execution import LocalExecution
 
 
 class _Alive:

@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 
 from apipi.config import ConfigError, Settings
-from apipi.errors import ApiError
+from apipi.gateway.errors import ApiError
 from apipi.pi.dirs import sessions_root
 from apipi.pi.version import PINNED_PI
 

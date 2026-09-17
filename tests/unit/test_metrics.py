@@ -1,6 +1,6 @@
 from tests.support.prom import metric_line
 
-from apipi.metrics import Metrics
+from apipi.gateway.metrics import Metrics
 
 
 def test_observe_turn_series_have_no_prompt_text() -> None:
