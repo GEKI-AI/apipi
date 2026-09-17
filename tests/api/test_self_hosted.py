@@ -37,8 +37,7 @@ async def test_self_hosted_create_returns_id_and_key(
     settings: Settings, store: Store
 ) -> None:
     harness = FakeHarness()
-    async for app, client in _app_client(settings, store, harness):
-        del app
+    async for _app, client in _app_client(settings, store, harness):
         token = "t"
         agent_id = await _agent(client, token)
         created = await client.post(

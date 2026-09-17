@@ -40,8 +40,7 @@ async def test_verbose_gateway_pattern(settings: Settings, store: Store) -> None
     gateway = Gateway.create(settings, store=store, harness=FakeHarness())
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        del app
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await gateway.startup()
         try:
             yield
@@ -70,8 +69,7 @@ async def test_authenticate_inject(settings: Settings, store: Store) -> None:
     )
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        del app
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await gateway.startup()
         try:
             yield
