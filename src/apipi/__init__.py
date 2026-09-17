@@ -9,6 +9,7 @@ from apipi.auth import Authenticate, AuthIdentity, AuthReject
 from apipi.config import Settings, extend_settings
 from apipi.gateway import Gateway, create_app
 from apipi.runtime import EventHub
+from apipi.sessions import SessionService
 from apipi.store.engine import Store
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "Authenticate",
     "EventHub",
     "Gateway",
+    "SessionService",
     "Settings",
     "Store",
     "__version__",

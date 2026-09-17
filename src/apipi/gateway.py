@@ -1,7 +1,9 @@
 import asyncio
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import APIRouter, FastAPI
 from fastapi.responses import JSONResponse
@@ -31,6 +33,7 @@ from apipi.pi.isolation.base import Isolation
 from apipi.pi.pool import PiPool
 from apipi.request_id import RequestIdMiddleware
 from apipi.runtime import EventHub, FakeHarness
+from apipi.sessions import SessionService
 from apipi.store.engine import Store, create_engine
 from apipi.store.models import utc_now
 from apipi.store.repo import purge_turn_logs
@@ -214,6 +217,19 @@ class Gateway:
         self.blobs = blobs
         self.metrics = metrics
         self.tracing = tracing
+        self.mcp_http: dict[uuid.UUID, Any] = {}
+        self.mcp_stdio: dict[uuid.UUID, Any] = {}
+        self.sessions = SessionService(
+            settings=settings,
+            store=store,
+            event_hub=event_hub,
+            env_hub=env_hub,
+            execution=execution,
+            blobs=blobs,
+            tracing=tracing,
+            mcp_http=self.mcp_http,
+            mcp_stdio=self.mcp_stdio,
+        )
         self.routers = GatewayRouters(
             sessions=sessions_router,
             agents=agents_router,
@@ -327,8 +343,9 @@ class Gateway:
         app.state.metrics = self.metrics
         app.state.tracing = self.tracing
         app.state.store = self.store
-        app.state.mcp_http = {}
-        app.state.mcp_stdio = {}
+        app.state.mcp_http = self.mcp_http
+        app.state.mcp_stdio = self.mcp_stdio
+        app.state.sessions = self.sessions
         app.state.authenticate = self.authenticate
         app.state.auth_cache = self._auth_cache
         app.state.usage_sinks = self._usage_sinks
