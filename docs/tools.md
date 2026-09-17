@@ -55,9 +55,15 @@ bearers. Prefer a [vault](api.md#vaults) (`static_bearer` bound to
 `mcp_server_url`, attach `vault_ids` on the session). Tool `headers`
 with `${ENV}` still expand on the host. Stdio servers start next to
 Pi: on the host in `none` mode, and inside the same guest in
-`microvm` mode. Optional `transport.cwd` is the process working
+`microvm` mode. Pi does not speak MCP by itself. ApiPi loads a Pi
+extension that starts each stdio server, lists its tools, and
+registers them on Pi as `mcp_<server_label>_<tool>`. If a listed
+stdio server cannot start, Pi exits instead of running without those
+tools. Optional `transport.cwd` is the process working
 directory. Stdio credentials stay in environment variables, not in
-git.
+git. Bash that tries to install Playwright or browser binaries is
+blocked. A bash call with no `timeout` is capped at 120 seconds so a
+stuck install cannot hold the turn until `APIPI_TURN_TIMEOUT`.
 
 Search goes through MCP.
 
@@ -77,10 +83,13 @@ Sandbox size `L` on isolation `microvm` attaches that server for you
 (system Chromium in the browser rootfs). You do not need to list it on
 the agent. A caller-supplied Playwright MCP tool is not duplicated.
 Turn auto-inject off with `APIPI_SANDBOX_AUTO_PLAYWRIGHT=false` if you
-want L RAM and rootfs but manual MCP only.
+want L RAM and rootfs but manual MCP only. The platform prompt names
+the sandbox size and, on `L`, tells the model to use MCP tools and
+not to install browsers. Save screenshots under `outputs/`.
 
 The browser follows Pi (`none` or `microvm`). Inside a `microvm`,
-Chromium can use its own sandbox in the guest.
+Chromium can use its own sandbox in the guest. A small client is
+`examples/browser_screenshot.py`.
 
 ## Skills
 

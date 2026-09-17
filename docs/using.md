@@ -29,7 +29,8 @@ uv run --with openai python examples/openai_sdk.py
 ```
 
 Isolation `none` is enough for this tutorial. Production usually uses
-`APIPI_RUN_MODE=microvm`.
+`APIPI_RUN_MODE=microvm`. A size `L` browser capture is
+`examples/browser_screenshot.py`.
 
 ## 1. Run a task
 

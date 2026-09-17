@@ -7,6 +7,7 @@ from the environment, not from these files.
 | File | What |
 | --- | --- |
 | [openai_sdk.py](openai_sdk.py) | Official OpenAI Python client against this API |
+| [browser_screenshot.py](browser_screenshot.py) | Size `L` session: open a page, screenshot under `outputs/` |
 | [self_hosted_runner.py](self_hosted_runner.py) | Local directory as a `self_hosted` computer |
 | [playground/](playground/) | Vite React playground (agents, sessions, turns, artifacts) |
 | [apipi.toml](apipi.toml) | Gateway settings file |
@@ -63,6 +64,26 @@ uv run --with openai python examples/openai_sdk.py
 
 The product [Using the API](../docs/using.md) page walks through the same
 client: run a task, follow progress, continue, and delete.
+
+## Browser screenshot
+
+[browser_screenshot.py](browser_screenshot.py) creates a size `L`
+`openai_hosted` session and asks the agent to open a page with
+Playwright MCP, print the title, and save `outputs/page.png`. Isolation
+must be `microvm` with the browser rootfs. The worker (or combined
+serve) needs `APIPI_RUN_MODE=microvm`. Default sandbox size can stay
+`S`; this script sets `environment.sandbox_size` to `L`.
+
+```
+export OPENAI_API_KEY=dev-token
+export OPENAI_BASE_URL=http://localhost:8000/v1
+export APIPI_MODEL=deepseek-v4-flash-0731
+uv run --with openai python examples/browser_screenshot.py
+```
+
+`APIPI_PAGE_URL` changes the target (default `https://example.com`).
+`APIPI_MODEL` must exist on the model host. The stream prints SSE
+lines and stops after the first turn outcome.
 
 ## self_hosted runner
 

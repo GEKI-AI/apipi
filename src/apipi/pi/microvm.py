@@ -30,6 +30,11 @@ from apipi.env.setup import (
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.pi.dirs import PI_SESSION_REL, pi_session_file
+from apipi.pi.extension import (
+    GUEST_MCP_EXTENSION,
+    MCP_EXTENSION_REL,
+    mcp_extension_source,
+)
 from apipi.pi.model_host import pi_agent_dir
 from apipi.pi.proc import PiProc, pi_command_args, pi_env
 
@@ -561,6 +566,7 @@ def write_workspace_image(
         _add_bytes(tar, ".apipi/guest.sh", guest_sh, mode=0o755)
         if models_json is not None:
             _add_bytes(tar, ".pi/agent/models.json", models_json, mode=0o644)
+        _add_bytes(tar, MCP_EXTENSION_REL, mcp_extension_source(), mode=0o644)
         _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
         if shell:
             _add_bytes(tar, ".apipi/shell", b"", mode=0o644)
@@ -1265,6 +1271,7 @@ async def start_microvm(
                 model=model,
                 instructions=instructions,
                 session_file=PI_SESSION_REL if cwd else None,
+                extension=GUEST_MCP_EXTENSION,
             ),
             net=net,
             extra_dirs=extra_dirs,

@@ -1176,7 +1176,12 @@ async def run_turn(
                 await fail_session(db, hub, tenant_id, session_id, str(exc))
             return
         browser = playwright_attached(mcp_stdio)
-        composed = compose_instructions(settings, instructions, browser=browser)
+        composed = compose_instructions(
+            settings,
+            instructions,
+            browser=browser,
+            sandbox_size=sandbox_size,
+        )
         log.info(
             "turn start",
             extra={
@@ -1484,7 +1489,12 @@ async def continue_turn(
                 await fail_session(db, hub, tenant_id, session_id, str(exc))
             return
         browser = playwright_attached(mcp_stdio)
-        composed = compose_instructions(settings, instructions, browser=browser)
+        composed = compose_instructions(
+            settings,
+            instructions,
+            browser=browser,
+            sandbox_size=sandbox_size,
+        )
         with start_span(
             tracing,
             "turn",

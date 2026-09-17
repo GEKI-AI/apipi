@@ -202,7 +202,10 @@ that runs Pi (combined `apipi serve` or `apipi worker`).
 The built-in main prompt tells the model that hosted cwd is
 `/workspace`, durable files go under `outputs/` only, `none` has no
 computer, scratch is deleted with the sandbox, and it must not invent
-unavailable APIs.
+unavailable APIs. The gateway also appends the resolved sandbox size
+(`S` / `M` / `L`). Size `L` with Playwright attached adds a browser
+block: system Chromium is already there, use MCP tools, do not
+install browsers.
 
 ```toml
 [pi]

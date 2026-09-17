@@ -38,7 +38,9 @@ async def test_saved_agent_instructions_reach_harness(
             },
         )
         assert created.status_code == 200
-        assert harness.instructions == compose_instructions(settings, "be brief")
+        assert harness.instructions == compose_instructions(
+            settings, "be brief", sandbox_size="S"
+        )
 
 
 async def test_inline_instructions_kept_for_follow_up(
@@ -64,7 +66,7 @@ async def test_inline_instructions_kept_for_follow_up(
             },
         )
         assert created.status_code == 200
-        expected = compose_instructions(settings, "write tests")
+        expected = compose_instructions(settings, "write tests", sandbox_size="S")
         assert harness.instructions == expected
         session_id = created.json()["id"]
         harness.instructions = None
@@ -96,7 +98,9 @@ async def test_empty_agent_instructions_keep_platform_prompt(
             },
         )
         assert created.status_code == 200
-        assert harness.instructions == compose_instructions(settings, "")
+        assert harness.instructions == compose_instructions(
+            settings, "", sandbox_size="S"
+        )
 
 
 async def test_omitted_agent_instructions_keep_platform_prompt(
@@ -118,7 +122,9 @@ async def test_omitted_agent_instructions_keep_platform_prompt(
             },
         )
         assert created.status_code == 200
-        assert harness.instructions == compose_instructions(settings, None)
+        assert harness.instructions == compose_instructions(
+            settings, None, sandbox_size="S"
+        )
 
 
 async def test_empty_main_platform_prompt_keeps_additional(
@@ -150,7 +156,9 @@ async def test_empty_main_platform_prompt_keeps_additional(
             },
         )
         assert created.status_code == 200
-        assert harness.instructions == compose_instructions(settings, "be brief")
+        assert harness.instructions == compose_instructions(
+            settings, "be brief", sandbox_size="S"
+        )
 
 
 async def test_override_main_platform_prompt(store: Store, tmp_path: Path) -> None:
@@ -175,4 +183,6 @@ async def test_override_main_platform_prompt(store: Store, tmp_path: Path) -> No
             },
         )
         assert created.status_code == 200
-        assert harness.instructions == "Use outputs/ only."
+        assert harness.instructions == compose_instructions(
+            settings, None, sandbox_size="S"
+        )

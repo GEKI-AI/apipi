@@ -93,9 +93,10 @@ On `microvm`, size `L` injects a Playwright stdio MCP server
 tool (`server_label` `playwright` or the same package), that tool is
 kept and nothing is duplicated. Set `[sandbox.browser].auto_playwright
 = false` to keep L RAM and rootfs but attach MCP yourself. A Playwright
-process that exits immediately fails the guest instead of booting L
-without browser tools. The platform prompt mentions Chromium only when
-those tools are attached.
+process that cannot start makes Pi exit instead of running L without
+browser tools. The platform prompt always names the sandbox size. It
+mentions Chromium and MCP tool names only when those tools are
+attached, and it tells the model not to install Playwright or browsers.
 
 ### Packages, files, env, network, and setup commands
 

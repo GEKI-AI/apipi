@@ -174,6 +174,7 @@ def pi_command_args(
     model: str | None = None,
     instructions: str | None = None,
     session_file: str | None = None,
+    extension: str | None = None,
 ) -> list[str]:
     from apipi.pi.model_host import PI_PROVIDER
 
@@ -195,6 +196,8 @@ def pi_command_args(
         args.append("--no-skills")
         for path in skill_dirs:
             args.extend(["--skill", path])
+    if extension:
+        args.extend(["--extension", extension])
     return args
 
 
