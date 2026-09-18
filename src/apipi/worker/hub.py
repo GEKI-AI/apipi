@@ -14,6 +14,12 @@ from starlette.websockets import WebSocket, WebSocketState
 from apipi.config import ConfigError, Settings
 from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
+from apipi.gateway.otel import (
+    Tracing,
+    attach_traceparent,
+    detach_traceparent,
+    start_span,
+)
 from apipi.services.runtime import PUBLIC_EVENT_TYPES, EventHub, persist_event
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
@@ -48,9 +54,16 @@ class WorkerConnection:
 
 
 class WorkerHub:
-    def __init__(self, settings: Settings, *, metrics: Any | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        metrics: Any | None = None,
+        tracing: Tracing | None = None,
+    ) -> None:
         self.settings = settings
         self.metrics = metrics
+        self.tracing = tracing
         self._conns: dict[uuid.UUID, WorkerConnection] = {}
         self._unacked: dict[uuid.UUID, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
@@ -132,6 +145,32 @@ class WorkerHub:
         if op not in COMMAND_OPS:
             raise ValueError(op)
         started = time.monotonic()
+        request_id = payload.get("request_id") if isinstance(payload, dict) else None
+        with start_span(
+            self.tracing,
+            "worker.assign",
+            session_id=session_id,
+            request_id=request_id,
+        ):
+            return await self._acquire(
+                store,
+                tenant_id,
+                session_id,
+                op=op,
+                payload=payload,
+                started=started,
+            )
+
+    async def _acquire(
+        self,
+        store: Store,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        op: str,
+        payload: dict[str, Any] | None,
+        started: float,
+    ) -> dict[str, Any] | None:
         async with store.session() as db:
             session = await get_session(db, tenant_id, session_id)
         session_mem = mem_mib_for_size(
@@ -453,6 +492,8 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
     request_id = request_id if isinstance(request_id, str) else None
     api_key = api_key if isinstance(api_key, str) else None
     key_id = key_id if isinstance(key_id, str) else None
+    raw_parent = payload.get("traceparent")
+    token = attach_traceparent(raw_parent if isinstance(raw_parent, str) else None)
     try:
         await _run_command(
             execution,
@@ -491,6 +532,8 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
             request_id=request_id,
         )
         raise
+    finally:
+        detach_traceparent(token)
 
 
 async def _run_command(

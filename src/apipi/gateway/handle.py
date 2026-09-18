@@ -189,10 +189,11 @@ class Gateway:
             resolved_tracing = Tracing(endpoint=resolved.otel_endpoint)
         else:
             resolved_tracing = None
+        resolved_pool.tracing = resolved_tracing
         resolved_workers = (
             workers
             if workers is not None
-            else WorkerHub(resolved, metrics=resolved_metrics)
+            else WorkerHub(resolved, metrics=resolved_metrics, tracing=resolved_tracing)
         )
         if execution is not None:
             resolved_execution = execution

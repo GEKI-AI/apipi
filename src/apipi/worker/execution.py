@@ -8,7 +8,7 @@ from apipi.env.hub import EnvironmentHub
 from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics
-from apipi.gateway.otel import Tracing
+from apipi.gateway.otel import Tracing, inject_traceparent
 from apipi.mcp.stdio import McpStdioServer
 from apipi.services.runtime import (
     EventHub,
@@ -282,7 +282,7 @@ def local_execution(
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
 ) -> LocalExecution:
-    pool = PiPool(settings)
+    pool = PiPool(settings, tracing=tracing)
     isolation = load_isolation(settings.run_mode)
     resolved_harness = harness if harness is not None else PiHarness(pool)
     return LocalExecution(
@@ -365,6 +365,9 @@ class RemoteExecution:
             "key_id": key_id,
             **extra,
         }
+        parent = inject_traceparent()
+        if parent is not None:
+            payload["traceparent"] = parent
         return payload
 
     async def _wait(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> None:

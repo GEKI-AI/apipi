@@ -218,6 +218,89 @@ async def test_remote_turn_records_metrics_and_spans_on_worker(
         tracing.shutdown()
 
 
+async def test_remote_turn_shares_trace_and_assign_span(
+    settings: Settings, store: Store
+) -> None:
+    api_exporter = InMemorySpanExporter()
+    api_tracing = Tracing(exporter=api_exporter)
+    worker_exporter = InMemorySpanExporter()
+    worker_tracing = Tracing(exporter=worker_exporter)
+    api_settings = _api_settings(settings)
+    app = create_app(
+        api_settings, store=store, harness=FakeHarness(), tracing=api_tracing
+    )
+    local = local_execution(
+        api_settings,
+        store=store,
+        harness=FakeHarness(),
+        hub=app.state.event_hub,
+        env_hub=app.state.env_hub,
+        tracing=worker_tracing,
+    )
+    token = "t"
+    worker = FakeWorker(app, "worker-secret")
+    ready = asyncio.Event()
+
+    async def pump() -> None:
+        hello = await worker.connect(capacity=2)
+        assert hello.get("ok") is True
+        ready.set()
+        while True:
+            message = await worker.receive_json()
+            if message.get("type") != "command":
+                continue
+            await worker.send_json(
+                {
+                    "type": "lease.ack",
+                    "id": message.get("id"),
+                    "lease_id": message.get("lease_id"),
+                }
+            )
+            from apipi.worker.hub import dispatch_command
+
+            await dispatch_command(local, message)
+
+    task = asyncio.create_task(pump())
+    await ready.wait()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            agent = await client.post(
+                "/v1/agents",
+                headers=_auth(token),
+                json={"name": "bot", "model": "test"},
+            )
+            created = await client.post(
+                "/v1/agents/sessions",
+                headers=_auth(token),
+                json={
+                    "agent_id": agent.json()["id"],
+                    "environment": {"type": "none"},
+                    "input": "hello",
+                },
+            )
+            assert created.status_code == 200
+            api_spans = list(api_exporter.get_finished_spans())
+            worker_spans = list(worker_exporter.get_finished_spans())
+            api_names = {span.name for span in api_spans}
+            worker_names = {span.name for span in worker_spans}
+            assert api_names >= {"session", "worker.assign"}
+            assert worker_names >= {"turn", "model"}
+            session = next(span for span in api_spans if span.name == "session")
+            assign = next(span for span in api_spans if span.name == "worker.assign")
+            turn = next(span for span in worker_spans if span.name == "turn")
+            assert assign.parent is not None
+            assert assign.parent.span_id == session.context.span_id
+            assert turn.context.trace_id == session.context.trace_id
+    finally:
+        task.cancel()
+        await worker.close()
+        await local.close()
+        api_tracing.shutdown()
+        worker_tracing.shutdown()
+
+
 def test_worker_observability_follows_settings(settings: Settings) -> None:
     off_metrics, off_tracing = worker_observability(settings)
     assert off_metrics is None

@@ -91,6 +91,35 @@ def test_create_app_otlp_when_endpoint_set(tmp_path: Path, store: Store) -> None
         app.state.tracing.shutdown()
 
 
+async def test_traceparent_parents_session_span(
+    otel_client: AsyncClient, otel_exporter: InMemorySpanExporter
+) -> None:
+    trace_id = "0af7651916cd43dd8448eb211c80319c"
+    token = "otel-parent"
+    agent = await otel_client.post(
+        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+    )
+    created = await otel_client.post(
+        "/v1/agents/sessions",
+        headers={
+            **_auth(token),
+            "traceparent": f"00-{trace_id}-b7ad6b7169203331-01",
+        },
+        json={
+            "agent_id": agent.json()["id"],
+            "environment": {"type": "none"},
+            "input": "hello",
+        },
+    )
+    assert created.status_code == 200
+    assert created.headers["x-trace-id"] == trace_id
+    spans = list(otel_exporter.get_finished_spans())
+    session = next(span for span in spans if span.name == "session")
+    assert session.context.trace_id == int(trace_id, 16)
+    assert session.parent is not None
+    assert session.parent.span_id == int("b7ad6b7169203331", 16)
+
+
 async def test_completed_turn_spans_link_ids_without_message_text(
     otel_client: AsyncClient, otel_exporter: InMemorySpanExporter
 ) -> None:

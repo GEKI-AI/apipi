@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 
 from apipi.config import CapacityError, Settings
 from apipi.gateway.logutil import log_event
+from apipi.gateway.otel import Tracing, start_span
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer, stop_mcp_stdio
 from apipi.worker.pi.proc import PiProc, spawn_pi
@@ -15,9 +16,16 @@ log = logging.getLogger("apipi.worker.pi")
 
 
 class PiPool:
-    def __init__(self, settings: Settings, *, on_kill: OnKill | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        on_kill: OnKill | None = None,
+        tracing: Tracing | None = None,
+    ) -> None:
         self.settings = settings
         self.on_kill = on_kill
+        self.tracing = tracing
         self._procs: dict[uuid.UUID, PiProc] = {}
         self._tenants: dict[uuid.UUID, uuid.UUID] = {}
         self._stdio: dict[uuid.UUID, list[McpStdioServer]] = {}
@@ -61,61 +69,67 @@ class PiPool:
             if proc is not None and proc.alive and not same:
                 await self.kill(session_id)
                 proc = None
-            if proc is None or not proc.alive:
-                code = self.capacity_code(
-                    session_id, tenant_id, session_mem_mib=session_mem
-                )
-                if code is not None:
-                    message = (
-                        "Too many live sessions for this tenant"
-                        if code == "capacity_tenant"
-                        else "Too many live sessions"
+            reused = proc is not None and proc.alive
+            with start_span(
+                self.tracing,
+                "sandbox.attach" if reused else "sandbox.boot",
+                session_id=session_id,
+            ):
+                if proc is None or not proc.alive:
+                    code = self.capacity_code(
+                        session_id, tenant_id, session_mem_mib=session_mem
                     )
-                    log_event(
-                        log,
-                        logging.WARNING,
-                        "worker assign failed",
-                        event="worker.assign.failed",
-                        error_code=code,
-                        tenant_id=tenant_id,
-                        session_id=session_id,
+                    if code is not None:
+                        message = (
+                            "Too many live sessions for this tenant"
+                            if code == "capacity_tenant"
+                            else "Too many live sessions"
+                        )
+                        log_event(
+                            log,
+                            logging.WARNING,
+                            "worker assign failed",
+                            event="worker.assign.failed",
+                            error_code=code,
+                            tenant_id=tenant_id,
+                            session_id=session_id,
+                        )
+                        raise CapacityError(message, code=code)
+                    log.info(
+                        "pi spawn",
+                        extra={
+                            "session_id": str(session_id),
+                            "run_mode": self.settings.run_mode,
+                        },
                     )
-                    raise CapacityError(message, code=code)
-                log.info(
-                    "pi spawn",
-                    extra={
-                        "session_id": str(session_id),
-                        "run_mode": self.settings.run_mode,
-                    },
-                )
-                proc = await spawn_pi(
-                    self.settings,
-                    cwd=cwd,
-                    tools=tools,
-                    mcp_http=mcp_http,
-                    mcp_stdio=mcp_stdio,
-                    skill_dirs=skill_dirs,
-                    model=model,
-                    instructions=instructions,
-                    api_key=api_key,
-                    mem_mib=mem_mib,
-                    image=image,
-                    extra_env=extra_env,
-                )
-                log.info("pi ready", extra={"session_id": str(session_id)})
-                self._procs[session_id] = proc
-                self._spawn_tools[session_id] = tools
-                self._models[session_id] = model
-                self._instructions[session_id] = instructions
-                self._key_ids[session_id] = key_id
-                self._env_types[session_id] = env_type
-                self._mem[session_id] = session_mem
-                if tenant_id is not None:
-                    self._tenants[session_id] = tenant_id
-            elif env_type is not None:
-                self._env_types[session_id] = env_type
-            self._last[session_id] = time.monotonic()
-            return proc
+                    proc = await spawn_pi(
+                        self.settings,
+                        cwd=cwd,
+                        tools=tools,
+                        mcp_http=mcp_http,
+                        mcp_stdio=mcp_stdio,
+                        skill_dirs=skill_dirs,
+                        model=model,
+                        instructions=instructions,
+                        api_key=api_key,
+                        mem_mib=mem_mib,
+                        image=image,
+                        extra_env=extra_env,
+                    )
+                    log.info("pi ready", extra={"session_id": str(session_id)})
+                    self._procs[session_id] = proc
+                    self._spawn_tools[session_id] = tools
+                    self._models[session_id] = model
+                    self._instructions[session_id] = instructions
+                    self._key_ids[session_id] = key_id
+                    self._env_types[session_id] = env_type
+                    self._mem[session_id] = session_mem
+                    if tenant_id is not None:
+                        self._tenants[session_id] = tenant_id
+                elif env_type is not None:
+                    self._env_types[session_id] = env_type
+                self._last[session_id] = time.monotonic()
+                return proc
 
     def live(self) -> int:
         return sum(1 for proc in self._procs.values() if proc.alive)

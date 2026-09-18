@@ -246,15 +246,29 @@ It does not double-count turns.
 ## OpenTelemetry
 
 Export OTLP/HTTP traces when `APIPI_OTEL_ENDPOINT` is set. `/v1/traces`
-is appended when missing. Spans exist for session, turn, and the
-upstream model call. Attributes: request id, session, turn, model,
-status, token counts, tool names. Not message text. Not a warehouse
-for agent usage history.
+is appended when missing. Spans are sparse and wait-focused. Attributes:
+request id, session, turn, model, status, token counts, tool names. Not
+message text. Not a warehouse for agent usage history.
 
-Set `APIPI_OTEL_ENDPOINT` on the process that does the wait. Combined
-`apipi serve` exports session, turn, and model spans from that process.
-In split mode, the API exports the `session` span; set the endpoint on
-the worker for `turn` and `model` spans.
+| Span | What wait |
+| --- | --- |
+| `session` | Attach and the request that owns the turn |
+| `worker.assign` | Lease / capacity wait before work starts |
+| `sandbox.boot` | Cold microVM or Pi spawn |
+| `sandbox.attach` | Reuse an already live sandbox |
+| `turn` | End-to-end user wait for that turn |
+| `model` | Upstream model call |
+
+Inbound `traceparent` is honored and becomes the parent of `session`.
+Responses still echo `X-Trace-Id`. Combined `apipi serve` emits the
+full tree in one process. In split mode the API emits `session` and
+`worker.assign`; set `APIPI_OTEL_ENDPOINT` on the worker for
+`sandbox.*`, `turn`, and `model`. The worker command carries
+`traceparent` so those spans stay on the same trace.
+
+Use traces to see where time went on a slow turn. Use Prometheus for
+rates and saturation. Use JSON logs for error codes and alerts. Use
+the usage export for who used how many tokens.
 
 ## Config
 

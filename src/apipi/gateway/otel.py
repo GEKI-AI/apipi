@@ -3,7 +3,9 @@ from contextlib import nullcontext
 from typing import Any
 from uuid import UUID
 
+from opentelemetry.context import attach, detach
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.propagate import extract, inject
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -128,3 +130,22 @@ def set_span(
     if not isinstance(tracing, Tracing):
         return
     tracing.set(span, **attrs)
+
+
+def attach_traceparent(value: str | None) -> Any:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return attach(extract({"traceparent": value.strip()}))
+
+
+def detach_traceparent(token: Any) -> None:
+    if token is None:
+        return
+    detach(token)
+
+
+def inject_traceparent() -> str | None:
+    carrier: dict[str, str] = {}
+    inject(carrier)
+    value = carrier.get("traceparent")
+    return value if value else None

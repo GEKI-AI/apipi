@@ -4,8 +4,10 @@ from datetime import timedelta
 from typing import Any, cast
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from apipi.config import Settings
+from apipi.gateway.otel import Tracing
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
@@ -176,6 +178,54 @@ def test_hold_and_release() -> None:
     pool.release(sid)
     assert not pool.held(sid)
     pool.release(sid)
+
+
+async def test_get_emits_sandbox_attach_span() -> None:
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(exporter=exporter)
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+        ),
+        tracing=tracing,
+    )
+    sid = uuid.uuid4()
+    pool._procs[sid] = cast(PiProc, _Alive())
+    pool._spawn_tools[sid] = True
+    try:
+        await pool.get(sid, cwd=None, tools=True)
+        names = [span.name for span in exporter.get_finished_spans()]
+        assert names == ["sandbox.attach"]
+        assert dict(exporter.get_finished_spans()[0].attributes or {})[
+            "session_id"
+        ] == str(sid)
+    finally:
+        tracing.shutdown()
+
+
+async def test_get_emits_sandbox_boot_span(monkeypatch: pytest.MonkeyPatch) -> None:
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(exporter=exporter)
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+        ),
+        tracing=tracing,
+    )
+
+    async def _spawn(*_args: object, **_kwargs: object) -> PiProc:
+        return cast(PiProc, _Alive())
+
+    monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", _spawn)
+    sid = uuid.uuid4()
+    try:
+        await pool.get(sid, cwd=None, tools=True)
+        names = [span.name for span in exporter.get_finished_spans()]
+        assert names == ["sandbox.boot"]
+    finally:
+        tracing.shutdown()
 
 
 async def test_hosted_reap_kills_after_sandbox_ttl() -> None:
