@@ -41,11 +41,14 @@ auth, then `await gateway.ensure_tenant(tenant_id)` before
 `sessions.create`.
 
 A plugin returns `tenant_id` and `key_id`, or a typed reject. It may
-set its own `tenant_id` (many keys to one tenant). `key_id` is for
-logs and metrics. Queries stay tenant-scoped. The plugin must
-not expect the gateway to persist the raw bearer. After a successful
-callback, HTTP responses include `X-Tenant-Id` and `X-User-Id`
-(`key_id`). Incoming values of those headers are not trusted for auth.
+set its own `tenant_id` (many keys to one tenant). Optional `user_id`
+is the SaaS user when the plugin knows it. ApiPi does not invent
+`user_id` from `key_id`. `key_id` is for logs. Queries stay
+tenant-scoped. The plugin must not expect the gateway to persist the
+raw bearer. After a successful callback, HTTP responses include
+`X-Tenant-Id` and `X-User-Id` (`key_id`, not `user_id`). Incoming
+values of those headers are not trusted for auth. Usage events and
+the usage export include `user_id` when the plugin set it.
 
 ### Reject
 

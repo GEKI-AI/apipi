@@ -110,6 +110,7 @@ def test_usage_event_has_no_message_text() -> None:
         request_id="req-1",
         error_code=None,
         created_at=datetime(2026, 1, 2, tzinfo=UTC),
+        user_id="user-9",
     )
     blob = str(event)
     assert "hello" not in blob
@@ -117,5 +118,6 @@ def test_usage_event_has_no_message_text() -> None:
     assert event["tenant_id"] == str(tenant_id)
     assert event["prompt_tokens"] == 1
     assert event["environment_type"] == "none"
+    assert event["user_id"] == "user-9"
     assert "content" not in event
     assert "prompt" not in event

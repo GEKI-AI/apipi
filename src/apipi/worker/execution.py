@@ -59,6 +59,7 @@ class Execution(Protocol):
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
+        user_id: str | None = None,
     ) -> None: ...
 
     async def continue_turn(
@@ -76,6 +77,7 @@ class Execution(Protocol):
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
+        user_id: str | None = None,
     ) -> None: ...
 
     async def cancel(self, session_id: uuid.UUID, *, status: str) -> None: ...
@@ -166,6 +168,7 @@ class LocalExecution:
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         store = self.store
         assert store is not None
@@ -187,6 +190,7 @@ class LocalExecution:
             pool=self.pool,
             api_key=api_key,
             key_id=key_id,
+            user_id=user_id,
             objects=self.objects,
         )
 
@@ -205,6 +209,7 @@ class LocalExecution:
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         store = self.store
         assert store is not None
@@ -230,6 +235,7 @@ class LocalExecution:
             pool=self.pool,
             api_key=api_key,
             key_id=key_id,
+            user_id=user_id,
         )
 
     async def cancel(self, session_id: uuid.UUID, *, status: str) -> None:
@@ -447,12 +453,14 @@ class RemoteExecution:
         request_id: str | None,
         api_key: str | None,
         key_id: str | None,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             "tenant_id": str(tenant_id),
             "request_id": request_id,
             "api_key": api_key,
             "key_id": key_id,
+            "user_id": user_id,
             **extra,
         }
         parent = inject_traceparent()
@@ -493,6 +501,7 @@ class RemoteExecution:
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         del mcp_http, mcp_stdio
         store = self.store
@@ -508,6 +517,7 @@ class RemoteExecution:
                 request_id=request_id,
                 api_key=api_key,
                 key_id=key_id,
+                user_id=user_id,
             ),
         )
         if sent is None:
@@ -522,6 +532,7 @@ class RemoteExecution:
                     request_id=request_id,
                     api_key=api_key,
                     key_id=key_id,
+                    user_id=user_id,
                 ),
             )
         if sent is None:
@@ -543,6 +554,7 @@ class RemoteExecution:
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         del mcp_http, mcp_stdio
         store = self.store
@@ -564,6 +576,7 @@ class RemoteExecution:
                 request_id=request_id,
                 api_key=api_key,
                 key_id=key_id,
+                user_id=user_id,
             ),
         )
         if sent is None:

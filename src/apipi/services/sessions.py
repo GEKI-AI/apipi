@@ -249,6 +249,7 @@ class SessionService:
         metadata: dict[str, Any] | None = None,
         vault_ids: list[uuid.UUID] | None = None,
         key_id: str = "",
+        user_id: str | None = None,
         request_id: str | None = None,
         api_key: str | None = None,
     ) -> dict[str, Any]:
@@ -420,6 +421,7 @@ class SessionService:
                     request_id=request_id,
                     api_key=api_key,
                     key_id=key_id or None,
+                    user_id=user_id,
                 )
             else:
                 async with self.store.session() as db:
@@ -527,6 +529,7 @@ class SessionService:
         output: str | None = None,
         error: str | None = None,
         key_id: str | None = None,
+        user_id: str | None = None,
         request_id: str | None = None,
         api_key: str | None = None,
     ) -> dict[str, Any]:
@@ -590,6 +593,7 @@ class SessionService:
                     request_id=request_id,
                     api_key=api_key,
                     key_id=key_id,
+                    user_id=user_id,
                 )
         else:
             if stale:
@@ -614,6 +618,7 @@ class SessionService:
                     request_id=request_id,
                     api_key=api_key,
                     key_id=key_id,
+                    user_id=user_id,
                 )
         async with self.store.session() as db:
             row = await get_session(db, tenant_id, session_id)

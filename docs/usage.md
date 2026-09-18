@@ -64,6 +64,7 @@ on, POSTs the full object.
 | --- | --- |
 | `tenant_id` | Tenant |
 | `key_id` | Auth key id |
+| `user_id` | Auth `user_id` when the plugin provides it. Not `key_id`. |
 | `session_id` | Session |
 | `turn_id` | Turn |
 | `agent_id` | Agent, if any |
@@ -88,6 +89,13 @@ on, POSTs the full object.
 | `created_at` | When the usage row was written |
 
 Reads are tenant-scoped. The object must not contain message text.
+
+Join warehouse rows with `tenant_id`, `user_id`, `agent_id`,
+`session_id`, `turn_id`, and `request_id`. Prometheus labels stay
+low-cardinality: `tenant` is allowed; `user_id` and `session_id` are
+not Prometheus labels. Per-user and per-agent totals come from the
+HTTPS usage export (or extra sinks), not from `GET /v1/usage`. That
+query is tenant-scoped session, turn, or day rollups only.
 
 ## Request ids
 

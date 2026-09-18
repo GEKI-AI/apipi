@@ -568,6 +568,7 @@ async def _write_turn_log(
     tracing: Tracing | None = None,
     settings: Settings | None = None,
     artifact_bytes: int = 0,
+    user_id: str | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is None:
@@ -622,6 +623,7 @@ async def _write_turn_log(
         request_id=request_id,
         error_code=error_code,
         created_at=created,
+        user_id=user_id,
     )
     if store == "turns":
         await append_turn_log(
@@ -772,6 +774,7 @@ async def _complete_turn(
     settings: Settings | None = None,
     proc: PiProc | None = None,
     env_hub: EnvironmentHub | None = None,
+    user_id: str | None = None,
 ) -> None:
     await _emit_item(
         db,
@@ -814,6 +817,7 @@ async def _complete_turn(
         tracing=tracing,
         settings=settings,
         artifact_bytes=published,
+        user_id=user_id,
     )
     await persist_event(
         db,
@@ -845,6 +849,7 @@ async def _cancel_turn(
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
     settings: Settings | None = None,
+    user_id: str | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is not None:
@@ -860,6 +865,7 @@ async def _cancel_turn(
         metrics=metrics,
         tracing=tracing,
         settings=settings,
+        user_id=user_id,
     )
     await persist_event(
         db,
@@ -953,6 +959,7 @@ async def _fail_turn(
     tracing: Tracing | None = None,
     settings: Settings | None = None,
     code: str = "model_host_error",
+    user_id: str | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is not None:
@@ -968,6 +975,7 @@ async def _fail_turn(
         metrics=metrics,
         tracing=tracing,
         settings=settings,
+        user_id=user_id,
         error_code=code,
     )
     await persist_event(
@@ -1095,6 +1103,7 @@ async def run_turn(
     pool: PiPool | None = None,
     api_key: str | None = None,
     key_id: str | None = None,
+    user_id: str | None = None,
     objects: ObjectStore | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
@@ -1324,6 +1333,7 @@ async def run_turn(
                             tracing=tracing,
                             settings=settings,
                             code=exc.code,
+                            user_id=user_id,
                         )
                     return
                 except OSError as exc:
@@ -1340,6 +1350,7 @@ async def run_turn(
                             tracing=tracing,
                             settings=settings,
                             code="spawn_failed",
+                            user_id=user_id,
                         )
                     return
                 except TimeoutError:
@@ -1370,6 +1381,7 @@ async def run_turn(
                         metrics=metrics,
                         tracing=tracing,
                         settings=settings,
+                        user_id=user_id,
                     )
                     return
                 if pending:
@@ -1408,6 +1420,7 @@ async def run_turn(
                     settings=settings,
                     proc=pool.peek(session_id) if pool is not None else None,
                     env_hub=env_hub,
+                    user_id=user_id,
                 )
     finally:
         if pool is not None:
@@ -1438,6 +1451,7 @@ async def continue_turn(
     pool: PiPool | None = None,
     api_key: str | None = None,
     key_id: str | None = None,
+    user_id: str | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -1614,6 +1628,7 @@ async def continue_turn(
                             tracing=tracing,
                             settings=settings,
                             code=exc.code,
+                            user_id=user_id,
                         )
                     return
                 except OSError as exc:
@@ -1630,6 +1645,7 @@ async def continue_turn(
                             tracing=tracing,
                             settings=settings,
                             code="spawn_failed",
+                            user_id=user_id,
                         )
                     return
                 except CapacityError as exc:
@@ -1703,6 +1719,7 @@ async def continue_turn(
                     settings=settings,
                     proc=pool.peek(session_id) if pool is not None else None,
                     env_hub=env_hub,
+                    user_id=user_id,
                 )
     finally:
         if pool is not None:
