@@ -14,7 +14,8 @@ need them, go to an optional external HTTPS export.
 Postgres is the **hot** store: recent turns and daily rollups for
 quotas and `GET /v1/usage`. Long-term analytics go through an optional
 HTTPS usage export. Prometheus and OpenTelemetry traces are local
-exports of the same non-text facts.
+exports of the same non-text facts. How operators collect those
+signals is in [observability](observability.md).
 
 ## Tokens
 
