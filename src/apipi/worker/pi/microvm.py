@@ -27,6 +27,7 @@ from apipi.env.setup import (
     workspace_egress_hosts,
     workspace_network_policy,
 )
+from apipi.gateway.logutil import log_event
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.worker.pi.dirs import PI_SESSION_REL, pi_session_file
@@ -64,6 +65,18 @@ NET_RIGHTS = (
 JAILER_RIGHTS = "Need root to chroot Firecracker with jailer."
 INSTALL_HINT = "Run apipi install and pick MicroVM"
 log = logging.getLogger("apipi.microvm")
+
+
+def log_sandbox_boot_failed(exc: BaseException, *, vm_id: str | None = None) -> None:
+    log_event(
+        log,
+        logging.ERROR,
+        "sandbox boot failed",
+        event="sandbox.boot.failed",
+        error_code="sandbox_boot_failed",
+        exc_info=exc,
+        vm_id=vm_id,
+    )
 
 
 class TapNet(NamedTuple):
@@ -1192,6 +1205,7 @@ async def start_microvm(
             extra_hosts=tuple(extra_hosts),
         )
     except SetupError as exc:
+        log_sandbox_boot_failed(exc, vm_id=vm_id)
         raise ConfigError(exc.message) from exc
     allowlist = tap.allowlist
     allowed_ips: list[str] = []
@@ -1307,6 +1321,7 @@ async def start_microvm(
         if broker is not None:
             await broker.stop()
         cleanup()
+        log_sandbox_boot_failed(exc, vm_id=vm_id)
         if isinstance(exc, ConfigError):
             raise
         if isinstance(exc, (RuntimeError, ValueError)):
@@ -1324,6 +1339,7 @@ async def start_microvm(
         if broker is not None:
             await broker.stop()
         cleanup()
+        log_sandbox_boot_failed(ConfigError("microvm cannot start jailer"), vm_id=vm_id)
         raise ConfigError("microvm cannot start jailer")
     log.info("jailer", extra={"vm_id": vm_id, "pid": pid})
     if not inherit_stdio:
@@ -1376,6 +1392,7 @@ async def spawn_microvm_pi(
         extra = started.broker
         if extra is not None:
             await extra.stop()
+        log_sandbox_boot_failed(exc, vm_id=started.chroot_dir.parent.name)
         if isinstance(exc, ConfigError):
             raise
         raise ConfigError("microvm cannot start") from exc

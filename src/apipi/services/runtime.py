@@ -13,6 +13,7 @@ from apipi.env.computer import Computer, bind_computer, computer_item_events
 from apipi.env.hub import EnvironmentHub
 from apipi.env.setup import SetupError, provision_hosted, session_env_from
 from apipi.gateway.errors import ApiError
+from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics, observe_turn
 from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.mcp.http import McpConnectError
@@ -662,17 +663,33 @@ async def _write_turn_log(
             turns=1,
             artifact_bytes=artifact_bytes,
         )
-    log.info(
-        "turn",
-        extra={
-            "tenant_id": str(tenant_id),
-            "session_id": str(session_id),
-            "turn_id": str(turn_id),
-            "status": status,
-            "latency_ms": latency_ms,
-            **({"request_id": request_id} if request_id else {}),
-        },
-    )
+    if status == "failed":
+        log_event(
+            log,
+            logging.ERROR,
+            "turn failed",
+            event="turn.failed",
+            error_code=error_code,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            status=status,
+            latency_ms=latency_ms,
+        )
+    else:
+        log_event(
+            log,
+            logging.INFO,
+            "turn",
+            event="turn",
+            tenant_id=tenant_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            status=status,
+            latency_ms=latency_ms,
+        )
     observe_turn(
         metrics,
         tenant_id=tenant_id,
@@ -702,7 +719,18 @@ async def _write_turn_log(
     try:
         export_usage(settings, metrics, event)
     except Exception:
-        log.warning("usage export failed", exc_info=True)
+        log_event(
+            log,
+            logging.WARNING,
+            "usage export failed",
+            event="usage.export.dropped",
+            error_code="export_drop",
+            exc_info=True,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            request_id=request_id,
+        )
     try:
         items = await list_items(db, tenant_id, session_id)
         export_payload(
@@ -715,7 +743,18 @@ async def _write_turn_log(
             items=items or [],
         )
     except Exception:
-        log.warning("payload export failed", exc_info=True)
+        log_event(
+            log,
+            logging.WARNING,
+            "payload export failed",
+            event="payload.export.dropped",
+            error_code="export_drop",
+            exc_info=True,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            request_id=request_id,
+        )
 
 
 async def _complete_turn(
@@ -929,6 +968,7 @@ async def _fail_turn(
         metrics=metrics,
         tracing=tracing,
         settings=settings,
+        error_code=code,
     )
     await persist_event(
         db,

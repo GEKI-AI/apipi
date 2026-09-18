@@ -1,9 +1,16 @@
 import json
 import logging
+import uuid
 
 import pytest
 
-from apipi.gateway.logutil import FlushStreamHandler, JsonFormatter, extra_fields
+from apipi.gateway.logutil import (
+    FlushStreamHandler,
+    JsonFormatter,
+    extra_fields,
+    log_event,
+    log_fields,
+)
 
 
 def _record(msg: str = "hello", **extra: object) -> logging.LogRecord:
@@ -87,3 +94,50 @@ def test_extra_fields_skip_record_attrs() -> None:
     assert fields["session_id"] == "s"
     assert "msg" not in fields
     assert "levelname" not in fields
+
+
+def test_log_fields_omits_none_and_empty() -> None:
+    tenant_id = uuid.uuid4()
+    fields = log_fields(
+        event="turn.failed",
+        error_code="spawn_failed",
+        tenant_id=tenant_id,
+        session_id=uuid.uuid4(),
+        request_id=None,
+        worker_id="",
+        latency_ms=0,
+    )
+    assert fields["event"] == "turn.failed"
+    assert fields["error_code"] == "spawn_failed"
+    assert fields["tenant_id"] == str(tenant_id)
+    assert "request_id" not in fields
+    assert "worker_id" not in fields
+    assert fields["latency_ms"] == 0
+
+
+def test_log_event_includes_ids_and_code(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.ERROR, logger="apipi")
+    log = logging.getLogger("apipi")
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    turn_id = uuid.uuid4()
+    log_event(
+        log,
+        logging.ERROR,
+        "turn failed",
+        event="turn.failed",
+        error_code="model_host_error",
+        tenant_id=tenant_id,
+        session_id=session_id,
+        turn_id=turn_id,
+        request_id="req-1",
+    )
+    record = caplog.records[-1]
+    assert record.getMessage() == "turn failed"
+    assert record.levelno == logging.ERROR
+    assert record.__dict__["event"] == "turn.failed"
+    assert record.__dict__["error_code"] == "model_host_error"
+    assert record.__dict__["tenant_id"] == str(tenant_id)
+    assert record.__dict__["session_id"] == str(session_id)
+    assert record.__dict__["turn_id"] == str(turn_id)
+    assert record.__dict__["request_id"] == "req-1"

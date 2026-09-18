@@ -75,7 +75,8 @@ class PayloadExporter:
             timeout=settings.payload_export_timeout.total_seconds(),
             retries=settings.payload_export_retries,
             observe=observe,
-            dropped="payload export dropped: %s",
+            dropped="payload export dropped",
+            drop_event="payload.export.dropped",
         )
 
     def emit(self, event: dict[str, Any]) -> None:
@@ -121,4 +122,5 @@ def export_payload(
         sinks,
         redact_payload(event, _secrets(settings)),
         failed="payload sink failed",
+        drop_event="payload.export.dropped",
     )

@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 from apipi.config import CapacityError, Settings
+from apipi.gateway.logutil import log_event
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer, stop_mcp_stdio
 from apipi.worker.pi.proc import PiProc, spawn_pi
@@ -69,6 +70,15 @@ class PiPool:
                         "Too many live sessions for this tenant"
                         if code == "capacity_tenant"
                         else "Too many live sessions"
+                    )
+                    log_event(
+                        log,
+                        logging.WARNING,
+                        "worker assign failed",
+                        event="worker.assign.failed",
+                        error_code=code,
+                        tenant_id=tenant_id,
+                        session_id=session_id,
                     )
                     raise CapacityError(message, code=code)
                 log.info(

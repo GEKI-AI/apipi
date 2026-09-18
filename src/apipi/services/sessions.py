@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import secrets
 import uuid
 from collections.abc import AsyncIterator
@@ -11,6 +12,7 @@ from apipi.env.setup import SetupError, prepare_workspace
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.gateway.auth import not_found
 from apipi.gateway.errors import ApiError, gone
+from apipi.gateway.logutil import log_event
 from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.gateway.tokens import hash_token
 from apipi.mcp.http import (
@@ -62,6 +64,8 @@ from apipi.worker.pi.sandbox import (
     resolve_sandbox_size,
     sandbox_size_of,
 )
+
+log = logging.getLogger("apipi")
 
 
 def turn_body(turn: Turn) -> dict[str, Any]:
@@ -217,6 +221,15 @@ class SessionService:
             "Too many live sessions for this tenant"
             if code == "capacity_tenant"
             else "Too many live sessions"
+        )
+        log_event(
+            log,
+            logging.WARNING,
+            "worker assign failed",
+            event="worker.assign.failed",
+            error_code=code,
+            tenant_id=tenant_id,
+            session_id=session_id,
         )
         raise ApiError(
             "invalid_request",

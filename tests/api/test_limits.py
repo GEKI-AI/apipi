@@ -1,3 +1,4 @@
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -43,7 +44,10 @@ async def limited_client(
         yield client
 
 
-async def test_capacity_rejects_new_turn(limited_client: AsyncClient) -> None:
+async def test_capacity_rejects_new_turn(
+    limited_client: AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="apipi")
     token = {"Authorization": "Bearer t"}
     agent = await limited_client.post(
         "/v1/agents", headers=token, json={"name": "bot", "model": "test"}
@@ -61,6 +65,15 @@ async def test_capacity_rejects_new_turn(limited_client: AsyncClient) -> None:
     assert created.status_code == 429
     error = created.json()["error"]
     assert error["code"] == "capacity"
+    assigned = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("event") == "worker.assign.failed"
+    ]
+    assert assigned
+    assert assigned[-1].__dict__["error_code"] == "capacity"
+    assert assigned[-1].__dict__.get("session_id")
+    assert assigned[-1].__dict__.get("tenant_id")
 
 
 async def test_capacity_rejects_tenant_over_cap(store: Store, tmp_path: Path) -> None:

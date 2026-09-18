@@ -1,6 +1,7 @@
 import asyncio
 import errno
 import json
+import logging
 import subprocess
 import tarfile
 from pathlib import Path
@@ -40,6 +41,7 @@ from apipi.worker.pi.microvm import (
     guest_env,
     guest_skill_dirs,
     jailer_argv,
+    log_sandbox_boot_failed,
     microvm_binaries,
     microvm_config,
     microvm_egress_hosts,
@@ -1153,3 +1155,20 @@ async def test_piproc_rpc_over_custom_streams() -> None:
     proc = PiProc(cast(asyncio.subprocess.Process, inner), stdin=cast(Any, writer))
     await proc.send({"type": "abort"})
     assert json.loads(writer.buf.decode().strip()) == {"type": "abort"}
+
+
+def test_sandbox_boot_failed_is_structured(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="apipi.microvm")
+    log_sandbox_boot_failed(ConfigError("microvm cannot start"), vm_id="vm-1")
+    records = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("event") == "sandbox.boot.failed"
+    ]
+    assert records
+    last = records[-1]
+    assert last.levelno == logging.ERROR
+    assert last.__dict__["error_code"] == "sandbox_boot_failed"
+    assert last.__dict__["vm_id"] == "vm-1"

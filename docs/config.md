@@ -136,10 +136,13 @@ Logs are JSON lines on stderr. Collectors should scrape that stream.
 Each line has `timestamp`, `level`, `logger`, `message`, and
 `service` (`apipi`). Context fields (`request_id`, `tenant_id`,
 `session_id`, `turn_id`, `instance_id`, `run_mode`) are present when
-known. Default level is `info`: process start, one HTTP request line
-(not `/health` or `/metrics`), and turn completed or failed. `debug`
+known. Error and warning lines that operators should alert on also set
+`event` and `error_code`. Default level is `info`: process start, one
+HTTP request line (not `/health` or `/metrics`), and turn completed or
+cancelled. Failed turns and unexpected exceptions are `error`. `debug`
 is optional. Prompt and completion bodies are never logged.
-`APIPI_LOG_FORMAT=text` restores the old one-line format.
+`APIPI_LOG_FORMAT=text` restores the old one-line format. The event
+table is in [usage](usage.md#logs).
 
 One `apipi serve` process has one profile. Change a setting and restart.
 The Pi pool is in memory in that process, so extra uvicorn workers do
