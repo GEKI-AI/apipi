@@ -3,7 +3,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from apipi.gateway.errors import error_body
 from apipi.gateway.http_path import request_path, skip_request_path
-from apipi.gateway.otel import current_trace_id
+from apipi.gateway.otel import attach_traceparent, current_trace_id, detach_traceparent
 
 _SKIP_CONTEXT = frozenset({"/health", "/metrics"})
 _CONTEXT_HEADERS = frozenset(
@@ -62,9 +62,11 @@ class InstanceMiddleware:
             await self.app(scope, receive, send)
             return
         state = scope.setdefault("state", {})
-        incoming = _trace_id_from_parent(_header_value(scope, b"traceparent"))
+        parent = _header_value(scope, b"traceparent")
+        incoming = _trace_id_from_parent(parent)
         if incoming is not None:
             state["trace_id"] = incoming
+        token = attach_traceparent(parent)
 
         async def send_with_context(message: Message) -> None:
             if message["type"] == "http.response.start":
@@ -90,7 +92,10 @@ class InstanceMiddleware:
                 message = {**message, "headers": headers}
             await send(message)
 
-        await self.app(scope, receive, send_with_context)
+        try:
+            await self.app(scope, receive, send_with_context)
+        finally:
+            detach_traceparent(token)
 
 
 class MaxBodyMiddleware:

@@ -1,6 +1,13 @@
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from apipi.gateway.otel import Tracing, span_attributes, traces_endpoint
+from apipi.gateway.otel import (
+    Tracing,
+    attach_traceparent,
+    detach_traceparent,
+    inject_traceparent,
+    span_attributes,
+    traces_endpoint,
+)
 from apipi.services.runtime import FAKE_USAGE
 
 
@@ -121,3 +128,24 @@ def test_in_memory_exporter_records_nested_spans() -> None:
     blob = str(session_attrs) + str(turn_attrs) + str(model_attrs)
     assert "hello" not in blob
     assert "secret-prompt" not in blob
+
+
+def test_inject_and_attach_traceparent_nests_span() -> None:
+    exporter = InMemorySpanExporter()
+    tracing = Tracing(exporter=exporter)
+    try:
+        with tracing.span("session", session_id="sess-1"):
+            parent = inject_traceparent()
+            assert parent is not None
+        token = attach_traceparent(parent)
+        try:
+            with tracing.span("turn", session_id="sess-1"):
+                pass
+        finally:
+            detach_traceparent(token)
+    finally:
+        tracing.shutdown()
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert spans["turn"].context.trace_id == spans["session"].context.trace_id
+    assert spans["turn"].parent is not None
+    assert spans["turn"].parent.span_id == spans["session"].context.span_id
