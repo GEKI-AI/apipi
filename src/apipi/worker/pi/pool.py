@@ -6,10 +6,12 @@ from collections.abc import Awaitable, Callable
 
 from apipi.config import CapacityError, Settings
 from apipi.gateway.logutil import log_event
+from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing, start_span
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer, stop_mcp_stdio
 from apipi.worker.pi.proc import PiProc, spawn_pi
+from apipi.worker.pi.sandbox import size_for_mem
 
 OnKill = Callable[[uuid.UUID, PiProc | None], Awaitable[None]]
 log = logging.getLogger("apipi.worker.pi")
@@ -22,10 +24,12 @@ class PiPool:
         *,
         on_kill: OnKill | None = None,
         tracing: Tracing | None = None,
+        metrics: Metrics | None = None,
     ) -> None:
         self.settings = settings
         self.on_kill = on_kill
         self.tracing = tracing
+        self.metrics = metrics
         self._procs: dict[uuid.UUID, PiProc] = {}
         self._tenants: dict[uuid.UUID, uuid.UUID] = {}
         self._stdio: dict[uuid.UUID, list[McpStdioServer]] = {}
@@ -36,6 +40,8 @@ class PiPool:
         self._key_ids: dict[uuid.UUID, str | None] = {}
         self._env_types: dict[uuid.UUID, str | None] = {}
         self._mem: dict[uuid.UUID, int] = {}
+        self._sizes: dict[uuid.UUID, str] = {}
+        self._born: dict[uuid.UUID, float] = {}
         self._held: set[uuid.UUID] = set()
         self._lock = asyncio.Lock()
 
@@ -102,20 +108,27 @@ class PiPool:
                             "run_mode": self.settings.run_mode,
                         },
                     )
-                    proc = await spawn_pi(
-                        self.settings,
-                        cwd=cwd,
-                        tools=tools,
-                        mcp_http=mcp_http,
-                        mcp_stdio=mcp_stdio,
-                        skill_dirs=skill_dirs,
-                        model=model,
-                        instructions=instructions,
-                        api_key=api_key,
-                        mem_mib=mem_mib,
-                        image=image,
-                        extra_env=extra_env,
-                    )
+                    size = size_for_mem(self.settings, session_mem)
+                    started = time.monotonic()
+                    try:
+                        proc = await spawn_pi(
+                            self.settings,
+                            cwd=cwd,
+                            tools=tools,
+                            mcp_http=mcp_http,
+                            mcp_stdio=mcp_stdio,
+                            skill_dirs=skill_dirs,
+                            model=model,
+                            instructions=instructions,
+                            api_key=api_key,
+                            mem_mib=mem_mib,
+                            image=image,
+                            extra_env=extra_env,
+                        )
+                    except Exception:
+                        self._observe_boot(size, "error", time.monotonic() - started)
+                        raise
+                    self._observe_boot(size, "ok", time.monotonic() - started)
                     log.info("pi ready", extra={"session_id": str(session_id)})
                     self._procs[session_id] = proc
                     self._spawn_tools[session_id] = tools
@@ -124,6 +137,8 @@ class PiPool:
                     self._key_ids[session_id] = key_id
                     self._env_types[session_id] = env_type
                     self._mem[session_id] = session_mem
+                    self._sizes[session_id] = size
+                    self._born[session_id] = time.monotonic()
                     if tenant_id is not None:
                         self._tenants[session_id] = tenant_id
                 elif env_type is not None:
@@ -133,6 +148,13 @@ class PiPool:
 
     def live(self) -> int:
         return sum(1 for proc in self._procs.values() if proc.alive)
+
+    def live_procs(self) -> list[tuple[str, PiProc]]:
+        return [
+            (self._sizes.get(sid, "S"), proc)
+            for sid, proc in self._procs.items()
+            if proc.alive
+        ]
 
     def live_for(self, tenant_id: uuid.UUID) -> int:
         return sum(
@@ -204,13 +226,44 @@ class PiPool:
         self._env_types.pop(session_id, None)
         self._mem.pop(session_id, None)
         self._tenants.pop(session_id, None)
+        size = self._sizes.pop(session_id, "S")
+        born = self._born.pop(session_id, None)
         stdio = self._stdio.pop(session_id, None)
+        if proc is not None and self.metrics is not None:
+            hold = time.monotonic() - born if born is not None else 0.0
+            self.metrics.observe_sandbox_destroy(size=size, hold_seconds=hold)
         if self.on_kill is not None:
             await self.on_kill(session_id, proc)
         if proc is not None:
             await proc.terminate()
         if stdio:
             await stop_mcp_stdio(stdio)
+
+    def _observe_boot(self, size: str, result: str, seconds: float) -> None:
+        if self.metrics is None:
+            return
+        self.metrics.observe_sandbox_boot(size=size, result=result, seconds=seconds)
+
+    def refresh_metrics(self) -> None:
+        if self.metrics is None:
+            return
+        used = sum(
+            self._mem.get(sid, self.settings.microvm_mem_mib)
+            for sid, proc in self._procs.items()
+            if proc.alive
+        )
+        self.metrics.set_worker_util(
+            capacity=self.settings.max_sessions,
+            sessions=self.live(),
+            memory_mib_used=used,
+            memory_mib_total=self.settings.node_memory_mb(),
+        )
+        counts = {"S": 0, "M": 0, "L": 0}
+        for sid, proc in self._procs.items():
+            if proc.alive:
+                size = self._sizes.get(sid, "S")
+                counts[size] = counts.get(size, 0) + 1
+        self.metrics.set_sandboxes_active(counts)
 
     def hold(self, session_id: uuid.UUID) -> None:
         self._held.add(session_id)

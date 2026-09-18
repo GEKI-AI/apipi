@@ -228,6 +228,22 @@ Prometheus text format. `/health` and `/metrics` are not counted.
 | `apipi_workers` | gauge | connected sandbox workers |
 | `apipi_worker_leases` | gauge | active session leases |
 | `apipi_worker_assign_seconds` | histogram | time to assign a lease |
+| `apipi_worker_capacity` | gauge | advertised session slots on this worker |
+| `apipi_worker_sessions` | gauge | live sandboxes on this worker |
+| `apipi_worker_memory_mib_used` | gauge | reserved guest RAM in use |
+| `apipi_worker_memory_mib_total` | gauge | advertised guest RAM budget |
+| `apipi_worker_lease_hold_seconds` | histogram | how long a sandbox stayed live |
+| `apipi_sandbox_boot_total` | counter | `size`, `result` (`ok` or `error`) |
+| `apipi_sandbox_destroy_total` | counter | `size` |
+| `apipi_sandbox_boot_seconds` | histogram | `size` |
+| `apipi_sandboxes_active` | gauge | `size` |
+| `apipi_guest_memory_bytes` | gauge | jailer cgroup `memory.current`, `size` |
+| `apipi_guest_memory_limit_bytes` | gauge | jailer cgroup `memory.max`, `size` |
+| `apipi_guest_cpu_seconds` | gauge | jailer cgroup CPU usage, `size` |
+| `apipi_guest_mem_available_bytes` | gauge | vsock sample MemAvailable, `size` |
+| `apipi_guest_load` | gauge | vsock sample load average, `size` |
+| `apipi_guest_workspace_used_bytes` | gauge | vsock sample workspace used, `size` |
+| `apipi_guest_workspace_avail_bytes` | gauge | vsock sample workspace free, `size` |
 
 `tenant` is the tenant id. Empty when the request has no tenant.
 `path` is the route template, not the raw URL. `kind` is `prompt`,
@@ -238,10 +254,22 @@ text.
 Turn, token, and latency series are recorded once, on the process that
 completes the turn. Combined `apipi serve` exposes them on API
 `GET /metrics`. With `apipi serve --api-only` plus `apipi worker`, set
-`APIPI_METRICS` on the worker so those series are recorded there. The
-API process still has HTTP request series and worker-pool gauges
-(`apipi_workers`, `apipi_worker_leases`, `apipi_worker_assign_seconds`).
-It does not double-count turns.
+`APIPI_METRICS` on the worker so those series are recorded there, and
+scrape the worker at `http://<worker>:9091/metrics` (or
+`APIPI_WORKER_METRICS_PORT`). The API process still has HTTP request
+series and worker-pool gauges (`apipi_workers`, `apipi_worker_leases`,
+`apipi_worker_assign_seconds`). It does not double-count turns.
+
+Guest resource series stay low-cardinality (`size` is `S` / `M` /
+`L`). They never use `session_id` or `user_id` as labels.
+
+| Layer | What | Default | How |
+| --- | --- | --- | --- |
+| Host / cgroup | Guest RAM and CPU from the jailer cgroup | On when worker metrics are on | Read on the host. No guest code. |
+| Guest sample | MemAvailable, load, workspace disk | Off | Tiny JSON over vsock. Set `APIPI_GUEST_SAMPLE_INTERVAL` (for example `15s`). |
+| In-guest Prometheus | node_exporter or a metrics port on TAP | Out of scope | Not lightweight. |
+
+Scrape node_exporter on the worker host if you need machine disk and NIC. ApiPi does not replace that.
 
 ## OpenTelemetry
 
@@ -285,6 +313,9 @@ the usage export for who used how many tokens.
 | `APIPI_PAYLOAD_EXPORT_TIMEOUT` | `5s` | Payload HTTP timeout |
 | `APIPI_PAYLOAD_EXPORT_RETRIES` | `1` | Extra tries, then drop |
 | `APIPI_METRICS` | off | Prometheus at `/metrics` |
+| `APIPI_WORKER_METRICS_HOST` | `0.0.0.0` | Worker scrape bind address |
+| `APIPI_WORKER_METRICS_PORT` | `9091` | Worker scrape port |
+| `APIPI_GUEST_SAMPLE_INTERVAL` | unset | Opt-in vsock guest samples |
 | `APIPI_OTEL_ENDPOINT` | unset | OTLP traces when set |
 
 The full setting list is in [configuration](config.md).

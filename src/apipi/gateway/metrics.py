@@ -115,6 +115,99 @@ class Metrics:
             registry=self.registry,
             buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
         )
+        self.worker_capacity = Gauge(
+            "apipi_worker_capacity",
+            "Advertised session slots on this worker",
+            registry=self.registry,
+        )
+        self.worker_sessions = Gauge(
+            "apipi_worker_sessions",
+            "Live sandboxes on this worker",
+            registry=self.registry,
+        )
+        self.worker_memory_used = Gauge(
+            "apipi_worker_memory_mib_used",
+            "Reserved guest RAM in use on this worker",
+            registry=self.registry,
+        )
+        self.worker_memory_total = Gauge(
+            "apipi_worker_memory_mib_total",
+            "Advertised guest RAM budget on this worker",
+            registry=self.registry,
+        )
+        self.worker_lease_hold = Histogram(
+            "apipi_worker_lease_hold_seconds",
+            "How long a sandbox stayed live",
+            registry=self.registry,
+            buckets=_LATENCY_BUCKETS,
+        )
+        self.sandbox_boot = Counter(
+            "apipi_sandbox_boot_total",
+            "Sandbox boots",
+            ["size", "result"],
+            registry=self.registry,
+        )
+        self.sandbox_destroy = Counter(
+            "apipi_sandbox_destroy_total",
+            "Sandbox teardowns",
+            ["size"],
+            registry=self.registry,
+        )
+        self.sandbox_boot_seconds = Histogram(
+            "apipi_sandbox_boot_seconds",
+            "Sandbox boot time",
+            ["size"],
+            registry=self.registry,
+            buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+        )
+        self.sandboxes_active = Gauge(
+            "apipi_sandboxes_active",
+            "Live sandboxes by size",
+            ["size"],
+            registry=self.registry,
+        )
+        self.guest_memory_current = Gauge(
+            "apipi_guest_memory_bytes",
+            "Sum of jailer cgroup memory.current by size",
+            ["size"],
+            registry=self.registry,
+        )
+        self.guest_memory_limit = Gauge(
+            "apipi_guest_memory_limit_bytes",
+            "Sum of jailer cgroup memory.max by size",
+            ["size"],
+            registry=self.registry,
+        )
+        self.guest_cpu_seconds = Gauge(
+            "apipi_guest_cpu_seconds",
+            "Sum of jailer cgroup cpu.stat usage by size",
+            ["size"],
+            registry=self.registry,
+        )
+        self.guest_mem_available = Gauge(
+            "apipi_guest_mem_available_bytes",
+            "Sum of guest MemAvailable by size",
+            ["size"],
+            registry=self.registry,
+        )
+        self.guest_load = Gauge(
+            "apipi_guest_load",
+            "Mean guest load average by size",
+            ["size"],
+            registry=self.registry,
+        )
+        self.guest_workspace_used = Gauge(
+            "apipi_guest_workspace_used_bytes",
+            "Sum of guest workspace used bytes by size",
+            ["size"],
+            registry=self.registry,
+        )
+        self.guest_workspace_avail = Gauge(
+            "apipi_guest_workspace_avail_bytes",
+            "Sum of guest workspace free bytes by size",
+            ["size"],
+            registry=self.registry,
+        )
 
     def observe_request(
         self,
@@ -164,6 +257,58 @@ class Metrics:
 
     def observe_payload_export(self, result: str) -> None:
         self.payload_export.labels(result=result).inc()
+
+    def set_worker_util(
+        self,
+        *,
+        capacity: int,
+        sessions: int,
+        memory_mib_used: int,
+        memory_mib_total: int,
+    ) -> None:
+        self.worker_capacity.set(capacity)
+        self.worker_sessions.set(sessions)
+        self.worker_memory_used.set(memory_mib_used)
+        self.worker_memory_total.set(memory_mib_total)
+
+    def observe_sandbox_boot(self, *, size: str, result: str, seconds: float) -> None:
+        self.sandbox_boot.labels(size=size, result=result).inc()
+        if result == "ok":
+            self.sandbox_boot_seconds.labels(size=size).observe(max(seconds, 0.0))
+
+    def observe_sandbox_destroy(self, *, size: str, hold_seconds: float) -> None:
+        self.sandbox_destroy.labels(size=size).inc()
+        self.worker_lease_hold.observe(max(hold_seconds, 0.0))
+
+    def set_sandboxes_active(self, counts: dict[str, int]) -> None:
+        for size in ("S", "M", "L"):
+            self.sandboxes_active.labels(size=size).set(counts.get(size, 0))
+
+    def set_guest_cgroup(
+        self,
+        *,
+        size: str,
+        memory_bytes: float,
+        memory_limit_bytes: float,
+        cpu_seconds: float,
+    ) -> None:
+        self.guest_memory_current.labels(size=size).set(memory_bytes)
+        self.guest_memory_limit.labels(size=size).set(memory_limit_bytes)
+        self.guest_cpu_seconds.labels(size=size).set(cpu_seconds)
+
+    def set_guest_sample(
+        self,
+        *,
+        size: str,
+        mem_available_bytes: float,
+        load: float,
+        workspace_used_bytes: float,
+        workspace_avail_bytes: float,
+    ) -> None:
+        self.guest_mem_available.labels(size=size).set(mem_available_bytes)
+        self.guest_load.labels(size=size).set(load)
+        self.guest_workspace_used.labels(size=size).set(workspace_used_bytes)
+        self.guest_workspace_avail.labels(size=size).set(workspace_avail_bytes)
 
     def scrape(self) -> bytes:
         return generate_latest(self.registry)

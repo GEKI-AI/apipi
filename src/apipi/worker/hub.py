@@ -610,6 +610,26 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
     metrics, tracing = worker_observability(settings)
     execution = local_execution(settings, store=store, metrics=metrics, tracing=tracing)
     tasks: set[asyncio.Task[None]] = set()
+    if metrics is not None:
+        from apipi.worker.scrape import serve_metrics
+
+        tasks.add(
+            asyncio.create_task(
+                serve_metrics(
+                    metrics,
+                    host=settings.worker_metrics_host,
+                    port=settings.worker_metrics_port,
+                )
+            )
+        )
+        log.info(
+            "worker metrics",
+            extra={
+                "host": settings.worker_metrics_host,
+                "port": settings.worker_metrics_port,
+            },
+        )
+    tasks.add(asyncio.create_task(execution.observe_loop()))
     log.info("worker connect", extra={"url": ws_url})
     try:
         async with websockets.connect(

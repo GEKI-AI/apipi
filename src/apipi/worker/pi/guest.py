@@ -16,6 +16,7 @@ from pathlib import Path
 ARTIFACT_PORT = 53
 WORKSPACE_PORT = 54
 SESSION_PORT = 55
+METRICS_PORT = 56
 PUBLISH_DIRS = ("outputs",)
 SESSION_REL = ".apipi/pi-session.jsonl"
 RNDADDENTROPY = 0x40085203
@@ -74,6 +75,39 @@ def artifacts_tar_bytes(root: Path) -> bytes:
     if not added:
         return b""
     return buf.getvalue()
+
+
+def guest_sample(root: Path | None = None) -> dict[str, float]:
+    workspace = root if root is not None else Path(os.environ.get("HOME", "/workspace"))
+    mem_available = 0.0
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                mem_available = float(line.split()[1]) * 1024.0
+                break
+    except OSError:
+        pass
+    load_1 = 0.0
+    with contextlib.suppress(OSError, IndexError, ValueError):
+        load_1 = float(Path("/proc/loadavg").read_text().split()[0])
+    used = 0.0
+    avail = 0.0
+    try:
+        stats = os.statvfs(workspace)
+        avail = float(stats.f_bavail * stats.f_frsize)
+        used = float((stats.f_blocks - stats.f_bfree) * stats.f_frsize)
+    except OSError:
+        pass
+    return {
+        "mem_available_bytes": mem_available,
+        "load_1": load_1,
+        "workspace_used_bytes": used,
+        "workspace_avail_bytes": avail,
+    }
+
+
+def guest_sample_bytes(root: Path) -> bytes:
+    return (json.dumps(guest_sample(root)) + "\n").encode()
 
 
 def session_file_bytes(root: Path) -> bytes:
@@ -243,6 +277,9 @@ def main(argv: list[str] | None = None) -> None:
         target=_serve_workspace, args=(WORKSPACE_PORT,), daemon=True
     ).start()
     threading.Thread(target=_serve_session, args=(SESSION_PORT,), daemon=True).start()
+    threading.Thread(
+        target=_serve_tar, args=(METRICS_PORT, guest_sample_bytes), daemon=True
+    ).start()
     _serve_rpc(_pi_args(), port)
 
 
