@@ -140,7 +140,8 @@ Error and warning lines that operators should alert on include
 `event` and `error_code`. Same id fields as traces when known
 (`request_id`, `session_id`, `turn_id`, `tenant_id`, `worker_id`). The
 event table is in [usage](usage.md#logs). Keep secrets and prompt
-bodies out of the logs.
+bodies out of the logs. How to scrape metrics, ship logs, and point
+OTLP at a collector is in [observability](observability.md).
 
 ## Tuning
 

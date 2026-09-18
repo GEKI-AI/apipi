@@ -107,6 +107,9 @@ hosted files and skills).
 | `APIPI_OTEL_ENDPOINT` | `otel_endpoint` | unset | OTLP/HTTP traces when set. `/v1/traces` is appended if missing. |
 | `APIPI_CONFIG` | — | unset | Path to a TOML file. Ignored when `apipi serve --config` is set. |
 
+How to collect those signals in production is in
+[observability](observability.md).
+
 ```toml
 database_url = "postgresql+asyncpg://apipi:apipi@localhost:5432/apipi"
 host = "0.0.0.0"
