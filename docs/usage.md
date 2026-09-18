@@ -100,6 +100,31 @@ Every public request except `/health` has an id.
 - Authenticated responses include `X-Tenant-Id` and `X-User-Id`.
 - When a trace is known, responses include `X-Trace-Id`.
 
+## Logs
+
+API and worker processes write the same JSON line shape on stderr
+(`timestamp`, `level`, `logger`, `message`, `service`). Error and
+warning lines that operators should alert on also set `event` and
+`error_code`, plus `request_id`, `tenant_id`, `session_id`, `turn_id`,
+and `worker_id` when those ids are known. Prompt and completion bodies
+are never logged.
+
+| `event` | Level | When |
+| --- | --- | --- |
+| `turn.failed` | error | A turn failed. `error_code` is the public turn code. |
+| `api.error` | error | HTTP 5xx or an unexpected exception. |
+| `sandbox.boot.failed` | error | MicroVM jailer or vsock attach failed. |
+| `worker.command.failed` | error | A worker command raised after assign. |
+| `worker.assign.failed` | warning | No worker capacity (`capacity` or `capacity_tenant`). |
+| `worker.lease.expired` | warning | A worker lease TTL elapsed. |
+| `usage.export.dropped` | warning | Usage HTTPS export or sink dropped the event. |
+| `payload.export.dropped` | warning | Payload HTTPS export or sink dropped the event. |
+
+Failed turns use level `error`. Completed and cancelled turns stay
+`info` with `event` `turn`. HTTP request lines stay `info` and include
+`error_code` when the response is an ApiPi error. Ship stderr with a
+log collector; ApiPi does not bundle Grafana or Loki.
+
 ## Query
 
 Tenant-scoped. Wrong tenant is `404`. Tokens and turn counts, not USD.

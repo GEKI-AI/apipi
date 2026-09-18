@@ -128,12 +128,16 @@ writes one JSON object per line. Default level is `info`. Use
 
 Info covers process start (version, bind, run mode, store), one line
 per HTTP request except `/health` and `/metrics`, and turn completed
-or failed. Failed turns and unexpected exceptions are `error`.
-Warnings are degraded-but-running (SQLite one-process, `run_mode=none`,
-export drop). Debug is optional diagnosis.
+or cancelled. Failed turns, sandbox boot failures, unexpected
+exceptions, and HTTP 5xx are `error`. Warnings are degraded-but-running
+(SQLite one-process, `run_mode=none`, capacity, lease expiry, export
+drop). Debug is optional diagnosis.
 
-Same id fields as traces when known (`request_id`, `session_id`,
-`turn_id`). Keep secrets and prompt bodies out of the logs.
+Error and warning lines that operators should alert on include
+`event` and `error_code`. Same id fields as traces when known
+(`request_id`, `session_id`, `turn_id`, `tenant_id`, `worker_id`). The
+event table is in [usage](usage.md#logs). Keep secrets and prompt
+bodies out of the logs.
 
 ## Tuning
 

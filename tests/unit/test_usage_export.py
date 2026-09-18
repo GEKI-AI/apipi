@@ -1,4 +1,5 @@
 import json
+import logging
 
 import httpx
 import pytest
@@ -52,7 +53,10 @@ async def test_usage_export_posts_json(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def test_usage_export_drop_does_not_raise(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.WARNING, logger="apipi")
+
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down", request=request)
 
@@ -61,7 +65,26 @@ async def test_usage_export_drop_does_not_raise(
         "apipi.services.usage_export.httpx.AsyncClient",
         lambda **_kwargs: _Client(transport),
     )
-    await UsageExporter(_settings(retries=0))._post({"turn_id": "x"})
+    await UsageExporter(_settings(retries=0))._post(
+        {
+            "tenant_id": "t1",
+            "session_id": "s1",
+            "turn_id": "x",
+            "request_id": "r1",
+        }
+    )
+    dropped = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("event") == "usage.export.dropped"
+    ]
+    assert dropped
+    last = dropped[-1]
+    assert last.__dict__["error_code"] == "export_drop"
+    assert last.__dict__["tenant_id"] == "t1"
+    assert last.__dict__["session_id"] == "s1"
+    assert last.__dict__["turn_id"] == "x"
+    assert last.__dict__["request_id"] == "r1"
 
 
 def test_custom_usage_sink_receives_event() -> None:

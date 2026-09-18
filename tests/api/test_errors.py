@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 
 import pytest
@@ -25,6 +26,10 @@ def _app() -> FastAPI:
     def fail() -> None:
         raise ApiError("not_implemented", "nope", code="later", status_code=501)
 
+    @app.get("/boom")
+    def boom() -> None:
+        raise RuntimeError("hidden")
+
     return app
 
 
@@ -48,12 +53,37 @@ async def test_unknown_field(client: AsyncClient) -> None:
     }
 
 
-async def test_not_implemented(client: AsyncClient) -> None:
+async def test_not_implemented(
+    client: AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.ERROR, logger="apipi")
     response = await client.get("/fail")
     assert response.status_code == 501
     assert response.json() == {
         "error": {"type": "not_implemented", "code": "later", "message": "nope"}
     }
+    errors = [
+        record
+        for record in caplog.records
+        if record.name == "apipi" and record.__dict__.get("event") == "api.error"
+    ]
+    assert errors
+    assert errors[-1].__dict__["error_code"] == "later"
+
+
+async def test_unexpected_is_internal(
+    client: AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.ERROR, logger="apipi")
+    with pytest.raises(RuntimeError, match="hidden"):
+        await client.get("/boom")
+    errors = [
+        record
+        for record in caplog.records
+        if record.name == "apipi" and record.__dict__.get("event") == "api.error"
+    ]
+    assert errors
+    assert errors[-1].__dict__["error_code"] == "internal"
 
 
 def test_strict_model_rejects_extra() -> None:

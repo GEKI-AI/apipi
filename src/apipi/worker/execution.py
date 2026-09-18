@@ -6,6 +6,7 @@ from typing import Any, NoReturn, Protocol
 from apipi.config import Settings
 from apipi.env.hub import EnvironmentHub
 from apipi.gateway.errors import ApiError
+from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing
 from apipi.mcp.stdio import McpStdioServer
@@ -479,13 +480,15 @@ class RemoteExecution:
         missing = worker_id is not None and self.workers.get(worker_id) is None
         if missing:
             where = instance if instance else "another API process"
-            log.warning(
-                "worker socket missing",
-                extra={
-                    "session_id": str(session_id),
-                    "worker_id": str(worker_id),
-                    "api_instance_id": instance,
-                },
+            log_event(
+                log,
+                logging.WARNING,
+                "worker assign failed",
+                event="worker.assign.failed",
+                error_code="capacity",
+                tenant_id=tenant_id,
+                session_id=session_id,
+                worker_id=worker_id,
             )
             raise ApiError(
                 "invalid_request",
@@ -493,6 +496,16 @@ class RemoteExecution:
                 code="capacity",
                 status_code=429,
             )
+        log_event(
+            log,
+            logging.WARNING,
+            "worker assign failed",
+            event="worker.assign.failed",
+            error_code="capacity",
+            tenant_id=tenant_id,
+            session_id=session_id,
+            worker_id=worker_id,
+        )
         raise ApiError(
             "invalid_request",
             "Too many live sessions",

@@ -7,6 +7,7 @@ from typing import Any, Protocol
 import httpx
 
 from apipi.config import ConfigError, Settings
+from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics
 
 log = logging.getLogger("apipi")
@@ -47,12 +48,29 @@ def load_custom_sinks(paths: str, setting: str) -> list[EventSink]:
     return [load_sink(path, setting) for path in split_sink_paths(paths)]
 
 
-def emit_all(sinks: list[EventSink], event: dict[str, Any], *, failed: str) -> None:
+def emit_all(
+    sinks: list[EventSink],
+    event: dict[str, Any],
+    *,
+    failed: str,
+    drop_event: str,
+) -> None:
     for sink in sinks:
         try:
             sink.emit(event)
         except Exception:
-            log.warning(failed, exc_info=True)
+            log_event(
+                log,
+                logging.WARNING,
+                failed,
+                event=drop_event,
+                error_code="export_drop",
+                exc_info=True,
+                tenant_id=event.get("tenant_id"),
+                session_id=event.get("session_id"),
+                turn_id=event.get("turn_id"),
+                request_id=event.get("request_id"),
+            )
 
 
 class HttpExporter:
@@ -64,7 +82,8 @@ class HttpExporter:
         timeout: float,
         retries: int,
         observe: Callable[[str], None] | None = None,
-        dropped: str = "export dropped: %s",
+        dropped: str = "export dropped",
+        drop_event: str = "usage.export.dropped",
     ) -> None:
         self._url = url
         self._token = token
@@ -72,6 +91,7 @@ class HttpExporter:
         self._retries = retries
         self._observe = observe
         self._dropped = dropped
+        self._drop_event = drop_event
         self._tasks: set[asyncio.Task[None]] = set()
 
     def emit(self, event: dict[str, Any]) -> None:
@@ -109,7 +129,17 @@ class HttpExporter:
                 last = exc
         self._result("drop")
         if last is not None:
-            log.warning(self._dropped, last)
+            log_event(
+                log,
+                logging.WARNING,
+                self._dropped,
+                event=self._drop_event,
+                error_code="export_drop",
+                tenant_id=event.get("tenant_id"),
+                session_id=event.get("session_id"),
+                turn_id=event.get("turn_id"),
+                request_id=event.get("request_id"),
+            )
 
     def _result(self, result: str) -> None:
         if self._observe is not None:
@@ -127,7 +157,8 @@ class UsageExporter:
             timeout=settings.usage_export_timeout.total_seconds(),
             retries=settings.usage_export_retries,
             observe=observe,
-            dropped="usage export dropped: %s",
+            dropped="usage export dropped",
+            drop_event="usage.export.dropped",
         )
 
     def emit(self, event: dict[str, Any]) -> None:
@@ -156,4 +187,5 @@ def export_usage(
         load_usage_sinks(settings, metrics),
         event,
         failed="usage sink failed",
+        drop_event="usage.export.dropped",
     )

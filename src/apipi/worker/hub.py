@@ -12,6 +12,8 @@ import websockets
 from starlette.websockets import WebSocket, WebSocketState
 
 from apipi.config import ConfigError, Settings
+from apipi.gateway.errors import ApiError
+from apipi.gateway.logutil import log_event
 from apipi.services.runtime import PUBLIC_EVENT_TYPES, EventHub, persist_event
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
@@ -137,6 +139,19 @@ class WorkerHub:
         )
         conn = self.pick(session_mem)
         if conn is None:
+            request_id = (
+                payload.get("request_id") if isinstance(payload, dict) else None
+            )
+            log_event(
+                log,
+                logging.WARNING,
+                "worker assign failed",
+                event="worker.assign.failed",
+                error_code="capacity",
+                tenant_id=tenant_id,
+                session_id=session_id,
+                request_id=request_id,
+            )
             return None
         lease_id = uuid.uuid4()
         command_id = uuid.uuid4()
@@ -239,6 +254,16 @@ class WorkerHub:
                 lease_id = row.lease_id
                 worker_id = row.worker_id
                 await clear_session_lease(db, row.tenant_id, row.id)
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "worker lease expired",
+                    event="worker.lease.expired",
+                    error_code="worker_lease_expired",
+                    tenant_id=row.tenant_id,
+                    session_id=row.id,
+                    worker_id=worker_id,
+                )
                 await persist_event(
                     db,
                     hub,
@@ -428,6 +453,57 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
     request_id = request_id if isinstance(request_id, str) else None
     api_key = api_key if isinstance(api_key, str) else None
     key_id = key_id if isinstance(key_id, str) else None
+    try:
+        await _run_command(
+            execution,
+            op,
+            tenant_id,
+            session_id,
+            payload,
+            request_id=request_id,
+            api_key=api_key,
+            key_id=key_id,
+        )
+    except ApiError as exc:
+        if exc.status_code >= 500:
+            log_event(
+                log,
+                logging.ERROR,
+                "worker command failed",
+                event="worker.command.failed",
+                error_code=exc.code or "internal",
+                exc_info=exc,
+                tenant_id=tenant_id,
+                session_id=session_id,
+                request_id=request_id,
+            )
+        raise
+    except Exception as exc:
+        log_event(
+            log,
+            logging.ERROR,
+            "worker command failed",
+            event="worker.command.failed",
+            error_code="internal",
+            exc_info=exc,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            request_id=request_id,
+        )
+        raise
+
+
+async def _run_command(
+    execution: Any,
+    op: object,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    payload: dict[str, Any],
+    *,
+    request_id: str | None,
+    api_key: str | None,
+    key_id: str | None,
+) -> None:
     if op == "turn.start":
         text = payload.get("text")
         await execution.run_turn(

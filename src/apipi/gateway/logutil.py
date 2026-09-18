@@ -25,6 +25,39 @@ _handler: logging.Handler | None = None
 _http = logging.getLogger("apipi.http")
 
 
+def log_fields(**values: object) -> dict[str, Any]:
+    extra: dict[str, Any] = {}
+    for key, value in values.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            extra[key] = value
+            continue
+        if isinstance(value, UUID):
+            extra[key] = str(value)
+            continue
+        if isinstance(value, str):
+            if value:
+                extra[key] = value
+            continue
+        extra[key] = value
+    return extra
+
+
+def log_event(
+    log: logging.Logger,
+    level: int,
+    message: str,
+    *,
+    event: str,
+    error_code: str | None = None,
+    exc_info: bool | BaseException = False,
+    **values: object,
+) -> None:
+    extra = log_fields(event=event, error_code=error_code, **values)
+    log.log(level, message, extra=extra, exc_info=exc_info)
+
+
 def redact_value(key: str, value: object) -> object:
     if _SECRET_KEY.search(key):
         return "[redacted]"
@@ -179,6 +212,9 @@ class RequestLogMiddleware:
             tenant_id = _state_text(state, "tenant_id")
             if tenant_id is not None:
                 extra["tenant_id"] = tenant_id
+            error_code = _state_text(state, "error_code")
+            if error_code is not None:
+                extra["error_code"] = error_code
             app = scope.get("app")
             settings = getattr(getattr(app, "state", None), "settings", None)
             instance_id = getattr(settings, "instance_id", None)

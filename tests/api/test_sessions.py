@@ -460,6 +460,40 @@ async def test_unknown_session_field(client: AsyncClient) -> None:
     assert response.json()["error"]["code"] == "unknown_field"
 
 
+async def test_failed_turn_logs_event_and_code(
+    client: AsyncClient, store: Store, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.ERROR, logger="apipi")
+    token = _token()
+    agent_id = await _create_agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent_id, "environment": {"type": "none"}},
+    )
+    assert created.status_code == 200
+    sid = uuid.UUID(created.json()["id"])
+    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    async with store.session() as db:
+        await update_session(db, tenant_id, sid, changes={"status": "in_progress"})
+        turn = await create_turn(db, tenant_id, sid, status="in_progress")
+        turn_id = turn.id
+    got = await client.get(f"/v1/agents/sessions/{sid}", headers=_auth(token))
+    assert got.status_code == 200
+    failed = [
+        record
+        for record in caplog.records
+        if record.name == "apipi" and record.__dict__.get("event") == "turn.failed"
+    ]
+    assert failed
+    last = failed[-1]
+    assert last.levelno == logging.ERROR
+    assert last.__dict__["error_code"] == "turn_interrupted"
+    assert last.__dict__["tenant_id"] == str(tenant_id)
+    assert last.__dict__["session_id"] == str(sid)
+    assert last.__dict__["turn_id"] == str(turn_id)
+
+
 async def test_get_session_recovers_stale_in_progress(
     client: AsyncClient, store: Store
 ) -> None:
