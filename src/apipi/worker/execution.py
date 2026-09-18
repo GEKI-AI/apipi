@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import uuid
 from typing import Any, NoReturn, Protocol
@@ -92,6 +93,8 @@ class Execution(Protocol):
     async def reap_loop(self) -> None: ...
 
     async def reap_workspace_loop(self) -> None: ...
+
+    async def observe_loop(self) -> None: ...
 
     async def close(self) -> None: ...
 
@@ -253,6 +256,93 @@ class LocalExecution:
         assert store is not None
         await reap_workspace_loop(self.settings, store, self.pool)
 
+    async def observe_loop(self) -> None:
+        if self.metrics is None:
+            while True:
+                await asyncio.sleep(3600)
+        interval = 5.0
+        sample = self.settings.guest_sample_interval
+        sample_every = sample.total_seconds() if sample is not None else None
+        last_sample = 0.0
+        while True:
+            self.pool.refresh_metrics()
+            self._observe_cgroup()
+            now = asyncio.get_running_loop().time()
+            if sample_every is not None and now - last_sample >= sample_every:
+                await self._observe_guest_samples()
+                last_sample = now
+            await asyncio.sleep(interval)
+
+    def _observe_cgroup(self) -> None:
+        metrics = self.metrics
+        if metrics is None:
+            return
+        from apipi.worker.cgroup import read_cgroup
+
+        totals: dict[str, dict[str, float]] = {
+            size: {"memory_bytes": 0.0, "memory_limit_bytes": 0.0, "cpu_seconds": 0.0}
+            for size in ("S", "M", "L")
+        }
+        for size, proc in self.pool.live_procs():
+            if not proc.vm_id:
+                continue
+            data = read_cgroup(proc.vm_id)
+            if data is None:
+                continue
+            bucket = totals[size]
+            bucket["memory_bytes"] += data["memory_bytes"]
+            bucket["memory_limit_bytes"] += data["memory_limit_bytes"]
+            bucket["cpu_seconds"] += data["cpu_seconds"]
+        for size, bucket in totals.items():
+            metrics.set_guest_cgroup(size=size, **bucket)
+
+    async def _observe_guest_samples(self) -> None:
+        metrics = self.metrics
+        if metrics is None:
+            return
+        totals: dict[str, dict[str, float]] = {
+            size: {
+                "n": 0.0,
+                "mem_available_bytes": 0.0,
+                "load": 0.0,
+                "workspace_used_bytes": 0.0,
+                "workspace_avail_bytes": 0.0,
+            }
+            for size in ("S", "M", "L")
+        }
+        for size, proc in self.pool.live_procs():
+            pull = proc.pull_metrics
+            if pull is None:
+                continue
+            try:
+                raw = await pull()
+                payload = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            bucket = totals[size]
+            bucket["n"] += 1
+            bucket["mem_available_bytes"] += float(
+                payload.get("mem_available_bytes") or 0
+            )
+            bucket["load"] += float(payload.get("load_1") or 0)
+            bucket["workspace_used_bytes"] += float(
+                payload.get("workspace_used_bytes") or 0
+            )
+            bucket["workspace_avail_bytes"] += float(
+                payload.get("workspace_avail_bytes") or 0
+            )
+        for size, bucket in totals.items():
+            count = bucket["n"]
+            metrics.set_guest_sample(
+                size=size,
+                mem_available_bytes=bucket["mem_available_bytes"],
+                load=(bucket["load"] / count) if count else 0.0,
+                workspace_used_bytes=bucket["workspace_used_bytes"],
+                workspace_avail_bytes=bucket["workspace_avail_bytes"],
+            )
+
     async def close(self) -> None:
         await self.pool.close()
 
@@ -282,7 +372,7 @@ def local_execution(
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
 ) -> LocalExecution:
-    pool = PiPool(settings, tracing=tracing)
+    pool = PiPool(settings, tracing=tracing, metrics=metrics)
     isolation = load_isolation(settings.run_mode)
     resolved_harness = harness if harness is not None else PiHarness(pool)
     return LocalExecution(
@@ -566,6 +656,10 @@ class RemoteExecution:
             await asyncio.sleep(3600)
 
     async def reap_workspace_loop(self) -> None:
+        while True:
+            await asyncio.sleep(3600)
+
+    async def observe_loop(self) -> None:
         while True:
             await asyncio.sleep(3600)
 

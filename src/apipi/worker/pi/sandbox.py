@@ -38,6 +38,14 @@ def image_for_size(size: str) -> str:
     return "default"
 
 
+def size_for_mem(settings: Settings, mem_mib: int) -> str:
+    if mem_mib >= settings.sandbox_l_mem_mib:
+        return "L"
+    if mem_mib >= settings.sandbox_m_mem_mib:
+        return "M"
+    return "S"
+
+
 def size_from_metadata(metadata: dict[str, Any] | None) -> str | None:
     if not metadata:
         return None

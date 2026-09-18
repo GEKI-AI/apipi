@@ -453,6 +453,26 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("APIPI_METRICS", "metrics"),
     )
+    worker_metrics_host: str = Field(
+        default="0.0.0.0",
+        validation_alias=AliasChoices(
+            "APIPI_WORKER_METRICS_HOST", "worker_metrics_host"
+        ),
+    )
+    worker_metrics_port: int = Field(
+        default=9091,
+        ge=1,
+        le=65535,
+        validation_alias=AliasChoices(
+            "APIPI_WORKER_METRICS_PORT", "worker_metrics_port"
+        ),
+    )
+    guest_sample_interval: OptionalTtl = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "APIPI_GUEST_SAMPLE_INTERVAL", "guest_sample_interval"
+        ),
+    )
     otel_endpoint: OtelEndpoint = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_OTEL_ENDPOINT", "otel_endpoint"),
@@ -911,6 +931,10 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_AUTH_CACHE_TTL must be like 15m"
         if "metrics" in loc:
             return "APIPI_METRICS must be on or off"
+        if "worker_metrics_port" in loc or "APIPI_WORKER_METRICS_PORT" in loc:
+            return "APIPI_WORKER_METRICS_PORT must be 1-65535"
+        if "guest_sample_interval" in loc or "APIPI_GUEST_SAMPLE_INTERVAL" in loc:
+            return "APIPI_GUEST_SAMPLE_INTERVAL must be like 15s or empty"
         if "forward_models" in loc or "APIPI_FORWARD_MODELS" in loc:
             return "APIPI_FORWARD_MODELS must be on or off"
         if "pi_auto_compact" in loc or "APIPI_PI_AUTO_COMPACT" in loc:

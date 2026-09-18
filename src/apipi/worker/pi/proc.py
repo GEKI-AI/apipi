@@ -25,6 +25,8 @@ class PiProc:
         pull_artifacts: Callable[[], Awaitable[bytes]] | None = None,
         pull_workspace: Callable[[], Awaitable[bytes]] | None = None,
         pull_session: Callable[[], Awaitable[bytes]] | None = None,
+        pull_metrics: Callable[[], Awaitable[bytes]] | None = None,
+        vm_id: str | None = None,
     ) -> None:
         self.process = process
         self._stdin = process.stdin if stdin is None else stdin
@@ -34,6 +36,8 @@ class PiProc:
         self.pull_artifacts = pull_artifacts
         self.pull_workspace = pull_workspace
         self.pull_session = pull_session
+        self.pull_metrics = pull_metrics
+        self.vm_id = vm_id
         self._buf = b""
 
     @property

@@ -43,6 +43,7 @@ VSOCK_PORT = 52
 VSOCK_ARTIFACT_PORT = 53
 VSOCK_WORKSPACE_PORT = 54
 VSOCK_SESSION_PORT = 55
+VSOCK_METRICS_PORT = 56
 VSOCK_UDS = "vsock.sock"
 MEM_MIB = 512
 VCPU_COUNT = 1
@@ -1417,6 +1418,9 @@ async def spawn_microvm_pi(
     async def pull_session() -> bytes:
         return await _pull(VSOCK_SESSION_PORT)
 
+    async def pull_metrics() -> bytes:
+        return await _pull(VSOCK_METRICS_PORT)
+
     return PiProc(
         process,
         stdin=writer,
@@ -1426,6 +1430,8 @@ async def spawn_microvm_pi(
         pull_artifacts=pull_artifacts,
         pull_workspace=pull_workspace,
         pull_session=pull_session,
+        pull_metrics=pull_metrics,
+        vm_id=started.chroot_dir.parent.name,
     )
 
 

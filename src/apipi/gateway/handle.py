@@ -190,6 +190,7 @@ class Gateway:
         else:
             resolved_tracing = None
         resolved_pool.tracing = resolved_tracing
+        resolved_pool.metrics = resolved_metrics
         resolved_workers = (
             workers
             if workers is not None
@@ -279,6 +280,7 @@ class Gateway:
         self._tasks = [
             asyncio.create_task(self.execution.reap_loop()),
             asyncio.create_task(self.execution.reap_workspace_loop()),
+            asyncio.create_task(self.execution.observe_loop()),
             asyncio.create_task(_purge_usage_loop(self.settings, self.store)),
             asyncio.create_task(self._expire_worker_leases()),
         ]
