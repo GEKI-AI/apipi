@@ -14,7 +14,10 @@ single-host embedded worker. Nested Docker or nested KVM is a lab
 setup. The Compose file in this repo starts Postgres (and can run a
 rootless API). Drain a worker with a heartbeat `"drain": true` before
 you stop the unit so new leases go elsewhere. Expired leases fail
-closed; they are not reassigned.
+closed; they are not reassigned. Set `APIPI_METRICS` and
+`APIPI_OTEL_ENDPOINT` on the worker as well as the API so turn
+series and turn/model spans are recorded where the turn runs. See
+[usage](usage.md#prometheus).
 
 Isolation `none` is for local machines and CI. If the selected mode
 cannot start, `apipi serve` exits before it binds HTTP. The process

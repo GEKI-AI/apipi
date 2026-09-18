@@ -555,7 +555,7 @@ def worker_ws_url(base: str) -> str:
 
 async def run_worker(settings: Settings, *, url: str | None = None) -> None:
     from apipi.store.engine import Store, create_engine
-    from apipi.worker.execution import local_execution
+    from apipi.worker.execution import local_execution, worker_observability
 
     token = settings.worker_token
     if token is None or token == "":
@@ -564,7 +564,8 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
     ws_url = worker_ws_url(base)
     heartbeat = min(10.0, max(1.0, settings.worker_lease_ttl.total_seconds() / 2))
     store = Store(create_engine(settings.database_url, pool_size=settings.db_pool_size))
-    execution = local_execution(settings, store=store)
+    metrics, tracing = worker_observability(settings)
+    execution = local_execution(settings, store=store, metrics=metrics, tracing=tracing)
     tasks: set[asyncio.Task[None]] = set()
     log.info("worker connect", extra={"url": ws_url})
     try:
@@ -632,4 +633,6 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
         for task in tasks:
             task.cancel()
         await execution.close()
+        if execution.tracing is not None:
+            execution.tracing.shutdown()
         await store.dispose()
