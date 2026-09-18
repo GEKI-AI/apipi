@@ -87,11 +87,13 @@ def usage_event(
     request_id: str | None,
     error_code: str | None,
     created_at: datetime,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     stored = usage_from(usage)
     return {
         "tenant_id": str(tenant_id),
         "key_id": key_id,
+        "user_id": user_id,
         "session_id": str(session_id),
         "turn_id": str(turn_id),
         "agent_id": str(agent_id) if agent_id is not None else None,

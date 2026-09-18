@@ -27,6 +27,7 @@ Authenticate = Callable[[str], object]
 class AuthIdentity:
     key_id: str
     tenant_id: UUID
+    user_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,7 +144,9 @@ def auth_from_result(result: object) -> AuthIdentity | AuthReject:
         tenant_id = result.get("tenant_id")
         if key_id and tenant_id is not None:
             parsed = tenant_id if isinstance(tenant_id, UUID) else UUID(str(tenant_id))
-            return AuthIdentity(key_id=str(key_id), tenant_id=parsed)
+            raw_user = result.get("user_id")
+            user_id = str(raw_user) if raw_user else None
+            return AuthIdentity(key_id=str(key_id), tenant_id=parsed, user_id=user_id)
         if "status_code" in result or "code" in result:
             return _reject_from_dict(result)
         raise TypeError("authenticate must return key_id and tenant_id")
@@ -206,6 +209,7 @@ async def require_tenant(
         identity = parsed
     request.state.tenant_id = identity.tenant_id
     request.state.key_id = identity.key_id
+    request.state.user_id = identity.user_id
     request.state.bearer = token
     gateway = getattr(request.app.state, "gateway", None)
     if gateway is not None:

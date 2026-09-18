@@ -42,6 +42,19 @@ def test_identity_from_dict() -> None:
     )
     assert isinstance(parsed, AuthIdentity)
     assert parsed.key_id == "k"
+    assert parsed.user_id is None
+
+
+def test_identity_from_dict_with_user_id() -> None:
+    parsed = auth_from_result(
+        {
+            "key_id": "k",
+            "tenant_id": "12345678-1234-5678-1234-567812345678",
+            "user_id": "user-9",
+        }
+    )
+    assert isinstance(parsed, AuthIdentity)
+    assert parsed.user_id == "user-9"
 
 
 def test_reject_from_dict() -> None:

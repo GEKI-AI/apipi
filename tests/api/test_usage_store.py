@@ -1,9 +1,11 @@
 import json
 import uuid
 from collections.abc import AsyncIterator
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support import fake_sink
 
 from apipi.config import Settings
 from apipi.gateway import create_app
@@ -183,3 +185,44 @@ async def test_usage_export_failure_does_not_break_turn(
         )
     assert session.status_code == 200
     assert session.json()["status"] == "idle"
+
+
+async def test_usage_event_includes_plugin_user_id(
+    settings: Settings, store: Store
+) -> None:
+    fake_sink.reset()
+
+    def auth(bearer: str) -> dict[str, str]:
+        del bearer
+        return {
+            "key_id": "plugin-key",
+            "tenant_id": str(uuid5(NAMESPACE_URL, "usage-user")),
+            "user_id": "user-9",
+        }
+
+    app = create_app(
+        settings.model_copy(update={"usage_sinks": "tests.support.fake_sink:FakeSink"}),
+        store=store,
+        harness=FakeHarness(),
+        authenticate=auth,
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        agent = await client.post(
+            "/v1/agents", headers=_auth("t"), json={"name": "bot", "model": "test"}
+        )
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth("t"),
+            json={
+                "agent_id": agent.json()["id"],
+                "environment": {"type": "none"},
+                "input": "hello",
+            },
+        )
+        assert created.status_code == 200
+        assert created.headers["x-user-id"] == "plugin-key"
+    assert fake_sink.events
+    assert fake_sink.events[-1]["user_id"] == "user-9"
+    assert fake_sink.events[-1]["key_id"] == "plugin-key"
