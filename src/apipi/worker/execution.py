@@ -279,6 +279,8 @@ def local_execution(
     harness: Any | None = None,
     hub: EventHub | None = None,
     env_hub: EnvironmentHub | None = None,
+    metrics: Metrics | None = None,
+    tracing: Tracing | None = None,
 ) -> LocalExecution:
     pool = PiPool(settings)
     isolation = load_isolation(settings.run_mode)
@@ -293,7 +295,19 @@ def local_execution(
         store=store,
         blobs=blob_store(settings),
         objects=object_store(settings),
+        metrics=metrics,
+        tracing=tracing,
     )
+
+
+def worker_observability(
+    settings: Settings,
+) -> tuple[Metrics | None, Tracing | None]:
+    metrics = Metrics() if settings.metrics else None
+    tracing = (
+        Tracing(endpoint=settings.otel_endpoint) if settings.otel_endpoint else None
+    )
+    return metrics, tracing
 
 
 class RemoteExecution:

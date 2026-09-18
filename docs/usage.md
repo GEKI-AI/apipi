@@ -235,6 +235,14 @@ Prometheus text format. `/health` and `/metrics` are not counted.
 is `completed`, `failed`, or `cancelled`. Never prompt or completion
 text.
 
+Turn, token, and latency series are recorded once, on the process that
+completes the turn. Combined `apipi serve` exposes them on API
+`GET /metrics`. With `apipi serve --api-only` plus `apipi worker`, set
+`APIPI_METRICS` on the worker so those series are recorded there. The
+API process still has HTTP request series and worker-pool gauges
+(`apipi_workers`, `apipi_worker_leases`, `apipi_worker_assign_seconds`).
+It does not double-count turns.
+
 ## OpenTelemetry
 
 Export OTLP/HTTP traces when `APIPI_OTEL_ENDPOINT` is set. `/v1/traces`
@@ -242,6 +250,11 @@ is appended when missing. Spans exist for session, turn, and the
 upstream model call. Attributes: request id, session, turn, model,
 status, token counts, tool names. Not message text. Not a warehouse
 for agent usage history.
+
+Set `APIPI_OTEL_ENDPOINT` on the process that does the wait. Combined
+`apipi serve` exports session, turn, and model spans from that process.
+In split mode, the API exports the `session` span; set the endpoint on
+the worker for `turn` and `model` spans.
 
 ## Config
 
