@@ -4,6 +4,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from apipi.config import Settings
+from apipi.services.runtime import EventHub
+from apipi.store.engine import Store
+from apipi.store.events import list_events
+from apipi.store.repo import create_session, create_tenant
 from apipi.worker.hub import WorkerConnection, WorkerHub, _run_command
 from apipi.worker.placement import placement_for, worker_accepts
 
@@ -128,6 +132,41 @@ async def test_turn_start_none_accepts_chat() -> None:
         user_id=None,
     )
     execution.run_turn.assert_awaited_once()
+
+
+async def test_mismatched_turn_persists_error(store: Store) -> None:
+    hub = EventHub()
+    async with store.session() as db:
+        tenant = await create_tenant(db, name="t")
+        row = await create_session(
+            db, tenant.id, environment={"type": "none"}, metadata={}
+        )
+        tenant_id = tenant.id
+        session_id = row.id
+    execution = MagicMock()
+    execution.settings.run_mode = "microvm"
+    execution.store = store
+    execution.hub = hub
+    execution.run_turn = AsyncMock()
+    await _run_command(
+        execution,
+        "turn.start",
+        tenant_id,
+        session_id,
+        {"text": "hi", "run_mode": "chat"},
+        request_id=None,
+        api_key=None,
+        key_id=None,
+        user_id=None,
+    )
+    execution.run_turn.assert_not_called()
+    async with store.session() as db:
+        events = await list_events(db, tenant_id, session_id)
+    types = [event.type for event in events]
+    assert "agent.session.error" in types
+    assert "agent.session.turn.failed" in types
+    error = next(event for event in events if event.type == "agent.session.error")
+    assert error.data["code"] == "placement"
 
 
 def test_pick_filters_run_mode() -> None:
