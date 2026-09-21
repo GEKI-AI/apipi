@@ -325,7 +325,9 @@ WantedBy=multi-user.target
 `KillMode=control-group` is required so `systemctl stop` and
 `Restart=on-failure` kill host Pi children, not only the worker PID.
 `KillMode=process` leaks Pi after a crash. Chat workers use the same
-unit and omit the KVM `DeviceAllow` lines.
+unit and omit the KVM `DeviceAllow` lines. For a drain wait on stop,
+install `deploy/systemd/apipi-worker-drain.conf` as
+`TimeoutStopSec=16min` so SIGTERM can empty live Pi before SIGKILL.
 
 Many operators run that unit as root so jailer can chroot Firecracker
 and the process can create TAP devices. Set `APIPI_MICROVM_KERNEL`,

@@ -14,8 +14,11 @@ single-host embedded worker. Nested Docker or nested KVM is a lab
 setup. Chat without a computer uses a second worker pool with
 `APIPI_RUN_MODE=chat` on the same API-only gateway. See
 [chat fleets](chat.md). The Compose file in this repo starts Postgres (and can run a
-rootless API). Drain a worker with a heartbeat `"drain": true` before
-you stop the unit so new leases go elsewhere. Expired leases fail
+rootless API). `systemctl stop` / `restart` on `apipi worker` sends
+SIGTERM. The worker heartbeats `"drain": true` (no new leases), waits
+until live Pi are gone, then exits 0. Install
+`deploy/systemd/apipi-worker-drain.conf` as a drop-in so
+`TimeoutStopSec` covers that wait. Expired leases fail
 closed; they are not reassigned. Set `APIPI_METRICS` and
 `APIPI_OTEL_ENDPOINT` on the worker as well as the API so turn
 series and turn/model spans are recorded where the turn runs. See
@@ -185,10 +188,12 @@ Sticky rules still apply inside the pool. See
 Health checks should call `GET /health`. Probe health rather than a
 session. That endpoint accepts requests without a bearer.
 
-To drain a node, take it out of the upstream, wait until in-flight
-turns finish or idle TTL has killed Pi, then stop the systemd unit.
-Keep health successful while a turn is in flight. A live session stays
-on the node that owns it.
+To drain a worker, `systemctl stop` (or `restart`) it. SIGTERM sets
+heartbeat `"drain": true`, idle Pi exit, in-flight turns finish, then
+the process exits 0. Use the drain drop-in so `TimeoutStopSec` is
+longer than `--drain-timeout`. A timeout exits 1; systemd then SIGKILLs
+the cgroup (`KillMode=control-group`). Keep API health successful while
+a turn is in flight. A live session stays on the node that owns it.
 
 Host workers (`none` / `chat`) stamp Pi and host stdio MCP with
 `APIPI_WORKER_PID`. After a crash, the next `apipi worker` or combined

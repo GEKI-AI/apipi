@@ -248,6 +248,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="API base URL (default: APIPI_API_URL or http://127.0.0.1:8000)",
     )
+    worker_parser.add_argument(
+        "--drain-timeout",
+        default=None,
+        type=float,
+        help="Seconds to wait after SIGTERM for live Pi to empty (default: idle TTL)",
+    )
     microvm_parser = sub.add_parser("microvm", help="Operator microVM tools")
     microvm_sub = microvm_parser.add_subparsers(dest="microvm_command", required=True)
     shell_parser = microvm_sub.add_parser(
@@ -308,8 +314,13 @@ def main(argv: list[str] | None = None) -> int:
             from apipi.worker.hub import run_worker
 
             settings = prepare_worker(config_path=args.config)
-            asyncio.run(run_worker(settings, url=args.url))
-            return 0
+            return asyncio.run(
+                run_worker(
+                    settings,
+                    url=args.url,
+                    drain_timeout=args.drain_timeout,
+                )
+            )
         if args.command == "microvm" and args.microvm_command == "shell":
             return microvm_shell(
                 config_path=args.config,

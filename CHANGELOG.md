@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `apipi worker` treats SIGTERM/SIGINT as drain: heartbeat
+  `"drain": true`, wait until live Pi are gone, exit 0 (timeout exits
+  1). Example systemd drop-in `deploy/systemd/apipi-worker-drain.conf`.
 - Host Pi Prometheus series on the worker scrape: process count, RSS,
   PSS, spawn, and kill reason (`idle` / `session` / `respawn` /
   `shutdown`).

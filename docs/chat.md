@@ -30,8 +30,11 @@ fleets can schedule. Keep `none` for laptops and CI. Combined
 `apipi serve` still runs turns in-process and does not use worker
 placement. After a chat-worker crash, the next start reaps leftover
 host Pi processes from that worker. Use `KillMode=control-group` on
-the systemd unit. Scrape `apipi_pi_processes` and `apipi_pi_rss_bytes`
-on the worker when metrics are on. See
+the systemd unit. `systemctl restart` sends SIGTERM so the worker
+drains, then starts again. Install
+`deploy/systemd/apipi-worker-drain.conf` so stop can wait for live Pi
+to empty. Scrape `apipi_pi_processes` and `apipi_pi_rss_bytes` on the
+worker when metrics are on. See
 [sandbox workers](workers.md#drain-and-expiry) and
 [observability](observability.md#prometheus).
 

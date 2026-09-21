@@ -144,6 +144,18 @@ not draining, have a free session slot, and have enough remaining
 default 512). Among those it prefers the worker with the most free
 RAM. Session count is only a filter and a tie-break.
 
+`SIGTERM` or `SIGINT` on `apipi worker` sends that drain heartbeat,
+kills idle Pi (sessions not in a turn), waits until no live Pi remain,
+then exits 0. In-flight turns finish first. If live Pi remain after
+`--drain-timeout` (default idle TTL, 15 minutes), the process exits 1
+and systemd may then SIGKILL the cgroup. `systemctl stop` and
+`systemctl restart` send SIGTERM. Raise `TimeoutStopSec` so stop can
+wait; the example drop-in is `deploy/systemd/apipi-worker-drain.conf`
+(`TimeoutStopSec=16min`). Copy it to
+`/etc/systemd/system/apipi-worker.service.d/drain.conf`. The default
+unit keeps `TimeoutStopSec=15` so a Firecracker stop still fails fast
+unless you install the drop-in.
+
 When `lease_until` passes, the lease is cleared and the session gets
 `worker_lease_expired`. The turn is not moved to another worker: the
 guest and workspace were on the expired host. Start a new turn after
