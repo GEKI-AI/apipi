@@ -15,6 +15,11 @@ def _host_error(raw: object) -> list[tuple[str, dict[str, Any]]]:
         message = "Model host error (401)"
     elif "(403)" in text:
         message = "Model host error (403)"
+    elif text.strip():
+        message = text.strip().split("\n")[0][:300]
+        lowered = message.lower()
+        if "api key" in lowered or "bearer " in lowered:
+            message = "Model host error"
     else:
         message = "Model host error"
     return [("pi_error", {"message": message})]

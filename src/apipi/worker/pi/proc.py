@@ -3,6 +3,7 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 import signal
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
@@ -73,6 +74,8 @@ class PiProc:
         pull_metrics: Callable[[], Awaitable[bytes]] | None = None,
         vm_id: str | None = None,
         process_group: bool = False,
+        scratch_dir: str | None = None,
+        stderr_task: asyncio.Task[None] | None = None,
     ) -> None:
         self.process = process
         self._stdin = process.stdin if stdin is None else stdin
@@ -85,6 +88,8 @@ class PiProc:
         self.pull_metrics = pull_metrics
         self.vm_id = vm_id
         self.process_group = process_group
+        self.scratch_dir = scratch_dir
+        self._stderr_task = stderr_task
         self._buf = b""
 
     @property
@@ -169,6 +174,12 @@ class PiProc:
             if self.broker is not None:
                 await self.broker.stop()
                 self.broker = None
+            if self._stderr_task is not None:
+                self._stderr_task.cancel()
+                self._stderr_task = None
+            if self.scratch_dir is not None:
+                shutil.rmtree(self.scratch_dir, ignore_errors=True)
+                self.scratch_dir = None
 
 
 def pi_env(

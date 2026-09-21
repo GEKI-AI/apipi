@@ -194,6 +194,7 @@ class FakeHarness:
         self.tools: bool | None = None
         self.computer_calls: list[dict[str, Any]] = []
         self.hold = False
+        self.fail_message: str | None = None
         self.usage: dict[str, int] = dict(FAKE_USAGE)
 
     def complete(self, text: str) -> str:
@@ -223,6 +224,9 @@ class FakeHarness:
         if self.hold:
             if abort is not None:
                 await abort.wait()
+            return
+        if self.fail_message is not None:
+            yield ("pi_error", {"message": self.fail_message})
             return
         self.function_tools = (
             list(function_tools) if function_tools is not None else None

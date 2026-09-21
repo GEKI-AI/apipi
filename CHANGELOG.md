@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Chat and `environment.type=none` write broker `models.json` even
+  without a workspace, so text-only turns can reach the model. Pi
+  stderr is logged. Non-stream create returns `502` with `session_id`
+  when the first turn fails.
 - Artifact harvest I/O errors (`PermissionError` and other `OSError`)
   fail the turn with code `artifact_store` instead of `500 internal`.
 

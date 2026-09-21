@@ -145,7 +145,9 @@ yours.
 | Nested `events` length not 1, or mixed flat+nested body | `invalid_request` | `validation_error` |
 | Non-text input parts (for example `input_image`) | `not_implemented` | The part type |
 
-The envelope is `{ "error": { "type", "code", "message" } }`. See
+The envelope is `{ "error": { "type", "code", "message" } }`. When
+create already stored a session and the first turn failed, the error
+also has `session_id` and HTTP status `502`. See
 [API errors](api.md#errors).
 
 ## Events request and response

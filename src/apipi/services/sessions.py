@@ -257,6 +257,38 @@ class SessionService:
             status_code=429,
         )
 
+    async def _raise_if_first_turn_failed(
+        self, tenant_id: uuid.UUID, session_id: uuid.UUID
+    ) -> None:
+        async with self.store.session() as db:
+            turns = await list_turns(db, tenant_id, session_id)
+            if not turns:
+                return
+            last = turns[-1]
+            if last.status != "failed":
+                return
+            code = "model_host_error"
+            message = "Model host error"
+            events = await list_events(db, tenant_id, session_id)
+            for event in reversed(events):
+                if event.type != "agent.session.error":
+                    continue
+                data = event.data if isinstance(event.data, dict) else {}
+                raw_code = data.get("code")
+                raw_message = data.get("message")
+                if isinstance(raw_code, str) and raw_code:
+                    code = raw_code
+                if isinstance(raw_message, str) and raw_message:
+                    message = raw_message
+                break
+        raise ApiError(
+            "api_error",
+            message,
+            code=code,
+            status_code=502,
+            session_id=str(session_id),
+        )
+
     async def create(
         self,
         tenant_id: uuid.UUID,
@@ -450,6 +482,7 @@ class SessionService:
                     key_id=key_id or None,
                     user_id=user_id,
                 )
+                await self._raise_if_first_turn_failed(tenant_id, session_id)
             else:
                 async with self.store.session() as db:
                     await persist_event(

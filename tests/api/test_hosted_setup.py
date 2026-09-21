@@ -278,9 +278,15 @@ async def test_spawn_oserror_fails_turn_not_500(
                 "input": "hello",
             },
         )
-        assert created.status_code == 200
-        assert created.json()["status"] == "idle"
-        session_id = created.json()["id"]
+        assert created.status_code == 502
+        error = created.json()["error"]
+        assert error["code"] == "spawn_failed"
+        session_id = error["session_id"]
+        got = await client.get(
+            f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+        )
+        assert got.status_code == 200
+        assert got.json()["status"] == "idle"
         events = await client.get(
             f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
         )

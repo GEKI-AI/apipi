@@ -58,6 +58,23 @@ def test_agent_end_error_is_model_host_failure() -> None:
     assert "secret" not in error["message"]
 
 
+def test_agent_end_error_passes_plain_message() -> None:
+    mapped = map_pi_event(
+        {
+            "type": "agent_end",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "stopReason": "error",
+                    "errorMessage": "No model configured for provider",
+                }
+            ],
+        }
+    )
+    error = next(item[1] for item in mapped if item[0] == "pi_error")
+    assert error["message"] == "No model configured for provider"
+
+
 def test_internal_pi_events_are_dropped() -> None:
     assert map_pi_event({"type": "agent_start"}) == []
     assert map_pi_event({"type": "turn_start"}) == []

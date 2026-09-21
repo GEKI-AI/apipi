@@ -215,8 +215,9 @@ Create accepts `agent` or `agent_id`, `environment` (including
 directory next to Pi, not OpenAI's cloud. `hosted` is an alias for
 that same directory; the session stores and returns `openai_hosted`. `input` may be a string or an
 object with `content` or `text`. A non-empty input starts the first
-turn before the create response returns. `stream: true` returns SSE
-instead of the session JSON.
+turn before the create response returns. If that turn fails, non-stream
+create returns `502` with the turn error `code` and `session_id` on the
+error object. `stream: true` returns SSE instead of the session JSON.
 
 Status: `idle | in_progress | requires_action | failed`.
 
@@ -431,8 +432,11 @@ example is `examples/sessions/openai_sdk.py`. Create-and-stream steps are in
 ## Errors
 
 ```json
-{ "error": { "type": "not_implemented", "code": "...", "message": "..." } }
+{ "error": { "type": "not_implemented", "code": "...", "message": "...", "session_id": "..." } }
 ```
+
+`session_id` is set when create already stored a session and the first
+turn failed. The session stays `idle` so a follow-up message works.
 
 Missing or invalid bearer is `401` with code `unauthorized`. An auth
 plugin may return `429` with a plugin `code` such as `rate_limited` or
