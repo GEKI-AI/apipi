@@ -37,7 +37,7 @@ requires the mode it asked for.
 | Path | Marker | What | GitHub |
 | --- | --- | --- | --- |
 | `tests/unit/` | none | Internals with mocks: config, store, isolation contract, microvm image packing, artifacts | yes |
-| `tests/api/` | none | Public HTTP vs [api.md](api.md). FakeHarness. Tenant isolation. `test_compat.py` has one named test per yes row on the API page | yes |
+| `tests/api/` | none | Public HTTP vs [api.md](api.md). FakeHarness. Tenant isolation. `test_compat.py` has one named test per yes row on the API page. `test_chat_path_a.py` is the Chat Path A placement, facade, and tool-policy matrix | yes |
 | `tests/e2e/test_none_pi.py` | `e2e` | Live session against a fake Pi process in `none` mode | yes |
 | `tests/e2e/test_microvm_pi.py` | `e2e`, `microvm` | Same shape inside a real Firecracker guest | no (skips without KVM) |
 | `tests/e2e/test_metrics_scrape.py` | `e2e` | `/metrics` scrape | yes |
