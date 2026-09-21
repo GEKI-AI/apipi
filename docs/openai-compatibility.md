@@ -93,7 +93,7 @@ yours.
 | `POST/GET/DELETE /v1/skills` | Same shape, zip upload (no version endpoints). Max `APIPI_MAX_FILE_BYTES`. |
 | `/v1/chat/completions` | Error (no such route) |
 | ChatKit | Error (no such routes) |
-| Vaults | `/v1/agents/vaults` and credentials. `static_bearer` only. GET omits token values. `mcp_oauth` is `not_implemented`. |
+| Vaults | `/v1/agents/vaults` and credentials. `static_bearer` only. GET omits token values. Tokens encrypted at rest. `mcp_oauth` is `not_implemented`. |
 
 ## Agent fields and tools
 

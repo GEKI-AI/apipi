@@ -50,7 +50,8 @@ when those are set. See [Concepts](concepts.md#agents) and
 
 `vault_ids` on session create attaches vaults for HTTP MCP. The
 gateway matches `mcp_server_url` and injects the bearer on the host
-broker. GET of a vault or credential never returns the token.
+broker. Tokens are encrypted at rest. GET of a vault or credential
+never returns the token.
 
 ## Vaults
 
@@ -68,9 +69,11 @@ broker. GET of a vault or credential never returns the token.
 | `DELETE` | `/v1/agents/vaults/{vault_id}/credentials/{id}` |
 
 Create a vault with `name` and `metadata`. Add a credential with
-`auth.type` `static_bearer`, `mcp_server_url`, and `token`. List and
-get omit `token`. `auth.type` `mcp_oauth` is `not_implemented`. Every
-query is tenant-scoped. A vault from another tenant is `404`.
+`auth.type` `static_bearer`, `mcp_server_url`, and `token`. The store
+keeps the token as AES-256-GCM ciphertext (`APIPI_VAULT_MASTER_KEY`).
+List and get omit `token`. `auth.type` `mcp_oauth` is
+`not_implemented`. Every query is tenant-scoped. A vault from another
+tenant is `404`.
 
 ## Files
 

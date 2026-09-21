@@ -111,6 +111,25 @@ def test_worker_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.worker_lease_ttl == timedelta(seconds=15)
 
 
+def test_vault_master_key_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    import base64
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    raw = base64.b64encode(bytes(range(32))).decode()
+    monkeypatch.setenv("APIPI_VAULT_MASTER_KEY", raw)
+    assert Settings().vault_master_key == raw
+
+
+def test_vault_master_key_rejects_short(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("APIPI_VAULT_MASTER_KEY", "nope")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ConfigError, match="32 bytes"):
+        load_settings()
+
+
 def test_worker_memory_mb_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_WORKER_MEMORY_MB", "57344")

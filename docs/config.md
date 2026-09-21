@@ -70,6 +70,7 @@ hosted files and skills).
 | `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Cancel a stuck turn. |
 | `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. The callback may return a typed reject (`401` or `429`). |
 | `APIPI_WORKER_TOKEN` | `worker_token` | unset | Shared secret for `apipi worker` connections. Compared in memory. Not a tenant key and not stored in the database. Unset rejects the worker socket. Put this in the process environment. See [workers](workers.md). |
+| `APIPI_VAULT_MASTER_KEY` | `vault_master_key` | local default | 32-byte AES-256-GCM key for MCP vault tokens at rest (standard or urlsafe base64, or 64-char hex). Unset uses a local default so laptop try-outs keep working, and logs a warning. Production must set a real key from the deploy secret store. Never commit it. `apipi migrate` rewrites leftover plaintext rows to ciphertext. Generate with `python -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"`. |
 | `APIPI_WORKER_LEASE_TTL` | `worker_lease_ttl` | `30s` | How long a session lease stays valid without a heartbeat. Expiry fails closed and emits `agent.session.error` with code `worker_lease_expired`. |
 | `APIPI_API_URL` | `api_url` | unset (`http://127.0.0.1:8000` for `apipi worker`) | Base URL the worker uses to open `/internal/worker`. |
 | `APIPI_API_ONLY` | `api_only` | off | Control plane only. Turns lease a worker. `apipi serve --api-only` sets this. |
@@ -387,11 +388,13 @@ backend = "none"
 # .env
 OPENAI_BASE_URL=https://api.openai.com/v1
 # OPENAI_API_KEY_OVERWRITE=...
+# APIPI_VAULT_MASTER_KEY=...
 ```
 
 A production microVM host looks like this. Keep
-`OPENAI_API_KEY_OVERWRITE` (if you use it) and any export tokens in
-`/etc/apipi.env`, not in the committed TOML file:
+`OPENAI_API_KEY_OVERWRITE` (if you use it), `APIPI_VAULT_MASTER_KEY`,
+and any export tokens in `/etc/apipi.env`, not in the committed TOML
+file:
 
 ```toml
 database_url = "postgresql+asyncpg://apipi:apipi@postgres:5432/apipi"

@@ -912,8 +912,10 @@ async def create_vault_credential(
     auth_type: str,
     mcp_server_url: str,
     token: str,
+    credential_id: uuid.UUID | None = None,
 ) -> VaultCredential:
     row = VaultCredential(
+        id=credential_id if credential_id is not None else uuid.uuid4(),
         tenant_id=tenant_id,
         vault_id=vault_id,
         name=name,

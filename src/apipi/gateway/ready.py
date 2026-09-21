@@ -17,6 +17,7 @@ from apipi.config import (
 )
 from apipi.gateway.auth import load_authenticate
 from apipi.gateway.logutil import configure_logging
+from apipi.services.vault_crypto import vault_master_key_unset
 from apipi.store.engine import create_engine
 from apipi.worker.pi.isolation import load_isolation
 from apipi.worker.pi.model_host import (
@@ -150,6 +151,10 @@ def run_checks(
             checks.append(
                 Check("fail", "worker token", "APIPI_WORKER_TOKEN is required")
             )
+    if vault_master_key_unset(settings.vault_master_key):
+        checks.append(Check("ok", "vault key", "unset (local default)"))
+    else:
+        checks.append(Check("ok", "vault key", "set"))
     if settings.auth:
         try:
             load_authenticate(settings.auth)

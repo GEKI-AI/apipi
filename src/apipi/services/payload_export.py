@@ -20,6 +20,7 @@ def _secrets(settings: Settings) -> tuple[str, ...]:
         settings.model_api_key_overwrite,
         settings.usage_export_token,
         settings.payload_export_token,
+        settings.vault_master_key,
     )
     return tuple(value for value in values if isinstance(value, str) and value)
 

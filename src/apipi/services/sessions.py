@@ -34,6 +34,12 @@ from apipi.services.runtime import (
 from apipi.services.skill_store import SkillService
 from apipi.services.skills import copy_capability_directories
 from apipi.services.usage import usage_from
+from apipi.services.vault_crypto import (
+    VaultCryptoError,
+    decrypt_vault_token,
+    vault_aad,
+    vault_key_bytes,
+)
 from apipi.store.blobs import ArtifactBlobs, blob_key
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -115,6 +121,27 @@ def session_body(row: SessionRow) -> dict[str, Any]:
         "updated_at": row.updated_at.isoformat(),
         "vault_ids": [str(item) for item in (row.vault_ids or [])],
     }
+
+
+class _VaultPlain:
+    def __init__(self, cred_id: uuid.UUID, mcp_server_url: str, token: str) -> None:
+        self.id = cred_id
+        self.mcp_server_url = mcp_server_url
+        self.token = token
+
+
+def _plain_vault_creds(settings: Settings, creds: list[Any]) -> list[_VaultPlain]:
+    key = vault_key_bytes(settings.vault_master_key)
+    plain: list[_VaultPlain] = []
+    for cred in creds:
+        try:
+            token = decrypt_vault_token(
+                cred.token, key, aad=vault_aad(cred.tenant_id, cred.id)
+            )
+        except VaultCryptoError as exc:
+            raise McpConnectError("vault credential decrypt failed") from exc
+        plain.append(_VaultPlain(cred.id, cred.mcp_server_url, token))
+    return plain
 
 
 def is_chat_session(row: SessionRow | dict[str, Any]) -> bool:
@@ -443,7 +470,9 @@ class SessionService:
                             tenant_id,
                             [uuid.UUID(item) for item in vault_id_strs],
                         )
-                    connected = apply_vault_headers(connected, creds)
+                    connected = apply_vault_headers(
+                        connected, _plain_vault_creds(self.settings, creds)
+                    )
                 attached = (
                     raw_tools
                     if chat

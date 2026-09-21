@@ -17,7 +17,7 @@ SERVICE = "apipi"
 TEXT_FORMAT = "%(levelname)s %(name)s: %(message)s"
 _SKIP = frozenset({"/health", "/metrics"})
 _SECRET_KEY = re.compile(
-    r"(authorization|bearer|api[_-]?key|token|password|secret|cookie)",
+    r"(authorization|bearer|api[_-]?key|token|password|secret|cookie|master[_-]?key)",
     re.I,
 )
 _SKIP_RECORD = frozenset(logging.makeLogRecord({}).__dict__) | {"message"}
