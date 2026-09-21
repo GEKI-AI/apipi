@@ -55,6 +55,15 @@ def test_worker_util_and_sandbox_series() -> None:
     assert metric_line(body, "apipi_sandbox_destroy_total", size="S").endswith(" 1.0")
     assert metric_line(body, "apipi_sandboxes_active", size="S").endswith(" 2.0")
     assert metric_line(body, "apipi_guest_memory_bytes", size="S").endswith(" 100.0")
+    metrics.set_host_pi(processes=3, rss_bytes=4096, pss_bytes=2048)
+    metrics.observe_pi_spawn("ok")
+    metrics.observe_pi_kill("idle")
+    body = metrics.scrape().decode()
+    assert "apipi_pi_processes 3.0" in body
+    assert "apipi_pi_rss_bytes 4096.0" in body
+    assert "apipi_pi_pss_bytes 2048.0" in body
+    assert metric_line(body, "apipi_pi_spawn_total", result="ok").endswith(" 1.0")
+    assert metric_line(body, "apipi_pi_kill_total", reason="idle").endswith(" 1.0")
     assert "session_id" not in body
 
 
@@ -127,6 +136,60 @@ async def test_pool_boot_records_sandbox_series(
         body, "apipi_sandbox_boot_total", size="S", result="ok"
     ).endswith(" 1.0")
     assert "apipi_worker_sessions 1.0" in body
+    assert metric_line(body, "apipi_pi_spawn_total", result="ok").endswith(" 1.0")
     await pool.kill(sid)
     body = metrics.scrape().decode()
     assert metric_line(body, "apipi_sandbox_destroy_total", size="S").endswith(" 1.0")
+    assert metric_line(body, "apipi_pi_kill_total", reason="session").endswith(" 1.0")
+
+
+def test_procmem_reads_smaps_rollup(tmp_path: Path) -> None:
+    proc = tmp_path / "42"
+    proc.mkdir()
+    (proc / "smaps_rollup").write_text(
+        "Rss:              8 kB\nPss:              4 kB\n"
+    )
+    (proc / "stat").write_text("42 (pi) S 1 42 42 0 0 0\n")
+    from apipi.worker.procmem import read_group_rss_pss, read_rss_pss
+
+    assert read_rss_pss(42, proc_root=tmp_path) == (8192, 4096)
+    assert read_group_rss_pss(42, proc_root=tmp_path) == (8192, 4096)
+
+
+async def test_pool_guest_spawn_skips_host_pi_series(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Guest(_Alive):
+        vm_id = "vm-1"
+
+    metrics = Metrics()
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="microvm",
+        ),
+        metrics=metrics,
+    )
+
+    async def _spawn(*_args: object, **_kwargs: object) -> PiProc:
+        return cast(PiProc, _Guest())
+
+    monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", _spawn)
+    sid = uuid.uuid4()
+    await pool.get(sid, cwd=None, tools=True)
+    body = metrics.scrape().decode()
+    assert "apipi_pi_spawn_total" not in body or "apipi_pi_spawn_total{" not in body
+    await pool.kill(sid)
+    body = metrics.scrape().decode()
+    assert "apipi_pi_kill_total{" not in body
+
+
+def test_procmem_falls_back_to_statm(tmp_path: Path) -> None:
+    proc = tmp_path / "7"
+    proc.mkdir()
+    (proc / "statm").write_text("100 3 1 1 0 0 0\n")
+    from apipi.worker.procmem import read_rss_pss
+
+    rss, pss = read_rss_pss(7, proc_root=tmp_path)
+    assert rss > 0
+    assert pss == 0

@@ -30,7 +30,10 @@ fleets can schedule. Keep `none` for laptops and CI. Combined
 `apipi serve` still runs turns in-process and does not use worker
 placement. After a chat-worker crash, the next start reaps leftover
 host Pi processes from that worker. Use `KillMode=control-group` on
-the systemd unit. See [sandbox workers](workers.md#drain-and-expiry).
+the systemd unit. Scrape `apipi_pi_processes` and `apipi_pi_rss_bytes`
+on the worker when metrics are on. See
+[sandbox workers](workers.md#drain-and-expiry) and
+[observability](observability.md#prometheus).
 
 ## `/v1/chat`
 

@@ -210,6 +210,33 @@ class Metrics:
             ["size"],
             registry=self.registry,
         )
+        self.pi_processes = Gauge(
+            "apipi_pi_processes",
+            "Live host Pi processes on this worker",
+            registry=self.registry,
+        )
+        self.pi_rss_bytes = Gauge(
+            "apipi_pi_rss_bytes",
+            "Sum of host Pi process-group RSS",
+            registry=self.registry,
+        )
+        self.pi_pss_bytes = Gauge(
+            "apipi_pi_pss_bytes",
+            "Sum of host Pi process-group PSS",
+            registry=self.registry,
+        )
+        self.pi_spawn = Counter(
+            "apipi_pi_spawn_total",
+            "Host Pi spawns",
+            ["result"],
+            registry=self.registry,
+        )
+        self.pi_kill = Counter(
+            "apipi_pi_kill_total",
+            "Host Pi teardowns",
+            ["reason"],
+            registry=self.registry,
+        )
 
     def observe_request(
         self,
@@ -322,6 +349,19 @@ class Metrics:
         self.guest_load.labels(size=size).set(load)
         self.guest_workspace_used.labels(size=size).set(workspace_used_bytes)
         self.guest_workspace_avail.labels(size=size).set(workspace_avail_bytes)
+
+    def set_host_pi(
+        self, *, processes: int, rss_bytes: float, pss_bytes: float
+    ) -> None:
+        self.pi_processes.set(processes)
+        self.pi_rss_bytes.set(rss_bytes)
+        self.pi_pss_bytes.set(pss_bytes)
+
+    def observe_pi_spawn(self, result: str) -> None:
+        self.pi_spawn.labels(result=result).inc()
+
+    def observe_pi_kill(self, reason: str) -> None:
+        self.pi_kill.labels(reason=reason).inc()
 
     def scrape(self) -> bytes:
         return generate_latest(self.registry)

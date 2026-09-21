@@ -73,7 +73,7 @@ class PiPool:
             same = same and self._instructions.get(session_id) == instructions
             same = same and self._key_ids.get(session_id) == key_id
             if proc is not None and proc.alive and not same:
-                await self.kill(session_id)
+                await self.kill(session_id, reason="respawn")
                 proc = None
             reused = proc is not None and proc.alive
             with start_span(
@@ -127,8 +127,10 @@ class PiPool:
                         )
                     except Exception:
                         self._observe_boot(size, "error", time.monotonic() - started)
+                        self._observe_pi_spawn("error")
                         raise
                     self._observe_boot(size, "ok", time.monotonic() - started)
+                    self._observe_pi_spawn("ok", proc)
                     log.info("pi ready", extra={"session_id": str(session_id)})
                     self._procs[session_id] = proc
                     self._spawn_tools[session_id] = tools
@@ -216,7 +218,7 @@ class PiPool:
     def put_stdio(self, session_id: uuid.UUID, servers: list[McpStdioServer]) -> None:
         self._stdio[session_id] = servers
 
-    async def kill(self, session_id: uuid.UUID) -> None:
+    async def kill(self, session_id: uuid.UUID, *, reason: str = "session") -> None:
         proc = self._procs.pop(session_id, None)
         self._last.pop(session_id, None)
         self._spawn_tools.pop(session_id, None)
@@ -232,6 +234,8 @@ class PiPool:
         if proc is not None and self.metrics is not None:
             hold = time.monotonic() - born if born is not None else 0.0
             self.metrics.observe_sandbox_destroy(size=size, hold_seconds=hold)
+            if proc.vm_id is None:
+                self.metrics.observe_pi_kill(reason)
         if self.on_kill is not None:
             await self.on_kill(session_id, proc)
         if proc is not None:
@@ -243,6 +247,21 @@ class PiPool:
         if self.metrics is None:
             return
         self.metrics.observe_sandbox_boot(size=size, result=result, seconds=seconds)
+
+    def _observe_pi_spawn(self, result: str, proc: PiProc | None = None) -> None:
+        if self.metrics is None:
+            return
+        if result == "ok":
+            if proc is None or proc.vm_id is not None:
+                return
+        elif not self._host_backend():
+            return
+        self.metrics.observe_pi_spawn(result)
+
+    def _host_backend(self) -> bool:
+        from apipi.worker.pi.isolation import load_isolation
+
+        return load_isolation(self.settings.run_mode).stdio_on_host
 
     def refresh_metrics(self) -> None:
         if self.metrics is None:
@@ -292,7 +311,7 @@ class PiPool:
             if (ttl := self._ttl_seconds(sid)) is not None and now - last >= ttl
         ]
         for sid in idle:
-            await self.kill(sid)
+            await self.kill(sid, reason="idle")
 
     async def reap_loop(self) -> None:
         seconds = [
@@ -308,4 +327,4 @@ class PiPool:
 
     async def close(self) -> None:
         for sid in list(self._procs):
-            await self.kill(sid)
+            await self.kill(sid, reason="shutdown")
