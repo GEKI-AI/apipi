@@ -190,6 +190,18 @@ turns finish or idle TTL has killed Pi, then stop the systemd unit.
 Keep health successful while a turn is in flight. A live session stays
 on the node that owns it.
 
+Host workers (`none` / `chat`) stamp Pi and host stdio MCP with
+`APIPI_WORKER_PID`. After a crash, the next `apipi worker` or combined
+`apipi serve` start reaps processes whose stamped parent is dead. It
+does not kill another live worker's Pi, and it does not match on the
+`pi` command name. systemd units must set `KillMode=control-group` so
+`systemctl stop` kills the unit cgroup, including Pi. A raw
+`kill -9` of the worker PID does not; the startup sweep covers that.
+
+Checklist after `kill -9` of a host worker: start the worker again,
+then confirm no leftover processes remain whose `APIPI_WORKER_PID`
+is the old worker PID.
+
 If SSE drops, reconnect with `after_seq` to replay from the store. The
 next turn still needs the node that holds Pi.
 

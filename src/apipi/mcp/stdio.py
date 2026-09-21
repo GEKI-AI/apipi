@@ -45,6 +45,8 @@ async def start_mcp_stdio(
     try:
         env = os.environ.copy()
         env.pop("DATABASE_URL", None)
+        env["APIPI_HOST_PI"] = "1"
+        env["APIPI_WORKER_PID"] = str(os.getpid())
         process = await asyncio.create_subprocess_exec(
             command,
             *args,

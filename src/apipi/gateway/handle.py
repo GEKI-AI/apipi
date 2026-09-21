@@ -286,6 +286,10 @@ class Gateway:
 
     async def startup(self) -> None:
         self.execution.attach_store(self.store)
+        if self.execution.stdio_on_host:
+            from apipi.worker.pi.orphan import sweep_host_orphans
+
+            await sweep_host_orphans()
         self._tasks = [
             asyncio.create_task(self.execution.reap_loop()),
             asyncio.create_task(self.execution.reap_workspace_loop()),

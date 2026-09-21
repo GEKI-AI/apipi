@@ -321,9 +321,10 @@ permission to create TAP devices. Files are in `deploy/systemd/` and
 
 Example units: `deploy/systemd/apipi-api.service` (`serve --api-only`,
 no KVM) and `deploy/systemd/apipi-worker.service` (DeviceAllow for
-`/dev/kvm` and TAP). Combined serve on one box can still use
-`apipi serve` with `APIPI_RUN_MODE=microvm` if that host is the
-hypervisor.
+`/dev/kvm` and TAP). Both worker units need `KillMode=control-group`
+so a stop or crash restart does not leave host Pi processes. Combined
+serve on one box can still use `apipi serve` with
+`APIPI_RUN_MODE=microvm` if that host is the hypervisor.
 
 Environment variables in `/etc/apipi.env` override keys in the TOML
 file. Bind, run mode, worker token, and the auth callback are the

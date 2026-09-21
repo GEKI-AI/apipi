@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Host workers stamp Pi and stdio MCP with `APIPI_WORKER_PID` and reap
+  leftovers from a dead worker on the next start. systemd units set
+  `KillMode=control-group`.
 - Presigned PUT/GET for Files, Skills, and artifact downloads when
   `APIPI_ARTIFACT_STORE=s3`. Bytes go to the bucket; complete writes
   metadata. Local store returns `presign_unsupported`.

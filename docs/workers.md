@@ -150,6 +150,13 @@ guest and workspace were on the expired host. Start a new turn after
 that error. Heartbeats extend `lease_until` so a live worker does not
 expire mid-turn.
 
+Host Pi (`chat` / `none`) is a child of the worker. A graceful stop
+runs pool teardown. A `kill -9` of the worker leaves those children.
+The next worker start reaps leftovers stamped with a dead
+`APIPI_WORKER_PID`. Set `KillMode=control-group` on the systemd unit
+(`deploy/systemd/apipi-worker.service`) so `systemctl stop` kills the
+cgroup. See [production](production.md#failure-and-drain).
+
 ## What runs where
 
 | Process | Trust | Needs |
