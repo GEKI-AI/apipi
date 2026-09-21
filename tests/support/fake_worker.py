@@ -20,12 +20,18 @@ class FakeWorker:
         self.hello: dict[str, Any] | None = None
 
     async def connect(
-        self, *, capacity: int = 1, memory_mb: int | None = None
+        self,
+        *,
+        capacity: int = 1,
+        memory_mb: int | None = None,
+        run_mode: str | None = "chat",
     ) -> dict[str, Any]:
         await self.ws.connect()
         register: dict[str, Any] = {"type": "register", "capacity": capacity}
         if memory_mb is not None:
             register["memory_mb"] = memory_mb
+        if run_mode is not None:
+            register["run_mode"] = run_mode
         if self.worker_id is not None:
             register["id"] = self.worker_id
         await self.ws.send_json(register)

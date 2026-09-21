@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `server_url`, `stdio` with `command` / `args`). Flat `server_url` or
   `command` on the tool object is rejected. Rewrite saved agent tool
   JSON. Stdio MCP is the same API, not an ApiPi extension.
+- Worker `register` requires `run_mode`. The hub picks by that
+  placement class before capacity or RAM. Agents
+  `environment.type=none` is placed on `chat` workers by default
+  (`APIPI_ENV_NONE_PLACEMENT`). Set `microvm` to keep a computer-only
+  fleet, or `reject` to fail closed with code `placement`.
+- `apipi_workers` and `apipi_worker_leases` have a `run_mode` label.
 
 ### Changed
 

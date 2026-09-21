@@ -102,11 +102,13 @@ class Metrics:
         self.workers = Gauge(
             "apipi_workers",
             "Connected sandbox workers",
+            ["run_mode"],
             registry=self.registry,
         )
         self.worker_leases = Gauge(
             "apipi_worker_leases",
             "Active worker session leases",
+            ["run_mode"],
             registry=self.registry,
         )
         self.worker_assign = Histogram(
@@ -257,6 +259,17 @@ class Metrics:
 
     def observe_payload_export(self, result: str) -> None:
         self.payload_export.labels(result=result).inc()
+
+    def set_workers(
+        self,
+        counts: dict[str, int],
+        leases: dict[str, int],
+        *,
+        modes: set[str],
+    ) -> None:
+        for mode in modes:
+            self.workers.labels(run_mode=mode).set(counts.get(mode, 0))
+            self.worker_leases.labels(run_mode=mode).set(leases.get(mode, 0))
 
     def set_worker_util(
         self,

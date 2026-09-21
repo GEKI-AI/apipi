@@ -26,7 +26,10 @@ split is `self_hosted`: Pi stays in the run mode, and the runner is
 elsewhere. The customer must sandbox the runner. Tests that do not
 need a computer can use `environment.type=none`. That environment value
 means “no files.” Isolation `none` means “no sandbox for Pi.” They are
-not the same setting.
+not the same setting. On `apipi serve --api-only`, Agents sessions with
+`environment.type=none` are placed on workers that advertised `chat`
+unless you set `APIPI_ENV_NONE_PLACEMENT` to `microvm` or `reject`. See
+[workers](workers.md).
 
 | Mode | When to use | Isolation |
 | --- | --- | --- |

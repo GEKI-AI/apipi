@@ -134,4 +134,6 @@ The API never opens `/dev/kvm`. The worker does. See
 [workers](worker-concepts.md) and [install](install.md).
 
 `environment.type=none` means “no files.” Isolation `none` means “no
-sandbox for Pi.” They are not the same setting.
+sandbox for Pi.” They are not the same setting. Worker placement for
+`environment.type=none` is `APIPI_ENV_NONE_PLACEMENT` (default `chat`).
+See [workers](workers.md).
