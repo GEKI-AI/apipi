@@ -379,15 +379,18 @@ class LocalExecution:
         if store is None:
             return
         async with store.session() as db:
-            await harvest_session(
-                db,
-                self.settings,
-                session_id,
-                proc,
-                self.env_hub,
-                sync_workspace=False,
-                blobs=self.blobs,
-            )
+            try:
+                await harvest_session(
+                    db,
+                    self.settings,
+                    session_id,
+                    proc,
+                    self.env_hub,
+                    sync_workspace=False,
+                    blobs=self.blobs,
+                )
+            except OSError:
+                return
 
 
 def local_execution(

@@ -796,6 +796,22 @@ async def _complete_turn(
             db, settings, session_id, proc, env_hub, turn_id=turn_id
         )
         if limit_error is not None:
+            if limit_error.code == "artifact_store":
+                await _fail_turn(
+                    db,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    turn_id,
+                    str(limit_error),
+                    request_id=request_id,
+                    metrics=metrics,
+                    tracing=tracing,
+                    settings=settings,
+                    code="artifact_store",
+                    user_id=user_id,
+                )
+                return
             await persist_event(
                 db,
                 hub,

@@ -329,14 +329,23 @@ async def harvest_session(
             )
         except DiskLimitError as exc:
             persist_error = exc
-    await persist_pi_session(
-        db,
-        settings,
-        row,
-        proc,
-        dest=_hosted_dest(row),
-        blobs=blobs,
-    )
+        except OSError:
+            persist_error = DiskLimitError(
+                "Cannot write artifacts", code="artifact_store"
+            )
+    try:
+        await persist_pi_session(
+            db,
+            settings,
+            row,
+            proc,
+            dest=_hosted_dest(row),
+            blobs=blobs,
+        )
+    except OSError:
+        persist_error = persist_error or DiskLimitError(
+            "Cannot write artifacts", code="artifact_store"
+        )
     return row, persist_error or workspace_error
 
 

@@ -11,6 +11,7 @@ from apipi.store.engine import Store
 from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import create_artifact, get_session_by_id
 from apipi.worker.pi.artifacts import harvest_session, reap_workspaces
+from apipi.worker.pi.dirs import sessions_root
 from apipi.worker.pi.pool import PiPool
 
 
@@ -352,6 +353,24 @@ async def test_artifact_cap_rejects_publish(
     )
     assert listed.status_code == 200
     assert listed.json()["data"] == []
+
+
+async def test_harvest_unwritable_store_is_artifact_store(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = "disk-perm"
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
+    artifacts = sessions_root(settings) / ".artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    artifacts.chmod(0o500)
+    try:
+        with pytest.raises(DiskLimitError) as exc:
+            await _harvest(store, settings, session_id)
+        assert exc.value.code == "artifact_store"
+    finally:
+        artifacts.chmod(0o755)
 
 
 async def test_artifact_cap_allows_under_limit(
