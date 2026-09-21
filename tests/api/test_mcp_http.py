@@ -91,6 +91,34 @@ async def test_mcp_http_starts_with_session(
     assert "from-env" not in dumped
 
 
+async def test_mcp_http_on_chat_session(
+    mcp_client: AsyncClient,
+    mcp_harness: FakeHarness,
+    mcp_server: tuple[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mcp_url, seen = mcp_server
+    monkeypatch.setenv("MCP_TOKEN", "from-env")
+    token = "mcp-chat"
+    agent_id = await _agent_with_mcp(
+        mcp_client,
+        token,
+        mcp_url,
+        headers={"Authorization": "Bearer ${MCP_TOKEN}"},
+    )
+    created = await mcp_client.post(
+        "/v1/chat/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent_id, "input": "hello"},
+    )
+    assert created.status_code == 200
+    assert "environment" not in created.json()
+    assert created.json()["status"] == "idle"
+    assert mcp_harness.mcp_http is not None
+    assert mcp_harness.mcp_http[0].server_label == "mock"
+    assert seen.get("Authorization") == "Bearer from-env"
+
+
 async def test_mcp_http_failure_is_session_failed(
     mcp_client: AsyncClient, mcp_fail_url: str
 ) -> None:

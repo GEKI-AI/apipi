@@ -6,6 +6,11 @@ when the session has a computer (`openai_hosted` or a connected
 `none`. Everything else is attached per agent: function tools, MCP
 servers, and skills.
 
+`/v1/chat` sessions have no computer, so bash and file tools stay off.
+Chat allows function tools and HTTP MCP only. Stdio MCP, Playwright
+auto-inject, and workspace skills are rejected with code `chat_tool`.
+See [Chat](api.md#chat).
+
 Copy-paste configs live in `examples/` at the repo root (Tavily,
 Playwright).
 

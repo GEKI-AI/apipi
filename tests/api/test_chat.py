@@ -110,3 +110,89 @@ async def test_chat_events_and_export(client: AsyncClient) -> None:
     assert exported.status_code == 200
     assert "events" in exported.json()
     assert "environment" not in exported.json()
+
+
+_STDIO = {
+    "type": "mcp",
+    "server_label": "local",
+    "transport": {"type": "stdio", "command": "npx", "args": ["-y", "@playwright/mcp"]},
+}
+_HTTP = {
+    "type": "mcp",
+    "server_label": "search",
+    "transport": {"type": "http", "server_url": "https://mcp.example/mcp"},
+}
+_FN = {"type": "function", "name": "echo", "parameters": {"type": "object"}}
+
+
+async def test_chat_allows_function_tools(client: AsyncClient) -> None:
+    token = _token()
+    created = await client.post(
+        "/v1/chat/sessions",
+        headers=_auth(token),
+        json={"agent": {"name": "bot", "model": "test", "tools": [_FN]}},
+    )
+    assert created.status_code == 200
+    assert "environment" not in created.json()
+
+
+async def test_chat_rejects_stdio_mcp(client: AsyncClient) -> None:
+    token = _token()
+    created = await client.post(
+        "/v1/chat/sessions",
+        headers=_auth(token),
+        json={"agent": {"name": "bot", "model": "test", "tools": [_STDIO]}},
+    )
+    assert created.status_code == 400
+    assert created.json()["error"]["code"] == "chat_tool"
+
+
+async def test_chat_rejects_stdio_on_saved_agent(client: AsyncClient) -> None:
+    token = _token()
+    agent = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={"name": "bot", "model": "test", "tools": [_STDIO]},
+    )
+    assert agent.status_code == 200
+    created = await client.post(
+        "/v1/chat/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent.json()["id"]},
+    )
+    assert created.status_code == 400
+    assert created.json()["error"]["code"] == "chat_tool"
+
+
+async def test_chat_profile_agent_rejects_stdio(client: AsyncClient) -> None:
+    token = _token()
+    agent = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={
+            "name": "bot",
+            "model": "test",
+            "metadata": {"apipi.session_kind": "chat"},
+            "tools": [_STDIO],
+        },
+    )
+    assert agent.status_code == 400
+    assert agent.json()["error"]["code"] == "chat_tool"
+    ok = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={
+            "name": "bot",
+            "model": "test",
+            "metadata": {"apipi.session_kind": "chat"},
+            "tools": [_FN, _HTTP],
+        },
+    )
+    assert ok.status_code == 200
+    patched = await client.post(
+        f"/v1/agents/{ok.json()['id']}",
+        headers=_auth(token),
+        json={"tools": [_STDIO]},
+    )
+    assert patched.status_code == 400
+    assert patched.json()["error"]["code"] == "chat_tool"

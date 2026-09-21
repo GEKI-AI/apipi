@@ -34,7 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `/v1/chat/sessions` is a GEKI-native chat facade over the same
-  session store. Clients never set or see `environment`.
+  session store. Clients never set or see `environment`. Chat tools
+  allow function tools and HTTP MCP only (`chat_tool` on deny).
 - `APIPI_RUN_MODE=chat` is a first-class alias of isolation `none` for
   dedicated chat worker pools.
 - Trusted worker WebSocket at `/internal/worker` with leases,

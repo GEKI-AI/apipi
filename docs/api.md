@@ -161,6 +161,12 @@ and `stream`. An `environment` field is `400` with code
 on a chat path is `404`. Event types match Agents so one frontend can
 read both.
 
+Chat tools are an allowlist: function tools and HTTP MCP. Stdio MCP,
+Playwright auto-inject, workspace skills, and computer environments
+are rejected. A disallowed tool is `400` with code `chat_tool`. Saved
+agents used as chat profiles should set `metadata.apipi.session_kind`
+to `chat`; create and update then apply the same allowlist.
+
 ## Sessions
 
 | Method | Path |

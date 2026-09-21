@@ -6,6 +6,7 @@ from pydantic_core import PydanticCustomError
 
 from apipi.gateway.auth import not_found
 from apipi.gateway.schemas import StrictModel
+from apipi.services.chat_tools import is_chat_profile, reject_disallowed_chat_tools
 from apipi.store.engine import Store
 from apipi.store.models import Agent
 from apipi.store.repo import (
@@ -110,6 +111,8 @@ class AgentService:
 
     async def create(self, tenant_id: uuid.UUID, body: AgentWrite) -> dict[str, Any]:
         payload = write_payload(body)
+        if is_chat_profile(payload.get("metadata")):
+            reject_disallowed_chat_tools(payload.get("tools"))
         async with self.store.session() as db:
             agent = await create_agent(
                 db,
@@ -137,10 +140,16 @@ class AgentService:
     async def update(
         self, tenant_id: uuid.UUID, agent_id: uuid.UUID, body: AgentWrite
     ) -> dict[str, Any]:
+        payload = write_payload(body)
         async with self.store.session() as db:
-            agent = await update_agent(
-                db, tenant_id, agent_id, changes=write_payload(body)
-            )
+            existing = await get_agent(db, tenant_id, agent_id)
+            if existing is None:
+                not_found()
+            metadata = payload.get("metadata", existing.metadata_json)
+            tools = payload.get("tools", existing.tools)
+            if is_chat_profile(metadata):
+                reject_disallowed_chat_tools(tools)
+            agent = await update_agent(db, tenant_id, agent_id, changes=payload)
             if agent is None:
                 not_found()
             return agent_body(agent)

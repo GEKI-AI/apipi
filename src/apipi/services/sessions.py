@@ -22,6 +22,7 @@ from apipi.mcp.http import (
 )
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.services.agents import AgentWrite
+from apipi.services.chat_tools import is_chat_profile, reject_disallowed_chat_tools
 from apipi.services.files import FileService
 from apipi.services.runtime import (
     EventHub,
@@ -118,7 +119,7 @@ def session_body(row: SessionRow) -> dict[str, Any]:
 
 def is_chat_session(row: SessionRow | dict[str, Any]) -> bool:
     metadata = row.get("metadata") if isinstance(row, dict) else row.metadata_json
-    return isinstance(metadata, dict) and metadata.get(SESSION_KIND_KEY) == CHAT
+    return is_chat_profile(metadata if isinstance(metadata, dict) else None)
 
 
 def chat_session_body(row: SessionRow | dict[str, Any]) -> dict[str, Any]:
@@ -286,6 +287,7 @@ class SessionService:
         env_id: uuid.UUID | None = None
         model: str | None = None
         instructions: str | None = None
+        chat = is_chat_session({"metadata": metadata or {}})
         async with self.store.session() as db:
             agent_metadata: dict[str, Any] | None = None
             if agent_id is not None:
@@ -303,6 +305,8 @@ class SessionService:
                     raw_tools = [
                         tool.model_dump(exclude_none=True) for tool in agent.tools
                     ]
+            if chat:
+                reject_disallowed_chat_tools(raw_tools)
             size = resolve_sandbox_size(
                 environment_size=env.get("sandbox_size")
                 if isinstance(env.get("sandbox_size"), str)
@@ -406,8 +410,13 @@ class SessionService:
                             [uuid.UUID(item) for item in vault_id_strs],
                         )
                     connected = apply_vault_headers(connected, creds)
+                attached = (
+                    raw_tools
+                    if chat
+                    else merge_playwright(raw_tools, size=size, settings=self.settings)
+                )
                 stdio = await start_mcp_stdio_tools(
-                    merge_playwright(raw_tools, size=size, settings=self.settings),
+                    attached,
                     on_host=self.execution.stdio_on_host,
                 )
             except McpConnectError as exc:
