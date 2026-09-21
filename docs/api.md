@@ -444,5 +444,8 @@ processes returns `429` with code `capacity`. A tenant that would pass
 An `openai_hosted` directory over `APIPI_MAX_WORKSPACE_BYTES` emits
 `agent.session.error` with code `workspace_too_large`. Publishing
 artifacts that would pass `APIPI_MAX_ARTIFACT_BYTES` emits
-`agent.session.error` with code `artifact_too_large`. Settings and
-defaults are in [config](config.md).
+`agent.session.error` with code `artifact_too_large`. If the artifact
+store cannot be written (`OSError`, including a permission error on
+the local `.artifacts` tree), the turn fails with
+`agent.session.turn.failed` and `agent.session.error` with code
+`artifact_store`. Settings and defaults are in [config](config.md).

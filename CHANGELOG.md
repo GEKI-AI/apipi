@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fleet, or `reject` to fail closed with code `placement`.
 - `apipi_workers` and `apipi_worker_leases` have a `run_mode` label.
 
+### Fixed
+
+- Artifact harvest I/O errors (`PermissionError` and other `OSError`)
+  fail the turn with code `artifact_store` instead of `500 internal`.
+
 ### Changed
 
 - HTTP session routes run turns through an in-process execution

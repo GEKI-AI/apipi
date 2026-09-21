@@ -75,7 +75,7 @@ hosted files and skills).
 | `APIPI_API_ONLY` | `api_only` | off | Control plane only. Turns lease a worker. `apipi serve --api-only` sets this. |
 | `APIPI_ENV_NONE_PLACEMENT` | `[placement].env_none` | `chat` | Where Agents sessions with `environment.type=none` run on a mixed fleet: `chat` (chat workers), `microvm` (legacy computer workers), or `reject` (`400` code `placement`). Session metadata `apipi.session_kind=chat` always uses chat workers. Computer environments always use `microvm`. See [chat fleets](chat.md) and [workers](workers.md). |
 | `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache success and `401` rejects by SHA-256 of the bearer, never the raw key. `429` rejects are not cached. |
-| `APIPI_SESSIONS_DIR` | `sessions_dir` | `.apipi/sessions` under cwd | Root for local session directories (`openai_hosted`). |
+| `APIPI_SESSIONS_DIR` | `sessions_dir` | `.apipi/sessions` under cwd | Root for local session directories (`openai_hosted`). Must be writable by the gateway user. Local artifacts live under `.artifacts` there. A leftover root-owned tree fails harvest with code `artifact_store`. |
 | `APIPI_DB_POOL_SIZE` | `db_pool_size` | `5` | SQLAlchemy pool size. |
 | `APIPI_MAX_REQUEST_BYTES` | `max_request_bytes` | `1MiB` | Reject larger request bodies with `413` and code `payload_too_large`. |
 | `APIPI_MAX_WORKSPACE_BYTES` | `max_workspace_bytes` | `1GiB` | Size of one `openai_hosted` session directory. An oversized microvm pull is not unpacked. Over the cap, harvest emits `agent.session.error` with code `workspace_too_large`. |
@@ -172,6 +172,7 @@ idle TTL kills the process and frees a slot.
 | Request body too large | `413` | `payload_too_large` |
 | Workspace directory too large | `agent.session.error` | `workspace_too_large` |
 | Artifact store too large | `agent.session.error` | `artifact_too_large` |
+| Artifact store not writable | `agent.session.turn.failed` | `artifact_store` |
 
 The gateway does not intercept every write inside a guest. Guest tmpfs
 is already bounded by `[sandbox.resources].mem_mib`. Workspace and
