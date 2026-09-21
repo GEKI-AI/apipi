@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the first turn fails.
 - Artifact harvest I/O errors (`PermissionError` and other `OSError`)
   fail the turn with code `artifact_store` instead of `500 internal`.
+- Request-start logs use the URL path. Shutdown harvest ignores
+  `CancelledError`.
 
 ### Changed
 
