@@ -22,7 +22,8 @@ The example file in this repo is `examples/apipi.toml`. Copy
 
 Environment variables win. `.env` wins over TOML. Unknown TOML keys
 fail at startup. Nested tables are `[pi]`, `[sandbox]`,
-`[sandbox.resources]`, `[sandbox.network]`, and `[sandbox.ttl]`. A setting that would
+`[sandbox.resources]`, `[sandbox.network]`, `[sandbox.ttl]`, and
+`[placement]`. A setting that would
 store prompt or completion bodies is rejected at startup.
 
 `load_settings()` is the CLI path and still reads the process
@@ -72,6 +73,7 @@ hosted files and skills).
 | `APIPI_WORKER_LEASE_TTL` | `worker_lease_ttl` | `30s` | How long a session lease stays valid without a heartbeat. Expiry fails closed and emits `agent.session.error` with code `worker_lease_expired`. |
 | `APIPI_API_URL` | `api_url` | unset (`http://127.0.0.1:8000` for `apipi worker`) | Base URL the worker uses to open `/internal/worker`. |
 | `APIPI_API_ONLY` | `api_only` | off | Control plane only. Turns lease a worker. `apipi serve --api-only` sets this. |
+| `APIPI_ENV_NONE_PLACEMENT` | `[placement].env_none` | `chat` | Where Agents sessions with `environment.type=none` run on a mixed fleet: `chat` (chat workers), `microvm` (legacy computer workers), or `reject` (`400` code `placement`). Session metadata `apipi.session_kind=chat` always uses chat workers. Computer environments always use `microvm`. See [workers](workers.md). |
 | `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache success and `401` rejects by SHA-256 of the bearer, never the raw key. `429` rejects are not cached. |
 | `APIPI_SESSIONS_DIR` | `sessions_dir` | `.apipi/sessions` under cwd | Root for local session directories (`openai_hosted`). |
 | `APIPI_DB_POOL_SIZE` | `db_pool_size` | `5` | SQLAlchemy pool size. |
@@ -419,6 +421,9 @@ self_hosted = "0"
 
 [sandbox.browser]
 auto_playwright = true
+
+[placement]
+env_none = "chat"
 ```
 
 ## Compatibility

@@ -64,8 +64,8 @@ Worker to API:
 
 | `type` | Fields | What |
 | --- | --- | --- |
-| `register` | `id` (optional UUID), `capacity` (int ≥ 1), `memory_mb` (int ≥ 1, optional) | Create or reconnect the worker. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB. If `memory_mb` is omitted, the API uses `capacity ×` guest `mem_mib`. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
-| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `drain` (optional bool) | Refresh `last_seen`. May update both caps and drain posture. |
+| `register` | `id` (optional UUID), `capacity` (int ≥ 1), `memory_mb` (int ≥ 1, optional), `run_mode` (string, required) | Create or reconnect the worker. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB. If `memory_mb` is omitted, the API uses `capacity ×` guest `mem_mib`. `run_mode` is the placement class this process serves (`chat`, `microvm`, or the process `APIPI_RUN_MODE`). Reconnect bumps `generation` so a split brain cannot keep both sockets. |
+| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `drain` (optional bool) | Refresh `last_seen`. May update caps, advertised `run_mode`, and drain posture. |
 | `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. |
 | `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |
@@ -108,15 +108,40 @@ generation, and retransmits unacked commands for leases that worker
 still owns. The same `command.id` is replayed; the worker must treat
 that id as idempotent so a turn is not run twice.
 
+## Placement
+
+`WorkerHub.pick` matches **placement class** before capacity or RAM.
+A session is assigned only to a connected worker whose advertised
+`run_mode` equals that class. There is no fallback to another mode.
+
+| Session | Required worker `run_mode` |
+| --- | --- |
+| Session metadata `apipi.session_kind=chat` (and `/v1/chat` when that facade exists) | `chat` always |
+| Agents with a computer (`openai_hosted`, `hosted`, or `self_hosted`) | `microvm` |
+| Agents with `environment.type=none` | `APIPI_ENV_NONE_PLACEMENT` / `[placement].env_none`: `chat` (default), `microvm`, or `reject` |
+
+`reject` fails the turn with `400` and code `placement`. No matching
+worker is `429` with code `capacity`, as today.
+
+Commands include `run_mode` in the payload. The worker compares that
+to its process `APIPI_RUN_MODE` and does not start Pi when they do not
+match. Isolation `none` may still run a `chat` command because it is
+the same light backend; `run_mode=chat` as a process name is a later
+change. A `none` worker must not run a `microvm` command, and a
+`microvm` worker must not run a `chat` command.
+
+Advertise `chat` on a dedicated chat pool. Advertising `none` matches
+no Agents placement class in this version.
+
 ## Drain and expiry
 
 A heartbeat may include `"drain": true`. That worker keeps its current
 leases and heartbeats them, but the scheduler does not give it new
-sessions. Placement picks among workers that are not draining, have a
-free session slot, and have enough remaining `memory_mb` for one more
-guest (`mem_mib` from `[sandbox.resources]`, default 512). Among those
-it prefers the worker with the most free RAM. Session count is only a
-filter and a tie-break.
+sessions. After the placement filter, it picks among workers that are
+not draining, have a free session slot, and have enough remaining
+`memory_mb` for one more guest (`mem_mib` from `[sandbox.resources]`,
+default 512). Among those it prefers the worker with the most free
+RAM. Session count is only a filter and a tie-break.
 
 When `lease_until` passes, the lease is cleared and the session gets
 `worker_lease_expired`. The turn is not moved to another worker: the

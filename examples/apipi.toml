@@ -44,3 +44,6 @@ self_hosted = "0"
 
 [sandbox.browser]
 auto_playwright = true
+
+[placement]
+env_none = "chat"

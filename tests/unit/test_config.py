@@ -383,6 +383,7 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.microvm_egress_mbit == 50
     assert settings.workspace_ttl == timedelta(hours=1)
     assert settings.usage_store == "turns"
+    assert settings.env_none_placement == "chat"
     assert settings.usage_retention == timedelta(days=15)
     assert settings.usage_export_url is None
     assert settings.usage_export_token is None
@@ -742,3 +743,38 @@ def test_pi_auto_compact_default_omits_flag() -> None:
     )
     args = pi_command_args(settings, tools=False)
     assert "--no-auto-compact" not in args
+
+
+def test_env_none_placement_from_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_ENV_NONE_PLACEMENT", "microvm")
+    assert load_settings().env_none_placement == "microvm"
+
+
+def test_env_none_placement_from_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("APIPI_ENV_NONE_PLACEMENT", raising=False)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "[placement]\n"
+        'env_none = "reject"\n'
+    )
+    assert load_settings().env_none_placement == "reject"
+
+
+def test_env_none_placement_invalid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_ENV_NONE_PLACEMENT", "host")
+    with pytest.raises(ConfigError, match="APIPI_ENV_NONE_PLACEMENT must be"):
+        load_settings()

@@ -87,7 +87,7 @@ No bearer. Network-restrict `/metrics` like any scrape endpoint.
 | Process | Scrape | What you get |
 | --- | --- | --- |
 | Combined `apipi serve` | `http://<api>:8000/metrics` | HTTP, turns, tokens, worker-pool gauges, sandbox series if this process runs sandboxes |
-| API-only | `http://<api>:8000/metrics` | HTTP requests, errors, `apipi_workers`, `apipi_worker_leases`, `apipi_worker_assign_seconds` |
+| API-only | `http://<api>:8000/metrics` | HTTP requests, errors, `apipi_workers` and `apipi_worker_leases` (labeled `run_mode`), `apipi_worker_assign_seconds` |
 | Worker | `http://<worker>:9091/metrics` | Turns, tokens, utilization, sandbox boot/destroy, cgroup guest RAM/CPU, optional vsock samples |
 
 Guest resource layers:

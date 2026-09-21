@@ -35,6 +35,7 @@ from apipi.store.repo import (
     upsert_worker,
 )
 from apipi.worker.pi.sandbox import mem_mib_for_size, sandbox_size_of
+from apipi.worker.placement import placement_for, worker_accepts
 
 COMMAND_OPS = frozenset({"turn.start", "turn.cancel", "turn.continue"})
 WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})
@@ -48,6 +49,7 @@ class WorkerConnection:
     websocket: WebSocket
     capacity: int
     memory_mb: int
+    run_mode: str
     leases: set[uuid.UUID] = field(default_factory=set)
     lease_mem: dict[uuid.UUID, int] = field(default_factory=dict)
     draining: bool = False
@@ -66,6 +68,7 @@ class WorkerHub:
         self.tracing = tracing
         self._conns: dict[uuid.UUID, WorkerConnection] = {}
         self._unacked: dict[uuid.UUID, dict[str, Any]] = {}
+        self._metric_modes: set[str] = set()
         self._lock = asyncio.Lock()
 
     def authorized(self, token: str | None) -> bool:
@@ -105,12 +108,18 @@ class WorkerHub:
         metrics = self.metrics
         if metrics is None:
             return
-        metrics.workers.set(len(self._conns))
-        metrics.worker_leases.set(
-            sum(len(conn.leases) for conn in self._conns.values())
-        )
+        counts: dict[str, int] = {}
+        leases: dict[str, int] = {}
+        for conn in self._conns.values():
+            counts[conn.run_mode] = counts.get(conn.run_mode, 0) + 1
+            leases[conn.run_mode] = leases.get(conn.run_mode, 0) + len(conn.leases)
+        self._metric_modes |= set(counts)
+        self._metric_modes |= {"chat", "microvm", "none"}
+        metrics.set_workers(counts, leases, modes=self._metric_modes)
 
-    def pick(self, session_mem_mib: int | None = None) -> WorkerConnection | None:
+    def pick(
+        self, session_mem_mib: int | None = None, *, run_mode: str
+    ) -> WorkerConnection | None:
         session_mem = (
             session_mem_mib
             if session_mem_mib is not None
@@ -118,6 +127,8 @@ class WorkerHub:
         )
         ready = []
         for conn in self._conns.values():
+            if conn.run_mode != run_mode:
+                continue
             if conn.draining:
                 continue
             if len(conn.leases) + 1 > conn.capacity:
@@ -173,10 +184,37 @@ class WorkerHub:
     ) -> dict[str, Any] | None:
         async with store.session() as db:
             session = await get_session(db, tenant_id, session_id)
-        session_mem = mem_mib_for_size(
-            self.settings, sandbox_size_of(session.environment if session else None)
+        if session is None:
+            return None
+        required = placement_for(
+            environment=session.environment,
+            metadata=session.metadata_json,
+            env_none=self.settings.env_none_placement,
         )
-        conn = self.pick(session_mem)
+        if required is None:
+            request_id = (
+                payload.get("request_id") if isinstance(payload, dict) else None
+            )
+            log_event(
+                log,
+                logging.WARNING,
+                "worker assign failed",
+                event="worker.assign.failed",
+                error_code="placement",
+                tenant_id=tenant_id,
+                session_id=session_id,
+                request_id=request_id,
+            )
+            raise ApiError(
+                "invalid_request",
+                "environment.type=none is rejected by APIPI_ENV_NONE_PLACEMENT",
+                code="placement",
+                status_code=400,
+            )
+        session_mem = mem_mib_for_size(
+            self.settings, sandbox_size_of(session.environment)
+        )
+        conn = self.pick(session_mem, run_mode=required)
         if conn is None:
             request_id = (
                 payload.get("request_id") if isinstance(payload, dict) else None
@@ -214,7 +252,7 @@ class WorkerHub:
             "session_id": str(session_id),
             "lease_id": str(lease_id),
             "op": op,
-            "payload": payload if payload is not None else {},
+            "payload": _payload_with_run_mode(payload, required),
         }
         self._unacked[lease_id] = command
         await _send(conn.websocket, command)
@@ -241,6 +279,11 @@ class WorkerHub:
                 return None
             worker_id = row.worker_id
             lease_id = row.lease_id
+            required = placement_for(
+                environment=row.environment,
+                metadata=row.metadata_json,
+                env_none=self.settings.env_none_placement,
+            )
         conn = self._conns.get(worker_id)
         if conn is None or lease_id not in conn.leases:
             return None
@@ -251,7 +294,7 @@ class WorkerHub:
             "session_id": str(session_id),
             "lease_id": str(lease_id),
             "op": op,
-            "payload": payload if payload is not None else {},
+            "payload": _payload_with_run_mode(payload, required),
         }
         self._unacked[lease_id] = command
         await _send(conn.websocket, command)
@@ -378,10 +421,28 @@ def _positive_int(value: object) -> int | None:
     return value
 
 
+def _run_mode(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
+
+
+def _payload_with_run_mode(
+    payload: dict[str, Any] | None, required: str | None
+) -> dict[str, Any]:
+    out = dict(payload) if payload is not None else {}
+    if required is not None:
+        out["run_mode"] = required
+    return out
+
+
 async def register_worker(
     hub: WorkerHub, store: Store, websocket: WebSocket, message: dict[str, Any]
 ) -> WorkerConnection | None:
     raw_id = message.get("id")
+    run_mode = _run_mode(message.get("run_mode"))
+    if run_mode is None:
+        return None
     capacity = _positive_int(message.get("capacity", 1))
     if capacity is None:
         return None
@@ -414,6 +475,7 @@ async def register_worker(
         websocket=websocket,
         capacity=row.capacity,
         memory_mb=row.memory_mb,
+        run_mode=run_mode,
     )
     await hub.attach(conn)
     await _send(
@@ -440,6 +502,11 @@ async def heartbeat_worker(
         return
     parsed_capacity = _positive_int(capacity) if capacity is not None else None
     parsed_memory = _positive_int(memory_mb) if memory_mb is not None else None
+    parsed_mode = None
+    if "run_mode" in message:
+        parsed_mode = _run_mode(message.get("run_mode"))
+        if parsed_mode is None:
+            return
     async with store.session() as db:
         await touch_worker(
             db,
@@ -457,6 +524,9 @@ async def heartbeat_worker(
         conn.capacity = parsed_capacity
     if parsed_memory is not None:
         conn.memory_mb = parsed_memory
+    if parsed_mode is not None:
+        conn.run_mode = parsed_mode
+        hub._observe()
     if message.get("drain") is True:
         conn.draining = True
         hub._observe()
@@ -474,6 +544,52 @@ async def _send(websocket: WebSocket, payload: dict[str, Any]) -> None:
 async def _close(websocket: WebSocket) -> None:
     if websocket.client_state == WebSocketState.CONNECTED:
         await websocket.close()
+
+
+async def _reject_mismatched_turn(
+    execution: Any,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    required: str,
+    worker_mode: str,
+    request_id: str | None,
+) -> None:
+    log_event(
+        log,
+        logging.WARNING,
+        "worker placement rejected",
+        event="worker.placement.rejected",
+        error_code="placement",
+        tenant_id=tenant_id,
+        session_id=session_id,
+        request_id=request_id,
+        run_mode=worker_mode,
+    )
+    store = getattr(execution, "store", None)
+    hub = getattr(execution, "hub", None)
+    if store is None or hub is None:
+        return
+    async with store.session() as db:
+        await persist_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.error",
+            data={
+                "message": "Worker run_mode does not match the session",
+                "code": "placement",
+            },
+        )
+        await persist_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.turn.failed",
+            data={"message": "Worker run_mode does not match the session"},
+        )
 
 
 async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
@@ -552,6 +668,22 @@ async def _run_command(
     user_id: str | None,
 ) -> None:
     if op == "turn.start":
+        required = payload.get("run_mode")
+        worker_mode = getattr(getattr(execution, "settings", None), "run_mode", None)
+        if (
+            isinstance(required, str)
+            and isinstance(worker_mode, str)
+            and not worker_accepts(worker_mode, required)
+        ):
+            await _reject_mismatched_turn(
+                execution,
+                tenant_id,
+                session_id,
+                required=required,
+                worker_mode=worker_mode,
+                request_id=request_id,
+            )
+            return
         text = payload.get("text")
         await execution.run_turn(
             tenant_id,
@@ -647,6 +779,7 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
                         "type": "register",
                         "capacity": settings.max_sessions,
                         "memory_mb": settings.node_memory_mb(),
+                        "run_mode": settings.run_mode,
                     }
                 )
             )
@@ -670,6 +803,7 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
                                 "type": "heartbeat",
                                 "capacity": settings.max_sessions,
                                 "memory_mb": settings.node_memory_mb(),
+                                "run_mode": settings.run_mode,
                             }
                         )
                     )

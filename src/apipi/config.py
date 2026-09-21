@@ -27,9 +27,11 @@ S3Addressing = Literal["auto", "path", "virtual"]
 UsageStore = Literal["off", "rollups", "turns"]
 MicrovmImage = Literal["default", "browser"]
 SandboxSize = Literal["S", "M", "L"]
+EnvNonePlacement = Literal["chat", "microvm", "reject"]
 BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "microvm"})
 MICROVM_IMAGE_HELP = "APIPI_MICROVM_IMAGE must be default or browser"
 SANDBOX_SIZE_HELP = "APIPI_SANDBOX_DEFAULT_SIZE must be S, M, or L"
+ENV_NONE_PLACEMENT_HELP = "APIPI_ENV_NONE_PLACEMENT must be chat, microvm, or reject"
 
 NONE_MODE_WARNING = "APIPI_RUN_MODE=none is not suited for production"
 SQLITE_WARNING = (
@@ -86,6 +88,9 @@ _SANDBOX_TTL_TOML = {
 _SANDBOX_BROWSER_TOML = {
     "auto_playwright": "sandbox_auto_playwright",
     "playwright_mcp": "sandbox_playwright_mcp",
+}
+_PLACEMENT_TOML = {
+    "env_none": "env_none_placement",
 }
 _LEGACY_FLAT_TOML = {
     "run_mode": "[sandbox].backend",
@@ -418,6 +423,10 @@ class Settings(BaseSettings):
     api_only: bool = Field(
         default=False,
         validation_alias=AliasChoices("APIPI_API_ONLY", "api_only"),
+    )
+    env_none_placement: EnvNonePlacement = Field(
+        default="chat",
+        validation_alias=AliasChoices("APIPI_ENV_NONE_PLACEMENT", "env_none_placement"),
     )
     auth: str | None = Field(
         default=None,
@@ -822,6 +831,14 @@ def _toml_values(path: Path) -> dict[str, Any]:
         nested.update(_map_table(_require_table(raw.pop("pi"), "[pi]"), _PI_TOML, "pi"))
     if "sandbox" in raw:
         nested.update(_flatten_sandbox(_require_table(raw.pop("sandbox"), "[sandbox]")))
+    if "placement" in raw:
+        nested.update(
+            _map_table(
+                _require_table(raw.pop("placement"), "[placement]"),
+                _PLACEMENT_TOML,
+                "placement",
+            )
+        )
     known = set(Settings.model_fields)
     values: dict[str, Any] = {}
     for key, value in raw.items():
@@ -914,6 +931,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "DATABASE_URL must be Postgres or SQLite"
         if "run_mode" in loc:
             return RUN_MODE_HELP
+        if "env_none_placement" in loc or "APIPI_ENV_NONE_PLACEMENT" in loc:
+            return ENV_NONE_PLACEMENT_HELP
         if "idle_ttl" in loc or "APIPI_IDLE_TTL" in loc:
             return "APIPI_IDLE_TTL must be like 15m"
         if (
