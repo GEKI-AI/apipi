@@ -48,9 +48,10 @@ Python 3.13, FastAPI, SQLite (one process) or Postgres (shared
 store). uv
 only. PyPI name `geki-apipi`;
 import and CLI `apipi`. Pi via RPC, one process per
-session. Run mode `APIPI_RUN_MODE` (`none` \| `microvm`, or
+session. Run mode `APIPI_RUN_MODE` (`none` \| `chat` \| `microvm`, or
 `package.mod:Class`). Process default `none`. Production
-SaaS/enterprise is `microvm`. `none` is local/dev only. `microvm`
+SaaS/enterprise is `microvm` for computers and `chat` for chat fleets.
+`none` is local/dev only. `microvm`
 probes a real sandbox before the API listens, then exits if it cannot
 start. Custom backends that set `needs_probe` do the same. No silent
 fallback. `host` and `jail` are not valid. OpenAI-compatible

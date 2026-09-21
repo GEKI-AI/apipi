@@ -8,6 +8,7 @@ import uvicorn
 
 from apipi import __version__
 from apipi.config import (
+    CHAT_MODE_NOTE,
     METRICS_OFF,
     METRICS_ON,
     NONE_MODE_WARNING,
@@ -69,7 +70,9 @@ def prepare_serve(
     backend = load_isolation(resolved.run_mode)
     if os.environ.get("OPENAI_API_KEY"):
         log.warning(OPENAI_API_KEY_IGNORED)
-    if backend.warn_not_production:
+    if backend.name == "chat":
+        log.info(CHAT_MODE_NOTE)
+    elif backend.warn_not_production:
         if backend.name == "none":
             log.warning(NONE_MODE_WARNING)
         else:
@@ -96,7 +99,9 @@ def prepare_worker(
     reject_prompt_body_logging()
     configure_logging(level=resolved.log_level, format=resolved.log_format)
     backend = load_isolation(resolved.run_mode)
-    if backend.warn_not_production:
+    if backend.name == "chat":
+        log.info(CHAT_MODE_NOTE)
+    elif backend.warn_not_production:
         if backend.name == "none":
             log.warning(NONE_MODE_WARNING)
         else:

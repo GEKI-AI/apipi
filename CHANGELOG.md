@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `APIPI_RUN_MODE=chat` is a first-class alias of isolation `none` for
+  dedicated chat worker pools.
 - Trusted worker WebSocket at `/internal/worker` with leases,
   heartbeats, and session ownership. This is not customer
   `self_hosted`.

@@ -22,6 +22,7 @@ kernel.
 | Mode | What it is | When |
 | --- | --- | --- |
 | `none` | Pi is a child of the gateway process. | Laptops and CI. Logs a warning. Not for production. |
+| `chat` | Same host backend as `none`, labeled `chat`. | Dedicated chat worker pools. No production warning. |
 | `microvm` | One [Firecracker](https://firecracker-microvm.github.io/) KVM guest per session. | Production when a computer is in use. |
 | `package.mod:Class` | An operator class behind the same isolation interface. | You already have a sandbox. |
 
