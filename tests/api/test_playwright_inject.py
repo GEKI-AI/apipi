@@ -147,3 +147,34 @@ async def test_l_does_not_duplicate_caller_playwright(
     assert harness.mcp_stdio[0].args == ["-y", "@playwright/mcp@1.0.0"]
     assert harness.instructions is not None
     assert BROWSER_HINT in harness.instructions
+
+
+async def test_chat_does_not_inject_playwright(
+    settings: Settings, store: Store, tmp_path: Path
+) -> None:
+    harness = FakeHarness()
+    app = create_app(
+        _microvm_settings(settings, tmp_path), store=store, harness=harness
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = "chat-no-pw"
+        agent = await client.post(
+            "/v1/agents",
+            headers=_auth(token),
+            json={"name": "bot", "model": "test"},
+        )
+        created = await client.post(
+            "/v1/chat/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent.json()["id"],
+                "metadata": {"apipi.sandbox_size": "L"},
+                "input": "hello",
+            },
+        )
+        assert created.status_code == 200
+    assert harness.mcp_stdio == []
+    assert harness.instructions is not None
+    assert BROWSER_HINT not in harness.instructions
