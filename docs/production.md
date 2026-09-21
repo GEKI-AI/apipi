@@ -11,7 +11,9 @@ is `apipi serve --api-only` plus `apipi worker` on KVM. Combined
 Run production as `apipi serve --api-only` plus `apipi worker` on
 KVM hosts with `APIPI_RUN_MODE=microvm`. Combined `apipi serve` is the
 single-host embedded worker. Nested Docker or nested KVM is a lab
-setup. The Compose file in this repo starts Postgres (and can run a
+setup. Chat without a computer uses a second worker pool with
+`APIPI_RUN_MODE=chat` on the same API-only gateway. See
+[chat fleets](chat.md). The Compose file in this repo starts Postgres (and can run a
 rootless API). Drain a worker with a heartbeat `"drain": true` before
 you stop the unit so new leases go elsewhere. Expired leases fail
 closed; they are not reassigned. Set `APIPI_METRICS` and

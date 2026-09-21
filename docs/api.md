@@ -137,6 +137,7 @@ GEKI-native chat sessions. Not OpenAI `/v1/chat/completions`. The
 store is the same session and event log as Agents. Clients never set
 or see `environment`. The gateway stores `environment.type=none` and
 `metadata.apipi.session_kind=chat` so placement uses chat workers.
+Fleet layout and placement footguns are in [chat fleets](chat.md).
 
 To attach a computer later, create a new Agents session. Chat sessions
 do not upgrade in place.

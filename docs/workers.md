@@ -16,7 +16,8 @@ Firecracker, jailer, TAP, and the guest live on the **worker**.
 TAP device. Combined `apipi serve` (no `--api-only`) is the
 single-host embedded worker: the same in-process adapter as today,
 for a laptop or one box. Production is API-only plus one or more
-`apipi worker` hosts.
+`apipi worker` hosts. Chat fleets add workers with
+`APIPI_RUN_MODE=chat` next to `microvm`. See [chat fleets](chat.md).
 
 `apipi worker` requires `APIPI_WORKER_TOKEN` and probes the configured
 run mode before it connects. If `APIPI_RUN_MODE=microvm` cannot start,
@@ -116,7 +117,7 @@ A session is assigned only to a connected worker whose advertised
 
 | Session | Required worker `run_mode` |
 | --- | --- |
-| Session metadata `apipi.session_kind=chat` (and `/v1/chat` when that facade exists) | `chat` always |
+| Session metadata `apipi.session_kind=chat` (`/v1/chat`) | `chat` always |
 | Agents with a computer (`openai_hosted`, `hosted`, or `self_hosted`) | `microvm` |
 | Agents with `environment.type=none` | `APIPI_ENV_NONE_PLACEMENT` / `[placement].env_none`: `chat` (default), `microvm`, or `reject` |
 
