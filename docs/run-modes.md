@@ -312,6 +312,8 @@ WorkingDirectory=/opt/apipi
 EnvironmentFile=/etc/apipi.env
 ExecStart=/opt/apipi/.venv/bin/apipi worker --config /etc/apipi.toml
 Restart=on-failure
+KillMode=control-group
+TimeoutStopSec=15
 DeviceAllow=/dev/kvm rw
 DeviceAllow=/dev/net/tun rw
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
@@ -319,6 +321,11 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 [Install]
 WantedBy=multi-user.target
 ```
+
+`KillMode=control-group` is required so `systemctl stop` and
+`Restart=on-failure` kill host Pi children, not only the worker PID.
+`KillMode=process` leaks Pi after a crash. Chat workers use the same
+unit and omit the KVM `DeviceAllow` lines.
 
 Many operators run that unit as root so jailer can chroot Firecracker
 and the process can create TAP devices. Set `APIPI_MICROVM_KERNEL`,

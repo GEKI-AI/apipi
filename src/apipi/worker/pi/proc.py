@@ -10,6 +10,7 @@ from typing import Any
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
+from apipi.worker.pi.orphan import host_pi_stamp
 from apipi.worker.pi.version import PINNED_PI
 
 log = logging.getLogger("apipi.worker.pi")
@@ -197,6 +198,7 @@ def pi_env(
             env["OPENAI_BASE_URL"] = settings.model_base_url
     env["PI_CODING_AGENT_DIR"] = str(pi_agent_dir(settings))
     env["APIPI_PINNED_PI"] = PINNED_PI
+    env.update(host_pi_stamp())
     if mcp_http:
         env["APIPI_MCP_SERVERS"] = ",".join(server.server_label for server in mcp_http)
         for index, server in enumerate(mcp_http):

@@ -28,7 +28,9 @@ APIPI_RUN_MODE=microvm APIPI_WORKER_TOKEN=secret APIPI_API_URL=http://api.exampl
 `chat` is the same host backend as `none`, with a pool label so mixed
 fleets can schedule. Keep `none` for laptops and CI. Combined
 `apipi serve` still runs turns in-process and does not use worker
-placement.
+placement. After a chat-worker crash, the next start reaps leftover
+host Pi processes from that worker. Use `KillMode=control-group` on
+the systemd unit. See [sandbox workers](workers.md#drain-and-expiry).
 
 ## `/v1/chat`
 
