@@ -3,6 +3,8 @@
 These Python scripts create an ApiPi session, stream the first turn, and
 exit. They are clients. They are not the playground, and they are not
 pytest. Keys come from the environment, not from these files.
+`stream: true` on create starts SSE as soon as the session exists;
+turn events follow while Pi runs.
 
 | File | What |
 | --- | --- |

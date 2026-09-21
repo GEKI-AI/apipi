@@ -66,6 +66,7 @@ async def create_chat_session(
         user_id=_user_id(request),
         request_id=request_id_of(request),
         api_key=model_key(request),
+        wait_turn=not body.stream,
     )
     if body.stream:
         return _sse_response(
