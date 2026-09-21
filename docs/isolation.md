@@ -21,8 +21,8 @@ kernel.
 
 | Mode | What it is | When |
 | --- | --- | --- |
-| `none` | Pi is a child of the gateway process. | Laptops and CI. Logs a warning. Not for production. |
-| `chat` | Same host backend as `none`, labeled `chat`. | Dedicated chat worker pools. No production warning. |
+| `none` | Pi is a child of the gateway process, in its own process group. | Laptops and CI. Logs a warning. Not for production. |
+| `chat` | Same host backend as `none`, labeled `chat`. Teardown kills the Pi process group. | Dedicated chat worker pools. No production warning. |
 | `microvm` | One [Firecracker](https://firecracker-microvm.github.io/) KVM guest per session. | Production when a computer is in use. |
 | `package.mod:Class` | An operator class behind the same isolation interface. | You already have a sandbox. |
 
@@ -113,8 +113,9 @@ Laptop, no KVM:
 APIPI_RUN_MODE=none apipi serve
 ```
 
-Pi is a child of that process. Use a local `openai_hosted` directory
-the same way. This is the process default.
+Pi is a child of that process and starts in its own process group so
+teardown can kill Pi and the MCP children it started. Use a local
+`openai_hosted` directory the same way. This is the process default.
 
 One box with KVM (embedded worker):
 

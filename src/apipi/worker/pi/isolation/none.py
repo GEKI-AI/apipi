@@ -89,8 +89,9 @@ class NoneIsolation:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=env,
+                start_new_session=True,
             )
         except BaseException:
             await broker.stop()
             raise
-        return PiProc(process, broker=broker)
+        return PiProc(process, broker=broker, process_group=True)

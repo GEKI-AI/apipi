@@ -128,12 +128,16 @@ async def test_custom_backend_probe_and_spawn(
     assert not proc.alive
 
 
-async def test_spawn_pi_none_starts_child(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("run_mode", ["none", "chat"])
+async def test_spawn_pi_none_starts_child(
+    monkeypatch: pytest.MonkeyPatch, run_mode: str
+) -> None:
     created: dict[str, object] = {}
 
     async def fake_exec(*args: object, **kwargs: object) -> Any:
         created["args"] = args
         created["cwd"] = kwargs.get("cwd")
+        created["start_new_session"] = kwargs.get("start_new_session")
 
         class Process:
             returncode = None
@@ -146,12 +150,14 @@ async def test_spawn_pi_none_starts_child(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(
         "apipi.worker.pi.isolation.none.asyncio.create_subprocess_exec", fake_exec
     )
-    proc = await spawn_pi(_settings(), cwd="/tmp/session", tools=False)
+    proc = await spawn_pi(_settings(run_mode), cwd="/tmp/session", tools=False)
     assert proc.alive
+    assert proc.process_group is True
     args = created["args"]
     assert isinstance(args, tuple)
     assert "--mode" in args
     assert created["cwd"] == "/tmp/session"
+    assert created["start_new_session"] is True
 
 
 async def test_stdio_on_host_follows_isolation() -> None:

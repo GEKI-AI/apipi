@@ -71,7 +71,8 @@ needs sticky routing for Pi. Examples are in
 
 Count **live** Pi processes (or guests) on **workers**. The API
 process is cheap next to guest RAM. Idle TTL (default 15 minutes)
-kills Pi and frees that RAM. The session row can outlive the process.
+kills the Pi process group on host workers (`none` / `chat`) and
+frees that RAM. The session row can outlive the process.
 `max_sessions` and `worker_memory_mb` do not count Postgres rows.
 
 ```

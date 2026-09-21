@@ -1,7 +1,9 @@
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import signal
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
@@ -11,6 +13,48 @@ from apipi.mcp.stdio import McpStdioServer
 from apipi.worker.pi.version import PINNED_PI
 
 log = logging.getLogger("apipi.worker.pi")
+
+
+def _is_session_leader(pid: int) -> bool:
+    if pid <= 1:
+        return False
+    try:
+        return os.getpgid(pid) == pid
+    except ProcessLookupError:
+        return False
+
+
+def _killpg(pid: int, sig: int) -> None:
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(pid, sig)
+
+
+def _kill_pgrp_members(pgid: int, sig: int) -> None:
+    mypid = os.getpid()
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return
+    for name in names:
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == mypid:
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as fh:
+                rest = fh.read().split(")")[-1].split()
+            if int(rest[2]) != pgid:
+                continue
+            os.kill(pid, sig)
+        except (
+            FileNotFoundError,
+            ProcessLookupError,
+            PermissionError,
+            IndexError,
+            ValueError,
+        ):
+            continue
 
 
 class PiProc:
@@ -27,6 +71,7 @@ class PiProc:
         pull_session: Callable[[], Awaitable[bytes]] | None = None,
         pull_metrics: Callable[[], Awaitable[bytes]] | None = None,
         vm_id: str | None = None,
+        process_group: bool = False,
     ) -> None:
         self.process = process
         self._stdin = process.stdin if stdin is None else stdin
@@ -38,6 +83,7 @@ class PiProc:
         self.pull_session = pull_session
         self.pull_metrics = pull_metrics
         self.vm_id = vm_id
+        self.process_group = process_group
         self._buf = b""
 
     @property
@@ -100,11 +146,20 @@ class PiProc:
         try:
             if not self.alive:
                 return
-            self.process.terminate()
-            try:
+            pid = self.process.pid
+            group = self.process_group and pid is not None and _is_session_leader(pid)
+            if group and pid is not None:
+                _killpg(pid, signal.SIGTERM)
+            with contextlib.suppress(ProcessLookupError):
+                self.process.terminate()
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.process.wait(), timeout=2)
-            except TimeoutError:
+            if group and pid is not None:
+                _killpg(pid, signal.SIGKILL)
+                _kill_pgrp_members(pid, signal.SIGKILL)
+            elif self.process.returncode is None:
                 self.process.kill()
+            if self.process.returncode is None:
                 await self.process.wait()
         finally:
             if self._on_stop is not None:
