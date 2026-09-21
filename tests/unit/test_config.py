@@ -222,11 +222,19 @@ def test_run_mode_custom_import_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().run_mode == "tests.support.fake_isolation:FakeIsolation"
 
 
+def test_run_mode_chat_is_builtin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "chat")
+    assert Settings().run_mode == "chat"
+
+
 def test_run_mode_unknown_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "gvisor")
-    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
+    with pytest.raises(
+        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
+    ):
         load_settings()
 
 

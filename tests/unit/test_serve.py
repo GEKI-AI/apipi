@@ -5,6 +5,7 @@ import pytest
 
 from apipi.cli import main, prepare_serve, prepare_worker
 from apipi.config import (
+    CHAT_MODE_NOTE,
     METRICS_OFF,
     METRICS_ON,
     NONE_MODE_WARNING,
@@ -46,6 +47,43 @@ def test_prepare_serve_warns_on_none(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.WARNING, logger="apipi")
     prepare_serve(_none_settings())
     assert NONE_MODE_WARNING in caplog.text
+
+
+def test_prepare_serve_chat_skips_none_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi")
+    prepare_serve(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="chat",
+        )
+    )
+    assert NONE_MODE_WARNING not in caplog.text
+    assert CHAT_MODE_NOTE in caplog.text
+
+
+def test_prepare_worker_chat_probes_none_backend(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    probed: list[str] = []
+
+    def fake_probe(settings: Settings) -> None:
+        probed.append(settings.run_mode)
+
+    monkeypatch.setattr("apipi.cli.probe_run_mode", fake_probe)
+    caplog.set_level(logging.INFO, logger="apipi")
+    settings = prepare_worker(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="chat",
+            worker_token="secret",
+        )
+    )
+    assert settings.run_mode == "chat"
+    assert probed == ["chat"]
+    assert NONE_MODE_WARNING not in caplog.text
+    assert CHAT_MODE_NOTE in caplog.text
 
 
 def test_prepare_serve_logs_default_observability(

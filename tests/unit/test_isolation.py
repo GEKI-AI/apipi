@@ -6,6 +6,7 @@ from tests.support.fake_isolation import FakeIsolation
 from apipi.config import ConfigError, Settings, require_run_mode
 from apipi.mcp.stdio import McpStdioServer, start_mcp_stdio_tools
 from apipi.worker.pi.isolation import load_isolation
+from apipi.worker.pi.isolation.chat import ChatIsolation
 from apipi.worker.pi.isolation.microvm import MicrovmIsolation
 from apipi.worker.pi.isolation.none import NoneIsolation
 from apipi.worker.pi.proc import spawn_pi
@@ -29,6 +30,17 @@ def test_none_isolation_contract() -> None:
     backend.require(_settings())
 
 
+def test_chat_isolation_is_none_alias() -> None:
+    backend = load_isolation("chat")
+    assert isinstance(backend, ChatIsolation)
+    assert isinstance(backend, NoneIsolation)
+    assert backend.name == "chat"
+    assert backend.needs_probe is False
+    assert backend.stdio_on_host is True
+    assert backend.warn_not_production is False
+    backend.require(_settings("chat"))
+
+
 def test_microvm_isolation_contract() -> None:
     backend = load_isolation("microvm")
     assert isinstance(backend, MicrovmIsolation)
@@ -50,7 +62,9 @@ def test_host_and_jail_are_not_valid() -> None:
 
 
 def test_unknown_mode_without_import_path() -> None:
-    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
+    with pytest.raises(
+        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
+    ):
         load_isolation("gvisor")
 
 

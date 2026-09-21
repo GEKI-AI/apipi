@@ -33,14 +33,16 @@ unless you set `APIPI_ENV_NONE_PLACEMENT` to `microvm` or `reject`. See
 
 | Mode | When to use | Isolation |
 | --- | --- | --- |
-| `none` | Local tests and laptops without a sandbox | Pi is a child of the gateway. Use `microvm` in production. |
+| `none` | Local tests and laptops without a sandbox | Pi is a child of the gateway. Use `microvm` in production. Logs a production warning. |
+| `chat` | Dedicated chat worker pools | Same light Pi-on-host backend as `none`, with process name `chat` for placement and metrics. No production warning. |
 | `microvm` | SaaS and enterprise production when a computer is in use | KVM guest with its own kernel. Protects the host from a hostile session. |
 | `package.mod:Class` | An operator-provided backend | Whatever that class implements. Missing import fails at startup. |
 
 The process default is `none` so `apipi serve` can start without KVM.
-Production operators set `APIPI_RUN_MODE=microvm` on the worker. If the
+Production operators set `APIPI_RUN_MODE=microvm` on computer workers
+and `APIPI_RUN_MODE=chat` on chat workers. If the
 microVM cannot launch, that process exits. `none` logs a warning. Valid
-built-in names are `none` and `microvm`.
+built-in names are `none`, `chat`, and `microvm`.
 
 Run production as `apipi serve --api-only` plus `apipi worker` on the
 host. Docker Compose can run the API without privileged mode. Nested
@@ -57,6 +59,12 @@ the store, the Pi CLI (`pi --mode rpc`) on `PATH` at version 0.85.1, and
 
 Nothing beyond the gateway requirements. This mode is for development
 and CI that cannot start a microvm.
+
+### `chat`
+
+Same install as `none`. Use this on dedicated chat workers so they
+advertise `chat` for placement. Pi still runs as a child of the worker
+process.
 
 ### `microvm`
 

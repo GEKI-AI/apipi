@@ -28,19 +28,27 @@ def _resolve(mode: str) -> Isolation:
         from apipi.worker.pi.isolation.none import NoneIsolation
 
         return NoneIsolation()
+    if mode == "chat":
+        from apipi.worker.pi.isolation.chat import ChatIsolation
+
+        return ChatIsolation()
     if mode == "microvm":
         from apipi.worker.pi.isolation.microvm import MicrovmIsolation
 
         return MicrovmIsolation()
     if ":" not in mode:
-        raise ConfigError("APIPI_RUN_MODE must be none, microvm, or package.mod:Class")
+        raise ConfigError(
+            "APIPI_RUN_MODE must be none, chat, microvm, or package.mod:Class"
+        )
     return _load_custom(mode)
 
 
 def _load_custom(path: str) -> Isolation:
     module_name, attr_name = path.rsplit(":", 1)
     if not module_name or not attr_name:
-        raise ConfigError("APIPI_RUN_MODE must be none, microvm, or package.mod:Class")
+        raise ConfigError(
+            "APIPI_RUN_MODE must be none, chat, microvm, or package.mod:Class"
+        )
     try:
         module = importlib.import_module(module_name)
         attr = getattr(module, attr_name)

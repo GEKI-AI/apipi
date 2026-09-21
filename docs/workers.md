@@ -125,13 +125,13 @@ worker is `429` with code `capacity`, as today.
 
 Commands include `run_mode` in the payload. The worker compares that
 to its process `APIPI_RUN_MODE` and does not start Pi when they do not
-match. Isolation `none` may still run a `chat` command because it is
-the same light backend; `run_mode=chat` as a process name is a later
-change. A `none` worker must not run a `microvm` command, and a
-`microvm` worker must not run a `chat` command.
+match. `APIPI_RUN_MODE=chat` is the process name for a chat pool. It
+uses the same host backend as `none`. Isolation `none` may still run a
+`chat` command. A `none` or `chat` worker must not run a `microvm`
+command, and a `microvm` worker must not run a `chat` command.
 
-Advertise `chat` on a dedicated chat pool. Advertising `none` matches
-no Agents placement class in this version.
+Set `APIPI_RUN_MODE=chat` on dedicated chat workers so they advertise
+`chat`. Advertising `none` matches no Agents placement class.
 
 ## Drain and expiry
 

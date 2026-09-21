@@ -28,16 +28,17 @@ UsageStore = Literal["off", "rollups", "turns"]
 MicrovmImage = Literal["default", "browser"]
 SandboxSize = Literal["S", "M", "L"]
 EnvNonePlacement = Literal["chat", "microvm", "reject"]
-BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "microvm"})
+BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "chat", "microvm"})
 MICROVM_IMAGE_HELP = "APIPI_MICROVM_IMAGE must be default or browser"
 SANDBOX_SIZE_HELP = "APIPI_SANDBOX_DEFAULT_SIZE must be S, M, or L"
 ENV_NONE_PLACEMENT_HELP = "APIPI_ENV_NONE_PLACEMENT must be chat, microvm, or reject"
 
 NONE_MODE_WARNING = "APIPI_RUN_MODE=none is not suited for production"
+CHAT_MODE_NOTE = "APIPI_RUN_MODE=chat runs Pi on the host without a microVM"
 SQLITE_WARNING = (
     "SQLite is for one process. Do not share the file across processes or nodes."
 )
-RUN_MODE_HELP = "APIPI_RUN_MODE must be none, microvm, or package.mod:Class"
+RUN_MODE_HELP = "APIPI_RUN_MODE must be none, chat, microvm, or package.mod:Class"
 USAGE_STORE_OFF = "usage store off"
 USAGE_STORE_ROLLUPS = "usage store rollups"
 USAGE_STORE_TURNS = "usage store turns"

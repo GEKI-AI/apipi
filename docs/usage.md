@@ -82,7 +82,7 @@ on, POSTs the full object.
 | `mcp_names` | MCP server labels used |
 | `mcp_counts` | Calls per MCP server |
 | `environment_type` | `none` \| `openai_hosted` \| `self_hosted` |
-| `run_mode` | `none` \| `microvm` \| custom backend `name` |
+| `run_mode` | `none` \| `chat` \| `microvm` \| custom backend `name` |
 | `instance_id` | Process name, if set |
 | `artifact_bytes` | Bytes published this turn |
 | `request_id` | Request id |
