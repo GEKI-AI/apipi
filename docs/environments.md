@@ -41,7 +41,8 @@ survive sandbox stop.
 Session rows live in the store. The `openai_hosted` workspace is
 ephemeral: after `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour)
 with no activity, Pi stops and the directory is deleted. Transcript,
-published artifacts, and the harness session cache stay. The next turn
+published artifacts, and the harness session cache stay (the session
+row stores a `file://` or `s3://` URI for that cache). The next turn
 creates an empty `/workspace`, re-applies skills, packages, setup
 commands, files, env, and network policy, and reloads the cached
 session file so Pi continues the
