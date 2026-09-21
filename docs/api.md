@@ -131,6 +131,36 @@ the host is unreachable, the response is `400` with code
 route returns `400` with type `not_implemented` and code
 `forward_models`.
 
+## Chat
+
+GEKI-native chat sessions. Not OpenAI `/v1/chat/completions`. The
+store is the same session and event log as Agents. Clients never set
+or see `environment`. The gateway stores `environment.type=none` and
+`metadata.apipi.session_kind=chat` so placement uses chat workers.
+
+To attach a computer later, create a new Agents session. Chat sessions
+do not upgrade in place.
+
+| Method | Path |
+| --- | --- |
+| `POST` | `/v1/chat/sessions` |
+| `GET` | `/v1/chat/sessions` |
+| `GET` | `/v1/chat/sessions/{session_id}` |
+| `POST` | `/v1/chat/sessions/{session_id}` |
+| `DELETE` | `/v1/chat/sessions/{session_id}` |
+| `POST` | `/v1/chat/sessions/{session_id}/events` |
+| `GET` | `/v1/chat/sessions/{session_id}/events` |
+| `GET` | `/v1/chat/sessions/{session_id}/turns` |
+| `GET` | `/v1/chat/sessions/{session_id}/turns/{turn_id}` |
+| `GET` | `/v1/chat/sessions/{session_id}/items` |
+| `GET` | `/v1/chat/sessions/{session_id}/export` |
+
+Create accepts `agent` or `agent_id`, `input`, `metadata`, `vault_ids`,
+and `stream`. An `environment` field is `400` with code
+`unknown_field`. List returns only chat sessions. An Agents session id
+on a chat path is `404`. Event types match Agents so one frontend can
+read both.
+
 ## Sessions
 
 | Method | Path |
