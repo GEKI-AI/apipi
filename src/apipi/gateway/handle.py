@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI
 
 from apipi.api.agents import router as agents_router
+from apipi.api.chat import router as chat_router
 from apipi.api.environments import router as environments_router
 from apipi.api.files import router as files_router
 from apipi.api.health import router as health_router
@@ -62,6 +63,7 @@ async def _purge_usage_loop(settings: Settings, store: Store) -> None:
 @dataclass(frozen=True)
 class GatewayRouters:
     sessions: APIRouter
+    chat: APIRouter
     agents: APIRouter
     vaults: APIRouter
     files: APIRouter
@@ -130,6 +132,7 @@ class Gateway:
         self.models = ModelsService(settings)
         self.routers = GatewayRouters(
             sessions=sessions_router,
+            chat=chat_router,
             agents=agents_router,
             vaults=vaults_router,
             files=files_router,
@@ -338,6 +341,7 @@ def create_app(
     app = FastAPI(title="ApiPi", version="0.0.0", lifespan=lifespan)
     gateway.configure(app)
     app.include_router(gateway.routers.sessions)
+    app.include_router(gateway.routers.chat)
     app.include_router(gateway.routers.vaults)
     app.include_router(gateway.routers.files)
     app.include_router(gateway.routers.skills)

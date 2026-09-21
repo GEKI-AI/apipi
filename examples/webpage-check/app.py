@@ -148,6 +148,7 @@ def build_app(gateway: Gateway) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     gateway.configure(app)
     app.include_router(gateway.routers.sessions)
+    app.include_router(gateway.routers.chat)
     app.include_router(gateway.routers.vaults)
     app.include_router(gateway.routers.files)
     app.include_router(gateway.routers.skills)

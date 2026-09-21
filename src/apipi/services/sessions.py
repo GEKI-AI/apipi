@@ -64,6 +64,7 @@ from apipi.worker.pi.sandbox import (
     resolve_sandbox_size,
     sandbox_size_of,
 )
+from apipi.worker.placement import CHAT, SESSION_KIND_KEY
 
 log = logging.getLogger("apipi")
 
@@ -113,6 +114,23 @@ def session_body(row: SessionRow) -> dict[str, Any]:
         "updated_at": row.updated_at.isoformat(),
         "vault_ids": [str(item) for item in (row.vault_ids or [])],
     }
+
+
+def is_chat_session(row: SessionRow | dict[str, Any]) -> bool:
+    metadata = row.get("metadata") if isinstance(row, dict) else row.metadata_json
+    return isinstance(metadata, dict) and metadata.get(SESSION_KIND_KEY) == CHAT
+
+
+def chat_session_body(row: SessionRow | dict[str, Any]) -> dict[str, Any]:
+    body = session_body(row) if not isinstance(row, dict) else dict(row)
+    body.pop("environment", None)
+    return body
+
+
+def chat_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    out = dict(metadata) if metadata else {}
+    out[SESSION_KIND_KEY] = CHAT
+    return out
 
 
 def input_text(value: str | dict[str, Any] | None) -> str:
