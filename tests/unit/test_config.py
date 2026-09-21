@@ -151,6 +151,21 @@ def test_worker_memory_mb_invalid(
         load_settings()
 
 
+def test_pi_mem_mib_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_PI_MEM_MIB", "256")
+    assert Settings().pi_mem_mib == 256
+
+
+def test_pi_mem_mib_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_PI_MEM_MIB", "0")
+    with pytest.raises(ConfigError, match="APIPI_PI_MEM_MIB must be"):
+        load_settings()
+
+
 def test_workspace_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_WORKSPACE_TTL", "2h")
@@ -607,6 +622,7 @@ def test_nested_toml_sandbox_and_pi(
         "[pi]\n"
         'command = "pi-dev"\n'
         "auto_compact = false\n"
+        "mem_mib = 384\n"
         "[sandbox]\n"
         'backend = "microvm"\n'
         'kernel = "/tmp/vmlinux"\n'
@@ -634,6 +650,7 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.max_sessions == 8
     assert settings.pi_command == "pi-dev"
     assert settings.pi_auto_compact is False
+    assert settings.pi_mem_mib == 384
     assert settings.platform_prompt is None
     assert settings.platform_prompt_additional == ""
     assert settings.run_mode == "microvm"

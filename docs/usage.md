@@ -257,7 +257,7 @@ Prometheus text format. `/health` and `/metrics` are not counted.
 | `apipi_pi_rss_bytes` | gauge | sum of host Pi process-group RSS |
 | `apipi_pi_pss_bytes` | gauge | sum of host Pi process-group PSS |
 | `apipi_pi_spawn_total` | counter | `result` (`ok` or `error`) |
-| `apipi_pi_kill_total` | counter | `reason` (`idle`, `session`, `respawn`, `shutdown`) |
+| `apipi_pi_kill_total` | counter | `reason` (`idle`, `session`, `respawn`, `shutdown`, `memory`) |
 
 `tenant` is the tenant id. Empty when the request has no tenant.
 `path` is the route template, not the raw URL. `kind` is `prompt`,
