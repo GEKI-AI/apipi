@@ -28,4 +28,5 @@ def test_alembic_revisions_chain() -> None:
         "0006_worker_memory.py",
         "0007_files.py",
         "0008_skills.py",
+        "0009_pi_session_uri.py",
     ]

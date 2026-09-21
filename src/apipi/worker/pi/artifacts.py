@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.config import ConfigError, DiskLimitError, Settings
 from apipi.env.hub import EnvDisconnected, EnvironmentHub
 from apipi.services.skills import copy_capability_directories
-from apipi.store.blobs import ArtifactBlobs, blob_store
+from apipi.store.blobs import (
+    ArtifactBlobs,
+    artifact_blob_uri,
+    blob_store,
+    read_blob_uri,
+)
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import (
@@ -375,6 +380,9 @@ async def persist_pi_session(
     await store.put(row.tenant_id, row.key_id, row.id, blob_id, data)
     row.pi_session_id = blob_id
     row.pi_session_bytes = len(data)
+    row.pi_session_uri = artifact_blob_uri(
+        settings, row.tenant_id, row.key_id, row.id, blob_id
+    )
     await db.flush()
 
 
@@ -385,10 +393,15 @@ async def restore_pi_session(
     *,
     blobs: ArtifactBlobs | None = None,
 ) -> None:
-    if row.pi_session_id is None:
-        return
-    store = blobs if blobs is not None else blob_store(settings)
-    data = await store.get(row.tenant_id, row.key_id, row.id, row.pi_session_id)
+    data: bytes | None = None
+    if blobs is not None and row.pi_session_id is not None:
+        data = await blobs.get(row.tenant_id, row.key_id, row.id, row.pi_session_id)
+    elif row.pi_session_uri:
+        data = await read_blob_uri(settings, row.pi_session_uri)
+    elif row.pi_session_id is not None:
+        data = await blob_store(settings).get(
+            row.tenant_id, row.key_id, row.id, row.pi_session_id
+        )
     if not data:
         return
     path = pi_session_file(dest)

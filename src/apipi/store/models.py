@@ -136,6 +136,7 @@ class SessionRow(Base):
         Uuid(as_uuid=True), nullable=True
     )
     pi_session_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pi_session_uri: Mapped[str | None] = mapped_column(String, nullable=True)
     vault_ids: Mapped[list[Any]] = mapped_column(JSONType, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False

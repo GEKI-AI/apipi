@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Chat fleets operator page: `APIPI_RUN_MODE=chat` vs `microvm` on one
   API-only gateway, Agents `type=none` placement, and chat to computer
   as a new session.
+- Session rows store a full `file://` or `s3://` URI for the harness
+  Pi session cache.
 - `APIPI_RUN_MODE=chat` is a first-class alias of isolation `none` for
   dedicated chat worker pools.
 - Trusted worker WebSocket at `/internal/worker` with leases,
