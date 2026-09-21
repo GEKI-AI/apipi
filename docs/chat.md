@@ -22,7 +22,7 @@ APIPI_RUN_MODE=microvm APIPI_WORKER_TOKEN=secret APIPI_API_URL=http://api.exampl
 | Process | `APIPI_RUN_MODE` | What it serves |
 | --- | --- | --- |
 | `apipi serve --api-only` | unused for Pi | HTTP, store, placement |
-| Chat worker | `chat` | Light Pi on the host. No Firecracker. |
+| Chat worker | `chat` | Light Pi on the host. No Firecracker. Teardown kills the Pi process group. |
 | Computer worker | `microvm` | One KVM guest per session |
 
 `chat` is the same host backend as `none`, with a pool label so mixed
