@@ -253,6 +253,11 @@ Prometheus text format. `/health` and `/metrics` are not counted.
 | `apipi_guest_load` | gauge | vsock sample load average, `size` |
 | `apipi_guest_workspace_used_bytes` | gauge | vsock sample workspace used, `size` |
 | `apipi_guest_workspace_avail_bytes` | gauge | vsock sample workspace free, `size` |
+| `apipi_pi_processes` | gauge | live host Pi processes |
+| `apipi_pi_rss_bytes` | gauge | sum of host Pi process-group RSS |
+| `apipi_pi_pss_bytes` | gauge | sum of host Pi process-group PSS |
+| `apipi_pi_spawn_total` | counter | `result` (`ok` or `error`) |
+| `apipi_pi_kill_total` | counter | `reason` (`idle`, `session`, `respawn`, `shutdown`) |
 
 `tenant` is the tenant id. Empty when the request has no tenant.
 `path` is the route template, not the raw URL. `kind` is `prompt`,
@@ -269,11 +274,20 @@ scrape the worker at `http://<worker>:9091/metrics` (or
 series and worker-pool gauges (`apipi_workers`, `apipi_worker_leases`,
 `apipi_worker_assign_seconds`). It does not double-count turns.
 
-Guest resource series stay low-cardinality (`size` is `S` / `M` /
-`L`). They never use `session_id` or `user_id` as labels.
+Guest and host-Pi series stay low-cardinality (`size` is `S` / `M` /
+`L` on guest series). They never use `session_id` or `user_id` as
+labels. Host Pi series have no `size` label.
+
+| Set | When | Series |
+| --- | --- | --- |
+| Worker util | All run modes | `apipi_worker_{capacity,sessions,memory_mib_*}` |
+| Sandbox lifecycle | Any `PiPool` spawn | `apipi_sandbox_*` |
+| Host Pi | `chat` / `none` | `apipi_pi_*` (RSS/PSS of the Pi process group) |
+| MicroVM guest | jailer `vm_id` | `apipi_guest_*` |
 
 | Layer | What | Default | How |
 | --- | --- | --- | --- |
+| Host Pi RSS | Actual RAM of host Pi and its process group | On when worker metrics are on | `/proc/<pid>/smaps_rollup` (PSS) or `statm` (RSS only) |
 | Host / cgroup | Guest RAM and CPU from the jailer cgroup | On when worker metrics are on | Read on the host. No guest code. |
 | Guest sample | MemAvailable, load, workspace disk | Off | Tiny JSON over vsock. Set `APIPI_GUEST_SAMPLE_INTERVAL` (for example `15s`). |
 | In-guest Prometheus | node_exporter or a metrics port on TAP | Out of scope | Not lightweight. |

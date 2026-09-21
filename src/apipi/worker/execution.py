@@ -273,6 +273,7 @@ class LocalExecution:
         while True:
             self.pool.refresh_metrics()
             self._observe_cgroup()
+            self._observe_host_pi()
             now = asyncio.get_running_loop().time()
             if sample_every is not None and now - last_sample >= sample_every:
                 await self._observe_guest_samples()
@@ -301,6 +302,28 @@ class LocalExecution:
             bucket["cpu_seconds"] += data["cpu_seconds"]
         for size, bucket in totals.items():
             metrics.set_guest_cgroup(size=size, **bucket)
+
+    def _observe_host_pi(self) -> None:
+        metrics = self.metrics
+        if metrics is None:
+            return
+        from apipi.worker.procmem import read_group_rss_pss
+
+        count = 0
+        rss = 0
+        pss = 0
+        for _size, proc in self.pool.live_procs():
+            if proc.vm_id:
+                continue
+            process = getattr(proc, "process", None)
+            pid = getattr(process, "pid", None)
+            if pid is None:
+                continue
+            count += 1
+            r, p = read_group_rss_pss(pid)
+            rss += r
+            pss += p
+        metrics.set_host_pi(processes=count, rss_bytes=rss, pss_bytes=pss)
 
     async def _observe_guest_samples(self) -> None:
         metrics = self.metrics

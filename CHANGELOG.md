@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Host Pi Prometheus series on the worker scrape: process count, RSS,
+  PSS, spawn, and kill reason (`idle` / `session` / `respawn` /
+  `shutdown`).
 - Host workers stamp Pi and stdio MCP with `APIPI_WORKER_PID` and reap
   leftovers from a dead worker on the next start. systemd units set
   `KillMode=control-group`.
