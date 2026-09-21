@@ -15,6 +15,7 @@ from apipi.api.health import router as health_router
 from apipi.api.models import router as models_router
 from apipi.api.sessions import router as sessions_router
 from apipi.api.skills import router as skills_router
+from apipi.api.uploads import router as uploads_router
 from apipi.api.usage import router as usage_router
 from apipi.api.vaults import router as vaults_router
 from apipi.api.workers import router as workers_router
@@ -34,6 +35,7 @@ from apipi.services.payload_export import load_payload_sinks
 from apipi.services.runtime import EventHub, FakeHarness
 from apipi.services.sessions import SessionService
 from apipi.services.skill_store import SkillService
+from apipi.services.uploads import UploadService
 from apipi.services.usage_export import load_usage_sinks
 from apipi.services.usage_service import UsageService
 from apipi.services.vaults import VaultService
@@ -67,6 +69,7 @@ class GatewayRouters:
     agents: APIRouter
     vaults: APIRouter
     files: APIRouter
+    uploads: APIRouter
     skills: APIRouter
     environments: APIRouter
     usage: APIRouter
@@ -113,6 +116,7 @@ class Gateway:
         self.mcp_stdio: dict[uuid.UUID, Any] = {}
         self.files = FileService(store, objects, settings)
         self.skill_store = SkillService(store, objects, settings)
+        self.uploads = UploadService(store, objects, settings)
         self.sessions = SessionService(
             settings=settings,
             store=store,
@@ -136,6 +140,7 @@ class Gateway:
             agents=agents_router,
             vaults=vaults_router,
             files=files_router,
+            uploads=uploads_router,
             skills=skills_router,
             environments=environments_router,
             usage=usage_router,
@@ -158,6 +163,7 @@ class Gateway:
         pool: PiPool | None = None,
         tracing: Tracing | None = None,
         blobs: ArtifactBlobs | None = None,
+        objects: ObjectStore | None = None,
         *,
         authenticate: Authenticate | None = None,
         event_hub: EventHub | None = None,
@@ -181,7 +187,7 @@ class Gateway:
         resolved_harness = harness if harness is not None else PiHarness(resolved_pool)
         hub = event_hub if event_hub is not None else EventHub()
         env_hub = EnvironmentHub()
-        resolved_objects = object_store(resolved)
+        resolved_objects = objects if objects is not None else object_store(resolved)
         resolved_blobs = (
             blobs if blobs is not None else ArtifactAdapter(resolved_objects)
         )
@@ -311,6 +317,7 @@ def create_app(
     pool: PiPool | None = None,
     tracing: Tracing | None = None,
     blobs: ArtifactBlobs | None = None,
+    objects: ObjectStore | None = None,
     *,
     authenticate: Authenticate | None = None,
     event_hub: EventHub | None = None,
@@ -324,6 +331,7 @@ def create_app(
         pool=pool,
         tracing=tracing,
         blobs=blobs,
+        objects=objects,
         authenticate=authenticate,
         event_hub=event_hub,
         execution=execution,
@@ -344,6 +352,7 @@ def create_app(
     app.include_router(gateway.routers.chat)
     app.include_router(gateway.routers.vaults)
     app.include_router(gateway.routers.files)
+    app.include_router(gateway.routers.uploads)
     app.include_router(gateway.routers.skills)
     app.include_router(gateway.routers.agents)
     app.include_router(gateway.routers.environments)

@@ -362,6 +362,19 @@ async def read_session_artifact_content(
     )
 
 
+@router.post("/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/download")
+async def download_session_artifact(
+    session_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    request: Request,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+) -> dict[str, Any]:
+    object_id = await _sessions(request).artifact_object_id(
+        tenant.id, session_id, artifact_id
+    )
+    return request.app.state.gateway.uploads.download("artifacts", object_id)
+
+
 @router.delete("/v1/agents/sessions/{session_id}/artifacts/{artifact_id}")
 async def delete_agent_session_artifact(
     session_id: uuid.UUID,

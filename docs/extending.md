@@ -78,6 +78,7 @@ app.include_router(gateway.routers.sessions)
 app.include_router(gateway.routers.chat)
 app.include_router(gateway.routers.vaults)
 app.include_router(gateway.routers.files)
+app.include_router(gateway.routers.uploads)
 app.include_router(gateway.routers.skills)
 app.include_router(gateway.routers.agents)
 app.include_router(gateway.routers.environments)
@@ -184,8 +185,10 @@ Illustration only (not shipped as an ApiPi table):
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+
 class AppBase(DeclarativeBase):
     pass
+
 
 class Job(AppBase):
     __tablename__ = "jobs"

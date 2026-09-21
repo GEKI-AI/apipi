@@ -3,6 +3,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 
 from apipi.gateway.auth import require_tenant
+from apipi.store.blobs import NS_SKILLS, skill_object_id
 from apipi.store.models import Tenant
 
 router = APIRouter()
@@ -38,6 +39,18 @@ async def read_skill(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     return await _skills(request).get(tenant.id, skill_id)
+
+
+@router.post("/v1/skills/{skill_id}/download")
+async def download_skill(
+    skill_id: str,
+    request: Request,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+) -> dict[str, Any]:
+    await _skills(request).get(tenant.id, skill_id)
+    return request.app.state.gateway.uploads.download(
+        NS_SKILLS, skill_object_id(tenant.id, skill_id)
+    )
 
 
 @router.delete("/v1/skills/{skill_id}")

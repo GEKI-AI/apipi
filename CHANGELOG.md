@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- S3 `auto` addressing is virtual-hosted. Set `APIPI_S3_ADDRESSING=path`
+  for R2 or MinIO on an IP. Presigned URLs use the same style.
+
 - MCP tools use OpenAI nested `transport` only (`http` with
   `server_url`, `stdio` with `command` / `args`). Flat `server_url` or
   `command` on the tool object is rejected. Rewrite saved agent tool
@@ -33,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Presigned PUT/GET for Files, Skills, and artifact downloads when
+  `APIPI_ARTIFACT_STORE=s3`. Bytes go to the bucket; complete writes
+  metadata. Local store returns `presign_unsupported`.
 - `/v1/chat/sessions` is a GEKI-native chat facade over the same
   session store. Clients never set or see `environment`. Chat tools
   allow function tools and HTTP MCP only (`chat_tool` on deny).
