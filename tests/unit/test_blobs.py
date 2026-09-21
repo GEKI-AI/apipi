@@ -37,6 +37,7 @@ def _settings(
     s3_endpoint: str | None = None,
     s3_region: str = "us-east-1",
     s3_prefix: str = "apipi/artifacts",
+    s3_addressing: Literal["auto", "path", "virtual"] = "auto",
 ) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
@@ -47,6 +48,7 @@ def _settings(
         s3_endpoint=s3_endpoint,
         s3_region=s3_region,
         s3_prefix=s3_prefix,
+        s3_addressing=s3_addressing,
     )
 
 
@@ -58,6 +60,7 @@ class FakeS3Error(Exception):
 class FakeS3:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
+        self.types: dict[str, str] = {}
 
     def put_object(self, **kwargs: object) -> None:
         key = kwargs["Key"]
@@ -65,6 +68,9 @@ class FakeS3:
         assert isinstance(key, str)
         assert isinstance(body, bytes)
         self.objects[key] = body
+        ctype = kwargs.get("ContentType")
+        if isinstance(ctype, str):
+            self.types[key] = ctype
 
     def get_object(self, **kwargs: object) -> dict[str, object]:
         key = kwargs["Key"]
@@ -72,6 +78,28 @@ class FakeS3:
         if key not in self.objects:
             raise FakeS3Error("NoSuchKey")
         return {"Body": io.BytesIO(self.objects[key])}
+
+    def head_object(self, **kwargs: object) -> dict[str, object]:
+        key = kwargs["Key"]
+        assert isinstance(key, str)
+        if key not in self.objects:
+            raise FakeS3Error("404")
+        return {
+            "ContentLength": len(self.objects[key]),
+            "ContentType": self.types.get(key, "application/octet-stream"),
+        }
+
+    def generate_presigned_url(
+        self,
+        ClientMethod: str,
+        Params: dict[str, str],
+        ExpiresIn: int = 900,
+        HttpMethod: str | None = None,
+    ) -> str:
+        del ClientMethod, ExpiresIn
+        key = Params["Key"]
+        method = HttpMethod or "GET"
+        return f"https://bucket.example/{key}?presign=1&method={method}"
 
     def delete_object(self, **kwargs: object) -> None:
         key = kwargs["Key"]
@@ -133,13 +161,17 @@ async def test_s3_kwargs_hetzner(tmp_path: Path) -> None:
         s3_endpoint="https://hel1.your-objectstorage.com",
         s3_region="hel1",
     )
-    assert s3_addressing(settings) == "path"
+    assert s3_addressing(settings) == "virtual"
     kwargs = s3_client_kwargs(settings)
     assert kwargs["endpoint_url"] == "https://hel1.your-objectstorage.com"
     assert kwargs["region_name"] == "hel1"
     config = kwargs["config_kwargs"]
     assert isinstance(config, dict)
-    assert config["s3"] == {"addressing_style": "path"}
+    assert config["signature_version"] == "s3v4"
+    assert config["s3"] == {
+        "addressing_style": "virtual",
+        "payload_signing_enabled": False,
+    }
     assert config["request_checksum_calculation"] == "when_required"
     assert config["response_checksum_validation"] == "when_required"
 
@@ -149,6 +181,17 @@ async def test_s3_kwargs_aws_default(tmp_path: Path) -> None:
     assert s3_addressing(settings) == "virtual"
     kwargs = s3_client_kwargs(settings)
     assert "endpoint_url" not in kwargs
+
+
+def test_s3_addressing_path_opt_in(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        artifact_store="s3",
+        s3_bucket="bucket",
+        s3_endpoint="https://minio.example:9000",
+        s3_addressing="path",
+    )
+    assert s3_addressing(settings) == "path"
 
 
 async def test_s3_blobs_with_fake_client(tmp_path: Path) -> None:

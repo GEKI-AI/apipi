@@ -628,6 +628,10 @@ class Settings(BaseSettings):
         default="auto",
         validation_alias=AliasChoices("APIPI_S3_ADDRESSING", "s3_addressing"),
     )
+    presign_ttl: IdleTtl = Field(
+        default=timedelta(minutes=15),
+        validation_alias=AliasChoices("APIPI_PRESIGN_TTL", "presign_ttl"),
+    )
     usage_store: UsageStore = Field(
         default="turns",
         validation_alias=AliasChoices("APIPI_USAGE_STORE", "usage_store"),
@@ -1009,6 +1013,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_S3_BUCKET is required"
         if "s3_addressing" in loc:
             return "APIPI_S3_ADDRESSING must be auto, path, or virtual"
+        if "presign_ttl" in loc or "APIPI_PRESIGN_TTL" in loc:
+            return "APIPI_PRESIGN_TTL must be like 15m"
         if "usage_store" in loc or "APIPI_USAGE_STORE" in loc:
             return "APIPI_USAGE_STORE must be off, rollups, or turns"
         if "usage_retention" in loc or "APIPI_USAGE_RETENTION" in loc:

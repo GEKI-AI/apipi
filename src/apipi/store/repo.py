@@ -18,6 +18,7 @@ from apipi.store.models import (
     Tenant,
     Turn,
     TurnLog,
+    UploadRow,
     UsageRollup,
     Vault,
     VaultCredential,
@@ -1088,3 +1089,39 @@ async def delete_skill(db: AsyncSession, tenant_id: uuid.UUID, skill_id: str) ->
     await db.delete(row)
     await db.flush()
     return True
+
+
+async def create_upload(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    purpose: str,
+    object_id: str,
+    filename: str,
+    content_type: str,
+    declared_bytes: int,
+    expires_at: datetime,
+) -> UploadRow:
+    row = UploadRow(
+        tenant_id=tenant_id,
+        purpose=purpose,
+        object_id=object_id,
+        filename=filename,
+        content_type=content_type,
+        declared_bytes=declared_bytes,
+        status="pending",
+        expires_at=expires_at,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def get_upload(
+    db: AsyncSession, tenant_id: uuid.UUID, upload_id: uuid.UUID
+) -> UploadRow | None:
+    return await db.scalar(
+        select(UploadRow).where(
+            UploadRow.tenant_id == tenant_id, UploadRow.id == upload_id
+        )
+    )

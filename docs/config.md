@@ -86,7 +86,8 @@ hosted files and skills).
 | `APIPI_S3_ENDPOINT` | `s3_endpoint` | unset | Base URL for S3-compatible APIs (Hetzner, MinIO, R2). Unset talks to AWS. |
 | `APIPI_S3_REGION` | `s3_region` | `us-east-1` | Region (`hel1`, `fsn1`, `nbg1` on Hetzner). |
 | `APIPI_S3_PREFIX` | `s3_prefix` | `apipi/artifacts` | Artifact key prefix. Artifact objects are `{prefix}/{tenant_id}/{key_id}/{session_id}/{artifact_id}`. When the prefix ends with `/artifacts` (the default), files and skills use sibling prefixes `…/files` and `…/skills`. Otherwise they are `{prefix}/files` and `{prefix}/skills`. |
-| `APIPI_S3_ADDRESSING` | `s3_addressing` | `auto` | `auto` \| `path` \| `virtual`. `auto` uses path-style when `s3_endpoint` is set. |
+| `APIPI_S3_ADDRESSING` | `s3_addressing` | `auto` | `auto` \| `path` \| `virtual`. `auto` is virtual-hosted (`bucket.endpoint/key`). Set `path` for R2 or MinIO on an IP. |
+| `APIPI_PRESIGN_TTL` | `presign_ttl` | `15m` | Lifetime of presigned PUT/GET URLs. Needs `artifact_store=s3`. |
 | `OPENAI_BASE_URL` | `model_base_url` | required for serve | Model host passed to Pi. Not the gateway URL. Put this in `.env`. |
 | `OPENAI_API_KEY_OVERWRITE` | `model_api_key_overwrite` | unset | Optional operator model key. When unset, Pi gets the request bearer. A process `OPENAI_API_KEY` is ignored. |
 | `APIPI_FORWARD_MODELS` | `forward_models` | on | Proxy `GET /v1/models` to `{OPENAI_BASE_URL}/models`. Off returns `400` with code `forward_models`. |
@@ -195,6 +196,13 @@ APIPI_S3_REGION=hel1
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 ```
+
+Presigned uploads (`POST /v1/uploads`) send bytes straight to the bucket.
+The browser never holds the ApiPi API key. Virtual-hosted URLs match
+Hetzner (`https://bucket.hel1.your-objectstorage.com/…`). Set a CORS
+rule on the bucket that allows `PUT`, `GET`, and `HEAD` from your SPA
+origin, including the `Content-Type` header. Local `artifact_store`
+returns `400` with code `presign_unsupported`.
 
 The live `openai_hosted` workspace stays on the node. Published
 artifact content, and hosted file and skill bytes, can be read from any

@@ -34,7 +34,7 @@ from apipi.services.runtime import (
 from apipi.services.skill_store import SkillService
 from apipi.services.skills import copy_capability_directories
 from apipi.services.usage import usage_from
-from apipi.store.blobs import ArtifactBlobs
+from apipi.store.blobs import ArtifactBlobs, blob_key
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import Artifact, Item, SessionRow, Turn
@@ -763,6 +763,24 @@ class SessionService:
         if data is None:
             gone()
         return data, content_type, filename
+
+    async def artifact_object_id(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        artifact_id: uuid.UUID,
+    ) -> str:
+        async with self.store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            if row is None:
+                not_found()
+            artifact = await get_session_artifact(
+                db, tenant_id, session_id, artifact_id
+            )
+            if artifact is None:
+                not_found()
+            key_id = artifact.key_id
+        return blob_key(tenant_id, key_id, session_id, artifact_id)
 
     async def delete_artifact(
         self,

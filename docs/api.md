@@ -94,6 +94,37 @@ from another tenant is `404`. Attach an uploaded file on session
 create with `environment.files` `{ "type": "file_id", "file_id":
 "…", "path": "/workspace/…" }`.
 
+Browser and BFF uploads that must not proxy bytes through the gateway
+use [presigned uploads](#uploads) instead of this multipart route.
+`GET /v1/files/{id}/content` still streams through the gateway.
+`POST /v1/files/{id}/download` returns a short-lived GET URL when the
+artifact store is S3.
+
+## Uploads
+
+S3-compatible object storage only (`APIPI_ARTIFACT_STORE=s3`). Local
+store returns `400` with code `presign_unsupported`.
+
+| Method | Path |
+| --- | --- |
+| `POST` | `/v1/uploads` |
+| `POST` | `/v1/uploads/{upload_id}/complete` |
+| `POST` | `/v1/files/{file_id}/download` |
+| `POST` | `/v1/skills/{skill_id}/download` |
+| `POST` | `/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/download` |
+
+Create takes `purpose` (`file`, `attachment`, or `skill`), `filename`,
+`bytes`, and optional `content_type`. `attachment` is the same store as
+`file` (chat attachments reuse Files). The response is a PUT URL and
+headers. PUT the bytes to object storage, then complete. Complete
+checks the object with `HeadObject`, enforces `APIPI_MAX_FILE_BYTES`,
+and writes Files or Skills metadata. Complete before PUT is `400` with
+code `upload_incomplete`. Wrong tenant is `404`. The Pi harness session
+cache is not exposed this way.
+
+Do not put the ApiPi API key in the browser. Do not log the presigned
+URL.
+
 ## Skills
 
 | Method | Path |

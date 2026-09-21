@@ -2,6 +2,7 @@ import asyncio
 import shutil
 import uuid
 from collections.abc import MutableMapping
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from urllib.parse import unquote, urlparse
@@ -320,6 +321,55 @@ class S3Store:
         data = await asyncio.to_thread(read)
         return data if isinstance(data, bytes) else None
 
+    async def head(
+        self, namespace: Namespace, object_id: str
+    ) -> tuple[int, str | None] | None:
+        key = self._key(namespace, object_id)
+        try:
+            response = await asyncio.to_thread(
+                self._client.head_object, Bucket=self._bucket, Key=key
+            )
+        except Exception as exc:
+            if _s3_missing(exc):
+                return None
+            raise
+        size = response.get("ContentLength")
+        content_type = response.get("ContentType")
+        if not isinstance(size, int):
+            return None
+        ctype = content_type if isinstance(content_type, str) else None
+        return size, ctype
+
+    def presign(
+        self,
+        method: str,
+        namespace: Namespace,
+        object_id: str,
+        *,
+        expires: timedelta,
+        content_type: str | None = None,
+    ) -> tuple[str, dict[str, str]]:
+        params: dict[str, str] = {
+            "Bucket": self._bucket,
+            "Key": self._key(namespace, object_id),
+        }
+        headers: dict[str, str] = {}
+        client_method = "get_object"
+        if method == "PUT":
+            client_method = "put_object"
+            if content_type:
+                params["ContentType"] = content_type
+                headers["Content-Type"] = content_type
+        url = self._client.generate_presigned_url(
+            client_method,
+            Params=params,
+            ExpiresIn=max(1, int(expires.total_seconds())),
+            HttpMethod=method,
+        )
+        if not isinstance(url, str) or not url:
+            raise ConfigError("S3 presign returned no URL")
+        return url, headers
+
     async def delete(self, namespace: Namespace, object_id: str) -> None:
         key = self._key(namespace, object_id)
         await asyncio.to_thread(
@@ -461,17 +511,17 @@ class S3Blobs(ArtifactAdapter):
 def s3_addressing(settings: Settings) -> str:
     if settings.s3_addressing == "path":
         return "path"
-    if settings.s3_addressing == "virtual":
-        return "virtual"
-    if settings.s3_endpoint:
-        return "path"
     return "virtual"
 
 
 def s3_client_kwargs(settings: Settings) -> dict[str, object]:
     style = s3_addressing(settings)
     config_kwargs: dict[str, object] = {
-        "s3": {"addressing_style": style},
+        "signature_version": "s3v4",
+        "s3": {
+            "addressing_style": style,
+            "payload_signing_enabled": False,
+        },
         "request_checksum_calculation": "when_required",
         "response_checksum_validation": "when_required",
     }

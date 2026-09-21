@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
 from apipi.gateway.auth import require_tenant
+from apipi.store.blobs import NS_FILES, file_object_id
 from apipi.store.models import Tenant
 
 router = APIRouter()
@@ -61,6 +62,18 @@ async def read_file_content(
         content=data,
         media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/v1/files/{file_id}/download")
+async def download_file(
+    file_id: str,
+    request: Request,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+) -> dict[str, Any]:
+    await _files(request).get(tenant.id, file_id)
+    return request.app.state.gateway.uploads.download(
+        NS_FILES, file_object_id(tenant.id, file_id)
     )
 
 
