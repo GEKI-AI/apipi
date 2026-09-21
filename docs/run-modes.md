@@ -40,7 +40,8 @@ unless you set `APIPI_ENV_NONE_PLACEMENT` to `microvm` or `reject`. See
 
 The process default is `none` so `apipi serve` can start without KVM.
 Production operators set `APIPI_RUN_MODE=microvm` on computer workers
-and `APIPI_RUN_MODE=chat` on chat workers. If the
+and `APIPI_RUN_MODE=chat` on chat workers. Fleet layout is in
+[chat fleets](chat.md). If the
 microVM cannot launch, that process exits. `none` logs a warning. Valid
 built-in names are `none`, `chat`, and `microvm`.
 

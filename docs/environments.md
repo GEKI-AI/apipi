@@ -159,7 +159,10 @@ also rejects `network`. Environment type `none` ignores `network`.
 ## `none`
 
 No computer. Pi still runs the loop. Function tools and MCP still
-work. There is no session directory and no shell.
+work. There is no session directory and no shell. This type is an
+Agents API field. `/v1/chat` never asks clients to set it and never
+returns `environment`. Chat sessions still store `type=none` internally
+so placement can use chat workers. See [chat fleets](chat.md).
 
 ## `self_hosted`
 

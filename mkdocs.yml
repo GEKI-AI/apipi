@@ -71,6 +71,7 @@ nav:
       - Configuration: config.md
       - Run modes: run-modes.md
       - Production: production.md
+      - Chat fleets: chat.md
       - Observability: observability.md
       - Multiple nodes: scale.md
       - Using the API: using.md
