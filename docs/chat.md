@@ -53,7 +53,11 @@ and omit environment.
 
 Chat tools are function tools and HTTP MCP only. Stdio MCP, Playwright
 auto-inject, workspace skills, and a computer are `400` with code
-`chat_tool`. See [tools](tools.md).
+`chat_tool`. See [tools](tools.md). Host Pi still gets a private
+`models.json` pointed at the session broker when there is no workspace
+directory, so text-only turns can call the model. If a non-stream
+create with `input` fails the first turn, the HTTP status is `502` and
+the error includes `session_id`.
 
 To give a thread a computer later, create a **new** Agents session.
 Chat does not upgrade in place in this version.

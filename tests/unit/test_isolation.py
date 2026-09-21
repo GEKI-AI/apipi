@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -158,6 +160,37 @@ async def test_spawn_pi_none_starts_child(
     assert "--mode" in args
     assert created["cwd"] == "/tmp/session"
     assert created["start_new_session"] is True
+
+
+async def test_spawn_pi_none_without_cwd_writes_broker_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: dict[str, object] = {}
+
+    async def fake_exec(*_args: object, **kwargs: object) -> Any:
+        created["env"] = kwargs.get("env")
+
+        class Process:
+            returncode = 0
+            pid = None
+            stdin = None
+            stdout = None
+            stderr = None
+
+        return Process()
+
+    monkeypatch.setattr(
+        "apipi.worker.pi.isolation.none.asyncio.create_subprocess_exec", fake_exec
+    )
+    proc = await spawn_pi(_settings(), cwd=None, tools=False)
+    env = created["env"]
+    assert isinstance(env, dict)
+    agent_dir = env["PI_CODING_AGENT_DIR"]
+    assert isinstance(agent_dir, str)
+    models = json.loads((Path(agent_dir) / "models.json").read_text())
+    url = models["providers"]["apipi"]["baseUrl"]
+    assert "127.0.0.1" in url
+    await proc.terminate()
 
 
 async def test_stdio_on_host_follows_isolation() -> None:

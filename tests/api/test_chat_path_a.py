@@ -205,3 +205,29 @@ async def test_chat_rejects_computer_and_bash_tools(client: AsyncClient) -> None
     )
     assert stdio.status_code == 400
     assert stdio.json()["error"]["code"] == "chat_tool"
+
+
+async def test_chat_create_failed_turn_is_502(settings: Settings, store: Store) -> None:
+    harness = FakeHarness()
+    harness.fail_message = "No model configured for provider"
+    app = create_app(_worker_settings(settings), store=store, harness=harness)
+    token = "chat-fail"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/chat/sessions",
+            headers=_auth(token),
+            json={"agent": {"model": "test"}, "input": "pong"},
+        )
+        assert created.status_code == 502
+        error = created.json()["error"]
+        assert error["code"] == "model_host_error"
+        assert error["message"] == "No model configured for provider"
+        assert error["session_id"]
+        got = await client.get(
+            f"/v1/chat/sessions/{error['session_id']}",
+            headers=_auth(token),
+        )
+        assert got.status_code == 200
+        assert got.json()["status"] == "idle"

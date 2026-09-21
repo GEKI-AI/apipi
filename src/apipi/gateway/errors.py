@@ -19,16 +19,26 @@ class ApiError(Exception):
         *,
         code: str = "",
         status_code: int = 400,
+        session_id: str | None = None,
     ) -> None:
         super().__init__(message)
         self.type = type
         self.message = message
         self.code = code
         self.status_code = status_code
+        self.session_id = session_id
 
 
-def error_body(type: str, message: str, code: str = "") -> dict[str, Any]:
-    return {"error": {"type": type, "code": code, "message": message}}
+def error_body(
+    type: str,
+    message: str,
+    code: str = "",
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {"type": type, "code": code, "message": message}
+    if session_id:
+        error["session_id"] = session_id
+    return {"error": error}
 
 
 def not_implemented(code: str, message: str | None = None) -> NoReturn:
@@ -90,7 +100,9 @@ def register_exception_handlers(app: FastAPI) -> None:
             )
         return JSONResponse(
             status_code=exc.status_code,
-            content=error_body(exc.type, exc.message, exc.code),
+            content=error_body(
+                exc.type, exc.message, exc.code, session_id=exc.session_id
+            ),
         )
 
     @app.exception_handler(Exception)
