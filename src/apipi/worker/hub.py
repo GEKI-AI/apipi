@@ -1,7 +1,9 @@
 import asyncio
+import contextlib
 import json
 import logging
 import secrets
+import signal
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -734,7 +736,45 @@ def worker_ws_url(base: str) -> str:
     return urlunparse(parsed._replace(path=path, fragment=""))
 
 
-async def run_worker(settings: Settings, *, url: str | None = None) -> None:
+def worker_heartbeat(settings: Settings, *, drain: bool = False) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "type": "heartbeat",
+        "capacity": settings.max_sessions,
+        "memory_mb": settings.node_memory_mb(),
+        "run_mode": settings.run_mode,
+    }
+    if drain:
+        payload["drain"] = True
+    return payload
+
+
+def drain_idle(live: int, command_tasks: set[asyncio.Task[None]]) -> bool:
+    return live == 0 and not command_tasks
+
+
+def drain_timeout_seconds(settings: Settings, drain_timeout: float | None) -> float:
+    if drain_timeout is not None:
+        return drain_timeout
+    return settings.idle_ttl.total_seconds()
+
+
+def _install_drain_signals(draining: asyncio.Event) -> None:
+    loop = asyncio.get_running_loop()
+
+    def request_drain() -> None:
+        draining.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
+            loop.add_signal_handler(sig, request_drain)
+
+
+async def run_worker(
+    settings: Settings,
+    *,
+    url: str | None = None,
+    drain_timeout: float | None = None,
+) -> int:
     from apipi.store.engine import Store, create_engine
     from apipi.worker.execution import local_execution, worker_observability
     from apipi.worker.pi.orphan import sweep_host_orphans
@@ -772,6 +812,12 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
         )
     tasks.add(asyncio.create_task(execution.observe_loop()))
     log.info("worker connect", extra={"url": ws_url})
+    draining = asyncio.Event()
+    _install_drain_signals(draining)
+    drain_deadline: float | None = None
+    wait = drain_timeout_seconds(settings, drain_timeout)
+    command_tasks: set[asyncio.Task[None]] = set()
+    status = 0
     try:
         async with websockets.connect(
             ws_url, additional_headers={"Authorization": f"Bearer {token}"}
@@ -796,20 +842,35 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
                 )
                 raise ConfigError(f"worker register failed: {error}")
             log.info("worker hello", extra={"worker_id": hello.get("worker_id")})
+
+            async def send_heartbeat() -> None:
+                await sock.send(
+                    json.dumps(worker_heartbeat(settings, drain=draining.is_set()))
+                )
+
             while True:
+                if draining.is_set() and drain_deadline is None:
+                    drain_deadline = time.monotonic() + wait
+                    log.info("worker drain")
+                    await send_heartbeat()
+                    await execution.pool.kill_unheld(reason="idle")
+                    if drain_idle(execution.pool.live(), command_tasks):
+                        break
+                recv_timeout = 0.5 if draining.is_set() else heartbeat
                 try:
-                    incoming = await asyncio.wait_for(sock.recv(), timeout=heartbeat)
+                    incoming = await asyncio.wait_for(sock.recv(), timeout=recv_timeout)
                 except TimeoutError:
-                    await sock.send(
-                        json.dumps(
-                            {
-                                "type": "heartbeat",
-                                "capacity": settings.max_sessions,
-                                "memory_mb": settings.node_memory_mb(),
-                                "run_mode": settings.run_mode,
-                            }
-                        )
-                    )
+                    await send_heartbeat()
+                    if draining.is_set():
+                        await execution.pool.kill_unheld(reason="idle")
+                        if drain_idle(execution.pool.live(), command_tasks):
+                            break
+                        if (
+                            drain_deadline is not None
+                            and time.monotonic() >= drain_deadline
+                        ):
+                            status = 1
+                            break
                     continue
                 text = incoming if isinstance(incoming, str) else incoming.decode()
                 message = json.loads(text)
@@ -833,6 +894,8 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
                         },
                     )
                     task = asyncio.create_task(dispatch_command(execution, message))
+                    command_tasks.add(task)
+                    task.add_done_callback(command_tasks.discard)
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
     finally:
@@ -842,3 +905,4 @@ async def run_worker(settings: Settings, *, url: str | None = None) -> None:
         if execution.tracing is not None:
             execution.tracing.shutdown()
         await store.dispose()
+    return status

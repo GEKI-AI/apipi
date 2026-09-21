@@ -325,6 +325,11 @@ class PiPool:
             await asyncio.sleep(interval)
             await self.reap()
 
+    async def kill_unheld(self, *, reason: str = "idle") -> None:
+        for sid in list(self._procs):
+            if self.alive(sid) and not self.held(sid):
+                await self.kill(sid, reason=reason)
+
     async def close(self) -> None:
         for sid in list(self._procs):
             await self.kill(sid, reason="shutdown")
