@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- MCP vault tokens are encrypted at rest with AES-256-GCM
+  (`APIPI_VAULT_MASTER_KEY`). Unset uses a local default and logs a
+  warning. `apipi migrate` rewrites leftover plaintext rows.
+
 ## [0.3.0] - 2026-09-21
 
 ### Breaking

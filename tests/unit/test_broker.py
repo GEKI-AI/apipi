@@ -1,4 +1,5 @@
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -7,6 +8,8 @@ from httpx import AsyncClient
 
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer, apply_vault_headers
+from apipi.services.sessions import _plain_vault_creds
+from apipi.services.vault_crypto import encrypt_vault_token, vault_aad, vault_key_bytes
 from apipi.worker.pi.broker import DUMMY_KEY, start_broker
 from apipi.worker.pi.proc import pi_env
 
@@ -142,6 +145,32 @@ def test_pi_env_with_broker_hides_secrets(tmp_path: Path) -> None:
     assert "secret" not in env.values()
     assert env["APIPI_MCP_0_URL"] == "http://127.0.0.1:9/tok/mcp/0"
     assert "APIPI_MCP_0_AUTHORIZATION" not in env
+
+
+def test_plain_vault_creds_decrypt_for_broker() -> None:
+    class _Cred:
+        def __init__(self) -> None:
+            self.id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+            self.tenant_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
+            self.mcp_server_url = "https://mcp.example.com/mcp"
+            self.token = encrypt_vault_token(
+                "tok",
+                vault_key_bytes(None),
+                aad=vault_aad(self.tenant_id, self.id),
+            )
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi"
+    )
+    servers = [
+        McpHttpServer(
+            server_label="a",
+            server_url="https://mcp.example.com/mcp",
+            headers={},
+        )
+    ]
+    applied = apply_vault_headers(servers, _plain_vault_creds(settings, [_Cred()]))
+    assert applied[0].headers["Authorization"] == "Bearer tok"
 
 
 def test_apply_vault_headers_match_and_conflict() -> None:

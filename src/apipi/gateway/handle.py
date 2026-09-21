@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -19,7 +20,7 @@ from apipi.api.uploads import router as uploads_router
 from apipi.api.usage import router as usage_router
 from apipi.api.vaults import router as vaults_router
 from apipi.api.workers import router as workers_router
-from apipi.config import Settings, load_settings
+from apipi.config import VAULT_MASTER_KEY_UNSET, Settings, load_settings
 from apipi.env.hub import EnvironmentHub
 from apipi.gateway.auth import AuthCache, Authenticate, load_authenticate
 from apipi.gateway.errors import register_exception_handlers
@@ -38,6 +39,7 @@ from apipi.services.skill_store import SkillService
 from apipi.services.uploads import UploadService
 from apipi.services.usage_export import load_usage_sinks
 from apipi.services.usage_service import UsageService
+from apipi.services.vault_crypto import vault_master_key_unset
 from apipi.services.vaults import VaultService
 from apipi.store.blobs import ArtifactAdapter, ArtifactBlobs, ObjectStore, object_store
 from apipi.store.engine import Store, create_engine
@@ -50,6 +52,8 @@ from apipi.worker.pi.harness import PiHarness
 from apipi.worker.pi.isolation import load_isolation
 from apipi.worker.pi.isolation.base import Isolation
 from apipi.worker.pi.pool import PiPool
+
+log = logging.getLogger("apipi")
 
 
 async def _purge_usage_loop(settings: Settings, store: Store) -> None:
@@ -131,7 +135,7 @@ class Gateway:
             mcp_stdio=self.mcp_stdio,
         )
         self.agents = AgentService(store)
-        self.vaults = VaultService(store)
+        self.vaults = VaultService(store, settings)
         self.usage = UsageService(store)
         self.models = ModelsService(settings)
         self.routers = GatewayRouters(
@@ -285,6 +289,8 @@ class Gateway:
         register_exception_handlers(app)
 
     async def startup(self) -> None:
+        if vault_master_key_unset(self.settings.vault_master_key):
+            log.warning(VAULT_MASTER_KEY_UNSET)
         self.execution.attach_store(self.store)
         if self.execution.stdio_on_host:
             from apipi.worker.pi.orphan import sweep_host_orphans

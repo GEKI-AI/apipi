@@ -20,6 +20,7 @@ from apipi.config import (
     SQLITE_WARNING,
     USAGE_EXPORT_OFF,
     USAGE_EXPORT_ON,
+    VAULT_MASTER_KEY_UNSET,
     ConfigError,
     Settings,
     is_sqlite_url,
@@ -32,6 +33,7 @@ from apipi.config import (
 from apipi.gateway import create_app
 from apipi.gateway.logutil import configure_logging, uvicorn_log_config
 from apipi.gateway.ready import check_ready
+from apipi.services.vault_crypto import vault_master_key_unset
 from apipi.store.migrate import migrate
 from apipi.worker.pi.install import run_install
 from apipi.worker.pi.isolation import load_isolation
@@ -94,6 +96,8 @@ def prepare_worker(
     )
     if resolved.worker_token is None or resolved.worker_token == "":
         raise ConfigError("APIPI_WORKER_TOKEN is required")
+    if vault_master_key_unset(resolved.vault_master_key):
+        log.warning(VAULT_MASTER_KEY_UNSET)
     require_run_mode(resolved.run_mode, resolved)
     probe_run_mode(resolved)
     reject_prompt_body_logging()

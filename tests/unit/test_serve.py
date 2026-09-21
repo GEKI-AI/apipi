@@ -15,6 +15,7 @@ from apipi.config import (
     SQLITE_WARNING,
     USAGE_EXPORT_OFF,
     USAGE_STORE_TURNS,
+    VAULT_MASTER_KEY_UNSET,
     ConfigError,
     Settings,
     require_run_mode,
@@ -84,6 +85,7 @@ def test_prepare_worker_chat_probes_none_backend(
     assert probed == ["chat"]
     assert NONE_MODE_WARNING not in caplog.text
     assert CHAT_MODE_NOTE in caplog.text
+    assert VAULT_MASTER_KEY_UNSET in caplog.text
 
 
 def test_prepare_serve_logs_default_observability(

@@ -1,9 +1,10 @@
+import logging
 import uuid
 
 import httpx
 import pytest
 
-from apipi.config import Settings
+from apipi.config import VAULT_MASTER_KEY_UNSET, Settings
 from apipi.gateway import Gateway
 from apipi.gateway.errors import ApiError
 from apipi.services.agents import AgentWrite
@@ -41,6 +42,37 @@ async def test_in_process_agents_crud(settings: Settings, store: Store) -> None:
     with pytest.raises(ApiError) as exc:
         await gateway.agents.get(tenant_id, agent_id)
     assert exc.value.status_code == 404
+
+
+async def test_gateway_startup_warns_without_vault_key(
+    settings: Settings, store: Store, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="apipi")
+    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    await gateway.startup()
+    try:
+        assert VAULT_MASTER_KEY_UNSET in caplog.text
+    finally:
+        await gateway.shutdown()
+
+
+async def test_gateway_startup_quiet_with_vault_key(
+    settings: Settings, store: Store, caplog: pytest.LogCaptureFixture
+) -> None:
+    import base64
+
+    caplog.set_level(logging.WARNING, logger="apipi")
+    key = base64.b64encode(bytes(range(32))).decode()
+    gateway = Gateway.create(
+        settings.model_copy(update={"vault_master_key": key}),
+        store=store,
+        harness=FakeHarness(),
+    )
+    await gateway.startup()
+    try:
+        assert VAULT_MASTER_KEY_UNSET not in caplog.text
+    finally:
+        await gateway.shutdown()
 
 
 async def test_in_process_vaults_omit_token(settings: Settings, store: Store) -> None:

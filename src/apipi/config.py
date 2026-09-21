@@ -34,6 +34,10 @@ SANDBOX_SIZE_HELP = "APIPI_SANDBOX_DEFAULT_SIZE must be S, M, or L"
 ENV_NONE_PLACEMENT_HELP = "APIPI_ENV_NONE_PLACEMENT must be chat, microvm, or reject"
 
 NONE_MODE_WARNING = "APIPI_RUN_MODE=none is not suited for production"
+VAULT_MASTER_KEY_UNSET = (
+    "APIPI_VAULT_MASTER_KEY is unset; using a local default. "
+    "Set a 32-byte key in production."
+)
 CHAT_MODE_NOTE = "APIPI_RUN_MODE=chat runs Pi on the host without a microVM"
 SQLITE_WARNING = (
     "SQLite is for one process. Do not share the file across processes or nodes."
@@ -409,6 +413,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("APIPI_WORKER_TOKEN", "worker_token"),
     )
+    vault_master_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_VAULT_MASTER_KEY", "vault_master_key"),
+    )
     worker_lease_ttl: IdleTtl = Field(
         default=timedelta(seconds=30),
         validation_alias=AliasChoices("APIPI_WORKER_LEASE_TTL", "worker_lease_ttl"),
@@ -718,6 +726,10 @@ class Settings(BaseSettings):
             self.worker_memory_mb = self.max_sessions * self.sandbox_mem_mib(
                 self.sandbox_default_size
             )
+        if self.vault_master_key is not None and self.vault_master_key.strip():
+            from apipi.services.vault_crypto import parse_vault_master_key
+
+            parse_vault_master_key(self.vault_master_key)
         return self
 
     def sandbox_mem_mib(self, size: str) -> int:
@@ -932,6 +944,8 @@ def _settings_message(exc: ValidationError) -> str:
         msg = str(error.get("msg", ""))
         if "APIPI_S3_BUCKET" in msg:
             return "APIPI_S3_BUCKET is required"
+        if "APIPI_VAULT_MASTER_KEY must be 32 bytes" in msg:
+            return "APIPI_VAULT_MASTER_KEY must be 32 bytes (base64 or hex)"
         if "APIPI_RUN_MODE=host is not valid" in msg:
             return "APIPI_RUN_MODE=host is not valid"
         if "APIPI_RUN_MODE=jail is not valid" in msg:
@@ -1039,6 +1053,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_PAYLOAD_EXPORT_TIMEOUT must be like 15m"
         if "payload_export_retries" in loc or "APIPI_PAYLOAD_EXPORT_RETRIES" in loc:
             return "APIPI_PAYLOAD_EXPORT_RETRIES must be at least 0"
+        if "vault_master_key" in loc or "APIPI_VAULT_MASTER_KEY" in loc:
+            return "APIPI_VAULT_MASTER_KEY must be 32 bytes (base64 or hex)"
     return "invalid configuration"
 
 

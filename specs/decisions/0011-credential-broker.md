@@ -20,4 +20,6 @@ Stdio MCP is out of scope. Arbitrary guest `curl` that ignores the
 rewritten URLs is a later MITM story, not this path.
 
 Vaults follow the OpenAI Agents shape (`static_bearer` first). They
-are tenant-scoped store rows, not the gateway auth bearer.
+are tenant-scoped store rows, not the gateway auth bearer. Vault
+tokens are encrypted at rest with AES-256-GCM
+(`APIPI_VAULT_MASTER_KEY`, ciphertext prefix `v1:`).

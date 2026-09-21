@@ -37,8 +37,10 @@ project. S3-compatible artifact storage is an extra:
 When `DATABASE_URL` is unset, the process uses SQLite at
 `.apipi/apipi.db` in the current working directory, next to
 `.apipi/sessions`. Run `apipi migrate` before `apipi serve`. Isolation
-defaults to `none` and logs a warning. The process binds `0.0.0.0:8000`.
-`OPENAI_BASE_URL` is the model host that Pi calls.
+defaults to `none` and logs a warning. Unset
+`APIPI_VAULT_MASTER_KEY` uses a local default for MCP vault tokens and
+logs a warning; set a 32-byte key in production. The process binds
+`0.0.0.0:8000`. `OPENAI_BASE_URL` is the model host that Pi calls.
 
 `apipi check` verifies requirements and then exits. It leaves HTTP
 unbound. `--skip-db` and `--skip-model` skip the store and the model
@@ -216,6 +218,9 @@ APIPI_WORKER_TOKEN=secret
 OPENAI_BASE_URL=http://your-model-host/v1
 DATABASE_URL=postgresql+asyncpg://apipi:apipi@db:5432/apipi
 ```
+
+Set `APIPI_VAULT_MASTER_KEY` on the API to a 32-byte key (base64 or
+hex) so MCP vault tokens are not encrypted with the local default.
 
 ```
 # extra on the worker

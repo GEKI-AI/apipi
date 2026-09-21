@@ -87,5 +87,7 @@ success; the next request calls the plugin again.
 A `tenants` row is created on first use of a `tenant_id`. There is no
 `api_keys` table and no `apipi tenant create`. Postgres holds tenants,
 sessions, and the event log. It does not hold the gateway auth bearer.
-MCP vault tokens may be stored tenant-scoped. GET never returns those
-token values. Guests and browsers never see them.
+MCP vault tokens may be stored tenant-scoped. They are encrypted at
+rest with AES-256-GCM (`APIPI_VAULT_MASTER_KEY`). GET never returns
+those token values. Guests and browsers never see them. See
+[configuration](config.md).

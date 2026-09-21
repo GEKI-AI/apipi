@@ -1,5 +1,6 @@
 from httpx import AsyncClient
 
+from apipi.config import Settings
 from apipi.store.engine import Store
 
 
@@ -105,11 +106,17 @@ async def test_session_vault_ids_and_unknown_vault(client: AsyncClient) -> None:
     assert missing.status_code == 404
 
 
-async def test_vault_token_stays_in_store(client: AsyncClient, store: Store) -> None:
+async def test_vault_token_stays_encrypted(client: AsyncClient, store: Store) -> None:
     from uuid import UUID
 
     from sqlalchemy import select
 
+    from apipi.services.vault_crypto import (
+        decrypt_vault_token,
+        is_vault_ciphertext,
+        vault_aad,
+        vault_key_bytes,
+    )
     from apipi.store.models import VaultCredential
 
     token = "vault-store"
@@ -133,4 +140,61 @@ async def test_vault_token_stays_in_store(client: AsyncClient, store: Store) -> 
             select(VaultCredential).where(VaultCredential.id == UUID(cred.json()["id"]))
         )
         assert found is not None
-        assert found.token == "keep-me"
+        assert is_vault_ciphertext(found.token)
+        assert found.token != "keep-me"
+        assert "keep-me" not in found.token
+        assert (
+            decrypt_vault_token(
+                found.token,
+                vault_key_bytes(None),
+                aad=vault_aad(found.tenant_id, found.id),
+            )
+            == "keep-me"
+        )
+
+
+async def test_encrypt_plaintext_vault_tokens(settings: Settings, store: Store) -> None:
+    from uuid import uuid4
+
+    from sqlalchemy import select
+
+    from apipi.services.vault_crypto import (
+        decrypt_vault_token,
+        is_vault_ciphertext,
+        vault_aad,
+        vault_key_bytes,
+    )
+    from apipi.services.vaults import encrypt_plaintext_vault_tokens
+    from apipi.store.models import VaultCredential
+    from apipi.store.repo import create_vault, create_vault_credential, ensure_tenant
+
+    tenant_id = uuid4()
+    async with store.session() as db:
+        await ensure_tenant(db, tenant_id)
+        vault = await create_vault(db, tenant_id, name="v")
+        row = await create_vault_credential(
+            db,
+            tenant_id,
+            vault.id,
+            auth_type="static_bearer",
+            mcp_server_url="https://mcp.example.com/mcp",
+            token="legacy-plain",
+        )
+        cred_id = row.id
+    assert await encrypt_plaintext_vault_tokens(store, settings) == 1
+    assert await encrypt_plaintext_vault_tokens(store, settings) == 0
+    async with store.session() as db:
+        found = await db.scalar(
+            select(VaultCredential).where(VaultCredential.id == cred_id)
+        )
+        assert found is not None
+        assert is_vault_ciphertext(found.token)
+        assert "legacy-plain" not in found.token
+        assert (
+            decrypt_vault_token(
+                found.token,
+                vault_key_bytes(settings.vault_master_key),
+                aad=vault_aad(tenant_id, cred_id),
+            )
+            == "legacy-plain"
+        )

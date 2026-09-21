@@ -3,9 +3,17 @@ from typing import Any, Literal
 
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
+from sqlalchemy import select
 
+from apipi.config import Settings
 from apipi.gateway.auth import not_found
 from apipi.gateway.schemas import StrictModel
+from apipi.services.vault_crypto import (
+    encrypt_vault_token,
+    is_vault_ciphertext,
+    vault_aad,
+    vault_key_bytes,
+)
 from apipi.store.engine import Store
 from apipi.store.models import Vault, VaultCredential
 from apipi.store.repo import (
@@ -20,6 +28,21 @@ from apipi.store.repo import (
     update_vault,
     update_vault_credential,
 )
+
+
+async def encrypt_plaintext_vault_tokens(store: Store, settings: Settings) -> int:
+    key = vault_key_bytes(settings.vault_master_key)
+    rewritten = 0
+    async with store.session() as db:
+        rows = list(await db.scalars(select(VaultCredential)))
+        for row in rows:
+            if is_vault_ciphertext(row.token):
+                continue
+            row.token = encrypt_vault_token(
+                row.token, key, aad=vault_aad(row.tenant_id, row.id)
+            )
+            rewritten += 1
+    return rewritten
 
 
 class VaultWrite(StrictModel):
@@ -124,8 +147,18 @@ def credential_body(row: VaultCredential) -> dict[str, Any]:
 
 
 class VaultService:
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: Store, settings: Settings) -> None:
         self.store = store
+        self.settings = settings
+
+    def _encrypt_token(
+        self, plaintext: str, tenant_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> str:
+        return encrypt_vault_token(
+            plaintext,
+            vault_key_bytes(self.settings.vault_master_key),
+            aad=vault_aad(tenant_id, credential_id),
+        )
 
     async def create(self, tenant_id: uuid.UUID, body: VaultWrite) -> dict[str, Any]:
         async with self.store.session() as db:
@@ -170,6 +203,7 @@ class VaultService:
             vault = await get_vault(db, tenant_id, vault_id)
             if vault is None:
                 not_found()
+            credential_id = uuid.uuid4()
             row = await create_vault_credential(
                 db,
                 tenant_id,
@@ -177,7 +211,10 @@ class VaultService:
                 name=body.name,
                 auth_type="static_bearer",
                 mcp_server_url=str(body.auth["mcp_server_url"]),
-                token=str(body.auth["token"]),
+                token=self._encrypt_token(
+                    str(body.auth["token"]), tenant_id, credential_id
+                ),
+                credential_id=credential_id,
             )
             return credential_body(row)
 
@@ -212,7 +249,7 @@ class VaultService:
     ) -> dict[str, Any]:
         token = None
         if body.auth is not None and isinstance(body.auth.get("token"), str):
-            token = body.auth["token"]
+            token = self._encrypt_token(body.auth["token"], tenant_id, credential_id)
         async with self.store.session() as db:
             row = await update_vault_credential(
                 db,
