@@ -33,8 +33,9 @@ host Pi processes from that worker. Use `KillMode=control-group` on
 the systemd unit. `systemctl restart` sends SIGTERM so the worker
 drains, then starts again. Install
 `deploy/systemd/apipi-worker-drain.conf` so stop can wait for live Pi
-to empty. Scrape `apipi_pi_processes` and `apipi_pi_rss_bytes` on the
-worker when metrics are on. See
+to empty. Set `APIPI_PI_MEM_MIB` so one session cannot fill the worker.
+Scrape `apipi_pi_processes` and `apipi_pi_rss_bytes` on the worker when
+metrics are on. See
 [sandbox workers](workers.md#drain-and-expiry) and
 [observability](observability.md#prometheus).
 

@@ -121,6 +121,18 @@ def test_pi_env_uses_request_key_not_openai_api_key(
     assert "PI_CODING_AGENT_DIR" in env
 
 
+def test_pi_env_sets_node_old_space_when_pi_mem_mib(tmp_path: Path) -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        sessions_dir=str(tmp_path / "sessions"),
+        model_base_url="http://model.test/v1",
+        pi_mem_mib=256,
+    )
+    env = pi_env(settings, extra_env={"NODE_OPTIONS": "--from-session"})
+    assert env["NODE_OPTIONS"] == "--max-old-space-size=256"
+
+
 def test_pi_env_overwrite(tmp_path: Path) -> None:
     settings = _settings(tmp_path, model_api_key_overwrite="over")
     env = pi_env(settings)

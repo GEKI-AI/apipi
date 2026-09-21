@@ -325,6 +325,33 @@ class PiPool:
             await asyncio.sleep(interval)
             await self.reap()
 
+    async def enforce_memory(self) -> None:
+        limit = self.settings.pi_mem_mib
+        if limit is None:
+            return
+        from apipi.worker.procmem import read_group_rss_pss
+
+        ceiling = limit * 1024 * 1024
+        for sid, proc in list(self._procs.items()):
+            if not proc.alive or proc.vm_id:
+                continue
+            process = getattr(proc, "process", None)
+            pid = getattr(process, "pid", None)
+            if pid is None:
+                continue
+            rss, _pss = read_group_rss_pss(pid)
+            if rss <= ceiling:
+                continue
+            log.info(
+                "pi memory",
+                extra={
+                    "session_id": str(sid),
+                    "rss": rss,
+                    "limit_mib": limit,
+                },
+            )
+            await self.kill(sid, reason="memory")
+
     async def kill_unheld(self, *, reason: str = "idle") -> None:
         for sid in list(self._procs):
             if self.alive(sid) and not self.held(sid):

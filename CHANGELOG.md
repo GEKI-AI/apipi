@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional host Pi memory ceiling `APIPI_PI_MEM_MIB` / `[pi].mem_mib`:
+  Node heap hint plus RSS kill (`reason=memory`) so one session cannot
+  silently fill a chat worker.
 - `apipi worker` treats SIGTERM/SIGINT as drain: heartbeat
   `"drain": true`, wait until live Pi are gone, exit 0 (timeout exits
   1). Example systemd drop-in `deploy/systemd/apipi-worker-drain.conf`.

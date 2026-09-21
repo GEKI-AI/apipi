@@ -183,8 +183,9 @@ cgroup, or guest. Host Pi (`none` and `chat`) starts in its own process
 group. Idle reap, session end, and process shutdown send SIGTERM then
 SIGKILL to that group so stdio MCP children started by Pi do not linger.
 Gateway-owned stdio MCP is a sibling of Pi and is stopped separately.
-Use this when a microvm cannot run. Use `microvm` in production. The
-process logs a warning.
+`APIPI_PI_MEM_MIB` is an optional soft ceiling for one host Pi (Node
+heap plus RSS kill). It is not a cgroup. Use this when a microvm
+cannot run. Use `microvm` in production. The process logs a warning.
 
 ## `microvm`
 

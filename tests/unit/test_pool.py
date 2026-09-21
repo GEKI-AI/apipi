@@ -5,8 +5,10 @@ from typing import Any, cast
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from tests.support.prom import metric_line
 
 from apipi.config import Settings
+from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
@@ -243,3 +245,59 @@ async def test_hosted_reap_kills_after_sandbox_ttl() -> None:
     pool._last[hosted] = time.monotonic() - 30
     await pool.reap()
     assert hosted not in pool._procs
+
+
+class _HostProc(_Proc):
+    vm_id = None
+
+    def __init__(self, pid: int) -> None:
+        super().__init__()
+        self.process = type("P", (), {"pid": pid})()
+
+
+async def test_enforce_memory_kills_over_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = Metrics()
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+            pi_mem_mib=1,
+        ),
+        metrics=metrics,
+    )
+    over = uuid.uuid4()
+    under = uuid.uuid4()
+    guest = uuid.uuid4()
+    pool._procs[over] = cast(PiProc, _HostProc(11))
+    pool._procs[under] = cast(PiProc, _HostProc(12))
+    guest_proc = _HostProc(13)
+    guest_proc.vm_id = "vm-1"
+    pool._procs[guest] = cast(PiProc, guest_proc)
+
+    def fake_rss(pid: int, **_kwargs: object) -> tuple[int, int]:
+        if pid == 11:
+            return (2 * 1024 * 1024, 0)
+        return (100, 0)
+
+    monkeypatch.setattr("apipi.worker.procmem.read_group_rss_pss", fake_rss)
+    await pool.enforce_memory()
+    assert over not in pool._procs
+    assert under in pool._procs
+    assert guest in pool._procs
+    body = metrics.scrape().decode()
+    assert metric_line(body, "apipi_pi_kill_total", reason="memory").endswith(" 1.0")
+
+
+async def test_enforce_memory_skips_when_unset() -> None:
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+        )
+    )
+    sid = uuid.uuid4()
+    pool._procs[sid] = cast(PiProc, _HostProc(11))
+    await pool.enforce_memory()
+    assert sid in pool._procs

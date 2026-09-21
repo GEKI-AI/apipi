@@ -60,6 +60,7 @@ _log = logging.getLogger("apipi")
 _PI_TOML = {
     "command": "pi_command",
     "auto_compact": "pi_auto_compact",
+    "mem_mib": "pi_mem_mib",
     "platform_prompt": "platform_prompt",
     "platform_prompt_additional": "platform_prompt_additional",
 }
@@ -444,6 +445,11 @@ class Settings(BaseSettings):
     pi_auto_compact: bool = Field(
         default=True,
         validation_alias=AliasChoices("APIPI_PI_AUTO_COMPACT", "pi_auto_compact"),
+    )
+    pi_mem_mib: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("APIPI_PI_MEM_MIB", "pi_mem_mib"),
     )
     platform_prompt: str | None = Field(
         default=None,
@@ -963,6 +969,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_FORWARD_MODELS must be on or off"
         if "pi_auto_compact" in loc or "APIPI_PI_AUTO_COMPACT" in loc:
             return "APIPI_PI_AUTO_COMPACT must be on or off"
+        if "pi_mem_mib" in loc or "APIPI_PI_MEM_MIB" in loc:
+            return "APIPI_PI_MEM_MIB must be at least 1"
         if "port" in loc:
             return "APIPI_PORT must be 1-65535"
         if "instance_id" in loc or "APIPI_INSTANCE_ID" in loc:

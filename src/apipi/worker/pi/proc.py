@@ -222,6 +222,8 @@ def pi_env(
                 env[f"{prefix}_CWD"] = server.cwd
     if extra_env:
         env.update(extra_env)
+    if settings.pi_mem_mib is not None:
+        env["NODE_OPTIONS"] = f"--max-old-space-size={settings.pi_mem_mib}"
     return env
 
 

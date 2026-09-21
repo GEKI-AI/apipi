@@ -263,21 +263,20 @@ class LocalExecution:
         await reap_workspace_loop(self.settings, store, self.pool)
 
     async def observe_loop(self) -> None:
-        if self.metrics is None:
-            while True:
-                await asyncio.sleep(3600)
         interval = 5.0
         sample = self.settings.guest_sample_interval
         sample_every = sample.total_seconds() if sample is not None else None
         last_sample = 0.0
         while True:
-            self.pool.refresh_metrics()
-            self._observe_cgroup()
-            self._observe_host_pi()
-            now = asyncio.get_running_loop().time()
-            if sample_every is not None and now - last_sample >= sample_every:
-                await self._observe_guest_samples()
-                last_sample = now
+            await self.pool.enforce_memory()
+            if self.metrics is not None:
+                self.pool.refresh_metrics()
+                self._observe_cgroup()
+                self._observe_host_pi()
+                now = asyncio.get_running_loop().time()
+                if sample_every is not None and now - last_sample >= sample_every:
+                    await self._observe_guest_samples()
+                    last_sample = now
             await asyncio.sleep(interval)
 
     def _observe_cgroup(self) -> None:
