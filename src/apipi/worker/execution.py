@@ -391,6 +391,8 @@ class LocalExecution:
                 )
             except OSError:
                 return
+            except asyncio.CancelledError:
+                return
 
 
 def local_execution(

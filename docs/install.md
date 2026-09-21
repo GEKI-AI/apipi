@@ -290,7 +290,7 @@ That binds `0.0.0.0:8000` by default. `--host`, `--port`, and
 store depth, retention, whether usage and payload export are on, and
 whether Prometheus metrics and OpenTelemetry traces are on. Logs are
 JSON lines on stderr and flush after each line. A POST logs
-`request start` immediately. A turn logs `turn start`, then microVM
+`request start` immediately with the URL path. A turn logs `turn start`, then microVM
 boot/jailer/vsock and `pi prompt` / first `pi event` while it runs.
 The HTTP `request` line is written when the stream ends. Guest kernel
 and Firecracker console lines are `debug` (`APIPI_LOG_LEVEL=debug`).

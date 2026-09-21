@@ -108,6 +108,9 @@ async def test_request_and_turn_are_logged(
     starts = [record for record in http if record.getMessage() == "request start"]
     assert starts
     assert starts[0].__dict__["method"] == "POST"
+    assert any(
+        record.__dict__.get("route") == "/v1/agents/sessions" for record in starts
+    )
     last = http[-1]
     assert last.getMessage() == "request"
     assert last.__dict__["method"] == "POST"

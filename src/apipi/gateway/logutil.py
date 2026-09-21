@@ -186,9 +186,11 @@ class RequestLogMiddleware:
         started = time.perf_counter()
         method = str(scope.get("method", ""))
         if method in {"POST", "PUT", "PATCH"}:
+            path = scope.get("path")
+            route = path if isinstance(path, str) and path else route_path(scope)
             _http.info(
                 "request start",
-                extra={"method": method, "route": route_path(scope)},
+                extra={"method": method, "route": route},
             )
 
         async def send_wrapper(message: Message) -> None:
