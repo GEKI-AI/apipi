@@ -223,6 +223,7 @@ class SessionService:
         self.tracing = tracing
         self.mcp_http = mcp_http
         self.mcp_stdio = mcp_stdio
+        self._turn_tasks: set[asyncio.Task[None]] = set()
 
     def _require_capacity(
         self,
@@ -303,6 +304,7 @@ class SessionService:
         user_id: str | None = None,
         request_id: str | None = None,
         api_key: str | None = None,
+        wait_turn: bool = True,
     ) -> dict[str, Any]:
         if (agent is None) == (agent_id is None):
             raise ApiError(
@@ -471,18 +473,44 @@ class SessionService:
                     tenant_id,
                     session_mem_mib=mem_mib_for_size(self.settings, size),
                 )
-                await self.execution.run_turn(
-                    tenant_id,
-                    session_id,
-                    text,
-                    mcp_http=connected,
-                    mcp_stdio=stdio,
-                    request_id=request_id,
-                    api_key=api_key,
-                    key_id=key_id or None,
-                    user_id=user_id,
-                )
-                await self._raise_if_first_turn_failed(tenant_id, session_id)
+
+                if wait_turn:
+                    await self.execution.run_turn(
+                        tenant_id,
+                        session_id,
+                        text,
+                        mcp_http=connected,
+                        mcp_stdio=stdio,
+                        request_id=request_id,
+                        api_key=api_key,
+                        key_id=key_id or None,
+                        user_id=user_id,
+                    )
+                    await self._raise_if_first_turn_failed(tenant_id, session_id)
+                else:
+
+                    async def _run_first_turn() -> None:
+                        try:
+                            await self.execution.run_turn(
+                                tenant_id,
+                                session_id,
+                                text,
+                                mcp_http=connected,
+                                mcp_stdio=stdio,
+                                request_id=request_id,
+                                api_key=api_key,
+                                key_id=key_id or None,
+                                user_id=user_id,
+                            )
+                        except Exception:
+                            log.exception(
+                                "background turn",
+                                extra={"session_id": str(session_id)},
+                            )
+
+                    task = asyncio.create_task(_run_first_turn())
+                    self._turn_tasks.add(task)
+                    task.add_done_callback(self._turn_tasks.discard)
             else:
                 async with self.store.session() as db:
                     await persist_event(

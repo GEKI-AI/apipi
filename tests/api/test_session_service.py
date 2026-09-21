@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 from apipi.config import Settings
@@ -35,5 +36,30 @@ async def test_in_process_create_and_stream(settings: Settings, store: Store) ->
         assert "agent.session.created" in types
         assert "agent.session.idle" in types
         assert all(event.get("type") != "_keep_alive" for event in events)
+    finally:
+        await gateway.shutdown()
+
+
+async def test_create_wait_turn_false_returns_before_turn(
+    settings: Settings, store: Store
+) -> None:
+    harness = FakeHarness()
+    harness.hold = True
+    gateway = Gateway.create(settings, store=store, harness=harness)
+    await gateway.startup()
+    try:
+        tenant_id = uuid.uuid4()
+        await gateway.ensure_tenant(tenant_id)
+        created = await asyncio.wait_for(
+            gateway.sessions.create(
+                tenant_id,
+                agent=AgentWrite(name="bot", model="test"),
+                environment=EnvironmentSpec(type="none"),
+                input="hello",
+                wait_turn=False,
+            ),
+            timeout=2,
+        )
+        assert created["id"]
     finally:
         await gateway.shutdown()

@@ -188,7 +188,8 @@ do not upgrade in place.
 | `GET` | `/v1/chat/sessions/{session_id}/export` |
 
 Create accepts `agent` or `agent_id`, `input`, `metadata`, `vault_ids`,
-and `stream`. An `environment` field is `400` with code
+and `stream`. `stream: true` returns SSE as soon as the session exists.
+An `environment` field is `400` with code
 `unknown_field`. List returns only chat sessions. An Agents session id
 on a chat path is `404`. Event types match Agents so one frontend can
 read both.
@@ -214,10 +215,10 @@ Create accepts `agent` or `agent_id`, `environment` (including
 `environment` is omitted, the type is `openai_hosted`: a local session
 directory next to Pi, not OpenAI's cloud. `hosted` is an alias for
 that same directory; the session stores and returns `openai_hosted`. `input` may be a string or an
-object with `content` or `text`. A non-empty input starts the first
-turn before the create response returns. If that turn fails, non-stream
-create returns `502` with the turn error `code` and `session_id` on the
-error object. `stream: true` returns SSE instead of the session JSON.
+object with `content` or `text`. A non-empty input starts the first turn. Non-stream create waits for
+that turn. If it fails, the response is `502` with the turn error
+`code` and `session_id` on the error object. `stream: true` returns SSE
+as soon as the session row exists; turn events follow while Pi runs.
 
 Status: `idle | in_progress | requires_action | failed`.
 

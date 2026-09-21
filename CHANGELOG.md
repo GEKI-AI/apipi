@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `stream: true` on session create returns SSE as soon as the session
+  row exists. The first turn runs in the background.
 - HTTP session routes run turns through an in-process execution
   adapter. Isolation backends stay behind that boundary.
 - Concepts pages for how it fits together, isolation, and workers.
