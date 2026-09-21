@@ -7,11 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-21
+
 ### Breaking
 
 - S3 `auto` addressing is virtual-hosted. Set `APIPI_S3_ADDRESSING=path`
   for R2 or MinIO on an IP. Presigned URLs use the same style.
-
 - MCP tools use OpenAI nested `transport` only (`http` with
   `server_url`, `stdio` with `command` / `args`). Flat `server_url` or
   `command` on the tool object is rejected. Rewrite saved agent tool
@@ -33,9 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fail the turn with code `artifact_store` instead of `500 internal`.
 - Request-start logs use the URL path. Shutdown harvest ignores
   `CancelledError`.
+- Hosted follow-up after a sandbox TTL wipe fails cleanly. The Pi
+  session cache reloads for the next turn.
 
 ### Changed
 
+- Run `apipi migrate` for schema revisions `0002` through `0010`
+  (workers, leases, files, skills, Pi session URI, uploads).
 - `stream: true` on session create returns SSE as soon as the session
   row exists. The first turn runs in the background.
 - HTTP session routes run turns through an in-process execution
@@ -46,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MicroVM TAP egress is public internet by default. Guest localhost
   works. The model host is always reachable. Destination allowlist is
   optional. `tc` rate limits stay.
+- Artifact harvest publishes only workspace `outputs/`.
+- Model and MCP secrets stay on a host credential broker, not in the
+  guest.
 
 ### Added
 
@@ -115,9 +123,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   browser only when those tools are present.
 - Rootless API Docker image and Compose service (`apipi serve
   --api-only`). Worker systemd units live in `deploy/systemd/`.
-
-### Added
-
 - Serve logs flush each line. A turn logs `request start`,
   `turn start`, microVM boot/vsock, and `pi prompt` while SSE is
   still open.
@@ -134,6 +139,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `events` envelope and the existing flat body.
 - OpenAI compatibility page with comparison tables for routes, fields,
   lifecycle, and errors.
+- Production observability guide. Worker Prometheus metrics and
+  optional guest samples. Turn metrics and traces on the worker.
+  Wait-focused spans honor `traceparent`. Structured error events
+  with ids and codes.
+- Optional auth `user_id` on usage events and export.
+- `Gateway` handle for in-process wiring. Extending docs and a
+  webpage-check example. `tenant_from_key` for callers without HTTP
+  auth.
+- Overridable platform prompt before agent instructions.
 
 ## [0.2.0] - 2026-09-15
 
@@ -184,6 +198,7 @@ package and CLI stay `apipi`.
   `apipi migrate`, or stamp `0001_initial` if the schema already
   matches.
 
-[Unreleased]: https://github.com/GEKI-AI/apipi/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/GEKI-AI/apipi/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/GEKI-AI/apipi/releases/tag/v0.3.0
 [0.2.0]: https://github.com/GEKI-AI/apipi/releases/tag/v0.2.0
 [0.1.0]: https://github.com/GEKI-AI/apipi/releases/tag/v0.1.0
