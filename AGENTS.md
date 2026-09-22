@@ -66,6 +66,7 @@ fallback. `host` and `jail` are not valid. OpenAI-compatible
 - Pi types in HTTP
 - Pi JSONL as the database
 - Accept `multi_agent` silently
+- A Job or cron engine, or a Slack or Teams gateway
 - Gateway auth bearers in the browser or in Postgres. MCP vault tokens
   may be stored tenant-scoped; GET never returns them; guests never
   see them.
@@ -80,6 +81,8 @@ fallback. `host` and `jail` are not valid. OpenAI-compatible
 - Change `CONSTITUTION.md` rarely. Edit in place. No amendment log.
 - Tenant-scope every query. Auth is a callback; do not store gateway
   bearers.
+- Keep domain logic in services and the store. HTTP only routes,
+  validates, and serializes. Extenders call those services.
 - Persist the public event before SSE
 - Fail unknown OpenAI fields clearly
 - Pin Pi when touching the adapter

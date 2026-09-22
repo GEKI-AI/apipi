@@ -231,6 +231,13 @@ Status: `idle | in_progress | requires_action | failed`.
 `DELETE` removes the session for that tenant and returns
 `{"id": "…", "deleted": true}`.
 
+`metadata` is a JSON object. Keys that start with `apipi.` are
+reserved. The gateway interprets `apipi.sandbox_size`,
+`apipi.session_kind`, `apipi.title`, and `apipi.title_status`. It
+stores `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`
+and does not branch on them. There is no top-level `actor_type`
+field. See [reserved metadata](extending.md#reserved-metadata).
+
 ## Events
 
 | Method | Path |

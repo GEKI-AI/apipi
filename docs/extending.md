@@ -42,7 +42,9 @@ execution is `api_only` off, the same as `apipi serve` without
 `--api-only`.
 
 Do not put channel products (Slack, Teams, bot CRUD) in ApiPi. Those
-are your routes and your tables.
+are your routes and your tables. Do not put a Job or cron engine in
+ApiPi either. Triggers, job rows, and channel gateways belong to the
+extending service. ApiPi stores sessions, turns, and events.
 
 ## Explicit quick start
 
@@ -150,6 +152,100 @@ A custom `authenticate=` plugin may still return its own `tenant_id`.
 Inline agents on `sessions.create` use `AgentWrite` from
 `apipi.services.agents`. Do not import `apipi.api` or `store.repo` for
 product functions; `apipi.api` is HTTP only.
+
+## Driving a run
+
+Start work by calling `gateway.sessions`. That object is the same
+`SessionService` the HTTP routes use. Do not add a second run API, and
+do not HTTP-loopback to `/v1`.
+
+A new session per run is `create` with `input` set. A non-empty input
+starts the first turn. Reusing one session is `post_event` with type
+`agent.session.input.message` and `content` or `text` on an existing
+`session_id`. `stream` yields the same events SSE would send.
+`examples/webpage-check/` does create, then `post_event`, then
+`stream`. Pass `metadata` on `create`. Use `update` later if the tags
+must change.
+
+There is no named "run once" helper. `create` and `post_event` are
+that API. There is no Job or cron engine here, and no Slack or Teams
+gateway. The extender owns job definitions, triggers, channel
+delivery, and the link from a run to `session_id`. ApiPi does not
+keep schedule state.
+
+### Reserved metadata
+
+Session `metadata` is a JSON object. Keys that start with `apipi.` are
+reserved. Do not invent new `apipi.` keys in an extension. Other keys
+are yours.
+
+The gateway reads some reserved keys. It stores the rest and returns
+them on the session. It does not branch on those. A top-level
+`actor_type` field is not part of the API. Put the actor in metadata.
+Unknown top-level fields are rejected.
+
+| Key | Who writes it | What the gateway does |
+| --- | --- | --- |
+| `apipi.sandbox_size` | Client or agent | Chooses guest size when `environment.sandbox_size` is omitted. See [environments](environments.md). |
+| `apipi.session_kind` | Gateway on chat create, or the client on a saved agent | `chat` places the session on chat workers. |
+| `apipi.title` | Sidekick, when automatic titles are on | Short title. An existing value is kept. |
+| `apipi.title_status` | Sidekick | `pending`, `done`, or `failed`. |
+| `apipi.actor_type` | Extender | Stored and returned. Not interpreted. |
+| `apipi.schedule_id` | Extender | Stored and returned. Not interpreted. |
+| `apipi.source` | Extender | Stored and returned. Not interpreted. |
+
+`apipi.actor_type` says who started the run. Recommended values are
+`user`, `schedule`, `channel`, and `webhook`. The gateway does not
+check the value, so an extender can add one without an ApiPi release.
+Use a recommended value when it fits, so clients can share one reader.
+
+`apipi.schedule_id` is the extender's job or schedule id, as a string.
+ApiPi does not look it up.
+
+`apipi.source` is a short string for where the run came from, such as
+`geki.schedule` or `geki.slack`. It is not an allowlist.
+
+A scheduled run that should start immediately:
+
+```python
+created = await gateway.sessions.create(
+    tenant_id,
+    agent_id=agent_id,
+    input="Run the daily check.",
+    metadata={
+        "apipi.actor_type": "schedule",
+        "apipi.schedule_id": schedule_id,
+        "apipi.source": "geki.schedule",
+    },
+    key_id="jobs",
+    api_key=api_key,
+)
+```
+
+A later tick on the same session posts a message. It does not call
+`create` again:
+
+```python
+await gateway.sessions.post_event(
+    tenant_id,
+    session_id,
+    type="agent.session.input.message",
+    content="Run the daily check again.",
+    key_id="jobs",
+    api_key=api_key,
+)
+```
+
+Call `await gateway.ensure_tenant(tenant_id)` before the first
+`create` for that tenant.
+
+### Domain and HTTP
+
+Models, store functions, and service methods are the product. HTTP
+routes only route, validate parameters, and serialize. An extender
+calls `gateway.sessions`, `gateway.agents`, and the other gateway
+services. It does not import `apipi.api`, and it does not reimplement
+those functions by reading the route handlers.
 
 ## Lifespan and store ownership
 
@@ -273,7 +369,8 @@ your tests when the process environment is not yours.
 
 ## Non-goals
 
-- Channel or bot adapters in ApiPi core
+- A Job or cron engine in ApiPi
+- Slack, Teams, or other channel or bot adapters in ApiPi
 - A magic one-liner that hides lifespan, middleware, and routes
 - A multi-app Alembic orchestrator inside ApiPi
 - Changing ApiPi's migration system so two products share one
