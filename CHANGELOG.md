@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-22
+
+### Added
+
+- Pi thinking level `APIPI_PI_THINKING`. Stored thinking events carry a
+  100-character preview, `duration_ms`, and `reasoning_tokens`. The full
+  thinking text is not a public event.
+- Optional thinking summaries through a sidekick model. The platform
+  flag `APIPI_THINKING_SUMMARY` and the auth callback must both allow it.
+- Optional automatic session titles in `metadata["apipi.title"]` through
+  the same sidekick. `APIPI_AUTO_TITLE` and a separate auth callback
+  flag must both be on.
+- Reserved session metadata for extenders that drive runs:
+  `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`. The
+  gateway stores them and does not schedule from them.
+
+### Fixed
+
+- A streamed create that cannot start the first turn emits
+  `agent.session.error` with a code and `agent.session.failed`, then
+  the stream ends.
+- Session delete stops the live guest before it removes the row. A
+  worker started with sudo deletes artifact files it owns.
+
 ## [0.3.1] - 2026-09-22
 
 ### Changed
