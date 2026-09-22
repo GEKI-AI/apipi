@@ -1,5 +1,12 @@
-from apipi.services.runtime import PUBLIC_EVENT_TYPES
-from apipi.worker.pi.map import map_pi_event
+import json
+
+from apipi.services.runtime import LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES
+from apipi.worker.pi.map import (
+    THINKING_COMPLETED,
+    THINKING_STARTED,
+    ThinkingTracker,
+    map_pi_event,
+)
 from apipi.worker.pi.version import PINNED_PI
 
 
@@ -157,3 +164,76 @@ def test_mapped_payload_has_no_pi_keys() -> None:
     assert "type" not in payload
     assert "usage" not in payload
     assert "prompt" not in payload
+
+
+def _thinking_update(
+    inner: dict[str, object], reasoning: int | None = None
+) -> dict[str, object]:
+    event: dict[str, object] = {
+        "type": "message_update",
+        "assistantMessageEvent": inner,
+    }
+    if reasoning is not None:
+        event["usage"] = {"reasoning": reasoning}
+    return event
+
+
+def test_thinking_preview_is_truncated_and_public() -> None:
+    clock = iter([10.0, 10.25])
+    tracker = ThinkingTracker(clock=lambda: next(clock))
+    full = "你" * 100 + "TAIL-SECRET"
+    started = tracker.feed(
+        _thinking_update({"type": "thinking_start", "contentIndex": 1})
+    )
+    assert (
+        tracker.feed(
+            _thinking_update(
+                {"type": "thinking_delta", "contentIndex": 1, "delta": full}
+            )
+        )
+        == []
+    )
+    completed = tracker.feed(
+        _thinking_update(
+            {"type": "thinking_end", "contentIndex": 1, "content": full},
+            reasoning=12,
+        )
+    )
+    assert started[0][0] == THINKING_STARTED
+    assert started[0][0] in PUBLIC_EVENT_TYPES
+    assert started[0][0] not in LIVE_EVENT_TYPES
+    assert completed[0][0] == THINKING_COMPLETED
+    assert completed[0][0] in PUBLIC_EVENT_TYPES
+    assert completed[0][0] not in LIVE_EVENT_TYPES
+    payload = completed[0][1]
+    assert payload["item_id"] == started[0][1]["item_id"]
+    assert payload["content_index"] == 1
+    assert payload["duration_ms"] == 250
+    assert payload["reasoning_tokens"] == 12
+    assert payload["preview"] == full[:100]
+    assert payload["preview_truncated"] is True
+    dumped = json.dumps([started, completed])
+    assert "TAIL-SECRET" not in dumped
+
+
+def test_thinking_end_without_start_has_null_duration() -> None:
+    tracker = ThinkingTracker()
+    completed = tracker.feed(
+        _thinking_update(
+            {"type": "thinking_end", "contentIndex": 0, "content": "short"}
+        )
+    )
+    payload = completed[0][1]
+    assert payload["duration_ms"] is None
+    assert payload["reasoning_tokens"] is None
+    assert payload["preview"] == "short"
+    assert payload["preview_truncated"] is False
+
+
+def test_thinking_deltas_are_not_public() -> None:
+    assert (
+        map_pi_event(
+            _thinking_update({"type": "thinking_delta", "delta": "secret thinking"})
+        )
+        == []
+    )

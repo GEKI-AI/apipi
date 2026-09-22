@@ -1,6 +1,13 @@
+import uuid
+from collections.abc import Callable
+from time import monotonic
 from typing import Any
 
 from apipi.services.usage import usage_from_messages
+
+PREVIEW_CHARS = 100
+THINKING_STARTED = "agent.session.turn.thinking.started"
+THINKING_COMPLETED = "agent.session.turn.thinking.completed"
 
 
 def _tool_item_type(name: object) -> str:
@@ -82,3 +89,121 @@ def map_pi_event(event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
             )
         ]
     return []
+
+
+def _preview(text: str) -> tuple[str, bool]:
+    if len(text) <= PREVIEW_CHARS:
+        return text, False
+    return text[:PREVIEW_CHARS], True
+
+
+def _content_index(delta: dict[str, Any]) -> int:
+    raw = delta.get("contentIndex")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return 0
+    return raw
+
+
+def _reasoning_tokens(event: dict[str, Any]) -> int | None:
+    usage = event.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    raw = usage.get("reasoning")
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        return None
+    return raw
+
+
+class ThinkingTracker:
+    def __init__(self, clock: Callable[[], float] | None = None) -> None:
+        self._clock = clock or monotonic
+        self._item_id: str | None = None
+        self._content_index = 0
+        self._started: float | None = None
+        self._parts: list[str] = []
+
+    def feed(self, event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        if event.get("type") != "message_update":
+            return []
+        delta = event.get("assistantMessageEvent")
+        if not isinstance(delta, dict):
+            return []
+        inner = delta.get("type")
+        if inner == "thinking_start":
+            closed = self._finish_open()
+            return [*closed, self._start(delta)]
+        if inner == "thinking_delta":
+            if self._item_id is None:
+                return []
+            text = delta.get("delta")
+            if isinstance(text, str):
+                self._parts.append(text)
+            return []
+        if inner == "thinking_end":
+            return [self._complete(event, delta)]
+        return []
+
+    def _start(self, delta: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        self._item_id = str(uuid.uuid4())
+        self._content_index = _content_index(delta)
+        self._started = self._clock()
+        self._parts = []
+        return (
+            THINKING_STARTED,
+            {"item_id": self._item_id, "content_index": self._content_index},
+        )
+
+    def _finish_open(self) -> list[tuple[str, dict[str, Any]]]:
+        if self._item_id is None:
+            return []
+        preview, truncated = _preview("".join(self._parts))
+        payload = self._completed_payload(
+            preview=preview,
+            truncated=truncated,
+            reasoning_tokens=None,
+        )
+        self._reset()
+        return [(THINKING_COMPLETED, payload)]
+
+    def _complete(
+        self, event: dict[str, Any], delta: dict[str, Any]
+    ) -> tuple[str, dict[str, Any]]:
+        content = delta.get("content")
+        text = content if isinstance(content, str) else "".join(self._parts)
+        if self._item_id is None:
+            self._item_id = str(uuid.uuid4())
+            self._content_index = _content_index(delta)
+            self._started = None
+        preview, truncated = _preview(text)
+        payload = self._completed_payload(
+            preview=preview,
+            truncated=truncated,
+            reasoning_tokens=_reasoning_tokens(event),
+        )
+        self._reset()
+        return (THINKING_COMPLETED, payload)
+
+    def _completed_payload(
+        self,
+        *,
+        preview: str,
+        truncated: bool,
+        reasoning_tokens: int | None,
+    ) -> dict[str, Any]:
+        duration_ms = None
+        if self._started is not None:
+            duration_ms = max(0, round((self._clock() - self._started) * 1000))
+        return {
+            "item_id": self._item_id,
+            "content_index": self._content_index,
+            "duration_ms": duration_ms,
+            "reasoning_tokens": reasoning_tokens,
+            "preview": preview,
+            "preview_truncated": truncated,
+        }
+
+    def _reset(self) -> None:
+        self._item_id = None
+        self._content_index = 0
+        self._started = None
+        self._parts = []

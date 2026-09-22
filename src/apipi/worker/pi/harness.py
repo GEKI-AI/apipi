@@ -5,7 +5,7 @@ from typing import Any
 from apipi.env.computer import Computer
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
-from apipi.worker.pi.map import map_pi_event
+from apipi.worker.pi.map import ThinkingTracker, map_pi_event
 from apipi.worker.pi.pool import PiPool
 
 
@@ -68,10 +68,13 @@ class PiHarness:
             extra_env=extra_env,
         )
         settled = False
+        thinking = ThinkingTracker()
         async for event in proc.prompt(text):
             if event.get("type") == "agent_settled":
                 settled = True
             for public in map_pi_event(event):
+                yield public
+            for public in thinking.feed(event):
                 yield public
         if not settled:
             yield (

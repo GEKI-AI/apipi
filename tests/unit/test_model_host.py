@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import httpx
@@ -10,6 +11,7 @@ from apipi.worker.pi.model_host import (
     fetch_model_ids,
     fetch_models_json,
     listed_models,
+    models_json_for_base_url,
     models_url,
     parse_model_ids,
     probe_model_host,
@@ -64,11 +66,42 @@ def test_require_listed_model() -> None:
 def test_write_pi_models_json(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     path = write_pi_models_json(settings, ["Qwen/Qwen3.6-35B-A3B"])
-    text = path.read_text()
-    assert PI_PROVIDER in text
-    assert "openai-completions" in text
-    assert "Qwen/Qwen3.6-35B-A3B" in text
-    assert "http://model.test/v1" in text
+    payload = json.loads(path.read_text())
+    provider = payload["providers"][PI_PROVIDER]
+    assert provider["api"] == "openai-completions"
+    assert provider["baseUrl"] == "http://model.test/v1"
+    assert provider["compat"]["supportsReasoningEffort"] is False
+    assert provider["models"] == [{"id": "Qwen/Qwen3.6-35B-A3B"}]
+
+
+def test_write_pi_models_json_marks_reasoning_when_thinking_on(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings = settings.model_copy(update={"pi_thinking": "medium"})
+    path = write_pi_models_json(settings, ["m1"])
+    provider = json.loads(path.read_text())["providers"][PI_PROVIDER]
+    assert provider["compat"]["supportsDeveloperRole"] is False
+    assert provider["compat"]["supportsReasoningEffort"] is True
+    assert provider["models"] == [{"id": "m1", "reasoning": True}]
+    missing = models_json_for_base_url(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+            sessions_dir=str(tmp_path / "other"),
+            pi_thinking="high",
+        ),
+        "http://broker.test/v1",
+    )
+    fallback = json.loads(missing)["providers"][PI_PROVIDER]
+    assert fallback["compat"]["supportsReasoningEffort"] is True
+
+
+def test_pi_command_args_pass_thinking_level(tmp_path: Path) -> None:
+    off = pi_command_args(_settings(tmp_path), tools=True)
+    assert "--thinking" not in off
+    on = pi_command_args(
+        _settings(tmp_path).model_copy(update={"pi_thinking": "low"}), tools=True
+    )
+    assert on[on.index("--thinking") + 1] == "low"
 
 
 def test_pi_command_args_include_provider_and_model(tmp_path: Path) -> None:

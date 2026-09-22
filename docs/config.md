@@ -220,9 +220,22 @@ Firecracker.
 | --- | --- | --- | --- |
 | `APIPI_PI_COMMAND` | `[pi].command` | `pi` | Pi binary used as `pi --mode rpc`. |
 | `APIPI_PI_AUTO_COMPACT` | `[pi].auto_compact` | on | When off, ApiPi passes `--no-auto-compact` so Pi does not compact context on its own. |
+| `APIPI_PI_THINKING` | `[pi].thinking` | `off` | Pi thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. |
 | `APIPI_PI_MEM_MIB` | `[pi].mem_mib` | unset | Soft ceiling for one host Pi (`none` / `chat`) in MiB. Unset is off. Sets Node `NODE_OPTIONS=--max-old-space-size` and kills the process group when RSS goes over the limit (`apipi_pi_kill_total` reason `memory`). A turn in progress fails with `model_host_error`. Not a microVM hard cap. |
 | `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | built-in text | Main platform prompt appended after Pi's harness default. Unset keeps the built-in. Set to `""` to disable the main block. A non-empty value replaces the built-in entirely. |
 | `APIPI_PLATFORM_PROMPT_ADDITIONAL` | `[pi].platform_prompt_additional` | empty | Optional extra platform text appended after the main block. Does not replace the main prompt. |
+
+Thinking stays off until you set a level other than `off`. ApiPi then
+passes `--thinking` to Pi and writes each model in `models.json` with
+`reasoning` true and `supportsReasoningEffort` true. That asks an
+OpenAI-compatible host for `reasoning_effort`. Hosts that need another
+Pi thinking format, such as `chat-template` or `qwen`, are not
+configured here. `xhigh` and `max` are passed through. Pi drops a
+level the model does not support. `off` leaves `models.json` as it is
+today and does not pass `--thinking`. Set this on the process that
+runs Pi. Public events then carry a preview of the first 100 Unicode
+code points, a duration, and a reasoning token count. The full
+thinking text is not a public event. See [events](api.md#events).
 
 The gateway always composes those blocks before `agent.instructions`.
 Order: Pi's default system prompt, main platform prompt, additional

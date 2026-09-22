@@ -813,6 +813,34 @@ def test_env_none_placement_from_toml(
     assert load_settings().env_none_placement == "reject"
 
 
+def test_pi_thinking_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_PI_THINKING", "medium")
+    assert load_settings().pi_thinking == "medium"
+
+
+def test_pi_thinking_from_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("APIPI_PI_THINKING", raising=False)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "[pi]\n"
+        'thinking = "high"\n'
+    )
+    assert load_settings().pi_thinking == "high"
+
+
+def test_pi_thinking_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_PI_THINKING", "maxed")
+    with pytest.raises(ConfigError, match="APIPI_PI_THINKING must be"):
+        load_settings()
+
+
 def test_env_none_placement_invalid(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -270,7 +270,8 @@ JSON do not see an empty payload. Reconnect and replay from the store
 with `after_seq`. Stored public events are written before SSE.
 `output_text.delta` is live SSE only and is not stored; reconnect and
 export skip those fragments. Full assistant text is on
-`output_text.done` and the assistant item. Behind more than one
+`output_text.done` and the assistant item. Thinking is stored as a
+short preview, not as live deltas. Behind more than one
 gateway process, the stream and the next turn must hit the node that
 owns Pi. See [multiple nodes](scale.md).
 
@@ -294,13 +295,28 @@ log line.
 | `agent.session.turn.output_text.done` | Text finished |
 | `agent.session.turn.item.added` | New item |
 | `agent.session.turn.item.done` | Item finished |
+| `agent.session.turn.thinking.started` | Thinking block started. Stored. `item_id`, `content_index`. |
+| `agent.session.turn.thinking.completed` | Thinking block finished. Stored. Preview only, not the full text. |
 | `agent.session.environment.pending` | Waiting for a computer |
 | `agent.session.environment.connected` | Computer ready |
 | `agent.session.environment.disconnected` | Computer gone |
 | `agent.session.environment.failed` | Could not attach, or hosted setup failed |
 
 Item types: `message`, `function_call`, `mcp_call`,
-`command_execution`.
+`command_execution`. Thinking is not an item. `GET /items` does not
+list it.
+
+`agent.session.turn.thinking.completed` carries `item_id`,
+`content_index`, `duration_ms`, `reasoning_tokens`, `preview`, and
+`preview_truncated`. `preview` is the first 100 Unicode code points.
+`preview_truncated` is true when the block was longer. `duration_ms`
+is null when the start event was missed. `reasoning_tokens` is Pi's
+reasoning count at the end of the block, or null when the host did
+not report one. The full thinking text is not on these events, not
+in items, and not in logs. There is no admin API that returns it.
+Pi's session cache may still hold the full text. That cache is not
+the public transcript. Thinking deltas are not sent to clients.
+Enable thinking with `APIPI_PI_THINKING`. See [Pi](config.md#pi).
 
 ## Turns, items, artifacts
 

@@ -264,6 +264,8 @@ def pi_command_args(
         args.extend(["--append-system-prompt", instructions])
     if not settings.pi_auto_compact:
         args.append("--no-auto-compact")
+    if settings.pi_thinking != "off":
+        args.extend(["--thinking", settings.pi_thinking])
     if not tools:
         args.append("--no-builtin-tools" if mcp_http or mcp_stdio else "--no-tools")
     if skill_dirs is not None:

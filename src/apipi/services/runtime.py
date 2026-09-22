@@ -91,6 +91,8 @@ PUBLIC_EVENT_TYPES = frozenset(
         "agent.session.turn.output_text.done",
         "agent.session.turn.item.added",
         "agent.session.turn.item.done",
+        "agent.session.turn.thinking.started",
+        "agent.session.turn.thinking.completed",
         "agent.session.environment.pending",
         "agent.session.environment.connected",
         "agent.session.environment.disconnected",
