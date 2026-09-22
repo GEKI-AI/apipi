@@ -20,6 +20,11 @@ from apipi.mcp.http import McpConnectError
 from apipi.mcp.stdio import start_mcp_stdio_tools
 from apipi.services.files import FileService
 from apipi.services.payload_export import export_payload
+from apipi.services.sidekick import (
+    SUMMARY_COMPLETED,
+    SUMMARY_FAILED,
+    schedule_thinking_summaries,
+)
 from apipi.services.skill_store import SkillService
 from apipi.services.skills import discover_skill_dirs
 from apipi.services.usage import add_usage, empty_usage, usage_event, usage_from
@@ -93,6 +98,8 @@ PUBLIC_EVENT_TYPES = frozenset(
         "agent.session.turn.item.done",
         "agent.session.turn.thinking.started",
         "agent.session.turn.thinking.completed",
+        SUMMARY_COMPLETED,
+        SUMMARY_FAILED,
         "agent.session.environment.pending",
         "agent.session.environment.connected",
         "agent.session.environment.disconnected",
@@ -436,13 +443,20 @@ async def _consume_generate(
     session_id: uuid.UUID,
     turn_id: uuid.UUID,
     events: AsyncIterator[tuple[str, dict[str, Any]]],
-) -> tuple[str, list[dict[str, Any]], dict[str, int]]:
+) -> tuple[str, list[dict[str, Any]], dict[str, int], list[dict[str, str]]]:
     reply = ""
     pending: list[dict[str, Any]] = []
     usage = empty_usage()
+    thinking: list[dict[str, str]] = []
     async for etype, data in events:
         if etype == "usage":
             usage = add_usage(usage, usage_from(data))
+            continue
+        if etype == "thinking_body":
+            item_id = data.get("item_id")
+            text = data.get("text")
+            if isinstance(item_id, str) and isinstance(text, str) and text.strip():
+                thinking.append({"item_id": item_id, "text": text})
             continue
         if etype == "pi_error":
             message = data.get("message")
@@ -489,7 +503,7 @@ async def _consume_generate(
             await persist_event(
                 db, hub, tenant_id, session_id, type=etype, data=payload
             )
-    return reply, pending, usage
+    return reply, pending, usage, thinking
 
 
 def _tally(names: list[str]) -> tuple[list[str], dict[str, int]]:
@@ -1126,6 +1140,7 @@ async def run_turn(
     api_key: str | None = None,
     key_id: str | None = None,
     user_id: str | None = None,
+    thinking_summary: bool = False,
     objects: ObjectStore | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
@@ -1319,12 +1334,12 @@ async def run_turn(
                 )
                 try:
                     if turn_timeout is None:
-                        reply, pending, usage = await _consume_generate(
+                        reply, pending, usage, thinking = await _consume_generate(
                             store, hub, tenant_id, session_id, turn_id, generate
                         )
                     else:
                         async with asyncio.timeout(turn_timeout.total_seconds()):
-                            reply, pending, usage = await _consume_generate(
+                            reply, pending, usage, thinking = await _consume_generate(
                                 store, hub, tenant_id, session_id, turn_id, generate
                             )
                 except CapacityError as exc:
@@ -1444,6 +1459,17 @@ async def run_turn(
                     env_hub=env_hub,
                     user_id=user_id,
                 )
+                schedule_thinking_summaries(
+                    store,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    turn_id,
+                    thinking,
+                    settings=settings,
+                    api_key=api_key,
+                    enabled=thinking_summary,
+                )
     finally:
         if pool is not None:
             pool.release(session_id)
@@ -1474,6 +1500,7 @@ async def continue_turn(
     api_key: str | None = None,
     key_id: str | None = None,
     user_id: str | None = None,
+    thinking_summary: bool = False,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -1628,12 +1655,12 @@ async def continue_turn(
                 )
                 try:
                     if turn_timeout is None:
-                        reply, pending, usage = await _consume_generate(
+                        reply, pending, usage, thinking = await _consume_generate(
                             store, hub, tenant_id, session_id, turn_id, generate
                         )
                     else:
                         async with asyncio.timeout(turn_timeout.total_seconds()):
-                            reply, pending, usage = await _consume_generate(
+                            reply, pending, usage, thinking = await _consume_generate(
                                 store, hub, tenant_id, session_id, turn_id, generate
                             )
                 except TurnFailed as exc:
@@ -1742,6 +1769,17 @@ async def continue_turn(
                     proc=pool.peek(session_id) if pool is not None else None,
                     env_hub=env_hub,
                     user_id=user_id,
+                )
+                schedule_thinking_summaries(
+                    store,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    turn_id,
+                    thinking,
+                    settings=settings,
+                    api_key=api_key,
+                    enabled=thinking_summary,
                 )
     finally:
         if pool is not None:

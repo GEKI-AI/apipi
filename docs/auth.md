@@ -50,6 +50,13 @@ raw bearer. After a successful callback, HTTP responses include
 values of those headers are not trusted for auth. Usage events and
 the usage export include `user_id` when the plugin set it.
 
+Optional `thinking_summary` is a boolean. Omit it, or set it to false,
+and that tenant does not get thinking summaries. Set it to true when
+the tenant should. This is the per-tenant product switch. It is not a
+per-user or per-session flag. ApiPi does not store it. Each request
+reads it from the callback. Summaries still stay off unless
+`APIPI_THINKING_SUMMARY` is on. See [configuration](config.md).
+
 ### Reject
 
 Return `None` for a generic invalid key (`401`, code `unauthorized`).

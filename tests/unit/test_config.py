@@ -832,6 +832,21 @@ def test_pi_thinking_from_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     assert load_settings().pi_thinking == "high"
 
 
+def test_thinking_summary_requires_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_THINKING_SUMMARY", "on")
+    with pytest.raises(ConfigError, match="APIPI_SIDEKICK_MODEL is required"):
+        load_settings()
+    monkeypatch.setenv("APIPI_SIDEKICK_MODEL", "sidekick")
+    loaded = load_settings()
+    assert loaded.thinking_summary is True
+    assert loaded.sidekick_model == "sidekick"
+
+
 def test_pi_thinking_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")

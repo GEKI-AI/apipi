@@ -17,6 +17,7 @@ db_pool_size = 5
 usage_store = "turns"
 usage_retention = "15d"
 metrics = false
+thinking_summary = false
 forward_models = true
 
 [pi]

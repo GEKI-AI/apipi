@@ -212,8 +212,12 @@ def test_thinking_preview_is_truncated_and_public() -> None:
     assert payload["reasoning_tokens"] == 12
     assert payload["preview"] == full[:100]
     assert payload["preview_truncated"] is True
-    dumped = json.dumps([started, completed])
+    public = [item for item in [*started, *completed] if item[0] != "thinking_body"]
+    dumped = json.dumps(public)
     assert "TAIL-SECRET" not in dumped
+    body = next(item for item in completed if item[0] == "thinking_body")
+    assert body[1]["text"] == full
+    assert body[0] not in PUBLIC_EVENT_TYPES
 
 
 def test_thinking_end_without_start_has_null_duration() -> None:
