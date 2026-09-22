@@ -13,6 +13,7 @@ log = logging.getLogger("apipi")
 SUMMARY_COMPLETED = "agent.session.turn.thinking.summary.completed"
 SUMMARY_FAILED = "agent.session.turn.thinking.summary.failed"
 SUMMARY_CHARS = 280
+THINKING_SUMMARY_INPUT_CHARS = 3000
 _TIMEOUT = 20.0
 _tasks: set[asyncio.Task[None]] = set()
 
@@ -155,7 +156,7 @@ async def _summarize(
             summary = await sidekick_complete(
                 settings,
                 api_key=api_key,
-                prompt=_PROMPT + block["text"],
+                prompt=_PROMPT + block["text"][:THINKING_SUMMARY_INPUT_CHARS],
             )
         except Exception:
             log_event(

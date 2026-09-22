@@ -10,7 +10,11 @@ from apipi.gateway import create_app
 from apipi.gateway.auth import tenant_from_key
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import FAKE_USAGE, FakeHarness
-from apipi.services.sidekick import SidekickError, sidekick_complete
+from apipi.services.sidekick import (
+    THINKING_SUMMARY_INPUT_CHARS,
+    SidekickError,
+    sidekick_complete,
+)
 from apipi.services.usage import usage_from
 from apipi.store.engine import Store
 
@@ -146,6 +150,53 @@ async def test_summary_when_global_and_org_on(
     assert prompts and "hidden thinking text" in prompts[0]
     dumped = str(events)
     assert "hidden thinking text" not in dumped
+
+
+async def test_summary_prompt_is_capped_at_3000_chars(
+    tmp_path, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts: list[str] = []
+    tail = "TAIL-NOT-SENT"
+
+    async def fake_complete(*_args: object, **kwargs: object) -> str:
+        prompt = kwargs.get("prompt")
+        assert isinstance(prompt, str)
+        prompts.append(prompt)
+        return "short summary"
+
+    monkeypatch.setattr("apipi.services.sidekick.sidekick_complete", fake_complete)
+
+    class LongThinking(ThinkingHarness):
+        async def generate(
+            self, text: str, **_kwargs: object
+        ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+            yield (
+                "thinking_body",
+                {
+                    "item_id": "think-1",
+                    "text": "a" * THINKING_SUMMARY_INPUT_CHARS + tail,
+                },
+            )
+            async for event in super().generate(text, **_kwargs):
+                if event[0] != "thinking_body":
+                    yield event
+
+    app = create_app(
+        _settings(tmp_path, summary=True),
+        store=store,
+        harness=LongThinking(),
+        authenticate=_authenticate,
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        status, session_id, _session_status = await _create(client, "org-on")
+        assert status == 200
+        await _wait_idle(client, "org-on", session_id)
+    assert prompts
+    sent = prompts[0].split("\n\n", 1)[1]
+    assert sent == "a" * THINKING_SUMMARY_INPUT_CHARS
+    assert tail not in prompts[0]
 
 
 async def test_no_summary_when_org_off(

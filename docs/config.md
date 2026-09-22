@@ -122,7 +122,8 @@ summary and stores
 `agent.session.turn.thinking.summary.completed`. The call is
 asynchronous. A failure stores
 `agent.session.turn.thinking.summary.failed` and does not fail the
-turn. The full thinking text is sent to the sidekick in memory. It
+turn. Only the first 3000 characters of each thinking block are sent
+to the sidekick. That cap is `THINKING_SUMMARY_INPUT_CHARS`. The text
 is not logged and it is not a public event. The sidekick key is the
 configured key when set, otherwise the turn's model key. A process
 `OPENAI_API_KEY` is not used.
