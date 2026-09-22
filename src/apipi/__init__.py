@@ -3,7 +3,7 @@
 Point official clients at this gateway and bring your own model URL.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from apipi.config import Settings, extend_settings
 from apipi.gateway import Gateway, create_app
