@@ -155,6 +155,45 @@ async def test_remote_execution_names_missing_socket_instance(
     assert "node-b" in exc.value.message
 
 
+async def test_remote_teardown_stops_guest_before_release(
+    store: Store, settings: Settings
+) -> None:
+    class _StopHub:
+        def __init__(self) -> None:
+            self.ops: list[str] = []
+
+        async def command(self, *_args: object, **kwargs: object) -> dict[str, str]:
+            self.ops.append(str(kwargs.get("op")))
+            return {"id": "cmd-1"}
+
+        async def wait_ack(self, *_args: object, **_kwargs: object) -> bool:
+            self.ops.append("ack")
+            return True
+
+        async def release(self, *_args: object, **_kwargs: object) -> None:
+            self.ops.append("release")
+
+    worker_id = uuid.uuid4()
+    lease_id = uuid.uuid4()
+    hub = _StopHub()
+    async with store.session() as db:
+        tenant = await create_tenant(db, name="stop")
+        session = await create_session(db, tenant.id)
+        await upsert_worker(db, worker_id, capacity=1, memory_mb=512)
+        await set_session_lease(
+            db,
+            tenant.id,
+            session.id,
+            worker_id=worker_id,
+            lease_id=lease_id,
+            lease_until=utc_now() + timedelta(hours=1),
+        )
+        session_id = session.id
+    execution = RemoteExecution(settings, workers=hub, store=store, hub=EventHub())
+    await execution.teardown(session_id)
+    assert hub.ops == ["session.stop", "ack", "release"]
+
+
 async def test_upsert_worker_records_instance(store: Store) -> None:
     worker_id = uuid.uuid4()
     async with store.session() as db:

@@ -7,6 +7,7 @@ import signal
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -39,7 +40,7 @@ from apipi.store.repo import (
 from apipi.worker.pi.sandbox import mem_mib_for_size, sandbox_size_of
 from apipi.worker.placement import placement_for, worker_accepts
 
-COMMAND_OPS = frozenset({"turn.start", "turn.cancel", "turn.continue"})
+COMMAND_OPS = frozenset({"turn.start", "turn.cancel", "turn.continue", "session.stop"})
 WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})
 log = logging.getLogger("apipi.worker")
 
@@ -308,6 +309,21 @@ class WorkerHub:
             return False
         self._unacked.pop(lease_id, None)
         return True
+
+    async def wait_ack(
+        self, lease_id: uuid.UUID, command_id: str, *, timeout: float = 15
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            pending = self._unacked.get(lease_id)
+            if pending is None or pending.get("id") != command_id:
+                return True
+            await asyncio.sleep(0.05)
+        log.warning(
+            "worker command ack timed out",
+            extra={"lease_id": str(lease_id), "command_id": command_id},
+        )
+        return False
 
     async def release(
         self,
@@ -733,6 +749,31 @@ async def _run_command(
         return
     if op == "turn.cancel":
         await execution.cancel(session_id, status="in_progress")
+        return
+    if op == "session.stop":
+        await execution.teardown(session_id)
+        await _wipe_stopped_session(execution, tenant_id, session_id)
+
+
+async def _wipe_stopped_session(
+    execution: Any, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> None:
+    store = getattr(execution, "store", None)
+    settings = getattr(execution, "settings", None)
+    if store is None or settings is None:
+        return
+    from apipi.store.blobs import blob_store
+    from apipi.worker.pi.artifacts import wipe_artifact_store, wipe_workspace
+
+    async with store.session() as db:
+        row = await get_session(db, tenant_id, session_id)
+    if row is None:
+        return
+    environment = row.environment if isinstance(row.environment, dict) else {}
+    directory = environment.get("directory")
+    if isinstance(directory, str) and directory:
+        wipe_workspace(Path(directory))
+    await wipe_artifact_store(blob_store(settings), tenant_id, row.key_id, session_id)
 
 
 def worker_ws_url(base: str) -> str:
@@ -885,6 +926,21 @@ async def run_worker(
                 text = incoming if isinstance(incoming, str) else incoming.decode()
                 message = json.loads(text)
                 if not isinstance(message, dict):
+                    continue
+                if (
+                    message.get("type") == "command"
+                    and message.get("op") == "session.stop"
+                ):
+                    await dispatch_command(execution, message)
+                    await sock.send(
+                        json.dumps(
+                            {
+                                "type": "lease.ack",
+                                "id": message.get("id"),
+                                "lease_id": message.get("lease_id"),
+                            }
+                        )
+                    )
                     continue
                 if message.get("type") == "command":
                     await sock.send(

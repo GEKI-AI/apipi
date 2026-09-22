@@ -713,8 +713,17 @@ class RemoteExecution:
             return
         async with store.session() as db:
             row = await get_session_by_id(db, session_id)
-        if row is None or row.lease_id is None:
+        if row is None or row.lease_id is None or row.worker_id is None:
             return
+        command = await self.workers.command(
+            store,
+            row.tenant_id,
+            session_id,
+            op="session.stop",
+            payload={"tenant_id": str(row.tenant_id)},
+        )
+        if command is not None:
+            await self.workers.wait_ack(row.lease_id, str(command["id"]))
         await self.workers.release(store, row.tenant_id, session_id, row.lease_id)
 
     async def reap_loop(self) -> None:

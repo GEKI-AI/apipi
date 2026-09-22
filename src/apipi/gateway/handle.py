@@ -309,6 +309,7 @@ class Gateway:
             task.cancel()
         self._tasks = []
         await self.execution.close()
+        await self.sessions.cancel_turns()
         if isinstance(self.tracing, Tracing):
             self.tracing.shutdown()
         if self._store_owned:

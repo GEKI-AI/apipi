@@ -186,6 +186,15 @@ def input_text(value: str | dict[str, Any] | None) -> str:
     return ""
 
 
+_STREAM_END = frozenset({"agent.session.failed"})
+
+
+def _stream_ended(event: dict[str, Any] | Any) -> bool:
+    if isinstance(event, dict):
+        return event.get("type") in _STREAM_END
+    return getattr(event, "type", None) in _STREAM_END
+
+
 async def iter_session_events(
     store: Store,
     hub: EventHub,
@@ -203,7 +212,10 @@ async def iter_session_events(
         ping_at = 0.0
         for event in existing:
             last = event.seq
-            yield event_body(event)
+            body = event_body(event)
+            yield body
+            if _stream_ended(body):
+                return
         while True:
             try:
                 payload = await asyncio.wait_for(queue.get(), timeout=0.25)
@@ -213,7 +225,10 @@ async def iter_session_events(
                 if extra:
                     for event in extra:
                         last = event.seq
-                        yield event_body(event)
+                        body = event_body(event)
+                        yield body
+                        if _stream_ended(body):
+                            return
                     continue
                 ping_at += 0.25
                 if ping and ping_at >= 15:
@@ -230,6 +245,8 @@ async def iter_session_events(
                 continue
             last = seq
             yield payload
+            if _stream_ended(payload):
+                return
     finally:
         hub.unsubscribe(session_id, queue)
 
@@ -262,6 +279,13 @@ class SessionService:
         self.mcp_http = mcp_http
         self.mcp_stdio = mcp_stdio
         self._turn_tasks: set[asyncio.Task[None]] = set()
+
+    async def cancel_turns(self) -> None:
+        pending = list(self._turn_tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     def _require_capacity(
         self,
@@ -548,11 +572,28 @@ class SessionService:
                                 thinking_summary=thinking_summary,
                                 auto_title=auto_title,
                             )
-                        except Exception:
+                        except Exception as exc:
                             log.exception(
                                 "background turn",
                                 extra={"session_id": str(session_id)},
                             )
+                            if isinstance(exc, ApiError) and exc.code:
+                                code = exc.code
+                            else:
+                                code = "internal"
+                            if isinstance(exc, ApiError):
+                                message = exc.message
+                            else:
+                                message = "Turn failed"
+                            async with self.store.session() as db:
+                                await fail_session(
+                                    db,
+                                    self.event_hub,
+                                    tenant_id,
+                                    session_id,
+                                    message,
+                                    code=code,
+                                )
 
                     task = asyncio.create_task(_run_first_turn())
                     self._turn_tasks.add(task)
@@ -637,15 +678,16 @@ class SessionService:
             env_id_raw = row.environment.get("id")
             directory = row.environment.get("directory")
             key_id = row.key_id
-            deleted = await delete_session(db, tenant_id, session_id)
-            if not deleted:
-                not_found()
         if isinstance(env_id_raw, str):
             await self.env_hub.close(uuid.UUID(env_id_raw))
         await self.execution.teardown(session_id)
         if isinstance(directory, str) and directory:
             wipe_workspace(Path(directory))
         await wipe_artifact_store(self.blobs, tenant_id, key_id, session_id)
+        async with self.store.session() as db:
+            deleted = await delete_session(db, tenant_id, session_id)
+            if not deleted:
+                not_found()
         self.mcp_http.pop(session_id, None)
         stdio = self.mcp_stdio.pop(session_id, None)
         if stdio:

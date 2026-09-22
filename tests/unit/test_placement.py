@@ -74,6 +74,25 @@ def test_worker_accepts_same_mode() -> None:
     assert worker_accepts("none", "chat")
 
 
+async def test_session_stop_kills_the_guest() -> None:
+    execution = MagicMock()
+    execution.teardown = AsyncMock()
+    execution.store = None
+    execution.settings = None
+    await _run_command(
+        execution,
+        "session.stop",
+        uuid.uuid4(),
+        uuid.uuid4(),
+        {"tenant_id": str(uuid.uuid4())},
+        request_id=None,
+        api_key=None,
+        key_id=None,
+        user_id=None,
+    )
+    execution.teardown.assert_awaited()
+
+
 async def test_turn_start_rejects_microvm_on_none() -> None:
     execution = MagicMock()
     execution.settings.run_mode = "none"

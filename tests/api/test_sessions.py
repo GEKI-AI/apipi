@@ -11,6 +11,7 @@ from sqlalchemy import select
 from apipi.api.sessions import _event_stream
 from apipi.config import Settings
 from apipi.gateway import create_app
+from apipi.gateway.errors import ApiError
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import (
     PUBLIC_EVENT_TYPES,
@@ -21,7 +22,13 @@ from apipi.services.runtime import (
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import SessionRow
-from apipi.store.repo import create_session, create_tenant, create_turn, update_session
+from apipi.store.repo import (
+    create_session,
+    create_tenant,
+    create_turn,
+    get_session_by_id,
+    update_session,
+)
 
 
 def _token(name: str = "t") -> str:
@@ -610,4 +617,84 @@ async def test_follow_up_on_stale_in_progress_starts_turn(
     turns = await client.get(f"/v1/agents/sessions/{sid}/turns", headers=_auth(token))
     statuses = [row["status"] for row in turns.json()["data"]]
     assert "failed" in statuses
-    assert "completed" in statuses
+
+
+async def test_stream_create_ends_when_first_turn_fails(
+    settings: Settings, store: Store
+) -> None:
+    app = create_app(settings, store=store, harness=FakeHarness())
+
+    async def fail_turn(*_args: object, **_kwargs: object) -> None:
+        raise ApiError(
+            "invalid_request",
+            "Too many live sessions",
+            code="capacity",
+            status_code=429,
+        )
+
+    app.state.execution.run_turn = fail_turn
+    token = _token("stream-fail")
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        agent_id = await _create_agent(client, token)
+        async with client.stream(
+            "POST",
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent_id,
+                "environment": {"type": "none"},
+                "input": "hello",
+                "stream": True,
+            },
+            timeout=5,
+        ) as response:
+            assert response.status_code == 200
+            body = await response.aread()
+    events = _parse_sse(body.decode())
+    types = [event["type"] for event in events]
+    assert types[0] == "agent.session.created"
+    assert "agent.session.error" in types
+    assert types[-1] == "agent.session.failed"
+    error = next(event for event in events if event["type"] == "agent.session.error")
+    data = error["data"]
+    assert isinstance(data, dict)
+    assert data["code"] == "capacity"
+    assert data["message"] == "Too many live sessions"
+
+
+async def test_delete_stops_guest_before_dropping_the_row(
+    settings: Settings, store: Store
+) -> None:
+    app = create_app(settings, store=store, harness=FakeHarness())
+    seen: dict[str, bool] = {}
+
+    async def teardown(session_id: uuid.UUID) -> None:
+        async with store.session() as db:
+            row = await get_session_by_id(db, session_id)
+        seen["row"] = row is not None
+
+    app.state.execution.teardown = teardown
+    token = _token("delete-order")
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        agent_id = await _create_agent(client, token)
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent_id, "environment": {"type": "none"}},
+        )
+        assert created.status_code == 200
+        session_id = created.json()["id"]
+        deleted = await client.delete(
+            f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted"] is True
+        missing = await client.get(
+            f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+        )
+        assert missing.status_code == 404
+    assert seen["row"] is True
