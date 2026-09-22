@@ -1063,6 +1063,8 @@ async def fail_session(
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     message: str,
+    *,
+    code: str | None = None,
 ) -> None:
     await update_session(
         db,
@@ -1070,13 +1072,16 @@ async def fail_session(
         session_id,
         changes={"status": "failed", "required_actions": []},
     )
+    data: dict[str, Any] = {"message": message}
+    if code:
+        data["code"] = code
     await persist_event(
         db,
         hub,
         tenant_id,
         session_id,
         type="agent.session.error",
-        data={"message": message},
+        data=data,
     )
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.failed")
 

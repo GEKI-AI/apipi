@@ -1,4 +1,6 @@
 import asyncio
+import os
+import pwd
 import shutil
 import uuid
 from collections.abc import MutableMapping
@@ -103,6 +105,49 @@ async def read_blob_uri(settings: Settings, uri: str) -> bytes | None:
     return None
 
 
+def _operator_ids() -> tuple[int, int] | None:
+    if os.geteuid() != 0:
+        return None
+    name = os.environ.get("SUDO_USER")
+    if not name:
+        return None
+    try:
+        pw = pwd.getpwnam(name)
+    except KeyError:
+        return None
+    if pw.pw_uid == 0:
+        return None
+    return pw.pw_uid, pw.pw_gid
+
+
+def _give_to_operator(root: Path, path: Path) -> None:
+    ids = _operator_ids()
+    if ids is None:
+        return
+    uid, gid = ids
+    root_resolved = root.resolve()
+    current = path
+    while True:
+        try:
+            resolved = current.resolve()
+            st = os.stat(current)
+        except OSError:
+            return
+        if resolved != root_resolved and root_resolved not in resolved.parents:
+            return
+        if st.st_uid == 0:
+            try:
+                os.chown(current, uid, gid)
+            except OSError:
+                return
+        if resolved == root_resolved:
+            return
+        parent = current.parent
+        if parent == current:
+            return
+        current = parent
+
+
 def local_object_path(root: Path, namespace: Namespace, object_id: str) -> Path:
     body = _object_id(object_id)
     if namespace == NS_ARTIFACTS:
@@ -196,6 +241,7 @@ class LocalStore:
         path = self._path(namespace, object_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
+        _give_to_operator(self._root, path)
 
     async def get(self, namespace: Namespace, object_id: str) -> bytes | None:
         path = self._path(namespace, object_id)

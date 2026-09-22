@@ -76,7 +76,7 @@ API to worker:
 | `type` | Fields | What |
 | --- | --- | --- |
 | `hello` | `ok`, `worker_id`, `generation` | Register succeeded. |
-| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.cancel`, or `turn.continue`. |
+| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.cancel`, `turn.continue`, or `session.stop`. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
 | error object | `ok: false`, `error` | Auth or register failed, then the socket closes. |
 
@@ -143,6 +143,11 @@ not draining, have a free session slot, and have enough remaining
 `memory_mb` for one more guest (`mem_mib` from `[sandbox.resources]`,
 default 512). Among those it prefers the worker with the most free
 RAM. Session count is only a filter and a tie-break.
+
+Session delete sends `session.stop` to the worker that holds the
+lease. The worker kills that guest and deletes host files it owns,
+then acknowledges. The API drops the lease only after that
+acknowledgement. A delete does not wait for idle TTL.
 
 `SIGTERM` or `SIGINT` on `apipi worker` sends that drain heartbeat,
 kills idle Pi (sessions not in a turn), waits until no live Pi remain,

@@ -222,14 +222,20 @@ object with `content` or `text`. A non-empty input starts the first turn. Non-st
 that turn. If it fails, the response is `502` with the turn error
 `code` and `session_id` on the error object. `stream: true` returns SSE
 as soon as the session row exists; turn events follow while Pi runs.
+If that first turn fails, including when no worker can take it, the
+stream includes `agent.session.error` with a `code` and then
+`agent.session.failed`. The stream ends on `agent.session.failed`, so
+a client does not wait for a later event.
 
 Status: `idle | in_progress | requires_action | failed`.
 
 `required_actions`: `function_call`, `environment_connection`.
 
 `POST /v1/agents/sessions/{session_id}` updates `metadata` only.
-`DELETE` removes the session for that tenant and returns
-`{"id": "…", "deleted": true}`.
+`DELETE` stops the live guest on the worker that holds the lease,
+removes stored artifact bytes, then removes the session row. It
+returns `{"id": "…", "deleted": true}`. The guest does not stay up
+until the worker drains.
 
 `metadata` is a JSON object. Keys that start with `apipi.` are
 reserved. The gateway interprets `apipi.sandbox_size`,
@@ -271,7 +277,8 @@ The gateway persists `agent.session.turn.cancelled` then
 `agent.session.idle`.
 
 `GET` returns `{"data": […]}`. `GET ?stream=true` is SSE. The stream
-stays open across `idle` and sends SSE comment keepalives (`: ping`)
+stays open across `idle` and ends after `agent.session.failed`. It
+sends SSE comment keepalives (`: ping`)
 without a blank line, so clients that parse every dispatched event as
 JSON do not see an empty payload. Reconnect and replay from the store
 with `after_seq`. Stored public events are written before SSE.

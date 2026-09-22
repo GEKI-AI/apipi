@@ -1,4 +1,5 @@
 import io
+import os
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -16,6 +17,7 @@ from apipi.store.blobs import (
     MemoryStore,
     S3Blobs,
     S3Store,
+    _give_to_operator,
     blob_key,
     blob_prefix,
     blob_store,
@@ -306,3 +308,34 @@ def test_s3_bucket_required(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     monkeypatch.setenv("APIPI_ARTIFACT_STORE", "s3")
     with pytest.raises(ConfigError, match="APIPI_S3_BUCKET is required"):
         load_settings()
+
+
+def test_root_writer_gives_files_to_sudo_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "sessions"
+    nested = root / ".artifacts" / "tenant" / "file.bin"
+    nested.parent.mkdir(parents=True)
+    nested.write_bytes(b"x")
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_USER", "operator")
+
+    class _Pw:
+        pw_uid = 1000
+        pw_gid = 1000
+
+    monkeypatch.setattr("apipi.store.blobs.pwd.getpwnam", lambda _name: _Pw())
+    chowned: list[Path] = []
+
+    def fake_chown(path: Path, uid: int, gid: int) -> None:
+        del uid, gid
+        chowned.append(Path(path))
+
+    class _Stat:
+        st_uid = 0
+
+    monkeypatch.setattr(os, "chown", fake_chown)
+    monkeypatch.setattr(os, "stat", lambda _path: _Stat())
+    _give_to_operator(root, nested)
+    assert nested in chowned
+    assert nested.parent in chowned
