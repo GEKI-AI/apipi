@@ -23,6 +23,8 @@ from apipi.services.payload_export import export_payload
 from apipi.services.sidekick import (
     SUMMARY_COMPLETED,
     SUMMARY_FAILED,
+    TITLE_UPDATED,
+    schedule_auto_title,
     schedule_thinking_summaries,
 )
 from apipi.services.skill_store import SkillService
@@ -100,6 +102,7 @@ PUBLIC_EVENT_TYPES = frozenset(
         "agent.session.turn.thinking.completed",
         SUMMARY_COMPLETED,
         SUMMARY_FAILED,
+        TITLE_UPDATED,
         "agent.session.environment.pending",
         "agent.session.environment.connected",
         "agent.session.environment.disconnected",
@@ -1141,6 +1144,7 @@ async def run_turn(
     key_id: str | None = None,
     user_id: str | None = None,
     thinking_summary: bool = False,
+    auto_title: bool = False,
     objects: ObjectStore | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
@@ -1459,17 +1463,27 @@ async def run_turn(
                     env_hub=env_hub,
                     user_id=user_id,
                 )
-                schedule_thinking_summaries(
-                    store,
-                    hub,
-                    tenant_id,
-                    session_id,
-                    turn_id,
-                    thinking,
-                    settings=settings,
-                    api_key=api_key,
-                    enabled=thinking_summary,
-                )
+            schedule_thinking_summaries(
+                store,
+                hub,
+                tenant_id,
+                session_id,
+                turn_id,
+                thinking,
+                settings=settings,
+                api_key=api_key,
+                enabled=thinking_summary,
+            )
+            schedule_auto_title(
+                store,
+                hub,
+                tenant_id,
+                session_id,
+                settings=settings,
+                api_key=api_key,
+                enabled=auto_title,
+                text=text,
+            )
     finally:
         if pool is not None:
             pool.release(session_id)
@@ -1501,6 +1515,7 @@ async def continue_turn(
     key_id: str | None = None,
     user_id: str | None = None,
     thinking_summary: bool = False,
+    auto_title: bool = False,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -1770,17 +1785,27 @@ async def continue_turn(
                     env_hub=env_hub,
                     user_id=user_id,
                 )
-                schedule_thinking_summaries(
-                    store,
-                    hub,
-                    tenant_id,
-                    session_id,
-                    turn_id,
-                    thinking,
-                    settings=settings,
-                    api_key=api_key,
-                    enabled=thinking_summary,
-                )
+            schedule_thinking_summaries(
+                store,
+                hub,
+                tenant_id,
+                session_id,
+                turn_id,
+                thinking,
+                settings=settings,
+                api_key=api_key,
+                enabled=thinking_summary,
+            )
+            schedule_auto_title(
+                store,
+                hub,
+                tenant_id,
+                session_id,
+                settings=settings,
+                api_key=api_key,
+                enabled=auto_title,
+                text=None,
+            )
     finally:
         if pool is not None:
             pool.release(session_id)

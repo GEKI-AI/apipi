@@ -67,6 +67,16 @@ def test_thinking_summary_accepts_only_true() -> None:
     assert off.thinking_summary is False
 
 
+def test_auto_title_accepts_only_true() -> None:
+    tenant = "12345678-1234-5678-1234-567812345678"
+    on = auth_from_result({"key_id": "k", "tenant_id": tenant, "auto_title": True})
+    off = auth_from_result({"key_id": "k", "tenant_id": tenant, "auto_title": 1})
+    assert isinstance(on, AuthIdentity)
+    assert on.auto_title is True
+    assert isinstance(off, AuthIdentity)
+    assert off.auto_title is False
+
+
 def test_identity_from_dict_with_user_id() -> None:
     parsed = auth_from_result(
         {

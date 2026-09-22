@@ -18,6 +18,7 @@ usage_store = "turns"
 usage_retention = "15d"
 metrics = false
 thinking_summary = false
+auto_title = false
 forward_models = true
 
 [pi]

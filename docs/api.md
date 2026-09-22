@@ -299,6 +299,7 @@ log line.
 | `agent.session.turn.thinking.completed` | Thinking block finished. Stored. Preview only, not the full text. |
 | `agent.session.turn.thinking.summary.completed` | Short summary of that block. Stored. `item_id`, `summary`, `summary_status=done`. |
 | `agent.session.turn.thinking.summary.failed` | Summary was not produced. Stored. `item_id`, `summary_status=failed`. No summary text. |
+| `agent.session.title.updated` | `metadata["apipi.title"]` was set or the title job failed. Stored. |
 | `agent.session.environment.pending` | Waiting for a computer |
 | `agent.session.environment.connected` | Computer ready |
 | `agent.session.environment.disconnected` | Computer gone |
@@ -326,6 +327,11 @@ the preview. Clients can show `summary` when that event has arrived,
 and the preview otherwise. A failed summary does not fail the turn.
 The platform flag and the auth callback must both allow it. See
 [configuration](config.md) and [auth](auth.md).
+
+`metadata["apipi.title"]` is the automatic session title when that
+feature is on. `metadata["apipi.title_status"]` is `pending`, `done`,
+or `failed`. A metadata update that omits those keys keeps the stored
+values. The gateway does not replace an existing title.
 
 ## Turns, items, artifacts
 

@@ -28,6 +28,7 @@ def test_public_event_types_match_spec() -> None:
     assert "agent.session.turn.thinking.completed" in PUBLIC_EVENT_TYPES
     assert "agent.session.turn.thinking.summary.completed" in PUBLIC_EVENT_TYPES
     assert "agent.session.turn.thinking.summary.failed" in PUBLIC_EVENT_TYPES
+    assert "agent.session.title.updated" in PUBLIC_EVENT_TYPES
     assert "agent.session.turn.thinking.started" not in LIVE_EVENT_TYPES
     assert LIVE_EVENT_TYPES <= PUBLIC_EVENT_TYPES
     assert "pi.internal" not in PUBLIC_EVENT_TYPES

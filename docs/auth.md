@@ -57,6 +57,11 @@ per-user or per-session flag. ApiPi does not store it. Each request
 reads it from the callback. Summaries still stay off unless
 `APIPI_THINKING_SUMMARY` is on. See [configuration](config.md).
 
+Optional `auto_title` is a separate boolean. Omit it, or set it to
+false, and that tenant does not get automatic session titles. Set it
+to true when the tenant should. It is not a per-user or per-session
+flag. Titles still stay off unless `APIPI_AUTO_TITLE` is on.
+
 ### Reject
 
 Return `None` for a generic invalid key (`401`, code `unauthorized`).

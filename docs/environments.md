@@ -61,8 +61,9 @@ Session create may include `environment.sandbox_size` with value `S`,
 `M`, or `L`. That field is an ApiPi extension. Official OpenAI clients
 that reject unknown environment keys can set
 `metadata["apipi.sandbox_size"]` instead. Other `metadata` keys stay
-opaque tags; the `apipi.` prefix is reserved for gateway scheduling
-and resources.
+opaque tags; the `apipi.` prefix is reserved. Scheduling uses
+`apipi.sandbox_size` and `apipi.session_kind`. Automatic titles use
+`apipi.title` and `apipi.title_status`.
 
 Resolution, highest wins:
 
