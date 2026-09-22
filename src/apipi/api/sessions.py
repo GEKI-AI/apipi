@@ -38,6 +38,10 @@ def _user_id(request: Request) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _thinking_summary(request: Request) -> bool:
+    return getattr(request.state, "thinking_summary", False) is True
+
+
 class SessionCreate(StrictModel):
     agent: AgentWrite | None = None
     agent_id: uuid.UUID | None = None
@@ -204,6 +208,7 @@ async def create_agent_session(
         vault_ids=body.vault_ids,
         key_id=_key_id(request),
         user_id=_user_id(request),
+        thinking_summary=_thinking_summary(request),
         request_id=request_id_of(request),
         api_key=model_key(request),
         wait_turn=not body.stream,
@@ -278,6 +283,7 @@ async def post_session_event(
         error=parsed.error,
         key_id=_key_id(request) or None,
         user_id=_user_id(request),
+        thinking_summary=_thinking_summary(request),
         request_id=request_id_of(request),
         api_key=model_key(request),
     )

@@ -140,7 +140,7 @@ class ThinkingTracker:
                 self._parts.append(text)
             return []
         if inner == "thinking_end":
-            return [self._complete(event, delta)]
+            return self._complete(event, delta)
         return []
 
     def _start(self, delta: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -156,18 +156,20 @@ class ThinkingTracker:
     def _finish_open(self) -> list[tuple[str, dict[str, Any]]]:
         if self._item_id is None:
             return []
-        preview, truncated = _preview("".join(self._parts))
+        text = "".join(self._parts)
+        preview, truncated = _preview(text)
         payload = self._completed_payload(
             preview=preview,
             truncated=truncated,
             reasoning_tokens=None,
         )
+        body = self._body(text)
         self._reset()
-        return [(THINKING_COMPLETED, payload)]
+        return [(THINKING_COMPLETED, payload), body]
 
     def _complete(
         self, event: dict[str, Any], delta: dict[str, Any]
-    ) -> tuple[str, dict[str, Any]]:
+    ) -> list[tuple[str, dict[str, Any]]]:
         content = delta.get("content")
         text = content if isinstance(content, str) else "".join(self._parts)
         if self._item_id is None:
@@ -180,8 +182,9 @@ class ThinkingTracker:
             truncated=truncated,
             reasoning_tokens=_reasoning_tokens(event),
         )
+        body = self._body(text)
         self._reset()
-        return (THINKING_COMPLETED, payload)
+        return [(THINKING_COMPLETED, payload), body]
 
     def _completed_payload(
         self,
@@ -201,6 +204,9 @@ class ThinkingTracker:
             "preview": preview,
             "preview_truncated": truncated,
         }
+
+    def _body(self, text: str) -> tuple[str, dict[str, Any]]:
+        return ("thinking_body", {"item_id": self._item_id, "text": text})
 
     def _reset(self) -> None:
         self._item_id = None

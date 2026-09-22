@@ -329,6 +329,7 @@ class SessionService:
         vault_ids: list[uuid.UUID] | None = None,
         key_id: str = "",
         user_id: str | None = None,
+        thinking_summary: bool = False,
         request_id: str | None = None,
         api_key: str | None = None,
         wait_turn: bool = True,
@@ -514,6 +515,7 @@ class SessionService:
                         api_key=api_key,
                         key_id=key_id or None,
                         user_id=user_id,
+                        thinking_summary=thinking_summary,
                     )
                     await self._raise_if_first_turn_failed(tenant_id, session_id)
                 else:
@@ -530,6 +532,7 @@ class SessionService:
                                 api_key=api_key,
                                 key_id=key_id or None,
                                 user_id=user_id,
+                                thinking_summary=thinking_summary,
                             )
                         except Exception:
                             log.exception(
@@ -647,6 +650,7 @@ class SessionService:
         error: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        thinking_summary: bool = False,
         request_id: str | None = None,
         api_key: str | None = None,
     ) -> dict[str, Any]:
@@ -711,6 +715,7 @@ class SessionService:
                     api_key=api_key,
                     key_id=key_id,
                     user_id=user_id,
+                    thinking_summary=thinking_summary,
                 )
         else:
             if stale:
@@ -736,6 +741,7 @@ class SessionService:
                     api_key=api_key,
                     key_id=key_id,
                     user_id=user_id,
+                    thinking_summary=thinking_summary,
                 )
         async with self.store.session() as db:
             row = await get_session(db, tenant_id, session_id)

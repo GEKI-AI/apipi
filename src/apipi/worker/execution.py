@@ -60,6 +60,7 @@ class Execution(Protocol):
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        thinking_summary: bool = False,
     ) -> None: ...
 
     async def continue_turn(
@@ -78,6 +79,7 @@ class Execution(Protocol):
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        thinking_summary: bool = False,
     ) -> None: ...
 
     async def cancel(self, session_id: uuid.UUID, *, status: str) -> None: ...
@@ -169,6 +171,7 @@ class LocalExecution:
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        thinking_summary: bool = False,
     ) -> None:
         store = self.store
         assert store is not None
@@ -191,6 +194,7 @@ class LocalExecution:
             api_key=api_key,
             key_id=key_id,
             user_id=user_id,
+            thinking_summary=thinking_summary,
             objects=self.objects,
         )
 
@@ -210,6 +214,7 @@ class LocalExecution:
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        thinking_summary: bool = False,
     ) -> None:
         store = self.store
         assert store is not None
@@ -236,6 +241,7 @@ class LocalExecution:
             api_key=api_key,
             key_id=key_id,
             user_id=user_id,
+            thinking_summary=thinking_summary,
         )
 
     async def cancel(self, session_id: uuid.UUID, *, status: str) -> None:
@@ -481,6 +487,7 @@ class RemoteExecution:
         api_key: str | None,
         key_id: str | None,
         user_id: str | None = None,
+        thinking_summary: bool = False,
     ) -> dict[str, Any]:
         payload = {
             "tenant_id": str(tenant_id),
@@ -488,6 +495,7 @@ class RemoteExecution:
             "api_key": api_key,
             "key_id": key_id,
             "user_id": user_id,
+            "thinking_summary": thinking_summary,
             **extra,
         }
         parent = inject_traceparent()
@@ -529,6 +537,7 @@ class RemoteExecution:
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        thinking_summary: bool = False,
     ) -> None:
         del mcp_http, mcp_stdio
         store = self.store
@@ -545,6 +554,7 @@ class RemoteExecution:
                 api_key=api_key,
                 key_id=key_id,
                 user_id=user_id,
+                thinking_summary=thinking_summary,
             ),
         )
         if sent is None:
@@ -560,6 +570,7 @@ class RemoteExecution:
                     api_key=api_key,
                     key_id=key_id,
                     user_id=user_id,
+                    thinking_summary=thinking_summary,
                 ),
             )
         if sent is None:
@@ -582,6 +593,7 @@ class RemoteExecution:
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        thinking_summary: bool = False,
     ) -> None:
         del mcp_http, mcp_stdio
         store = self.store
@@ -604,6 +616,7 @@ class RemoteExecution:
                 api_key=api_key,
                 key_id=key_id,
                 user_id=user_id,
+                thinking_summary=thinking_summary,
             ),
         )
         if sent is None:

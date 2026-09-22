@@ -104,12 +104,29 @@ hosted files and skills).
 | `APIPI_PAYLOAD_EXPORT_RETRIES` | `payload_export_retries` | `1` | Extra tries after the first, then drop. A failed export does not break the turn. |
 | `APIPI_USAGE_SINKS` | `usage_sinks` | empty | Extra usage sinks, comma-separated `package.mod:Class`. |
 | `APIPI_PAYLOAD_SINKS` | `payload_sinks` | empty | Extra payload sinks, comma-separated `package.mod:Class`. |
+| `APIPI_THINKING_SUMMARY` | `thinking_summary` | off | Global switch for thinking summaries. Off never calls the sidekick, even if the auth callback asks for summaries. |
+| `APIPI_SIDEKICK_MODEL` | `sidekick_model` | unset | Model name for the sidekick. Required when `APIPI_THINKING_SUMMARY` is on. |
+| `APIPI_SIDEKICK_BASE_URL` | `sidekick_base_url` | `OPENAI_BASE_URL` | OpenAI-compatible base URL for the sidekick. Unset uses the model host. |
+| `APIPI_SIDEKICK_API_KEY` | `sidekick_api_key` | unset | Sidekick bearer. Put this in the process environment. Unset uses the turn's model key (the request bearer, or `OPENAI_API_KEY_OVERWRITE` when that is set). Never written to Postgres. |
 | `APIPI_METRICS` | `metrics` | off | Prometheus text at `/metrics` when on. No bearer. Combined `apipi serve` scrapes the API. `apipi worker` also binds `/metrics` on `APIPI_WORKER_METRICS_HOST`:`APIPI_WORKER_METRICS_PORT`. |
 | `APIPI_WORKER_METRICS_HOST` | `worker_metrics_host` | `0.0.0.0` | Bind address for the worker scrape endpoint. |
 | `APIPI_WORKER_METRICS_PORT` | `worker_metrics_port` | `9091` | Port for the worker scrape endpoint. |
 | `APIPI_GUEST_SAMPLE_INTERVAL` | `guest_sample_interval` | unset | How often the worker pulls a tiny vsock snapshot (CPU/load, MemAvailable, workspace disk). Unset is off. Host cgroup CPU+RAM is on whenever worker metrics are on. |
 | `APIPI_OTEL_ENDPOINT` | `otel_endpoint` | unset | OTLP/HTTP traces when set. `/v1/traces` is appended if missing. |
 | `APIPI_CONFIG` | — | unset | Path to a TOML file. Ignored when `apipi serve --config` is set. |
+
+Thinking summaries run only when `APIPI_THINKING_SUMMARY` is on and
+the auth callback set `thinking_summary` to true for that request.
+After a thinking block ends, ApiPi asks the sidekick for a short
+summary and stores
+`agent.session.turn.thinking.summary.completed`. The call is
+asynchronous. A failure stores
+`agent.session.turn.thinking.summary.failed` and does not fail the
+turn. Only the first 3000 characters of each thinking block are sent
+to the sidekick. That cap is `THINKING_SUMMARY_INPUT_CHARS`. The text
+is not logged and it is not a public event. The sidekick key is the
+configured key when set, otherwise the turn's model key. A process
+`OPENAI_API_KEY` is not used.
 
 How to collect those signals in production is in
 [observability](observability.md).

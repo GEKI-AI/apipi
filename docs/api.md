@@ -297,6 +297,8 @@ log line.
 | `agent.session.turn.item.done` | Item finished |
 | `agent.session.turn.thinking.started` | Thinking block started. Stored. `item_id`, `content_index`. |
 | `agent.session.turn.thinking.completed` | Thinking block finished. Stored. Preview only, not the full text. |
+| `agent.session.turn.thinking.summary.completed` | Short summary of that block. Stored. `item_id`, `summary`, `summary_status=done`. |
+| `agent.session.turn.thinking.summary.failed` | Summary was not produced. Stored. `item_id`, `summary_status=failed`. No summary text. |
 | `agent.session.environment.pending` | Waiting for a computer |
 | `agent.session.environment.connected` | Computer ready |
 | `agent.session.environment.disconnected` | Computer gone |
@@ -317,6 +319,13 @@ in items, and not in logs. There is no admin API that returns it.
 Pi's session cache may still hold the full text. That cache is not
 the public transcript. Thinking deltas are not sent to clients.
 Enable thinking with `APIPI_PI_THINKING`. See [Pi](config.md#pi).
+
+A thinking summary is optional and arrives later on
+`agent.session.turn.thinking.summary.completed`. It does not replace
+the preview. Clients can show `summary` when that event has arrived,
+and the preview otherwise. A failed summary does not fail the turn.
+The platform flag and the auth callback must both allow it. See
+[configuration](config.md) and [auth](auth.md).
 
 ## Turns, items, artifacts
 
