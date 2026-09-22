@@ -613,6 +613,7 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
     key_id = key_id if isinstance(key_id, str) else None
     user_id = user_id if isinstance(user_id, str) else None
     thinking_summary = payload.get("thinking_summary") is True
+    auto_title = payload.get("auto_title") is True
     raw_parent = payload.get("traceparent")
     token = attach_traceparent(raw_parent if isinstance(raw_parent, str) else None)
     try:
@@ -627,6 +628,7 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
             key_id=key_id,
             user_id=user_id,
             thinking_summary=thinking_summary,
+            auto_title=auto_title,
         )
     except ApiError as exc:
         if exc.status_code >= 500:
@@ -671,6 +673,7 @@ async def _run_command(
     key_id: str | None,
     user_id: str | None,
     thinking_summary: bool = False,
+    auto_title: bool = False,
 ) -> None:
     if op == "turn.start":
         required = payload.get("run_mode")
@@ -699,6 +702,7 @@ async def _run_command(
             key_id=key_id,
             user_id=user_id,
             thinking_summary=thinking_summary,
+            auto_title=auto_title,
         )
         return
     if op == "turn.continue":
@@ -724,6 +728,7 @@ async def _run_command(
             key_id=key_id,
             user_id=user_id,
             thinking_summary=thinking_summary,
+            auto_title=auto_title,
         )
         return
     if op == "turn.cancel":

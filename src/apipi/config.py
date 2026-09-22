@@ -719,6 +719,10 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("APIPI_THINKING_SUMMARY", "thinking_summary"),
     )
+    auto_title: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("APIPI_AUTO_TITLE", "auto_title"),
+    )
     sidekick_model: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_SIDEKICK_MODEL", "sidekick_model"),
@@ -755,11 +759,11 @@ class Settings(BaseSettings):
             from apipi.services.vault_crypto import parse_vault_master_key
 
             parse_vault_master_key(self.vault_master_key)
-        if self.thinking_summary and not (
+        if (self.thinking_summary or self.auto_title) and not (
             isinstance(self.sidekick_model, str) and self.sidekick_model.strip()
         ):
             raise ValueError(
-                "APIPI_SIDEKICK_MODEL is required when APIPI_THINKING_SUMMARY is on"
+                "APIPI_SIDEKICK_MODEL is required when a sidekick feature is on"
             )
         return self
 
@@ -1008,8 +1012,10 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_METRICS must be on or off"
         if "thinking_summary" in loc or "APIPI_THINKING_SUMMARY" in loc:
             return "APIPI_THINKING_SUMMARY must be on or off"
+        if "auto_title" in loc or "APIPI_AUTO_TITLE" in loc:
+            return "APIPI_AUTO_TITLE must be on or off"
         if "APIPI_SIDEKICK_MODEL is required" in msg:
-            return "APIPI_SIDEKICK_MODEL is required when APIPI_THINKING_SUMMARY is on"
+            return "APIPI_SIDEKICK_MODEL is required when a sidekick feature is on"
         if "worker_metrics_port" in loc or "APIPI_WORKER_METRICS_PORT" in loc:
             return "APIPI_WORKER_METRICS_PORT must be 1-65535"
         if "guest_sample_interval" in loc or "APIPI_GUEST_SAMPLE_INTERVAL" in loc:

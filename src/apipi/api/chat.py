@@ -8,6 +8,7 @@ from apipi.api.sessions import (
     OpenAIEventsBody,
     SessionEventBody,
     SessionUpdate,
+    _auto_title,
     _key_id,
     _sse_response,
     _thinking_summary,
@@ -66,6 +67,7 @@ async def create_chat_session(
         key_id=_key_id(request),
         user_id=_user_id(request),
         thinking_summary=_thinking_summary(request),
+        auto_title=_auto_title(request),
         request_id=request_id_of(request),
         api_key=model_key(request),
         wait_turn=not body.stream,
@@ -153,6 +155,7 @@ async def post_chat_session_event(
         key_id=_key_id(request) or None,
         user_id=_user_id(request),
         thinking_summary=_thinking_summary(request),
+        auto_title=_auto_title(request),
         request_id=request_id_of(request),
         api_key=model_key(request),
     )

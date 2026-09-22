@@ -42,6 +42,10 @@ def _thinking_summary(request: Request) -> bool:
     return getattr(request.state, "thinking_summary", False) is True
 
 
+def _auto_title(request: Request) -> bool:
+    return getattr(request.state, "auto_title", False) is True
+
+
 class SessionCreate(StrictModel):
     agent: AgentWrite | None = None
     agent_id: uuid.UUID | None = None
@@ -209,6 +213,7 @@ async def create_agent_session(
         key_id=_key_id(request),
         user_id=_user_id(request),
         thinking_summary=_thinking_summary(request),
+        auto_title=_auto_title(request),
         request_id=request_id_of(request),
         api_key=model_key(request),
         wait_turn=not body.stream,
@@ -284,6 +289,7 @@ async def post_session_event(
         key_id=_key_id(request) or None,
         user_id=_user_id(request),
         thinking_summary=_thinking_summary(request),
+        auto_title=_auto_title(request),
         request_id=request_id_of(request),
         api_key=model_key(request),
     )

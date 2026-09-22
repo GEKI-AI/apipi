@@ -12,14 +12,21 @@ log = logging.getLogger("apipi")
 
 SUMMARY_COMPLETED = "agent.session.turn.thinking.summary.completed"
 SUMMARY_FAILED = "agent.session.turn.thinking.summary.failed"
+TITLE_UPDATED = "agent.session.title.updated"
+TITLE_KEY = "apipi.title"
+TITLE_STATUS_KEY = "apipi.title_status"
 SUMMARY_CHARS = 280
 THINKING_SUMMARY_INPUT_CHARS = 3000
+TITLE_CHARS = 60
 _TIMEOUT = 20.0
 _tasks: set[asyncio.Task[None]] = set()
 
 _PROMPT = (
     "Summarize the thinking below in one or two short sentences. "
     "Do not repeat it. Do not include secrets.\n\n"
+)
+_TITLE_PROMPT = (
+    "Write a short session title of at most 60 characters. No quotes. One line.\n\n"
 )
 
 
@@ -229,3 +236,170 @@ async def _persist(
             tenant_id=tenant_id,
             session_id=session_id,
         )
+
+
+def schedule_auto_title(
+    store: Any,
+    hub: Any,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    settings: Settings | None,
+    api_key: str | None,
+    enabled: bool,
+    text: str | None,
+) -> None:
+    if settings is None or not settings.auto_title or not enabled:
+        return
+    try:
+        task = asyncio.create_task(
+            _title(
+                store,
+                hub,
+                tenant_id,
+                session_id,
+                settings=settings,
+                api_key=api_key,
+                text=text,
+            )
+        )
+    except RuntimeError:
+        return
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+
+
+async def _title(
+    store: Any,
+    hub: Any,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    settings: Settings,
+    api_key: str | None,
+    text: str | None,
+) -> None:
+    from apipi.services.runtime import persist_event
+    from apipi.store.repo import get_session, list_items, update_session
+
+    user_text = text.strip() if isinstance(text, str) else ""
+    try:
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            if row is None or _has_title(row.metadata_json):
+                return
+            if not user_text:
+                user_text = _first_user_text(
+                    await list_items(db, tenant_id, session_id)
+                )
+            if not user_text:
+                return
+            await _merge_title(
+                update_session,
+                db,
+                tenant_id,
+                session_id,
+                row.metadata_json,
+                status="pending",
+                title=None,
+            )
+    except Exception:
+        _drop_title(tenant_id, session_id)
+        return
+    try:
+        raw = await sidekick_complete(
+            settings,
+            api_key=api_key,
+            prompt=_TITLE_PROMPT + user_text,
+        )
+        title = _clean_title(raw)
+        if not title:
+            raise SidekickError("sidekick response")
+        status = "done"
+    except Exception:
+        _drop_title(tenant_id, session_id)
+        title = None
+        status = "failed"
+    try:
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            if row is None or _has_title(row.metadata_json):
+                return
+            await _merge_title(
+                update_session,
+                db,
+                tenant_id,
+                session_id,
+                row.metadata_json,
+                status=status,
+                title=title,
+            )
+            data: dict[str, Any] = {"title_status": status}
+            if title:
+                data["title"] = title
+            await persist_event(
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                type=TITLE_UPDATED,
+                data=data,
+            )
+    except Exception:
+        _drop_title(tenant_id, session_id)
+
+
+def _has_title(metadata: object) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    title = metadata.get(TITLE_KEY)
+    return isinstance(title, str) and bool(title.strip())
+
+
+def _first_user_text(items: object) -> str:
+    if not isinstance(items, list):
+        return ""
+    for item in items:
+        data = getattr(item, "data", None)
+        if not isinstance(data, dict) or data.get("role") != "user":
+            continue
+        content = data.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+    return ""
+
+
+def _clean_title(raw: str) -> str:
+    line = raw.strip().split("\n")[0].strip().strip("\"'")
+    if len(line) <= TITLE_CHARS:
+        return line.strip()
+    return line[:TITLE_CHARS].rstrip()
+
+
+async def _merge_title(
+    update_session: Any,
+    db: Any,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    metadata: object,
+    *,
+    status: str,
+    title: str | None,
+) -> None:
+    merged = dict(metadata) if isinstance(metadata, dict) else {}
+    if title:
+        merged[TITLE_KEY] = title
+    merged[TITLE_STATUS_KEY] = status
+    await update_session(db, tenant_id, session_id, changes={"metadata": merged})
+
+
+def _drop_title(tenant_id: uuid.UUID, session_id: uuid.UUID) -> None:
+    log_event(
+        log,
+        logging.WARNING,
+        "session title dropped",
+        event="session.title.dropped",
+        error_code="title_drop",
+        tenant_id=tenant_id,
+        session_id=session_id,
+    )
