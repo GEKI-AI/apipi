@@ -74,6 +74,7 @@ yours.
 | `self_hosted` | OpenAI `codex exec-server` | ApiPi runner WebSocket at `/v1/environments/{environment_id}`. Create returns `environment_id` and a one-time `key`. |
 | Hosted files | Last until OpenAI's sandbox idle expiry | Last until `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour). Then Pi stops and `/workspace` is deleted. The next turn rebuilds skills, packages, and setup commands, and reloads the harness session cache. The session transcript stays. |
 | `output_text.delta` | May be durable on their side | Live SSE only. Reconnect and export use `output_text.done` and items. |
+| Thinking | May stream the full reasoning text | Stored preview (first 100 Unicode code points), duration, and reasoning token count. The full thinking text is not a public event. |
 | SSE events | Typed OpenAI stream objects | `{type, seq, data, …}`. Extra OpenAI fields such as `delta` at the top level are omitted. Use raw SSE / `with_streaming_response`. |
 
 ## HTTP routes

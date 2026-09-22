@@ -392,6 +392,69 @@ async def test_output_text_delta_is_live_only(store: Store) -> None:
     assert stored[0].seq == 1
 
 
+async def test_thinking_events_are_stored_and_replayed(store: Store) -> None:
+    hub = EventHub()
+    async with store.session() as db:
+        tenant = await create_tenant(db, name="a")
+        session_row = await create_session(db, tenant.id)
+        tenant_id = tenant.id
+        session_id = session_row.id
+        started = await persist_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.turn.thinking.started",
+            data={"item_id": "t1", "content_index": 0},
+        )
+        completed = await persist_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.turn.thinking.completed",
+            data={
+                "item_id": "t1",
+                "content_index": 0,
+                "duration_ms": 40,
+                "reasoning_tokens": 3,
+                "preview": "plan",
+                "preview_truncated": False,
+            },
+        )
+        dropped = await persist_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.turn.thinking.delta",
+            data={"delta": "full secret thinking"},
+        )
+        await persist_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.idle",
+            data={},
+        )
+    assert started is not None
+    assert completed is not None
+    assert dropped is None
+    streamed = _parse_sse(
+        await _read_stream_until_idle(store, EventHub(), tenant_id, session_id)
+    )
+    assert [event["type"] for event in streamed] == [
+        "agent.session.turn.thinking.started",
+        "agent.session.turn.thinking.completed",
+        "agent.session.idle",
+    ]
+    data = streamed[1]["data"]
+    assert isinstance(data, dict)
+    assert data.get("preview") == "plan"
+    assert "full secret thinking" not in json.dumps(streamed)
+
+
 async def test_turn_publishes_live_delta(settings: Settings, store: Store) -> None:
     app = create_app(settings, store=store, harness=FakeHarness())
     hub: EventHub = app.state.event_hub

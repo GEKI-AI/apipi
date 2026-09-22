@@ -28,6 +28,10 @@ UsageStore = Literal["off", "rollups", "turns"]
 MicrovmImage = Literal["default", "browser"]
 SandboxSize = Literal["S", "M", "L"]
 EnvNonePlacement = Literal["chat", "microvm", "reject"]
+ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+THINKING_HELP = (
+    "APIPI_PI_THINKING must be off, minimal, low, medium, high, xhigh, or max"
+)
 BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "chat", "microvm"})
 MICROVM_IMAGE_HELP = "APIPI_MICROVM_IMAGE must be default or browser"
 SANDBOX_SIZE_HELP = "APIPI_SANDBOX_DEFAULT_SIZE must be S, M, or L"
@@ -64,6 +68,7 @@ _log = logging.getLogger("apipi")
 _PI_TOML = {
     "command": "pi_command",
     "auto_compact": "pi_auto_compact",
+    "thinking": "pi_thinking",
     "mem_mib": "pi_mem_mib",
     "platform_prompt": "platform_prompt",
     "platform_prompt_additional": "platform_prompt_additional",
@@ -453,6 +458,10 @@ class Settings(BaseSettings):
     pi_auto_compact: bool = Field(
         default=True,
         validation_alias=AliasChoices("APIPI_PI_AUTO_COMPACT", "pi_auto_compact"),
+    )
+    pi_thinking: ThinkingLevel = Field(
+        default="off",
+        validation_alias=AliasChoices("APIPI_PI_THINKING", "pi_thinking"),
     )
     pi_mem_mib: int | None = Field(
         default=None,
@@ -983,6 +992,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_FORWARD_MODELS must be on or off"
         if "pi_auto_compact" in loc or "APIPI_PI_AUTO_COMPACT" in loc:
             return "APIPI_PI_AUTO_COMPACT must be on or off"
+        if "pi_thinking" in loc or "APIPI_PI_THINKING" in loc:
+            return THINKING_HELP
         if "pi_mem_mib" in loc or "APIPI_PI_MEM_MIB" in loc:
             return "APIPI_PI_MEM_MIB must be at least 1"
         if "port" in loc:

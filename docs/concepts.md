@@ -29,7 +29,8 @@ run. Combined `apipi serve` runs Pi in that process.
 `apipi serve --api-only` leases a [worker](worker-concepts.md). Pi
 runs in [isolation](isolation.md) (`none` or a Firecracker guest).
 Public events are written to the store, then SSE. Token deltas are
-live only and are not stored.
+live only and are not stored. A thinking preview is stored. The full
+thinking text is not.
 
 Two knobs:
 
@@ -71,7 +72,8 @@ sessions.
 
 A session is one conversation. The durable store holds the session
 row, the append-only event log, turns, and items. Token deltas are
-live SSE only and are not stored. That transcript is the source of
+live SSE only and are not stored. Thinking events store a short
+preview, not the full text. That transcript is the source of
 truth. Pi's on-disk files are a cache.
 
 Create a session with `POST /v1/agents/sessions`. A non-empty `input`

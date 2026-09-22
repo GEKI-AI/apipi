@@ -120,6 +120,20 @@ def require_listed_model(model: str, ids: list[str]) -> None:
         )
 
 
+def _provider_compat(settings: Settings) -> dict[str, bool]:
+    return {
+        "supportsDeveloperRole": False,
+        "supportsReasoningEffort": settings.pi_thinking != "off",
+    }
+
+
+def _model_row(model_id: str, settings: Settings) -> dict[str, object]:
+    row: dict[str, object] = {"id": model_id}
+    if settings.pi_thinking != "off":
+        row["reasoning"] = True
+    return row
+
+
 def write_pi_models_json(settings: Settings, model_ids: list[str]) -> Path:
     base = settings.model_base_url
     if not base:
@@ -131,11 +145,8 @@ def write_pi_models_json(settings: Settings, model_ids: list[str]) -> Path:
                 "baseUrl": base,
                 "api": "openai-completions",
                 "apiKey": "$OPENAI_API_KEY",
-                "compat": {
-                    "supportsDeveloperRole": False,
-                    "supportsReasoningEffort": False,
-                },
-                "models": [{"id": model_id} for model_id in model_ids],
+                "compat": _provider_compat(settings),
+                "models": [_model_row(model_id, settings) for model_id in model_ids],
             }
         }
     }
@@ -162,10 +173,7 @@ def models_json_for_base_url(settings: Settings, base_url: str) -> bytes:
                         "baseUrl": base_url,
                         "api": "openai-completions",
                         "apiKey": "$OPENAI_API_KEY",
-                        "compat": {
-                            "supportsDeveloperRole": False,
-                            "supportsReasoningEffort": False,
-                        },
+                        "compat": _provider_compat(settings),
                         "models": [],
                     }
                 }
