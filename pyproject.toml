@@ -68,7 +68,9 @@ packages = ["src/apipi"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/apipi/worker/pi/guest.sh" = "apipi/worker/pi/guest.sh"
 "src/apipi/worker/pi/extensions/mcp.ts" = "apipi/worker/pi/extensions/mcp.ts"
-"scripts/microvm-rootfs" = "apipi/worker/pi/microvm-rootfs"
+"images/build.sh" = "apipi/worker/pi/images/build.sh"
+"images/default/image.env" = "apipi/worker/pi/images/default/image.env"
+"images/browser/image.env" = "apipi/worker/pi/images/browser/image.env"
 
 [project.scripts]
 apipi = "apipi.cli:main"

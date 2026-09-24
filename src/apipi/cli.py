@@ -199,9 +199,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     install_parser.add_argument(
         "--image",
-        choices=("default", "browser"),
         default=None,
-        help="MicroVM rootfs flavor (default: default)",
+        help="MicroVM image recipe id (default: default)",
     )
     install_parser.add_argument(
         "--force", action="store_true", help="Reinstall even if already present"

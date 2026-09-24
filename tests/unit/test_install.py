@@ -1,3 +1,5 @@
+import os
+import subprocess
 import tarfile
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -15,7 +17,12 @@ from apipi.worker.pi.install import (
     install_pi,
     npm_install_args,
     pi_install_prefix,
+    read_image_env,
+    recipe_ids,
+    require_recipe,
     resolve_install_targets,
+    rootfs_build_args,
+    rootfs_script_path,
     run_install,
 )
 from apipi.worker.pi.version import PI_NPM_PACKAGE, PINNED_FIRECRACKER, PINNED_PI
@@ -152,7 +159,8 @@ def test_install_microvm_dry_run(
     text = out.getvalue()
     assert PINNED_FIRECRACKER in text
     assert "firecracker-v" in text
-    assert "--flavor default" in text
+    assert "images/build.sh" in text
+    assert " default " in text
 
 
 def test_install_microvm_skips_when_present(
@@ -342,6 +350,64 @@ def test_cli_install_microvm_dry_run(
     out = capsys.readouterr().out
     assert PINNED_FIRECRACKER in out
     assert "npm install" not in out
+
+
+def test_recipe_ids_list_shipped_images() -> None:
+    assert recipe_ids() == ["browser", "default"]
+    default = read_image_env(require_recipe("default") / "image.env")
+    browser = read_image_env(require_recipe("browser") / "image.env")
+    assert default["SIZE_MIB"] == "2048"
+    assert default["PACKAGES"] == ""
+    assert default["MIN_SIZE"] == "S"
+    assert browser["SIZE_MIB"] == "4096"
+    assert "chromium" in browser["PACKAGES"].split()
+    assert browser["MIN_SIZE"] == "M"
+    assert rootfs_script_path().name == "build.sh"
+
+
+def test_rootfs_build_args_for_shipped_images(tmp_path: Path) -> None:
+    default_args = rootfs_build_args("default", tmp_path)
+    browser_args = rootfs_build_args("browser", tmp_path)
+    assert default_args[0] == "bash"
+    assert default_args[1].endswith("images/build.sh")
+    assert default_args[2:] == ["default", str(tmp_path)]
+    assert browser_args[2:] == ["browser", str(tmp_path)]
+
+
+def test_unknown_image_is_config_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="unknown microVM image nope"):
+        rootfs_build_args("nope", tmp_path)
+    with pytest.raises(ConfigError, match="known recipes"):
+        install_microvm(image="nope", dry_run=True, out=StringIO())
+
+
+def test_rootfs_wrapper_resolves_checkout_paths(tmp_path: Path) -> None:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    curl = bindir / "curl"
+    curl.write_text("#!/bin/sh\nexit 1\n")
+    curl.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("PINNED_PI", None)
+    env["PATH"] = f"{bindir}:{env.get('PATH', '')}"
+    repo = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [
+            "bash",
+            str(repo / "scripts" / "microvm-rootfs"),
+            "--flavor",
+            "default",
+            str(tmp_path / "out"),
+        ],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert "src/apipi/pi/" not in result.stderr
+    assert "could not read PINNED_PI" not in result.stderr
+    assert result.returncode != 0
 
 
 def test_cli_install_role_api(

@@ -85,10 +85,14 @@ tools, and point at operator-provided guest images:
 the guest image. Build a rootfs on the operator machine yourself if
 you want another output directory. Two flavors:
 
+Recipes live in `images/<id>/`. `images/build.sh` is the build
+script. `./scripts/microvm-rootfs` maps `--flavor` to that script so
+older commands still work.
+
 | Flavor | Command | Output |
 | --- | --- | --- |
-| `default` | `./scripts/microvm-rootfs` | `rootfs.ext4` |
-| `browser` | `./scripts/microvm-rootfs --flavor browser` | `rootfs-browser.ext4` |
+| `default` | `./images/build.sh default` | `rootfs.ext4` |
+| `browser` | `./images/build.sh browser` | `rootfs-browser.ext4` |
 
 Both write a Firecracker `vmlinux` (when the download works) under
 `$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). Pass a
@@ -111,7 +115,8 @@ apipi install --microvm --image browser
 ```
 
 ```
-./scripts/microvm-rootfs
+./images/build.sh default
+./images/build.sh browser
 ./scripts/microvm-rootfs --flavor browser
 ```
 

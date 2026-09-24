@@ -90,7 +90,7 @@ works.
 `apipi install --microvm` downloads Firecracker and jailer and builds
 guest images. You can still install Firecracker from the
 [Firecracker release](https://github.com/firecracker-microvm/firecracker/releases)
-and build images with `./scripts/microvm-rootfs`. The distro stays out
+and build images with `./images/build.sh`. The distro stays out
 of git. Unset `APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` use the
 cache files when they exist:
 
@@ -100,14 +100,15 @@ uv run pytest -m microvm
 ```
 
 ```
-./scripts/microvm-rootfs
+./images/build.sh default
 uv run pytest -m microvm
 ```
 
-`./scripts/microvm-rootfs` needs `curl`, `tar`, `mkfs.ext4`, `mount`,
-and root (or `sudo`) for the loop mount. Pass a directory argument to
-write the images somewhere else. `--flavor browser` writes
-`rootfs-browser.ext4` next to the default image. How to install
+`./images/build.sh` needs `curl`, `tar`, `mkfs.ext4`, `mount`, and
+root (or `sudo`) for the loop mount. Pass a directory argument to
+write the images somewhere else. `./images/build.sh browser` writes
+`rootfs-browser.ext4` next to the default image.
+`./scripts/microvm-rootfs --flavor browser` is the same build. How to install
 Firecracker and what the rootfs must contain are in
 [run modes](run-modes.md).
 
