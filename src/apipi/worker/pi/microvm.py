@@ -463,6 +463,60 @@ def boot_args(net: TapNet) -> str:
     )
 
 
+_GUEST_FILE_KEYS = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "PI_CODING_AGENT_DIR",
+        "NODE_OPTIONS",
+        "APIPI_PINNED_PI",
+        "APIPI_MCP_SERVERS",
+        "APIPI_MCP_STDIO",
+    }
+)
+_MCP_HTTP_FIELDS = frozenset({"LABEL", "URL"})
+_MCP_STDIO_FIELDS = frozenset({"LABEL", "COMMAND", "ARGS", "CWD"})
+_EXTRA_NEVER = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_KEY_OVERWRITE",
+        "DATABASE_URL",
+        "PI_CODING_AGENT_DIR",
+        "NODE_OPTIONS",
+        "PATH",
+        "HOME",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+    }
+)
+
+
+def _indexed_mcp_key(key: str, prefix: str, fields: frozenset[str]) -> bool:
+    if not key.startswith(prefix):
+        return False
+    index, sep, suffix = key.removeprefix(prefix).partition("_")
+    return bool(sep) and index.isdigit() and suffix in fields
+
+
+def _guest_file_key(key: str) -> bool:
+    if key in _GUEST_FILE_KEYS:
+        return True
+    if _indexed_mcp_key(key, "APIPI_MCP_STDIO_", _MCP_STDIO_FIELDS):
+        return True
+    if _indexed_mcp_key(key, "APIPI_MCP_", _MCP_HTTP_FIELDS):
+        return True
+    if key.startswith(("APIPI_", "OPENAI_", "CODEX_", "PI_")):
+        return False
+    return key not in _EXTRA_NEVER
+
+
+def _take(dest: dict[str, str], src: dict[str, str], key: str) -> None:
+    value = src.get(key)
+    if value is not None:
+        dest[key] = value
+
+
 def guest_env(
     settings: Settings,
     mcp_http: list[McpHttpServer] | None = None,
@@ -472,7 +526,7 @@ def guest_env(
     broker: object | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    env = pi_env(
+    built = pi_env(
         settings,
         mcp_http,
         mcp_stdio,
@@ -480,23 +534,46 @@ def guest_env(
         broker=broker,
         extra_env=extra_env,
     )
-    env["PI_CODING_AGENT_DIR"] = f"{GUEST_WORKSPACE}/.pi/agent"
-    extra_keys = set(extra_env) if extra_env else set()
-    return {
-        key: value
-        for key, value in env.items()
-        if key.startswith("OPENAI_")
-        or key.startswith("APIPI_")
-        or key == "PI_CODING_AGENT_DIR"
-        or key in extra_keys
+    guest: dict[str, str] = {
+        "PI_CODING_AGENT_DIR": f"{GUEST_WORKSPACE}/.pi/agent",
     }
+    _take(guest, built, "APIPI_PINNED_PI")
+    if settings.pi_mem_mib is not None:
+        _take(guest, built, "NODE_OPTIONS")
+    if broker is not None:
+        from apipi.worker.pi.broker import DUMMY_KEY
+
+        guest["OPENAI_API_KEY"] = DUMMY_KEY
+        base = getattr(broker, "openai_base_url", None)
+        if isinstance(base, str) and base:
+            guest["OPENAI_BASE_URL"] = base
+    if mcp_http:
+        _take(guest, built, "APIPI_MCP_SERVERS")
+        for index, _server in enumerate(mcp_http):
+            _take(guest, built, f"APIPI_MCP_{index}_LABEL")
+            _take(guest, built, f"APIPI_MCP_{index}_URL")
+    if mcp_stdio:
+        _take(guest, built, "APIPI_MCP_STDIO")
+        for index, server in enumerate(mcp_stdio):
+            prefix = f"APIPI_MCP_STDIO_{index}"
+            _take(guest, built, f"{prefix}_LABEL")
+            _take(guest, built, f"{prefix}_COMMAND")
+            _take(guest, built, f"{prefix}_ARGS")
+            if server.cwd:
+                _take(guest, built, f"{prefix}_CWD")
+    if extra_env:
+        for key, value in extra_env.items():
+            if key in guest or key in _EXTRA_NEVER or not _guest_file_key(key):
+                continue
+            guest[key] = value
+    return {key: value for key, value in guest.items() if _guest_file_key(key)}
 
 
 def env_file(env: dict[str, str]) -> str:
     lines = [
         f"{key}={shlex.quote(value)}"
         for key, value in env.items()
-        if key != "DATABASE_URL"
+        if _guest_file_key(key)
     ]
     return "\n".join(lines) + ("\n" if lines else "")
 
