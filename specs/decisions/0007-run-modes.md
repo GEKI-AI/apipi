@@ -18,10 +18,12 @@ if `/dev/kvm`, `firecracker`, `jailer`, the kernel and rootfs images,
 boot. Operators without KVM must set `APIPI_RUN_MODE=none`. `host` and
 `jail` are not valid and fail at startup.
 
-`microvm` attaches a TAP device for egress. Guest loopback, the model
-host, and the public internet are open by default. The TAP is
-rate-limited with `tc`. An optional fail-closed destination allowlist
-can lock the guest to named hosts (the model host is always included).
+`microvm` attaches a TAP device for egress. Guest loopback and the
+public internet are open. Private and special-use IPv4 ranges are
+rejected. The TAP subnet stays open for the host broker, which is
+how the guest reaches the model host. The TAP is rate-limited with
+`tc`. An optional fail-closed destination allowlist can lock the
+guest to named public hosts.
 
 `none` logs a warning: not suited for production.
 

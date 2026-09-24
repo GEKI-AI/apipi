@@ -65,9 +65,11 @@ guest process tree. Guest localhost works (loopback inside the guest).
 The guest cannot use **host** loopback, so it cannot open Postgres on
 the worker's `localhost`. Model calls and HTTP MCP from Pi go to the
 host broker on the TAP gateway address. The broker forwards to the
-real model host and MCP servers. By default the TAP may also reach
-the public internet. It
-is rate-limited with `tc`. An optional destination allowlist can lock
+real model host and MCP servers. By default the TAP may reach the
+public internet. Private and special-use IPv4 ranges are rejected,
+including RFC1918, link-local, and `100.64.0.0/10`. The TAP subnet
+stays open for the host broker. It is rate-limited with `tc`. An
+optional destination allowlist can lock
 the guest to named hosts; the model host is always included. Session
 `environment.network` can disable or restrict that TAP further. It
 cannot open hosts the process-wide allowlist forbids. See

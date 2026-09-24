@@ -55,8 +55,25 @@ TAP_NET_BASE = 0xAC100000
 TAP_NET_SLOTS = 16384
 SHELL_WARNING = (
     "Operator microVM shell. Guest localhost and the public internet "
-    "are open by default. The same TAP rate limit as agent sessions "
-    "applies. Exit the shell or press Ctrl-C to stop the VM."
+    "are open. Private and special-use IPv4 ranges are rejected. "
+    "The same TAP rate limit as agent sessions applies. "
+    "Exit the shell or press Ctrl-C to stop the VM."
+)
+BLOCKED_EGRESS_CIDRS = (
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "192.168.0.0/16",
+    "198.18.0.0/15",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
 )
 SHELL_SUDO_MARK = "APIPI_MICROVM_SHELL_SUDO"
 SHELL_SUDO_NOTICE = "Need root for TAP, NAT, and jailer. Re-running under sudo."
@@ -749,6 +766,70 @@ def _tap_chain(net: TapNet) -> str:
     return f"{net.name}eg"
 
 
+def _reject_unreachable(
+    iptables: str, chain: str, dest: str | None = None
+) -> list[str]:
+    argv = [iptables, "-w", "-A", chain]
+    if dest is not None:
+        argv.extend(["-d", dest])
+    argv.extend(["-j", "REJECT", "--reject-with", "icmp-port-unreachable"])
+    return argv
+
+
+def _egress_filter_cmds(
+    iptables: str,
+    chain: str,
+    *,
+    subnet: str,
+    allowlist: bool,
+    allowed_ips: list[str] | None,
+) -> list[list[str]]:
+    cmds: list[list[str]] = [
+        [iptables, "-w", "-N", chain],
+        [iptables, "-w", "-A", chain, "-d", subnet, "-j", "ACCEPT"],
+    ]
+    for cidr in BLOCKED_EGRESS_CIDRS:
+        cmds.append(_reject_unreachable(iptables, chain, cidr))
+    if not allowlist:
+        cmds.append([iptables, "-w", "-A", chain, "-j", "ACCEPT"])
+        return cmds
+    for dns in GUEST_DNS:
+        for proto in ("udp", "tcp"):
+            cmds.append(
+                [
+                    iptables,
+                    "-w",
+                    "-A",
+                    chain,
+                    "-p",
+                    proto,
+                    "-d",
+                    dns,
+                    "--dport",
+                    "53",
+                    "-j",
+                    "ACCEPT",
+                ]
+            )
+    for dest in allowed_ips or []:
+        cmds.append(
+            [
+                iptables,
+                "-w",
+                "-A",
+                chain,
+                "-p",
+                "tcp",
+                "-d",
+                dest,
+                "-j",
+                "ACCEPT",
+            ]
+        )
+    cmds.append(_reject_unreachable(iptables, chain))
+    return cmds
+
+
 def tap_setup_argv(
     net: TapNet,
     *,
@@ -818,103 +899,32 @@ def tap_setup_argv(
             "ACCEPT",
         ],
     ]
-    if allowlist:
-        cmds.append([iptables, "-w", "-N", chain])
-        for dns in GUEST_DNS:
-            cmds.append(
-                [
-                    iptables,
-                    "-w",
-                    "-A",
-                    chain,
-                    "-p",
-                    "udp",
-                    "-d",
-                    dns,
-                    "--dport",
-                    "53",
-                    "-j",
-                    "ACCEPT",
-                ]
-            )
-            cmds.append(
-                [
-                    iptables,
-                    "-w",
-                    "-A",
-                    chain,
-                    "-p",
-                    "tcp",
-                    "-d",
-                    dns,
-                    "--dport",
-                    "53",
-                    "-j",
-                    "ACCEPT",
-                ]
-            )
-        for dest in allowed_ips or []:
-            cmds.append(
-                [
-                    iptables,
-                    "-w",
-                    "-A",
-                    chain,
-                    "-p",
-                    "tcp",
-                    "-d",
-                    dest,
-                    "-j",
-                    "ACCEPT",
-                ]
-            )
-        cmds.append(
-            [
-                iptables,
-                "-w",
-                "-A",
-                chain,
-                "-j",
-                "REJECT",
-                "--reject-with",
-                "icmp-port-unreachable",
-            ]
+    cmds.extend(
+        _egress_filter_cmds(
+            iptables,
+            chain,
+            subnet=net.subnet,
+            allowlist=allowlist,
+            allowed_ips=allowed_ips,
         )
-        cmds.append(
-            [
-                iptables,
-                "-w",
-                "-I",
-                "FORWARD",
-                "1",
-                "-i",
-                net.name,
-                "-m",
-                "comment",
-                "--comment",
-                comment,
-                "-j",
-                chain,
-            ]
-        )
-    else:
-        cmds.append(
-            [
-                iptables,
-                "-w",
-                "-I",
-                "FORWARD",
-                "1",
-                "-i",
-                net.name,
-                "-m",
-                "comment",
-                "--comment",
-                comment,
-                "-j",
-                "ACCEPT",
-            ]
-        )
+    )
+    cmds.append(
+        [
+            iptables,
+            "-w",
+            "-I",
+            "FORWARD",
+            "1",
+            "-i",
+            net.name,
+            "-m",
+            "comment",
+            "--comment",
+            comment,
+            "-j",
+            chain,
+        ]
+    )
     if tc is not None:
         rate = f"{egress_mbit}mbit"
         cmds.extend(
@@ -987,29 +997,8 @@ def tap_teardown_argv(
     if tc is not None:
         cmds.append([tc, "qdisc", "del", "dev", net.name, "ingress"])
         cmds.append([tc, "qdisc", "del", "dev", net.name, "root"])
-    if allowlist:
-        cmds.extend(
-            [
-                [
-                    iptables,
-                    "-w",
-                    "-D",
-                    "FORWARD",
-                    "-i",
-                    net.name,
-                    "-m",
-                    "comment",
-                    "--comment",
-                    comment,
-                    "-j",
-                    chain,
-                ],
-                [iptables, "-w", "-F", chain],
-                [iptables, "-w", "-X", chain],
-            ]
-        )
-    else:
-        cmds.append(
+    cmds.extend(
+        [
             [
                 iptables,
                 "-w",
@@ -1022,9 +1011,12 @@ def tap_teardown_argv(
                 "--comment",
                 comment,
                 "-j",
-                "ACCEPT",
-            ]
-        )
+                chain,
+            ],
+            [iptables, "-w", "-F", chain],
+            [iptables, "-w", "-X", chain],
+        ]
+    )
     cmds.extend(
         [
             [

@@ -134,10 +134,11 @@ agent turn that needs the computer:
 
 `network.access` is `enabled`, `disabled`, or `restricted`.
 `restricted` requires `allowed_domains` (1–100 exact hostnames).
-`enabled` allows outbound traffic unless the process-wide TAP
-allowlist is on; then the gateway list still wins. `disabled` blocks
-guest TAP egress (DNS and the host broker on the TAP subnet still
-work). `restricted` allows only those hostnames, plus package
+`enabled` allows outbound traffic to the public internet. Private and
+special-use IPv4 ranges are always rejected. If the process-wide TAP
+allowlist is on, that list still wins for public hosts. `disabled`
+blocks guest TAP egress (DNS and the host broker on the TAP subnet
+still work). `restricted` allows only those hostnames, plus package
 registries when `packages` is set so install can run. A session cannot
 add a host that `[sandbox.network]` forbids. Model and HTTP MCP calls
 go through the host broker, so they still work when TAP is locked.
