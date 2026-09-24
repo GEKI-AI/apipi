@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-24
+
 ### Added
 
 - Prebuilt MicroVM guest images. Recipes live in `images/`.
@@ -28,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   do not fail the turn.
 - Every MicroVM guest image built from `images/` includes `curl` and
   `git`.
+
+### Fixed
+
+- `apipi worker` starts the idle Pi and workspace reap loops. Split
+  deploys kill idle sessions. `apipi serve --api-only` still does not.
 
 ## [0.4.0] - 2026-09-24
 
