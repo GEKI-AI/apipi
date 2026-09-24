@@ -32,8 +32,11 @@ agents until you create one.
 | `POST` | `/v1/agents/{agent_id}` |
 | `DELETE` | `/v1/agents/{agent_id}` |
 
-Fields: `id`, `name`, `model`, `instructions`, `metadata`, `tools`
-(function, mcp HTTP, mcp stdio), `created_at`, `updated_at`.
+Fields: `id`, `name`, `model`, `instructions`, `idle_ttl`, `metadata`,
+`tools` (function, mcp HTTP, mcp stdio), `created_at`, `updated_at`.
+`idle_ttl` is an ApiPi extension: a duration such as `30m` or `1h`,
+or `0` to turn the idle timer off. Omit it to keep the environment
+default. See [config](config.md).
 
 Rejected: `multi_agent`, `tool_search`, `programmatic_tool_calling`.
 
@@ -237,10 +240,15 @@ removes stored artifact bytes, then removes the session row. It
 returns `{"id": "…", "deleted": true}`. The guest does not stay up
 until the worker drains.
 
+Session create may set `idle_ttl` to the same duration. That value
+wins over the agent field. Stock clients can set
+`metadata["apipi.idle_ttl"]` instead of the top-level field. See
+[config](config.md).
+
 `metadata` is a JSON object. Keys that start with `apipi.` are
 reserved. The gateway interprets `apipi.sandbox_size`,
 `apipi.session_kind`, `apipi.thinking`, `apipi.system_prompt`,
-`apipi.title`, and `apipi.title_status`. It
+`apipi.idle_ttl`, `apipi.title`, and `apipi.title_status`. It
 stores `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`
 and does not branch on them. There is no top-level `actor_type`
 field. See [reserved metadata](extending.md#reserved-metadata).

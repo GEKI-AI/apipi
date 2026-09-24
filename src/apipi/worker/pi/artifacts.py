@@ -23,11 +23,13 @@ from apipi.store.engine import Store
 from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import (
     create_artifact,
+    get_agent,
     get_session,
     get_session_by_id,
     list_artifacts,
 )
 from apipi.worker.pi.dirs import pi_session_file, sessions_root
+from apipi.worker.pi.idle import resolve_idle_ttl
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
@@ -426,7 +428,6 @@ async def reap_workspaces(
     now: datetime | None = None,
 ) -> None:
     current = _utc(now or utc_now())
-    ttl = settings.workspace_ttl
     root = sessions_root(settings)
     for tenant_dir in root.iterdir():
         if not tenant_dir.is_dir() or tenant_dir.name.startswith("."):
@@ -446,12 +447,25 @@ async def reap_workspaces(
                 continue
             async with store.session() as db:
                 row = await get_session(db, tenant_id, session_id)
+                agent_idle = None
+                if row is not None and row.agent_id is not None:
+                    agent = await get_agent(db, tenant_id, row.agent_id)
+                    if agent is not None:
+                        agent_idle = agent.idle_ttl
             if row is None:
                 wipe_workspace(session_dir)
                 continue
             env_type = row.environment.get("type")
             if env_type != "openai_hosted":
                 continue
+            meta = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+            ttl = resolve_idle_ttl(
+                settings,
+                env_type,
+                session_idle=row.idle_ttl,
+                session_metadata=meta,
+                agent_idle=agent_idle,
+            )
             if ttl is None:
                 continue
             if current - _utc(row.updated_at) >= ttl:

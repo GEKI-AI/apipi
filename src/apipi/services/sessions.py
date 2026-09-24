@@ -65,6 +65,11 @@ from apipi.store.repo import (
 from apipi.worker.execution import LocalExecution, RemoteExecution
 from apipi.worker.pi.artifacts import wipe_artifact_store, wipe_workspace
 from apipi.worker.pi.dirs import session_workspace
+from apipi.worker.pi.idle import (
+    metadata_has_idle_ttl,
+    normalize_idle_ttl,
+    validate_idle_metadata,
+)
 from apipi.worker.pi.sandbox import (
     mem_mib_for_size,
     merge_playwright,
@@ -120,6 +125,7 @@ def session_body(row: SessionRow) -> dict[str, Any]:
         "agent_id": str(row.agent_id) if row.agent_id is not None else None,
         "status": row.status,
         "environment": row.environment,
+        "idle_ttl": row.idle_ttl,
         "metadata": row.metadata_json,
         "required_actions": row.required_actions,
         "created_at": row.created_at.isoformat(),
@@ -365,6 +371,7 @@ class SessionService:
         environment: EnvironmentSpec | None = None,
         input: str | dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        idle_ttl: str | None = None,
         vault_ids: list[uuid.UUID] | None = None,
         key_id: str = "",
         user_id: str | None = None,
@@ -413,6 +420,17 @@ class SessionService:
                 metadata = copy_inline_pi_metadata(metadata, agent_metadata)
             validate_pi_metadata(metadata)
             validate_pi_metadata(agent_metadata)
+            validate_idle_metadata(metadata)
+            validate_idle_metadata(agent_metadata)
+            idle_ttl = normalize_idle_ttl(idle_ttl)
+            if (
+                idle_ttl is None
+                and agent_id is None
+                and agent is not None
+                and agent.idle_ttl is not None
+                and not metadata_has_idle_ttl(metadata)
+            ):
+                idle_ttl = normalize_idle_ttl(agent.idle_ttl)
             size = resolve_sandbox_size(
                 environment_size=env.get("sandbox_size")
                 if isinstance(env.get("sandbox_size"), str)
@@ -433,6 +451,7 @@ class SessionService:
                 agent_id=agent_id,
                 model=model if agent_id is None else None,
                 instructions=instructions if agent_id is None else None,
+                idle_ttl=idle_ttl,
                 environment=env,
                 metadata=metadata,
                 key_id=key_id,
@@ -672,6 +691,7 @@ class SessionService:
                     not_found()
                 merged = _keep_title(current.metadata_json, metadata)
                 validate_pi_metadata(merged)
+                validate_idle_metadata(merged)
                 changes["metadata"] = merged
             row = await update_session(db, tenant_id, session_id, changes=changes)
             if row is None:

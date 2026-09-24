@@ -86,11 +86,14 @@ starts the first turn. Follow-up messages go to
 
 When a `none` or `self_hosted` session is idle for `APIPI_IDLE_TTL`
 (default 15 minutes), the process that holds Pi kills it to free RAM.
-Combined `apipi serve` does that in-process. In a split deploy,
-`apipi worker` owns the idle reap; `apipi serve --api-only` does not.
-An `openai_hosted` computer lasts until
-`APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour): Pi stops and the
-workspace is deleted. The session row stays. The next message starts
+That follows the environment type, not the run mode. Combined
+`apipi serve` does that in-process. In a split deploy, `apipi worker`
+owns the idle reap; `apipi serve --api-only` does not. An
+`openai_hosted` computer lasts until
+`APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour): one timer stops Pi
+and deletes the workspace together. There is no separate guest timeout.
+A session or agent `idle_ttl` replaces that default for that session.
+The session row stays. The next message starts
 Pi again, rebuilds `/workspace` from stored config (skills, packages,
 setup commands), reloads the cached harness session file so the model
 keeps the conversation, and continues the event log.

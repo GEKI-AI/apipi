@@ -152,6 +152,8 @@ async def test_idle_ttl_kills_pi_session_stays(
         headers=_auth(token),
         json={"name": "bot", "model": "test"},
     )
+    pool = none_app.state.pi_pool
+    pool.settings.workspace_ttl = timedelta(seconds=0)
     created = await none_client.post(
         "/v1/agents/sessions",
         headers=_auth(token),
@@ -162,9 +164,7 @@ async def test_idle_ttl_kills_pi_session_stays(
         },
     )
     session_id = uuid.UUID(created.json()["id"])
-    pool = none_app.state.pi_pool
     assert pool.alive(session_id)
-    pool.settings.workspace_ttl = timedelta(seconds=0)
     await pool.reap()
     assert not pool.alive(session_id)
     got = await none_client.get(

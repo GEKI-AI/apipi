@@ -101,6 +101,7 @@ yours.
 | Field or tool | Status |
 | --- | --- |
 | `name`, `model`, `instructions`, `metadata` | Same API |
+| `idle_ttl` | ApiPi extension. Duration (`30m`, `1h`) or `0` to turn idle off. Stock SDKs can set `metadata["apipi.idle_ttl"]` instead. |
 | `tools` type `function` | Same API |
 | `tools` type `mcp` with nested `transport` (`http` or `stdio`) | Same API |
 | Top-level MCP `server_url` / `command` / `args` | Error (`unknown_field`) |

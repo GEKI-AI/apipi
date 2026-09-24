@@ -53,6 +53,7 @@ from apipi.worker.pi.artifacts import (
     harvest_session,
     restore_pi_session,
 )
+from apipi.worker.pi.idle import resolve_idle_ttl
 from apipi.worker.pi.isolation import load_isolation
 from apipi.worker.pi.model_host import (
     listed_models,
@@ -371,6 +372,28 @@ def with_env_actions(current: list[Any], actions: list[Any]) -> list[Any]:
     return rest + env
 
 
+def _idle_spawn(
+    settings: Settings | None,
+    env_type: str | None,
+    *,
+    session_idle: str | None,
+    session_metadata: dict[str, Any] | None,
+    agent_idle: str | None,
+) -> dict[str, Any]:
+    if settings is None:
+        return {}
+    return {
+        "idle_ttl": resolve_idle_ttl(
+            settings,
+            env_type,
+            session_idle=session_idle,
+            session_metadata=session_metadata,
+            agent_idle=agent_idle,
+        ),
+        "idle_ttl_set": True,
+    }
+
+
 def _pi_spawn_overrides(
     settings: Settings | None,
     session_metadata: dict[str, Any] | None,
@@ -417,15 +440,24 @@ async def _stdio_for_turn(
 
 async def _agent_tools_and_model(
     db: AsyncSession, tenant_id: uuid.UUID, row: SessionRow
-) -> tuple[list[dict[str, Any]], str | None, str | None, list[Any], dict[str, Any]]:
+) -> tuple[
+    list[dict[str, Any]], str | None, str | None, list[Any], dict[str, Any], str | None
+]:
     if row.agent_id is None:
-        return [], row.model, row.instructions, [], {}
+        return [], row.model, row.instructions, [], {}, None
     agent = await get_agent(db, tenant_id, row.agent_id)
     if agent is None:
-        return [], row.model, row.instructions, [], {}
+        return [], row.model, row.instructions, [], {}, None
     raw = agent.tools if isinstance(agent.tools, list) else []
     meta = agent.metadata_json if isinstance(agent.metadata_json, dict) else {}
-    return _function_tools(raw), agent.model, agent.instructions, raw, meta
+    return (
+        _function_tools(raw),
+        agent.model,
+        agent.instructions,
+        raw,
+        meta,
+        agent.idle_ttl,
+    )
 
 
 async def _emit_item(
@@ -1191,6 +1223,8 @@ async def run_turn(
         raw_tools: list[Any]
         agent_metadata: dict[str, Any]
         session_metadata: dict[str, Any]
+        session_idle: str | None
+        agent_idle: str | None
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
@@ -1201,10 +1235,12 @@ async def run_turn(
                 instructions,
                 raw_tools,
                 agent_metadata,
+                agent_idle,
             ) = await _agent_tools_and_model(db, tenant_id, row)
             session_metadata = (
                 row.metadata_json if isinstance(row.metadata_json, dict) else {}
             )
+            session_idle = row.idle_ttl
             model = require_model(model)
             if settings is not None and settings.model_base_url:
                 ids = listed_models(settings.model_base_url, api_key)
@@ -1367,6 +1403,13 @@ async def run_turn(
                     image=sandbox_image,
                     extra_env=extra_env,
                     **_pi_spawn_overrides(settings, session_metadata, agent_metadata),
+                    **_idle_spawn(
+                        settings,
+                        env_type,
+                        session_idle=session_idle,
+                        session_metadata=session_metadata,
+                        agent_idle=agent_idle,
+                    ),
                 )
                 try:
                     if turn_timeout is None:
@@ -1628,10 +1671,12 @@ async def continue_turn(
             instructions,
             raw_tools,
             agent_metadata,
+            agent_idle,
         ) = await _agent_tools_and_model(db, tenant_id, row)
         session_metadata = (
             row.metadata_json if isinstance(row.metadata_json, dict) else {}
         )
+        session_idle = row.idle_ttl
         model = require_model(model)
         if settings is not None and settings.model_base_url:
             ids = listed_models(settings.model_base_url, api_key)
@@ -1707,6 +1752,13 @@ async def continue_turn(
                     image=sandbox_image,
                     extra_env=extra_env,
                     **_pi_spawn_overrides(settings, session_metadata, agent_metadata),
+                    **_idle_spawn(
+                        settings,
+                        env_type,
+                        session_idle=session_idle,
+                        session_metadata=session_metadata,
+                        agent_idle=agent_idle,
+                    ),
                 )
                 try:
                     if turn_timeout is None:
