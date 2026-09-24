@@ -506,7 +506,10 @@ turn failed. The session stays `idle` so a follow-up message works.
 Missing or invalid bearer is `401` with code `unauthorized`. An auth
 plugin may return `429` with a plugin `code` such as `rate_limited` or
 `quota`. A new turn that would pass `APIPI_MAX_SESSIONS` live Pi
-processes returns `429` with code `capacity`. A tenant that would pass
+processes returns `429` with code `capacity`. A known
+`sandbox_image` that no live worker has returns `503` with code
+`image_unavailable`. Workers that have the image but are full still
+return `429` `capacity`. An unknown image id is `400`. A tenant that would pass
 `APIPI_MAX_SESSIONS_PER_TENANT` returns `429` with code
 `capacity_tenant`. A request body larger than
 `APIPI_MAX_REQUEST_BYTES` returns `413` with code `payload_too_large`.

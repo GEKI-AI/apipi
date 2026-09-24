@@ -65,8 +65,8 @@ Worker to API:
 
 | `type` | Fields | What |
 | --- | --- | --- |
-| `register` | `id` (optional UUID), `capacity` (int ≥ 1), `memory_mb` (int ≥ 1, optional), `run_mode` (string, required) | Create or reconnect the worker. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB. If `memory_mb` is omitted, the API uses `capacity ×` guest `mem_mib`. `run_mode` is the placement class this process serves (`chat`, `microvm`, or the process `APIPI_RUN_MODE`). Reconnect bumps `generation` so a split brain cannot keep both sockets. |
-| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `drain` (optional bool) | Refresh `last_seen`. May update caps, advertised `run_mode`, and drain posture. |
+| `register` | `id` (optional UUID), `capacity` (int ≥ 1), `memory_mb` (int ≥ 1, optional), `run_mode` (string, required), `images` (optional list) | Create or reconnect the worker. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB. If `memory_mb` is omitted, the API uses `capacity ×` guest `mem_mib`. `run_mode` is the placement class this process serves (`chat`, `microvm`, or the process `APIPI_RUN_MODE`). `images` lists `{id, version, digest, min_size}` for guest images on this host. An older microvm worker that omits `images` is treated as having `default` and `browser`. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
+| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `drain` (optional bool), `images` (optional list) | Refresh `last_seen`. May update caps, advertised `run_mode`, drain posture, and the image list. |
 | `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. |
 | `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |

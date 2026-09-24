@@ -5,7 +5,12 @@ from tests.support.prom import metric_line
 
 from apipi.config import Settings
 from apipi.gateway.metrics import Metrics
-from apipi.worker.hub import WorkerConnection, WorkerHub
+from apipi.worker.hub import (
+    WorkerConnection,
+    WorkerHub,
+    WorkerImage,
+    images_from_message,
+)
 
 
 def _settings() -> Settings:
@@ -25,6 +30,32 @@ def _conn(*, capacity: int, memory_mb: int, run_mode: str = "chat") -> WorkerCon
         memory_mb=memory_mb,
         run_mode=run_mode,
     )
+
+
+def test_pick_filters_image_before_capacity() -> None:
+    hub = WorkerHub(_settings())
+    image = WorkerImage("browser", "1", "abc", "M")
+    browser = _conn(capacity=1, memory_mb=4096, run_mode="microvm")
+    browser.images = {"browser": image}
+    full = _conn(capacity=1, memory_mb=4096, run_mode="microvm")
+    full.images = {"browser": image}
+    full.leases.add(uuid.uuid4())
+    plain = _conn(capacity=8, memory_mb=4096, run_mode="microvm")
+    chat = _conn(capacity=8, memory_mb=4096, run_mode="chat")
+    hub._conns[browser.worker_id] = browser
+    hub._conns[full.worker_id] = full
+    hub._conns[plain.worker_id] = plain
+    hub._conns[chat.worker_id] = chat
+    assert hub.pick(512, run_mode="microvm", image="browser") is browser
+    assert hub.has_image("microvm", "missing") is False
+    assert hub.pick(512, run_mode="chat") is chat
+
+
+def test_legacy_worker_without_images_has_default_and_browser() -> None:
+    images = images_from_message({"type": "register"}, "microvm")
+    assert set(images) == {"default", "browser"}
+    assert images_from_message({"type": "register"}, "chat") == {}
+    assert images_from_message({"images": []}, "microvm") == {}
 
 
 def test_pick_prefers_more_free_ram() -> None:
