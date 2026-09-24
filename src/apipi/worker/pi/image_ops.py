@@ -8,7 +8,7 @@ import zstandard
 
 from apipi import __version__
 from apipi.config import ConfigError
-from apipi.worker.pi.image_store import FileImageStore, S3ImageStore
+from apipi.worker.pi.image_store import FileImageStore, HttpImageStore, S3ImageStore
 from apipi.worker.pi.images import (
     ImageFormatError,
     ImageIndex,
@@ -186,7 +186,9 @@ def build_image(
     )
 
 
-def _load_store_index(store: FileImageStore | S3ImageStore) -> ImageIndex:
+def _load_store_index(
+    store: FileImageStore | S3ImageStore | HttpImageStore,
+) -> ImageIndex:
     if not store.exists("index.json"):
         return ImageIndex(schema_version=1, kernels=[], images=[])
     try:
@@ -217,7 +219,7 @@ def _built_manifests(source: Path, ids: list[str]) -> list[ImageManifest]:
 
 
 def publish_images(
-    store: FileImageStore | S3ImageStore,
+    store: FileImageStore | S3ImageStore | HttpImageStore,
     source: Path,
     *,
     ids: list[str] | None = None,

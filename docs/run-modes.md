@@ -81,8 +81,11 @@ tools, and point at operator-provided guest images:
 | Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4) for `APIPI_MICROVM_IMAGE=default`. Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/worker/pi/guest.sh`. Optional `APIPI_MICROVM_ROOTFS_BROWSER` when `image` is `browser`. |
 | TAP / NAT | Permission to create a TAP device, set `ip_forward`, and add iptables rules. Root or `CAP_NET_ADMIN` is the usual setup. |
 
-`apipi install --microvm` downloads Firecracker and jailer and builds
-the guest image. Build a rootfs on the operator machine yourself if
+`apipi install --microvm` downloads Firecracker and jailer and pulls
+a guest image when `APIPI_IMAGE_SOURCE` is set. `--build` builds from
+the recipe instead. The runtime looks for a kernel and rootfs in this
+order: an explicit path, then `<id>/current` in the images dir, then
+the legacy cache. Missing files should be fixed with `apipi images pull`. Build a rootfs on the operator machine yourself if
 you want another output directory. Two flavors:
 
 Recipes live in `images/<id>/`. `images/build.sh` is the build

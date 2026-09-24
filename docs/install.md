@@ -64,6 +64,10 @@ apipi install --microvm --image browser
 apipi install --pi --microvm
 ```
 
+`--microvm` pulls a prebuilt image when `APIPI_IMAGE_SOURCE` is set.
+`--build` keeps the local recipe build for an air-gapped host.
+`--dry-run` prints which of those it would run.
+
 `--microvm` checks `/dev/kvm`, `ip`, `iptables`, and `tc` (it names
 the packages; it does not run apt). It downloads pinned Firecracker
 1.17.0 and jailer into `$XDG_DATA_HOME/apipi/firecracker` (or

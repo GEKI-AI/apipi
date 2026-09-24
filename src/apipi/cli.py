@@ -37,6 +37,7 @@ from apipi.gateway.ready import check_ready
 from apipi.services.vault_crypto import vault_master_key_unset
 from apipi.store.migrate import migrate
 from apipi.worker.pi.image_ops import build_image, publish_images
+from apipi.worker.pi.image_pull import list_images, pull_images
 from apipi.worker.pi.image_store import open_image_store
 from apipi.worker.pi.install import run_install
 from apipi.worker.pi.isolation import load_isolation
@@ -148,6 +149,21 @@ def microvm_shell(
 
 
 def _images_command(args: argparse.Namespace) -> int:
+    if args.images_command == "pull":
+        settings = load_settings(config_path=args.config)
+        if args.source:
+            settings = settings.model_copy(update={"image_source": args.source})
+        for line in pull_images(settings, ids=list(args.ids) or None, force=args.force):
+            print(line)
+        return 0
+    if args.images_command == "list":
+        settings = load_settings(config_path=args.config)
+        print("id\tversion\tdigest\tstatus")
+        for image_id, version, digest, status in list_images(
+            settings, remote=args.remote
+        ):
+            print(f"{image_id}\t{version}\t{digest}\t{status}")
+        return 0
     if args.images_command == "build":
         out = Path(args.out) if args.out else _default_image_build_dir()
         manifest = build_image(args.id, out_dir=out, arch=args.arch)
@@ -233,6 +249,11 @@ def main(argv: list[str] | None = None) -> int:
         "--image",
         default=None,
         help="MicroVM image recipe id (default: default)",
+    )
+    install_parser.add_argument(
+        "--build",
+        action="store_true",
+        help="Build the guest image locally instead of pulling",
     )
     install_parser.add_argument(
         "--force", action="store_true", help="Reinstall even if already present"
@@ -336,6 +357,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print objects that would be uploaded",
     )
+    pull_parser = images_sub.add_parser("pull", help="Pull guest images")
+    pull_parser.add_argument("--config", default=None, help="TOML config file")
+    pull_parser.add_argument("ids", nargs="*", help="Image ids to pull")
+    pull_parser.add_argument("--source", default=None, help="Image source URI")
+    pull_parser.add_argument(
+        "--force", action="store_true", help="Download even if the digest matches"
+    )
+    list_parser = images_sub.add_parser("list", help="List local and remote images")
+    list_parser.add_argument("--config", default=None, help="TOML config file")
+    list_parser.add_argument(
+        "--remote", action="store_true", help="Compare with the image source"
+    )
     args = parser.parse_args(argv)
     try:
         if args.command == "migrate":
@@ -358,6 +391,7 @@ def main(argv: list[str] | None = None) -> int:
                 image=args.image,
                 force=args.force,
                 dry_run=args.dry_run,
+                build=args.build,
             )
         if args.command == "check":
             return check_ready(

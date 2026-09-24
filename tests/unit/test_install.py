@@ -159,8 +159,7 @@ def test_install_microvm_dry_run(
     text = out.getvalue()
     assert PINNED_FIRECRACKER in text
     assert "firecracker-v" in text
-    assert "images/build.sh" in text
-    assert " default " in text
+    assert "apipi images pull default" in text
 
 
 def test_install_microvm_skips_when_present(

@@ -144,6 +144,14 @@ def run_checks(
                 checks.append(Check("ok", "sandbox probe", backend.name))
             except ConfigError as exc:
                 checks.append(Check("fail", "sandbox probe", str(exc)))
+    from apipi.worker.pi.image_pull import available_images
+
+    present = available_images(settings)
+    if present:
+        detail = ", ".join(f"{item.id} {item.version}" for item in present)
+        checks.append(Check("ok", "images", detail))
+    else:
+        checks.append(Check("skip", "images", "none local"))
     if role == "worker":
         if settings.worker_token:
             checks.append(Check("ok", "worker token", "set"))
