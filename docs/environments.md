@@ -81,6 +81,29 @@ The resolved size is stored on the session `environment` and is fixed
 for the life of the live guest. Updating session metadata later does
 not resize or reimage an already chosen size.
 
+### Sandbox image
+
+`environment.sandbox_image` chooses the guest image by id. It is
+separate from size. Size is RAM. Official clients can set
+`metadata["apipi.sandbox_image"]` instead. Resolution, highest wins:
+
+1. `environment.sandbox_image`
+2. Session create `metadata["apipi.sandbox_image"]`
+3. Agent `metadata["apipi.sandbox_image"]`
+4. Size `L` selects `browser`. Other sizes fall through.
+5. `APIPI_SANDBOX_DEFAULT_IMAGE` / `[sandbox].default_image` (shipped
+   default `default`)
+
+The resolved id is stored on the session `environment` as
+`sandbox_image`. A later metadata update does not reimage a live guest.
+An id must match `^[a-z0-9][a-z0-9-]{0,31}$`. An unknown id is `400`.
+Each image has a minimum size. `browser` needs `M` or larger. A smaller
+size is `400`. Isolation `none` stores the field and does not apply it.
+
+Playwright MCP is injected when the resolved image is `browser` and
+auto-inject is on, not because the size is `L`. The shipped default
+still maps `L` to `browser`, so existing `L` sessions keep the tools.
+
 | Size | Guest RAM | Rootfs | When |
 | --- | --- | --- | --- |
 | `S` | `[sandbox.resources].mem_mib` (512) | `default` | Pi and light tools |

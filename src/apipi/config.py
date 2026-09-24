@@ -83,6 +83,7 @@ _SANDBOX_TOML = {
     "rootfs_browser": "microvm_rootfs_browser",
     "image": "microvm_image",
     "default_size": "sandbox_default_size",
+    "default_image": "sandbox_default_image",
     "image_source": "image_source",
     "images_dir": "images_dir",
     "images": "sandbox_images",
@@ -587,6 +588,12 @@ class Settings(BaseSettings):
     microvm_image: MicrovmImageName = Field(
         default="default",
         validation_alias=AliasChoices("APIPI_MICROVM_IMAGE", "microvm_image"),
+    )
+    sandbox_default_image: str = Field(
+        default="default",
+        validation_alias=AliasChoices(
+            "APIPI_SANDBOX_DEFAULT_IMAGE", "sandbox_default_image"
+        ),
     )
     sandbox_default_size: SandboxSizeName = Field(
         default="S",

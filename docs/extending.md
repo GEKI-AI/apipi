@@ -187,6 +187,7 @@ Unknown top-level fields are rejected.
 | Key | Who writes it | What the gateway does |
 | --- | --- | --- |
 | `apipi.sandbox_size` | Client or agent | Chooses guest size when `environment.sandbox_size` is omitted. See [environments](environments.md). |
+| `apipi.sandbox_image` | Client or agent | Chooses the guest image when `environment.sandbox_image` is omitted. See [environments](environments.md). |
 | `apipi.thinking` | Client or agent | Thinking level for that session. Session wins over agent, then `[pi].thinking`. See [config](config.md#pi). |
 | `apipi.idle_ttl` | Client | Idle timer for that session when the session `idle_ttl` field is omitted. Same duration shape as the agent field. Session wins over agent, then the environment-type default. |
 | `apipi.system_prompt` | Client or agent | Replaces Pi's harness default. Session wins over agent, then `[pi].system_prompt`. Does not replace the platform prompt. |

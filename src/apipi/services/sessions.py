@@ -73,7 +73,10 @@ from apipi.worker.pi.idle import (
 from apipi.worker.pi.sandbox import (
     mem_mib_for_size,
     merge_playwright,
-    require_size_rootfs,
+    require_image_rootfs,
+    require_image_size,
+    require_known_image,
+    resolve_sandbox_image,
     resolve_sandbox_size,
     sandbox_size_of,
 )
@@ -439,8 +442,19 @@ class SessionService:
                 agent_metadata=agent_metadata,
                 default=self.settings.sandbox_default_size,
             )
-            env = {**env, "sandbox_size": size}
-            require_size_rootfs(self.settings, size)
+            image = resolve_sandbox_image(
+                environment_image=env.get("sandbox_image")
+                if isinstance(env.get("sandbox_image"), str)
+                else None,
+                session_metadata=metadata,
+                agent_metadata=agent_metadata,
+                size=size,
+                default=self.settings.sandbox_default_image,
+            )
+            require_known_image(self.settings, image)
+            require_image_size(image, size)
+            env = {**env, "sandbox_size": size, "sandbox_image": image}
+            require_image_rootfs(self.settings, image)
             vault_id_strs = [str(item) for item in (vault_ids or [])]
             for vault_id in vault_ids or []:
                 if await get_vault(db, tenant_id, vault_id) is None:
@@ -540,7 +554,14 @@ class SessionService:
                 attached = (
                     raw_tools
                     if chat
-                    else merge_playwright(raw_tools, size=size, settings=self.settings)
+                    else merge_playwright(
+                        raw_tools,
+                        size=size,
+                        settings=self.settings,
+                        image=env.get("sandbox_image")
+                        if isinstance(env.get("sandbox_image"), str)
+                        else None,
+                    )
                 )
                 stdio = await start_mcp_stdio_tools(
                     attached,

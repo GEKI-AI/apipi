@@ -69,6 +69,7 @@ from apipi.worker.pi.sandbox import (
     mem_mib_for_size,
     merge_playwright,
     playwright_attached,
+    sandbox_image_of,
     sandbox_size_of,
 )
 from apipi.worker.pi.settings_json import resolve_system_prompt, resolve_thinking
@@ -426,12 +427,13 @@ async def _stdio_for_turn(
     *,
     size: str,
     settings: Settings | None,
+    image: str | None = None,
 ) -> list[Any] | None:
     if mcp_stdio is not None:
         return mcp_stdio
     if settings is None:
         return None
-    merged = merge_playwright(raw_tools, size=size, settings=settings)
+    merged = merge_playwright(raw_tools, size=size, settings=settings, image=image)
     return await start_mcp_stdio_tools(
         merged,
         on_host=load_isolation(settings.run_mode).stdio_on_host,
@@ -1298,7 +1300,8 @@ async def run_turn(
                 if settings is not None
                 else None
             )
-            sandbox_image = image_for_size(sandbox_size)
+            stored_image = sandbox_image_of(row.environment)
+            sandbox_image = stored_image or image_for_size(sandbox_size)
             extra_env = session_env_from(row.environment)
             await update_session(
                 db,
@@ -1345,6 +1348,7 @@ async def run_turn(
                 raw_tools,
                 size=sandbox_size,
                 settings=settings,
+                image=sandbox_image,
             )
         except McpConnectError as exc:
             async with store.session() as db:
@@ -1688,7 +1692,8 @@ async def continue_turn(
         sandbox_mem = (
             mem_mib_for_size(settings, sandbox_size) if settings is not None else None
         )
-        sandbox_image = image_for_size(sandbox_size)
+        stored_image = sandbox_image_of(row.environment)
+        sandbox_image = stored_image or image_for_size(sandbox_size)
         extra_env = session_env_from(row.environment)
         result = {
             "call_id": call_id,
@@ -1703,6 +1708,7 @@ async def continue_turn(
                 raw_tools,
                 size=sandbox_size,
                 settings=settings,
+                image=sandbox_image,
             )
         except McpConnectError as exc:
             async with store.session() as db:

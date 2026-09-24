@@ -152,7 +152,11 @@ async def test_session_crud_environment_none(client: AsyncClient) -> None:
     assert created.status_code == 200
     body = created.json()
     assert body["status"] == "idle"
-    assert body["environment"] == {"type": "none", "sandbox_size": "S"}
+    assert body["environment"] == {
+        "type": "none",
+        "sandbox_size": "S",
+        "sandbox_image": "default",
+    }
     assert body["agent_id"] == agent_id
     assert body["metadata"] == {"k": "v"}
     assert body["required_actions"] == []
