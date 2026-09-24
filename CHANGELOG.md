@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-24
+
+### Fixed
+
+- `apipi install --microvm` installs the release Jailer, not the
+  `.debug` binary from the Firecracker tarball. A missing or crashing
+  Jailer is replaced on the next install without `--force`.
+- The microVM guest no longer receives the worker process environment.
+  Guest `.apipi/env` keeps the broker URL, a dummy `OPENAI_API_KEY`,
+  that session's MCP settings, and `environment.env`. It does not hold
+  `APIPI_WORKER_TOKEN`, database settings, or `OPENAI_API_KEY_OVERWRITE`.
+- MicroVM TAP egress rejects private and special-use IPv4, including
+  RFC1918, link-local, and `100.64.0.0/10`. The public internet stays
+  open. The TAP subnet stays open so the guest can reach the host broker.
+
 ## [0.3.2] - 2026-09-22
 
 ### Added

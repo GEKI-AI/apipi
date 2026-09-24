@@ -5,7 +5,7 @@ from apipi import __version__
 
 
 def test_version_is_first_public_release() -> None:
-    assert __version__ == "0.3.2"
+    assert __version__ == "0.4.0"
 
 
 def test_pyproject_ships_cli_and_s3_extra() -> None:
