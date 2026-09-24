@@ -104,7 +104,8 @@ overwrite each other. The script needs `curl`, `tar`, `mkfs.ext4`,
 `mount`, and root (or `sudo`) for the loop mount and chroot.
 
 `default` installs Alpine, Node, the pinned Pi CLI, Python 3, `ip`,
-`socat`, and copies `src/apipi/worker/pi/guest.sh` to `/sbin/apipi-guest`.
+`socat`, `curl`, and `git`, and copies `src/apipi/worker/pi/guest.sh` to
+`/sbin/apipi-guest`.
 `browser` is that image plus Alpine Chromium and font/NSS packages so
 stdio MCP such as Playwright can drive a **system** browser
 (`/usr/bin/chromium-browser`). Playwright's own glibc browser builds

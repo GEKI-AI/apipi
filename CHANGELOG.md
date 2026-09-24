@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public events `agent.session.turn.compaction.started` and
   `agent.session.turn.compaction.completed`. Missing compaction events
   do not fail the turn.
+- Every MicroVM guest image built from `images/` includes `curl` and
+  `git`.
 
 ## [0.4.0] - 2026-09-24
 
