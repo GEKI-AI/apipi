@@ -83,6 +83,9 @@ _SANDBOX_TOML = {
     "rootfs_browser": "microvm_rootfs_browser",
     "image": "microvm_image",
     "default_size": "sandbox_default_size",
+    "image_source": "image_source",
+    "images_dir": "images_dir",
+    "images": "sandbox_images",
 }
 _SANDBOX_RESOURCES_TOML = {
     "mem_mib": "microvm_mem_mib",
@@ -299,6 +302,14 @@ def parse_hosts(value: object) -> object:
     return value
 
 
+def parse_image_list(value: object) -> object:
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return value
+
+
 def parse_microvm_image(value: object) -> object:
     if value is None:
         return "default"
@@ -327,6 +338,7 @@ ExportUrl = Annotated[str | None, BeforeValidator(parse_export_url)]
 HostList = Annotated[str, BeforeValidator(parse_hosts)]
 InstanceId = Annotated[str | None, BeforeValidator(parse_instance_id)]
 MicrovmImageName = Annotated[MicrovmImage, BeforeValidator(parse_microvm_image)]
+ImageIdList = Annotated[list[str] | None, BeforeValidator(parse_image_list)]
 SandboxSizeName = Annotated[SandboxSize, BeforeValidator(parse_sandbox_size_setting)]
 
 
@@ -559,6 +571,18 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "APIPI_MICROVM_ROOTFS_BROWSER", "microvm_rootfs_browser"
         ),
+    )
+    image_source: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_IMAGE_SOURCE", "image_source"),
+    )
+    images_dir: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_IMAGES_DIR", "images_dir"),
+    )
+    sandbox_images: ImageIdList = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_SANDBOX_IMAGES", "sandbox_images"),
     )
     microvm_image: MicrovmImageName = Field(
         default="default",

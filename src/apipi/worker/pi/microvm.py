@@ -254,6 +254,26 @@ def _resolve_image_file(configured: str | None, default: Path, name: str) -> str
     raise _image_missing(name, default)
 
 
+def _images_dir_file(settings: Settings | None, image_id: str) -> Path | None:
+    from apipi.worker.pi.image_pull import configured_images_dir
+    from apipi.worker.pi.images import read_current
+
+    root = configured_images_dir(settings)
+    version = read_current(root, image_id)
+    if version is None:
+        return None
+    path = root / image_id / version / "rootfs.ext4"
+    return path if path.is_file() else None
+
+
+def _images_dir_kernel(settings: Settings | None) -> Path | None:
+    from apipi.worker.pi.image_pull import configured_images_dir
+    from apipi.worker.pi.images import local_kernel_path
+
+    path = local_kernel_path(configured_images_dir(settings), os.uname().machine)
+    return path if path.is_file() else None
+
+
 def microvm_images(
     settings: Settings | None = None, *, image: str | None = None
 ) -> tuple[str, str]:
@@ -265,21 +285,49 @@ def microvm_images(
         kernel = os.environ.get("APIPI_MICROVM_KERNEL")
         default_rootfs = os.environ.get("APIPI_MICROVM_ROOTFS")
         browser_rootfs = os.environ.get("APIPI_MICROVM_ROOTFS_BROWSER")
-    kernel_path = _resolve_image_file(
-        kernel, default_kernel_path(), "APIPI_MICROVM_KERNEL"
-    )
-    selected = image if image is not None else microvm_image_name(settings)
-    if selected == "browser":
-        rootfs_path = _resolve_image_file(
-            browser_rootfs,
-            default_rootfs_browser_path(),
-            "APIPI_MICROVM_ROOTFS_BROWSER",
+    if kernel:
+        kernel_path = _resolve_image_file(
+            kernel, default_kernel_path(), "APIPI_MICROVM_KERNEL"
         )
-        return kernel_path, rootfs_path
-    rootfs_path = _resolve_image_file(
-        default_rootfs, default_rootfs_path(), "APIPI_MICROVM_ROOTFS"
+    else:
+        pulled = _images_dir_kernel(settings)
+        kernel_path = (
+            str(pulled)
+            if pulled is not None
+            else _resolve_image_file(
+                None, default_kernel_path(), "APIPI_MICROVM_KERNEL"
+            )
+        )
+    selected = image if image is not None else microvm_image_name(settings)
+    explicit = browser_rootfs if selected == "browser" else None
+    if selected == "default":
+        explicit = default_rootfs
+    if explicit:
+        name = (
+            "APIPI_MICROVM_ROOTFS_BROWSER"
+            if selected == "browser"
+            else "APIPI_MICROVM_ROOTFS"
+        )
+        fallback = (
+            default_rootfs_browser_path()
+            if selected == "browser"
+            else default_rootfs_path()
+        )
+        return kernel_path, _resolve_image_file(explicit, fallback, name)
+    pulled_root = _images_dir_file(settings, selected)
+    if pulled_root is not None:
+        return kernel_path, str(pulled_root)
+    if selected == "browser":
+        return kernel_path, _resolve_image_file(
+            None, default_rootfs_browser_path(), "APIPI_MICROVM_ROOTFS_BROWSER"
+        )
+    if selected == "default":
+        return kernel_path, _resolve_image_file(
+            None, default_rootfs_path(), "APIPI_MICROVM_ROOTFS"
+        )
+    raise ConfigError(
+        f"sandbox_image {selected} is not in the images dir. Run apipi images pull."
     )
-    return kernel_path, rootfs_path
 
 
 def microvm_shell_needs_sudo() -> bool:

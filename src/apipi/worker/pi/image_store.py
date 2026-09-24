@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
+
 from apipi.config import ConfigError, Settings
 from apipi.store.blobs import make_s3_client
 
@@ -138,6 +140,46 @@ class S3ImageStore:
         self.put_bytes(name, source.read_bytes())
 
 
+class HttpImageStore:
+    def __init__(self, base: str, client: httpx.Client | None = None) -> None:
+        self.base = base.rstrip("/")
+        if client is None:
+            client = httpx.Client(follow_redirects=True)
+        self.client = client
+
+    def _url(self, name: str) -> str:
+        return f"{self.base}/{_safe_name(name)}"
+
+    def exists(self, name: str) -> bool:
+        response = self.client.head(self._url(name))
+        return response.status_code == 200
+
+    def get(self, name: str) -> bytes:
+        response = self.client.get(self._url(name))
+        if response.status_code != 200:
+            raise ConfigError(f"image store is missing {name}")
+        return response.content
+
+    def get_to(self, name: str, dest: Path) -> None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".part")
+        with self.client.stream("GET", self._url(name)) as response:
+            if response.status_code != 200:
+                raise ConfigError(f"image store is missing {name}")
+            with tmp.open("wb") as out:
+                for chunk in response.iter_bytes():
+                    out.write(chunk)
+        tmp.replace(dest)
+
+    def put_bytes(self, name: str, data: bytes) -> None:
+        del name, data
+        raise ConfigError("https:// image stores are read-only")
+
+    def put_file(self, name: str, source: Path) -> None:
+        del source
+        self.put_bytes(name, b"")
+
+
 class ImageStore:
     def exists(self, name: str) -> bool:
         raise NotImplementedError
@@ -158,14 +200,15 @@ def open_image_store(
     *,
     write: bool,
     client: object | None = None,
-) -> FileImageStore | S3ImageStore:
+) -> FileImageStore | S3ImageStore | HttpImageStore:
     parsed = parse_image_uri(uri)
     if parsed.scheme == "https":
         if write:
             raise ConfigError(
                 "https:// image stores are read-only; publish to s3:// or file://"
             )
-        raise ConfigError("https:// image pull is not available on this command")
+        http = client if isinstance(client, httpx.Client) else None
+        return HttpImageStore(parsed.path, client=http)
     if parsed.scheme == "file":
         return FileImageStore(Path(parsed.path))
     if settings is None:

@@ -266,10 +266,12 @@ def _print_microvm_snippet(image: str, stream: TextIO) -> None:
 
 
 def install_microvm(
+    settings: Settings | None = None,
     *,
     image: str = "default",
     force: bool = False,
     dry_run: bool = False,
+    build: bool = False,
     out: TextIO | None = None,
 ) -> int:
     stream: TextIO = sys.stdout if out is None else out
@@ -286,7 +288,10 @@ def install_microvm(
     args = rootfs_build_args(image, out_dir)
     if dry_run:
         print(url, file=stream)
-        print(" ".join(args), file=stream)
+        if build:
+            print(" ".join(args), file=stream)
+        else:
+            print(f"apipi images pull {image}", file=stream)
         return 0
     if _release_bins_ok(dest_dir) and not force:
         print(
@@ -308,7 +313,7 @@ def install_microvm(
             )
     if kernel.is_file() and rootfs.is_file() and not force:
         print(f"MicroVM {image} image is already installed", file=stream)
-    else:
+    elif build:
         env = os.environ.copy()
         env["PINNED_PI"] = PINNED_PI
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -318,8 +323,26 @@ def install_microvm(
             raise ConfigError("could not build the microVM guest image") from exc
         if not kernel.is_file() or not rootfs.is_file():
             raise ConfigError(f"rootfs build did not write {kernel} and {rootfs}")
+    else:
+        from apipi.worker.pi.image_pull import configured_images_dir, pull_images
+
+        resolved = settings if settings is not None else Settings()
+        pull_images(resolved, ids=[image], force=force)
+        print(f"Pulled MicroVM image {image}", file=stream)
+        _print_pulled_snippet(image, configured_images_dir(resolved), stream)
+        return 0
     _print_microvm_snippet(image, stream)
     return 0
+
+
+def _print_pulled_snippet(image: str, images_dir: Path, stream: TextIO) -> None:
+    print(f"images dir: {images_dir}", file=stream)
+    print(f"current image: {image}", file=stream)
+    print(
+        "Leave APIPI_MICROVM_KERNEL and APIPI_MICROVM_ROOTFS unset "
+        "to use that directory.",
+        file=stream,
+    )
 
 
 def _read_choice(
@@ -404,6 +427,7 @@ def run_install(
     image: str | None = None,
     force: bool = False,
     dry_run: bool = False,
+    build: bool = False,
     tty: bool | None = None,
     inp: TextIO | None = None,
     out: TextIO | None = None,
@@ -424,5 +448,12 @@ def run_install(
     if want_pi:
         install_pi(settings, force=force, dry_run=dry_run, out=stream)
     if want_microvm:
-        install_microvm(image=flavor, force=force, dry_run=dry_run, out=stream)
+        install_microvm(
+            settings,
+            image=flavor,
+            force=force,
+            dry_run=dry_run,
+            build=build,
+            out=stream,
+        )
     return 0
