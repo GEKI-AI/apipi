@@ -75,6 +75,13 @@ loop mount still needs sudo, the same way
 kernel and rootfs. It does not write `.env` or `apipi.toml`, and it
 does not set `APIPI_RUN_MODE`.
 
+The Firecracker tarball also contains `.debug` binaries. Install
+copies the release `firecracker` and `jailer` only. It skips that
+download when both `firecracker --version` and `jailer --version`
+exit 0 and report the pinned version. A missing or crashing jailer
+is replaced on the next `apipi install --microvm` without `--force`.
+`--force` still replaces binaries that already pass those checks.
+
 When those image paths are unset, `apipi serve` and
 `apipi microvm shell` use the cache files if they exist. Env, `.env`,
 and `[sandbox].kernel` / `rootfs` still override. Missing files fail

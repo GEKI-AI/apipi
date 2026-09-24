@@ -128,6 +128,8 @@ def _firecracker_version(binary: Path) -> str | None:
         )
     except OSError:
         return None
+    if result.returncode != 0:
+        return None
     text = f"{result.stdout} {result.stderr}"
     for part in text.replace(",", " ").split():
         if part.startswith("v") and len(part) > 1 and part[1].isdigit():
@@ -137,12 +139,32 @@ def _firecracker_version(binary: Path) -> str | None:
     return None
 
 
-def _extract_release_bin(tar: tarfile.TarFile, prefix: str, dest: Path) -> None:
+def _release_bins_ok(dest_dir: Path) -> bool:
+    firecracker = dest_dir / "firecracker"
+    jailer = dest_dir / "jailer"
+    pinned = PINNED_FIRECRACKER
+    return (
+        firecracker.is_file()
+        and jailer.is_file()
+        and _firecracker_version(firecracker) == pinned
+        and _firecracker_version(jailer) == pinned
+    )
+
+
+def _extract_release_bin(
+    tar: tarfile.TarFile,
+    prefix: str,
+    dest: Path,
+    *,
+    arch: str | None = None,
+) -> None:
+    machine = os.uname().machine if arch is None else arch
+    expected = f"{prefix}{PINNED_FIRECRACKER}-{machine}"
     for member in tar.getmembers():
         if not member.isfile():
             continue
         name = Path(member.name).name
-        if not name.startswith(prefix):
+        if name.endswith(".debug") or name != expected:
             continue
         extracted = tar.extractfile(member)
         if extracted is None:
@@ -152,11 +174,12 @@ def _extract_release_bin(tar: tarfile.TarFile, prefix: str, dest: Path) -> None:
             shutil.copyfileobj(extracted, out)
         dest.chmod(0o755)
         return
-    raise ConfigError(f"Firecracker release tarball has no {prefix} binary")
+    raise ConfigError(f"Firecracker release tarball has no {expected} binary")
 
 
 def _download_firecracker(dest_dir: Path, *, stream: TextIO) -> None:
-    url = firecracker_release_url()
+    machine = os.uname().machine
+    url = firecracker_release_url(machine)
     req = urllib.request.Request(url, headers={"User-Agent": "apipi"})
     try:
         with urllib.request.urlopen(req) as resp:
@@ -169,8 +192,10 @@ def _download_firecracker(dest_dir: Path, *, stream: TextIO) -> None:
         tmp.write(data)
         tmp.flush()
         with tarfile.open(tmp.name, "r:gz") as tar:
-            _extract_release_bin(tar, "firecracker-v", dest_dir / "firecracker")
-            _extract_release_bin(tar, "jailer-v", dest_dir / "jailer")
+            _extract_release_bin(
+                tar, "firecracker-v", dest_dir / "firecracker", arch=machine
+            )
+            _extract_release_bin(tar, "jailer-v", dest_dir / "jailer", arch=machine)
     print(
         f"Installed Firecracker {PINNED_FIRECRACKER} at {dest_dir / 'firecracker'}",
         file=stream,
@@ -227,18 +252,24 @@ def install_microvm(
         print(url, file=stream)
         print(" ".join(args), file=stream)
         return 0
-    have_fc = (
-        fc.is_file()
-        and jailer.is_file()
-        and _firecracker_version(fc) == PINNED_FIRECRACKER
-    )
-    if have_fc and not force:
+    if _release_bins_ok(dest_dir) and not force:
         print(
             f"Firecracker {PINNED_FIRECRACKER} is already installed at {fc}",
             file=stream,
         )
     else:
+        if (fc.is_file() or jailer.is_file()) and not force:
+            print(
+                "Firecracker or jailer is missing or failed --version; "
+                f"reinstalling {PINNED_FIRECRACKER}",
+                file=stream,
+            )
         _download_firecracker(dest_dir, stream=stream)
+        if not _release_bins_ok(dest_dir):
+            raise ConfigError(
+                "firecracker and jailer --version must both match "
+                f"Firecracker {PINNED_FIRECRACKER}"
+            )
     if kernel.is_file() and rootfs.is_file() and not force:
         print(f"MicroVM {image} image is already installed", file=stream)
     else:
