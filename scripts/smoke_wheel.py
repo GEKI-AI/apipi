@@ -18,8 +18,15 @@ def main() -> None:
         raise SystemExit(f"wheel name {wheel.name} does not contain {__version__}")
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
-        if "apipi/worker/pi/guest.sh" not in names:
-            raise SystemExit("wheel is missing apipi/worker/pi/guest.sh")
+        required = (
+            "apipi/worker/pi/guest.sh",
+            "apipi/worker/pi/images/build.sh",
+            "apipi/worker/pi/images/default/image.env",
+            "apipi/worker/pi/images/browser/image.env",
+        )
+        missing = [name for name in required if name not in names]
+        if missing:
+            raise SystemExit(f"wheel is missing {', '.join(missing)}")
         meta_name = next(
             name
             for name in names

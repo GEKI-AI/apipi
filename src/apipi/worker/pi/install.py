@@ -11,8 +11,6 @@ from typing import TextIO
 from apipi.config import ConfigError, Settings
 from apipi.worker.pi.microvm import (
     default_kernel_path,
-    default_rootfs_browser_path,
-    default_rootfs_path,
     firecracker_bin_dirs,
     kvm_available,
     microvm_image_dir,
@@ -58,25 +56,68 @@ def firecracker_install_dir() -> Path:
     return firecracker_bin_dirs()[0]
 
 
-def rootfs_script_path() -> Path:
+def images_root() -> Path:
     here = Path(__file__).resolve().parent
-    packaged = here / "microvm-rootfs"
-    if packaged.is_file():
+    packaged = here / "images"
+    if (packaged / "build.sh").is_file():
         return packaged
-    repo = here.parents[3] / "scripts" / "microvm-rootfs"
-    if repo.is_file():
+    repo = here.parents[3] / "images"
+    if (repo / "build.sh").is_file():
         return repo
-    raise ConfigError("apipi install --microvm cannot find the rootfs script")
+    raise ConfigError("apipi install --microvm cannot find image recipes")
+
+
+def read_image_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, raw = stripped.split("=", 1)
+        value = raw.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        values[key.strip()] = value
+    return values
+
+
+def recipe_ids() -> list[str]:
+    root = images_root()
+    found: list[str] = []
+    for path in sorted(root.iterdir()):
+        if path.is_dir() and (path / "image.env").is_file():
+            found.append(path.name)
+    return found
+
+
+def require_recipe(image: str) -> Path:
+    root = images_root()
+    recipe = root / image
+    env_path = recipe / "image.env"
+    if not env_path.is_file():
+        known = ", ".join(recipe_ids()) or "none"
+        raise ConfigError(f"unknown microVM image {image}; known recipes: {known}")
+    declared = read_image_env(env_path).get("IMAGE_ID", "")
+    if declared != image:
+        raise ConfigError(f"recipe {image} declares IMAGE_ID {declared or 'unset'}")
+    return recipe
+
+
+def rootfs_output_name(image: str) -> str:
+    if image == "default":
+        return "rootfs.ext4"
+    if image == "browser":
+        return "rootfs-browser.ext4"
+    return f"rootfs-{image}.ext4"
+
+
+def rootfs_script_path() -> Path:
+    return images_root() / "build.sh"
 
 
 def rootfs_build_args(image: str, out_dir: Path) -> list[str]:
-    return [
-        "bash",
-        str(rootfs_script_path()),
-        "--flavor",
-        image,
-        str(out_dir),
-    ]
+    require_recipe(image)
+    return ["bash", str(rootfs_script_path()), image, str(out_dir)]
 
 
 def install_pi(
@@ -210,15 +251,13 @@ def _require_microvm_host() -> None:
 
 def _print_microvm_snippet(image: str, stream: TextIO) -> None:
     kernel = default_kernel_path()
+    rootfs = microvm_image_dir() / rootfs_output_name(image)
     print(f"export APIPI_MICROVM_KERNEL={kernel}", file=stream)
     if image == "browser":
-        print(
-            f"export APIPI_MICROVM_ROOTFS_BROWSER={default_rootfs_browser_path()}",
-            file=stream,
-        )
+        print(f"export APIPI_MICROVM_ROOTFS_BROWSER={rootfs}", file=stream)
         print("export APIPI_MICROVM_IMAGE=browser", file=stream)
     else:
-        print(f"export APIPI_MICROVM_ROOTFS={default_rootfs_path()}", file=stream)
+        print(f"export APIPI_MICROVM_ROOTFS={rootfs}", file=stream)
     print(
         "Unset, apipi uses those files when they exist. "
         "apipi microvm shell re-runs under sudo if TAP/jailer need root.",
@@ -234,8 +273,7 @@ def install_microvm(
     out: TextIO | None = None,
 ) -> int:
     stream: TextIO = sys.stdout if out is None else out
-    if image not in {"default", "browser"}:
-        raise ConfigError("APIPI_MICROVM_IMAGE must be default or browser")
+    require_recipe(image)
     if not dry_run:
         _require_microvm_host()
     dest_dir = firecracker_install_dir()
@@ -243,9 +281,7 @@ def install_microvm(
     jailer = dest_dir / "jailer"
     url = firecracker_release_url()
     out_dir = microvm_image_dir()
-    rootfs = (
-        default_rootfs_browser_path() if image == "browser" else default_rootfs_path()
-    )
+    rootfs = out_dir / rootfs_output_name(image)
     kernel = default_kernel_path()
     args = rootfs_build_args(image, out_dir)
     if dry_run:

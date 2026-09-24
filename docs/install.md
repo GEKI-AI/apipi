@@ -70,8 +70,9 @@ the packages; it does not run apt). It downloads pinned Firecracker
 `~/.local/share/apipi/firecracker`). It builds the guest kernel and
 rootfs with the packaged rootfs script into
 `$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). The
-loop mount still needs sudo, the same way
-`./scripts/microvm-rootfs` does. It prints `export` lines for the
+loop mount still needs sudo, the same way `./images/build.sh`
+does. `./scripts/microvm-rootfs` is a wrapper for that script. It
+prints `export` lines for the
 kernel and rootfs. It does not write `.env` or `apipi.toml`, and it
 does not set `APIPI_RUN_MODE`.
 
