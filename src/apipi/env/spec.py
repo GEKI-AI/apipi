@@ -67,6 +67,7 @@ class EnvironmentSpec(StrictModel):
     packages: PackagesSpec | None = None
     setup_commands: list[SetupCommandSpec] | None = None
     sandbox_size: Literal["S", "M", "L"] | None = None
+    sandbox_image: str | None = None
     env: dict[str, str] | None = None
     files: list[InlineFileSpec | FileIdFileSpec] | None = None
     skills: list[SkillReferenceSpec] | None = None
@@ -133,6 +134,8 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
         payload["capability_directories"] = spec.capability_directories
     if spec.sandbox_size is not None:
         payload["sandbox_size"] = spec.sandbox_size
+    if spec.sandbox_image is not None:
+        payload["sandbox_image"] = spec.sandbox_image
     if spec.packages is not None:
         packages = spec.packages.model_dump(exclude_none=True)
         if packages:

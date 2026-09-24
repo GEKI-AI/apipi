@@ -118,6 +118,7 @@ yours.
 | `capability_directories` | Same API (skills on the computer) |
 | `packages`, `setup_commands` | Same API on `openai_hosted` only; `400` on `none` or `self_hosted` |
 | `sandbox_size` | ApiPi extension (`S` \| `M` \| `L`). Stock SDKs can set `metadata["apipi.sandbox_size"]`. Top-level session `sandbox_size` is `unknown_field`. |
+| `sandbox_image` | ApiPi extension. Stock SDKs can set `metadata["apipi.sandbox_image"]`. Top-level session `sandbox_image` is `unknown_field`. |
 | `env` | Same API on `openai_hosted` only; reserved names `400`; `400` on `none` or `self_hosted` |
 | `files` with `type: "inline"` or `type: "file_id"` | Same API on `openai_hosted` only. `file_id` mounts a Files API object. Other file types are `not_implemented`. |
 | `network` | Same API on `openai_hosted` only. Session policy cannot widen `[sandbox.network]`. Isolation `none` cannot enforce `disabled` / `restricted`. |

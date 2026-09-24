@@ -1,3 +1,5 @@
+import pytest
+
 from apipi.config import Settings
 from apipi.gateway.errors import ApiError
 from apipi.worker.pi.sandbox import (
@@ -6,6 +8,8 @@ from apipi.worker.pi.sandbox import (
     image_for_size,
     merge_playwright,
     playwright_attached,
+    require_image_size,
+    resolve_sandbox_image,
     resolve_sandbox_size,
     sandbox_size_of,
 )
@@ -86,6 +90,70 @@ def _microvm() -> Settings:
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="microvm",
     )
+
+
+def test_resolve_sandbox_image_order() -> None:
+    assert (
+        resolve_sandbox_image(
+            environment_image="default",
+            session_metadata={"apipi.sandbox_image": "browser"},
+            agent_metadata={"apipi.sandbox_image": "browser"},
+            size="S",
+            default="browser",
+        )
+        == "default"
+    )
+    assert (
+        resolve_sandbox_image(
+            environment_image=None,
+            session_metadata={"apipi.sandbox_image": "browser"},
+            agent_metadata={"apipi.sandbox_image": "default"},
+            size="S",
+            default="default",
+        )
+        == "browser"
+    )
+    assert (
+        resolve_sandbox_image(
+            environment_image=None,
+            session_metadata=None,
+            agent_metadata={"apipi.sandbox_image": "browser"},
+            size="S",
+            default="default",
+        )
+        == "browser"
+    )
+    assert (
+        resolve_sandbox_image(
+            environment_image=None,
+            session_metadata=None,
+            agent_metadata=None,
+            size="L",
+            default="default",
+        )
+        == "browser"
+    )
+    assert (
+        resolve_sandbox_image(
+            environment_image=None,
+            session_metadata=None,
+            agent_metadata=None,
+            size="S",
+            default="default",
+        )
+        == "default"
+    )
+
+
+def test_browser_image_rejects_size_s() -> None:
+    with pytest.raises(ApiError, match="needs sandbox_size M"):
+        require_image_size("browser", "S")
+    require_image_size("default", "L")
+
+
+def test_merge_playwright_follows_image_not_size() -> None:
+    assert merge_playwright([], size="M", image="browser", settings=_microvm())
+    assert merge_playwright([], size="L", image="default", settings=_microvm()) == []
 
 
 def test_merge_playwright_on_l_microvm() -> None:
