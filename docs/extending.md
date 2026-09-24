@@ -187,6 +187,8 @@ Unknown top-level fields are rejected.
 | Key | Who writes it | What the gateway does |
 | --- | --- | --- |
 | `apipi.sandbox_size` | Client or agent | Chooses guest size when `environment.sandbox_size` is omitted. See [environments](environments.md). |
+| `apipi.thinking` | Client or agent | Thinking level for that session. Session wins over agent, then `[pi].thinking`. See [config](config.md#pi). |
+| `apipi.system_prompt` | Client or agent | Replaces Pi's harness default. Session wins over agent, then `[pi].system_prompt`. Does not replace the platform prompt. |
 | `apipi.session_kind` | Gateway on chat create, or the client on a saved agent | `chat` places the session on chat workers. |
 | `apipi.title` | Sidekick, when automatic titles are on | Short title. An existing value is kept. |
 | `apipi.title_status` | Sidekick | `pending`, `done`, or `failed`. |

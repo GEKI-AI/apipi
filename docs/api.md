@@ -44,9 +44,9 @@ is not saved unless you `POST /v1/agents`. A live turn needs
 is `400` with code `model_required`. Unknown model is `400` with code
 `model_not_found`. Inline `model` and `instructions` are kept on the
 session for follow-up turns. Saved agents keep reading the agent row.
-The gateway always appends a platform prompt, then `agent.instructions`
-when those are set. See [Concepts](concepts.md#agents) and
-[config](config.md#pi).
+The gateway appends a platform prompt, then `agent.instructions` when
+those are set. A system prompt may replace Pi's harness default first.
+See [Concepts](concepts.md#agents) and [config](config.md#pi).
 
 `vault_ids` on session create attaches vaults for HTTP MCP. The
 gateway matches `mcp_server_url` and injects the bearer on the host
@@ -239,7 +239,8 @@ until the worker drains.
 
 `metadata` is a JSON object. Keys that start with `apipi.` are
 reserved. The gateway interprets `apipi.sandbox_size`,
-`apipi.session_kind`, `apipi.title`, and `apipi.title_status`. It
+`apipi.session_kind`, `apipi.thinking`, `apipi.system_prompt`,
+`apipi.title`, and `apipi.title_status`. It
 stores `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`
 and does not branch on them. There is no top-level `actor_type`
 field. See [reserved metadata](extending.md#reserved-metadata).
@@ -313,6 +314,8 @@ log line.
 | `agent.session.turn.thinking.completed` | Thinking block finished. Stored. Preview only, not the full text. |
 | `agent.session.turn.thinking.summary.completed` | Short summary of that block. Stored. `item_id`, `summary`, `summary_status=done`. |
 | `agent.session.turn.thinking.summary.failed` | Summary was not produced. Stored. `item_id`, `summary_status=failed`. No summary text. |
+| `agent.session.turn.compaction.started` | Pi started compaction. Stored. `reason` when Pi sent one (`manual`, `threshold`, or `overflow`). |
+| `agent.session.turn.compaction.completed` | Pi finished compaction. Stored. `reason`, `aborted`, `will_retry`, `tokens_before`, `tokens_after`, and a short `error` when present. The summary text is not stored. |
 | `agent.session.title.updated` | `metadata["apipi.title"]` was set or the title job failed. Stored. |
 | `agent.session.environment.pending` | Waiting for a computer |
 | `agent.session.environment.connected` | Computer ready |
@@ -333,7 +336,12 @@ not report one. The full thinking text is not on these events, not
 in items, and not in logs. There is no admin API that returns it.
 Pi's session cache may still hold the full text. That cache is not
 the public transcript. Thinking deltas are not sent to clients.
-Enable thinking with `APIPI_PI_THINKING`. See [Pi](config.md#pi).
+Enable thinking with `APIPI_PI_THINKING`, or override it per session
+with `metadata["apipi.thinking"]`. See [Pi](config.md#pi).
+
+Compaction events are optional. A Pi build that does not emit
+`compaction_start` or `compaction_end` does not fail the turn. The
+summary text is not a public event.
 
 A thinking summary is optional and arrives later on
 `agent.session.turn.thinking.summary.completed`. It does not replace

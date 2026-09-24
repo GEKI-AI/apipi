@@ -249,6 +249,7 @@ def pi_command_args(
     instructions: str | None = None,
     session_file: str | None = None,
     extension: str | None = None,
+    thinking: str | None = None,
 ) -> list[str]:
     from apipi.worker.pi.model_host import PI_PROVIDER
 
@@ -262,10 +263,9 @@ def pi_command_args(
         args.extend(["--provider", PI_PROVIDER, "--model", model])
     if instructions:
         args.extend(["--append-system-prompt", instructions])
-    if not settings.pi_auto_compact:
-        args.append("--no-auto-compact")
-    if settings.pi_thinking != "off":
-        args.extend(["--thinking", settings.pi_thinking])
+    level = thinking if thinking is not None else settings.pi_thinking
+    if level != "off":
+        args.extend(["--thinking", level])
     if not tools:
         args.append("--no-builtin-tools" if mcp_http or mcp_stdio else "--no-tools")
     if skill_dirs is not None:
@@ -291,6 +291,9 @@ async def spawn_pi(
     mem_mib: int | None = None,
     image: str | None = None,
     extra_env: dict[str, str] | None = None,
+    thinking: str | None = None,
+    system_prompt: str | None = None,
+    system_prompt_set: bool = False,
 ) -> PiProc:
     from apipi.worker.pi.isolation import load_isolation
 
@@ -307,4 +310,7 @@ async def spawn_pi(
         mem_mib=mem_mib,
         image=image,
         extra_env=extra_env,
+        thinking=thinking,
+        system_prompt=system_prompt,
+        system_prompt_set=system_prompt_set,
     )

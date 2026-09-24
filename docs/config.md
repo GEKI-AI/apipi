@@ -249,31 +249,53 @@ Firecracker.
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
 | `APIPI_PI_COMMAND` | `[pi].command` | `pi` | Pi binary used as `pi --mode rpc`. |
-| `APIPI_PI_AUTO_COMPACT` | `[pi].auto_compact` | on | When off, ApiPi passes `--no-auto-compact` so Pi does not compact context on its own. |
-| `APIPI_PI_THINKING` | `[pi].thinking` | `off` | Pi thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. |
+| `APIPI_PI_AUTO_COMPACT` | `[pi].auto_compact` | on | When off, ApiPi writes `compaction.enabled` false in Pi `settings.json`. Pi 0.85.1 does not accept `--no-auto-compact`, so that flag is not passed. |
+| `APIPI_PI_COMPACTION_RESERVE_TOKENS` | `[pi].compaction_reserve_tokens` | unset (Pi default 16384) | `compaction.reserveTokens` in Pi `settings.json`. Tokens reserved for the model reply. Unset leaves Pi's default. |
+| `APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS` | `[pi].compaction_keep_recent_tokens` | unset (Pi default 20000) | `compaction.keepRecentTokens` in Pi `settings.json`. Recent tokens kept out of the summary. Unset leaves Pi's default. |
+| `APIPI_PI_THINKING` | `[pi].thinking` | `off` | Process default thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. A session or agent may override it. |
 | `APIPI_PI_MEM_MIB` | `[pi].mem_mib` | unset | Soft ceiling for one host Pi (`none` / `chat`) in MiB. Unset is off. Sets Node `NODE_OPTIONS=--max-old-space-size` and kills the process group when RSS goes over the limit (`apipi_pi_kill_total` reason `memory`). A turn in progress fails with `model_host_error`. Not a microVM hard cap. |
-| `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | built-in text | Main platform prompt appended after Pi's harness default. Unset keeps the built-in. Set to `""` to disable the main block. A non-empty value replaces the built-in entirely. |
+| `APIPI_PI_SYSTEM_PROMPT` | `[pi].system_prompt` | unset | Replaces Pi's harness default system prompt. Unset or empty keeps Pi's default. This does not replace the platform prompt or agent instructions. |
+| `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | built-in text | Main platform prompt appended after Pi's harness default (or after `system_prompt` when that is set). Unset keeps the built-in. Set to `""` to disable the main block. A non-empty value replaces the built-in entirely. |
 | `APIPI_PLATFORM_PROMPT_ADDITIONAL` | `[pi].platform_prompt_additional` | empty | Optional extra platform text appended after the main block. Does not replace the main prompt. |
 
-Thinking stays off until you set a level other than `off`. ApiPi then
-passes `--thinking` to Pi and writes each model in `models.json` with
+Thinking stays off until the resolved level is not `off`. ApiPi then
+passes `--thinking` to Pi, writes `defaultThinkingLevel` in
+`settings.json`, and writes each model in `models.json` with
 `reasoning` true and `supportsReasoningEffort` true. That asks an
 OpenAI-compatible host for `reasoning_effort`. Hosts that need another
 Pi thinking format, such as `chat-template` or `qwen`, are not
 configured here. `xhigh` and `max` are passed through. Pi drops a
 level the model does not support. `off` leaves `models.json` as it is
-today and does not pass `--thinking`. Set this on the process that
-runs Pi. Public events then carry a preview of the first 100 Unicode
-code points, a duration, and a reasoning token count. The full
-thinking text is not a public event. See [events](api.md#events).
+today and does not pass `--thinking`. The process default is
+`[pi].thinking`. A session may set `metadata["apipi.thinking"]`. A
+saved agent may set the same key. Resolve order is session, then
+agent, then the process default. Inline agents copy that key onto the
+session when the session did not set it. The level is applied when Pi
+starts. A later change respawns Pi. Public events then carry a preview
+of the first 100 Unicode code points, a duration, and a reasoning token
+count. The full thinking text is not a public event. See
+[events](api.md#events).
 
-The gateway always composes those blocks before `agent.instructions`.
-Order: Pi's default system prompt, main platform prompt, additional
-platform prompt, then agent instructions. Skills, capability
+Compaction and the system prompt are written into the session Pi agent
+directory before Pi starts (`settings.json` and, when set, `SYSTEM.md`).
+That directory is `PI_CODING_AGENT_DIR`. Pi 0.85.1 reads global settings
+and `SYSTEM.md` from there. Project `.pi/settings.json` and
+`.pi/SYSTEM.md` are not used, because RPC does not trust the workspace.
+`compaction.enabled` follows `[pi].auto_compact`. Thresholds are written
+only when set. Those compaction settings stay process-wide.
+
+The gateway always composes the appended blocks before
+`agent.instructions`. Order: Pi's harness default, or
+`system_prompt` when that is set (session metadata, then agent
+metadata, then `[pi].system_prompt`); then the main platform prompt;
+then additional platform text; then the sandbox size hint and browser
+hint when those apply; then `agent.instructions`. Skills, capability
 directories, packages, and setup commands are unchanged. Empty main
 (`platform_prompt = ""`) drops only the main block; additional and
-agent instructions still apply. These settings live on the process
-that runs Pi (combined `apipi serve` or `apipi worker`).
+agent instructions still apply. An empty `system_prompt` keeps Pi's
+harness default. Platform prompt and compaction settings live on the
+process that runs Pi (combined `apipi serve` or `apipi worker`).
+Thinking level and system prompt may also be set per session.
 
 The built-in main prompt tells the model that hosted cwd is
 `/workspace`, durable files go under `outputs/` only, `none` has no
@@ -287,6 +309,8 @@ install browsers.
 [pi]
 command = "pi"
 auto_compact = true
+compaction_reserve_tokens = 16384
+compaction_keep_recent_tokens = 20000
 ```
 
 Override the main prompt, or keep it and append a sentence:

@@ -31,4 +31,7 @@ class Isolation(Protocol):
         mem_mib: int | None = None,
         image: str | None = None,
         extra_env: dict[str, str] | None = None,
+        thinking: str | None = None,
+        system_prompt: str | None = None,
+        system_prompt_set: bool = False,
     ) -> PiProc: ...

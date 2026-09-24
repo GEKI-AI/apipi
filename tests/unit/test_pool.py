@@ -195,6 +195,8 @@ async def test_get_emits_sandbox_attach_span() -> None:
     sid = uuid.uuid4()
     pool._procs[sid] = cast(PiProc, _Alive())
     pool._spawn_tools[sid] = True
+    pool._thinking[sid] = "off"
+    pool._system_prompts[sid] = None
     try:
         await pool.get(sid, cwd=None, tools=True)
         names = [span.name for span in exporter.get_finished_spans()]

@@ -16,6 +16,7 @@ from apipi.store.repo import (
     list_agents,
     update_agent,
 )
+from apipi.worker.pi.settings_json import validate_pi_metadata
 
 _UNIMPLEMENTED = ("multi_agent", "tool_search", "programmatic_tool_calling")
 
@@ -111,6 +112,7 @@ class AgentService:
 
     async def create(self, tenant_id: uuid.UUID, body: AgentWrite) -> dict[str, Any]:
         payload = write_payload(body)
+        validate_pi_metadata(payload.get("metadata"))
         if is_chat_profile(payload.get("metadata")):
             reject_disallowed_chat_tools(payload.get("tools"))
         async with self.store.session() as db:
@@ -146,6 +148,7 @@ class AgentService:
             if existing is None:
                 not_found()
             metadata = payload.get("metadata", existing.metadata_json)
+            validate_pi_metadata(metadata if isinstance(metadata, dict) else None)
             tools = payload.get("tools", existing.tools)
             if is_chat_profile(metadata):
                 reject_disallowed_chat_tools(tools)

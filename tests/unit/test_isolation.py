@@ -187,6 +187,9 @@ async def test_spawn_pi_none_without_cwd_writes_broker_models(
     assert isinstance(env, dict)
     agent_dir = env["PI_CODING_AGENT_DIR"]
     assert isinstance(agent_dir, str)
+    settings_doc = json.loads((Path(agent_dir) / "settings.json").read_text())
+    assert settings_doc["compaction"]["enabled"] is True
+    assert settings_doc["defaultThinkingLevel"] == "off"
     models = json.loads((Path(agent_dir) / "models.json").read_text())
     url = models["providers"]["apipi"]["baseUrl"]
     assert "127.0.0.1" in url

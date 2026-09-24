@@ -35,6 +35,9 @@ class ExampleIsolation:
         mem_mib: int | None = None,
         image: str | None = None,
         extra_env: dict[str, str] | None = None,
+        thinking: str | None = None,
+        system_prompt: str | None = None,
+        system_prompt_set: bool = False,
     ) -> PiProc:
         return await self._inner.spawn(
             settings,
@@ -49,4 +52,7 @@ class ExampleIsolation:
             mem_mib=mem_mib,
             image=image,
             extra_env=extra_env,
+            thinking=thinking,
+            system_prompt=system_prompt,
+            system_prompt_set=system_prompt_set,
         )

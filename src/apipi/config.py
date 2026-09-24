@@ -69,6 +69,9 @@ _PI_TOML = {
     "command": "pi_command",
     "auto_compact": "pi_auto_compact",
     "thinking": "pi_thinking",
+    "compaction_reserve_tokens": "pi_compaction_reserve_tokens",
+    "compaction_keep_recent_tokens": "pi_compaction_keep_recent_tokens",
+    "system_prompt": "pi_system_prompt",
     "mem_mib": "pi_mem_mib",
     "platform_prompt": "platform_prompt",
     "platform_prompt_additional": "platform_prompt_additional",
@@ -462,6 +465,25 @@ class Settings(BaseSettings):
     pi_thinking: ThinkingLevel = Field(
         default="off",
         validation_alias=AliasChoices("APIPI_PI_THINKING", "pi_thinking"),
+    )
+    pi_compaction_reserve_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices(
+            "APIPI_PI_COMPACTION_RESERVE_TOKENS", "pi_compaction_reserve_tokens"
+        ),
+    )
+    pi_compaction_keep_recent_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices(
+            "APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS",
+            "pi_compaction_keep_recent_tokens",
+        ),
+    )
+    pi_system_prompt: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_PI_SYSTEM_PROMPT", "pi_system_prompt"),
     )
     pi_mem_mib: int | None = Field(
         default=None,
@@ -1026,6 +1048,16 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_PI_AUTO_COMPACT must be on or off"
         if "pi_thinking" in loc or "APIPI_PI_THINKING" in loc:
             return THINKING_HELP
+        if (
+            "pi_compaction_reserve_tokens" in loc
+            or "APIPI_PI_COMPACTION_RESERVE_TOKENS" in loc
+        ):
+            return "APIPI_PI_COMPACTION_RESERVE_TOKENS must be 0 or more"
+        if (
+            "pi_compaction_keep_recent_tokens" in loc
+            or "APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS" in loc
+        ):
+            return "APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS must be 0 or more"
         if "pi_mem_mib" in loc or "APIPI_PI_MEM_MIB" in loc:
             return "APIPI_PI_MEM_MIB must be at least 1"
         if "port" in loc:

@@ -241,3 +241,30 @@ def test_thinking_deltas_are_not_public() -> None:
         )
         == []
     )
+
+
+def test_compaction_events_are_public_without_summary() -> None:
+    started = map_pi_event({"type": "compaction_start", "reason": "threshold"})
+    assert started == [
+        ("agent.session.turn.compaction.started", {"reason": "threshold"})
+    ]
+    assert started[0][0] in PUBLIC_EVENT_TYPES
+    ended = map_pi_event(
+        {
+            "type": "compaction_end",
+            "reason": "threshold",
+            "aborted": False,
+            "willRetry": False,
+            "result": {
+                "summary": "SECRET-SUMMARY",
+                "tokensBefore": 150000,
+                "estimatedTokensAfter": 32000,
+            },
+        }
+    )
+    assert ended[0][0] == "agent.session.turn.compaction.completed"
+    assert ended[0][0] in PUBLIC_EVENT_TYPES
+    assert ended[0][1]["tokens_before"] == 150000
+    assert ended[0][1]["tokens_after"] == 32000
+    assert "SECRET-SUMMARY" not in json.dumps(ended)
+    assert map_pi_event({"type": "not_a_compaction"}) == []

@@ -37,6 +37,8 @@ class PiPool:
         self._spawn_tools: dict[uuid.UUID, bool] = {}
         self._models: dict[uuid.UUID, str | None] = {}
         self._instructions: dict[uuid.UUID, str | None] = {}
+        self._thinking: dict[uuid.UUID, str] = {}
+        self._system_prompts: dict[uuid.UUID, str | None] = {}
         self._key_ids: dict[uuid.UUID, str | None] = {}
         self._env_types: dict[uuid.UUID, str | None] = {}
         self._mem: dict[uuid.UUID, int] = {}
@@ -63,14 +65,25 @@ class PiPool:
         mem_mib: int | None = None,
         image: str | None = None,
         extra_env: dict[str, str] | None = None,
+        thinking: str | None = None,
+        system_prompt: str | None = None,
+        system_prompt_set: bool = False,
     ) -> PiProc:
         instructions = instructions if instructions else None
+        from apipi.worker.pi.settings_json import process_system_prompt
+
+        level = thinking if thinking is not None else self.settings.pi_thinking
+        prompt = (
+            system_prompt if system_prompt_set else process_system_prompt(self.settings)
+        )
         session_mem = mem_mib if mem_mib is not None else self.settings.microvm_mem_mib
         async with self._lock:
             proc = self._procs.get(session_id)
             spawned = self._spawn_tools.get(session_id)
             same = spawned == tools and self._models.get(session_id) == model
             same = same and self._instructions.get(session_id) == instructions
+            same = same and self._thinking.get(session_id) == level
+            same = same and self._system_prompts.get(session_id) == prompt
             same = same and self._key_ids.get(session_id) == key_id
             if proc is not None and proc.alive and not same:
                 await self.kill(session_id, reason="respawn")
@@ -124,6 +137,9 @@ class PiPool:
                             mem_mib=mem_mib,
                             image=image,
                             extra_env=extra_env,
+                            thinking=level,
+                            system_prompt=prompt,
+                            system_prompt_set=True,
                         )
                     except Exception:
                         self._observe_boot(size, "error", time.monotonic() - started)
@@ -136,6 +152,8 @@ class PiPool:
                     self._spawn_tools[session_id] = tools
                     self._models[session_id] = model
                     self._instructions[session_id] = instructions
+                    self._thinking[session_id] = level
+                    self._system_prompts[session_id] = prompt
                     self._key_ids[session_id] = key_id
                     self._env_types[session_id] = env_type
                     self._mem[session_id] = session_mem
@@ -224,6 +242,8 @@ class PiPool:
         self._spawn_tools.pop(session_id, None)
         self._models.pop(session_id, None)
         self._instructions.pop(session_id, None)
+        self._thinking.pop(session_id, None)
+        self._system_prompts.pop(session_id, None)
         self._key_ids.pop(session_id, None)
         self._env_types.pop(session_id, None)
         self._mem.pop(session_id, None)
