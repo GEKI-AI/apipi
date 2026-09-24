@@ -55,6 +55,18 @@ Postgres. Give each process its own SQLite file if you are not sharing.
 | Many concurrent writers on one DB | Single writer / lock |
 | HA, backups, pooling at scale | Operator story |
 
+## Guest image store
+
+Build images with `apipi images build`, then publish them with
+`apipi images publish --to s3://your-bucket/apipi-images` or
+`file:///path` on storage the workers can read. An `https://` static
+host is a valid source once the files are there; publish itself
+rejects `https://`. Point workers at that prefix with one image
+source setting. The official Images workflow can publish `default`
+and `browser` as GitHub release assets. S3 credentials are the AWS
+environment or the instance role, the same endpoint settings as the
+artifact store, and never a key in TOML.
+
 ## Scale-out
 
 | Shape | When | What stays on the node | What is shared |

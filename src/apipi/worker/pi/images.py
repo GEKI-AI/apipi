@@ -86,7 +86,7 @@ class KernelRef(_Model):
 
 
 class ImageManifest(_Model):
-    schema_version: Literal[1] = Field(alias="schema")
+    schema_version: Literal[1] = Field(default=1, alias="schema")
     id: str
     version: str
     arch: Literal["x86_64", "aarch64"]
@@ -153,7 +153,7 @@ class ImageIndexEntry(_Model):
 
 
 class ImageIndex(_Model):
-    schema_version: Literal[1] = Field(alias="schema")
+    schema_version: Literal[1] = Field(default=1, alias="schema")
     kernels: list[KernelIndexEntry]
     images: list[ImageIndexEntry]
 

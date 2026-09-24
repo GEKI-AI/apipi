@@ -592,14 +592,12 @@ def _s3_missing(exc: BaseException) -> bool:
     return code in {"NoSuchKey", "404", "NotFound", "NoSuchBucket"}
 
 
-def _make_s3_client(settings: Settings) -> object:
+def make_s3_client(settings: Settings, *, missing: str) -> object:
     try:
         import boto3
         from botocore.config import Config
     except ImportError as exc:
-        raise ConfigError(
-            "APIPI_ARTIFACT_STORE=s3 requires boto3 (uv sync --extra s3)"
-        ) from exc
+        raise ConfigError(missing) from exc
     kwargs = s3_client_kwargs(settings)
     config_kwargs = kwargs.pop("config_kwargs")
     if not isinstance(config_kwargs, dict):
@@ -616,6 +614,13 @@ def _make_s3_client(settings: Settings) -> object:
     if endpoint is not None:
         client_kwargs["endpoint_url"] = endpoint
     return boto3.client("s3", **client_kwargs)
+
+
+def _make_s3_client(settings: Settings) -> object:
+    return make_s3_client(
+        settings,
+        missing="APIPI_ARTIFACT_STORE=s3 requires boto3 (uv sync --extra s3)",
+    )
 
 
 def object_store(settings: Settings) -> ObjectStore:

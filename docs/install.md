@@ -96,6 +96,26 @@ itself with `sudo -E`, the absolute Python interpreter, and `PATH` /
 `sudo uv`. `apipi serve` does not re-exec. TAP and jailer still need
 root or the capabilities in [run modes](run-modes.md).
 
+## Build and publish guest images
+
+`apipi images build <id>` runs the recipe in `images/<id>/` and writes
+a zstd rootfs plus `manifest.json`. It needs the same root, loop
+mount, and packages as `./images/build.sh`. `--arch` only checks that
+you asked for this host. Cross-build is not supported.
+
+`apipi images publish --to <uri>` uploads those files. `<uri>` is
+`s3://bucket/prefix` or `file:///path`. `https://` is read-only and is
+rejected. S3 uses `APIPI_S3_ENDPOINT`, `APIPI_S3_REGION`, and
+`APIPI_S3_ADDRESSING`. Credentials come from the AWS environment or
+the instance role, not from TOML. Install the client with
+`uv sync --extra s3`. Publishing the same image version again fails
+unless you pass `--force`. `--dry-run` prints the object names.
+
+The optional Images workflow builds the official `default` and
+`browser` images and attaches them to a GitHub release. After that
+runs, the release asset URL is an `https://` image source. See
+[production](production.md).
+
 ## From a git checkout
 
 ```
