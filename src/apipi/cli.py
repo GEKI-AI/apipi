@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -35,6 +36,8 @@ from apipi.gateway.logutil import configure_logging, uvicorn_log_config
 from apipi.gateway.ready import check_ready
 from apipi.services.vault_crypto import vault_master_key_unset
 from apipi.store.migrate import migrate
+from apipi.worker.pi.image_ops import build_image, publish_images
+from apipi.worker.pi.image_store import open_image_store
 from apipi.worker.pi.install import run_install
 from apipi.worker.pi.isolation import load_isolation
 from apipi.worker.pi.microvm import (
@@ -142,6 +145,35 @@ def microvm_shell(
         settings = settings.model_copy(update={"microvm_image": image})
     print(SHELL_WARNING, file=sys.stderr)
     return asyncio.run(run_microvm_shell(settings, cwd=workspace))
+
+
+def _images_command(args: argparse.Namespace) -> int:
+    if args.images_command == "build":
+        out = Path(args.out) if args.out else _default_image_build_dir()
+        manifest = build_image(args.id, out_dir=out, arch=args.arch)
+        print(f"built {manifest.id} {manifest.version} at {out}")
+        return 0
+    source = Path(args.source) if args.source else _default_image_build_dir()
+    settings = None
+    if not str(args.to).startswith("file:"):
+        settings = load_settings(config_path=args.config)
+    store = open_image_store(args.to, settings, write=True)
+    planned = publish_images(
+        store,
+        source,
+        ids=list(args.ids),
+        force=args.force,
+        dry_run=args.dry_run,
+    )
+    for name in planned:
+        print(name)
+    return 0
+
+
+def _default_image_build_dir() -> Path:
+    cache = os.environ.get("XDG_CACHE_HOME")
+    base = Path(cache) if cache else Path.home() / ".cache"
+    return base / "apipi" / "image-build"
 
 
 def serve(
@@ -274,6 +306,36 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Host directory packed into guest /workspace",
     )
+    images_parser = sub.add_parser("images", help="Build and publish guest images")
+    images_sub = images_parser.add_subparsers(dest="images_command", required=True)
+    build_parser = images_sub.add_parser("build", help="Build one guest image")
+    build_parser.add_argument("id", help="Recipe id")
+    build_parser.add_argument("--out", default=None, help="Output directory")
+    build_parser.add_argument(
+        "--arch",
+        default=None,
+        help="Host arch check only; cross-build is not supported",
+    )
+    publish_parser = images_sub.add_parser("publish", help="Publish built images")
+    publish_parser.add_argument("--config", default=None, help="TOML config file")
+    publish_parser.add_argument("--to", required=True, help="s3:// or file:// store")
+    publish_parser.add_argument(
+        "--from",
+        dest="source",
+        default=None,
+        help="Build directory (default: last images build output)",
+    )
+    publish_parser.add_argument("ids", nargs="*", help="Image ids to publish")
+    publish_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing id, version, and arch",
+    )
+    publish_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print objects that would be uploaded",
+    )
     args = parser.parse_args(argv)
     try:
         if args.command == "migrate":
@@ -330,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
                 image=args.image,
                 workspace=args.workspace,
             )
+        if args.command == "images":
+            return _images_command(args)
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 1
