@@ -1,4 +1,5 @@
-from io import StringIO
+import tarfile
+from io import BytesIO, StringIO
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,8 @@ from apipi.cli import main
 from apipi.config import ConfigError, Settings
 from apipi.worker.pi import install as pi_install
 from apipi.worker.pi.install import (
+    _extract_release_bin,
+    _firecracker_version,
     firecracker_release_url,
     install_microvm,
     install_pi,
@@ -188,6 +191,125 @@ def test_install_microvm_skips_when_present(
     assert "already installed" in text
     assert "APIPI_MICROVM_KERNEL" in text
     assert "APIPI_MICROVM_ROOTFS=" in text
+
+
+def _tar_member(tar: tarfile.TarFile, name: str, payload: bytes) -> None:
+    info = tarfile.TarInfo(name)
+    info.size = len(payload)
+    info.mode = 0o755
+    tar.addfile(info, BytesIO(payload))
+
+
+def test_extract_release_bin_skips_debug_first(tmp_path: Path) -> None:
+    machine = "x86_64"
+    prefix = "jailer-v"
+    release = f"{prefix}{PINNED_FIRECRACKER}-{machine}"
+    tar_path = tmp_path / "release.tar"
+    dest = tmp_path / "jailer"
+    with tarfile.open(tar_path, "w") as tar:
+        _tar_member(tar, f"dir/{release}.debug", b"debug-jailer")
+        _tar_member(tar, f"dir/{release}", b"release-jailer")
+    with tarfile.open(tar_path, "r") as tar:
+        _extract_release_bin(tar, prefix, dest, arch=machine)
+    assert dest.read_bytes() == b"release-jailer"
+    assert dest.stat().st_mode & 0o111
+
+
+def test_extract_release_bin_rejects_debug_only(tmp_path: Path) -> None:
+    machine = "x86_64"
+    prefix = "jailer-v"
+    release = f"{prefix}{PINNED_FIRECRACKER}-{machine}"
+    tar_path = tmp_path / "debug-only.tar"
+    with tarfile.open(tar_path, "w") as tar:
+        _tar_member(tar, f"dir/{release}.debug", b"debug-jailer")
+    with tarfile.open(tar_path, "r") as tar, pytest.raises(ConfigError, match=release):
+        _extract_release_bin(tar, prefix, tmp_path / "jailer", arch=machine)
+
+
+def test_firecracker_version_rejects_crash(tmp_path: Path) -> None:
+    binary = tmp_path / "jailer"
+    binary.write_text("#!/bin/sh\necho 'Jailer v1.17.0'\nexit 139\n")
+    binary.chmod(0o755)
+    assert _firecracker_version(binary) is None
+
+
+def test_firecracker_version_reads_jailer(tmp_path: Path) -> None:
+    binary = tmp_path / "jailer"
+    binary.write_text(f"#!/bin/sh\necho 'Jailer v{PINNED_FIRECRACKER}'\n")
+    binary.chmod(0o755)
+    assert _firecracker_version(binary) == PINNED_FIRECRACKER
+
+
+def test_install_microvm_repairs_bad_jailer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr("apipi.worker.pi.install.kvm_available", lambda: True)
+    monkeypatch.setattr(
+        "apipi.worker.pi.install.microvm_net_binaries", lambda: ("ip", "iptables", "tc")
+    )
+    dest = tmp_path / "apipi" / "firecracker"
+    dest.mkdir(parents=True)
+    (dest / "firecracker").write_text("")
+    (dest / "jailer").write_text("")
+    cache = tmp_path / "cache" / "apipi" / "microvm"
+    cache.mkdir(parents=True)
+    (cache / "vmlinux").write_bytes(b"k")
+    (cache / "rootfs.ext4").write_bytes(b"r")
+    state: dict[str, str | None] = {"jailer": None}
+
+    def version(path: Path) -> str | None:
+        if Path(path).name == "jailer":
+            return state["jailer"]
+        return PINNED_FIRECRACKER
+
+    downloaded: list[Path] = []
+
+    def fake_dl(dest_dir: Path, *, stream: object) -> None:
+        del stream
+        state["jailer"] = PINNED_FIRECRACKER
+        downloaded.append(dest_dir)
+
+    monkeypatch.setattr("apipi.worker.pi.install._firecracker_version", version)
+    monkeypatch.setattr(pi_install, "_download_firecracker", fake_dl)
+    ran: list[object] = []
+    monkeypatch.setattr(
+        "apipi.worker.pi.install.subprocess.run", lambda *_a, **_k: ran.append(1)
+    )
+    out = StringIO()
+    assert install_microvm(out=out) == 0
+    assert downloaded == [dest]
+    assert ran == []
+    text = out.getvalue()
+    assert "reinstalling" in text
+    assert f"Firecracker {PINNED_FIRECRACKER} is already installed" not in text
+    assert "MicroVM default image is already installed" in text
+
+
+def test_install_microvm_errors_when_jailer_still_bad(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr("apipi.worker.pi.install.kvm_available", lambda: True)
+    monkeypatch.setattr(
+        "apipi.worker.pi.install.microvm_net_binaries", lambda: ("ip", "iptables", "tc")
+    )
+    dest = tmp_path / "apipi" / "firecracker"
+    dest.mkdir(parents=True)
+    (dest / "firecracker").write_text("")
+    (dest / "jailer").write_text("")
+
+    def version(path: Path) -> str | None:
+        if Path(path).name == "jailer":
+            return None
+        return PINNED_FIRECRACKER
+
+    monkeypatch.setattr("apipi.worker.pi.install._firecracker_version", version)
+    monkeypatch.setattr(pi_install, "_download_firecracker", lambda *_a, **_k: None)
+    with pytest.raises(ConfigError, match="jailer --version"):
+        install_microvm(out=StringIO())
 
 
 def test_run_install_microvm_dry_run(
