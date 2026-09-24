@@ -63,7 +63,10 @@ SSE connection sits on another API replica, that replica polls the
 store. Pi does not have to live on the API node.
 
 If no worker can take a lease (session cap or RAM budget), the turn
-returns `429` with code `capacity`.
+returns `429` with code `capacity`. If workers are live for the run
+mode but none has the session's guest image, the turn returns `503`
+with code `image_unavailable`. Images are files the operator pulls
+onto the worker before it starts. They are not built on every host.
 
 A heartbeat may set `"drain": true`. That worker keeps current leases
 and takes no new ones. When `lease_until` passes, the lease is
