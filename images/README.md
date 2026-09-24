@@ -17,7 +17,7 @@ It only says what is different.
 | --- | --- |
 | `IMAGE_ID` | Same as the directory name. |
 | `SIZE_MIB` | ext4 size in MiB. `SIZE_MIB` in the environment overrides this. |
-| `PACKAGES` | Extra Alpine packages, space-separated. The base set is always `nodejs`, `npm`, `python3`, `iproute2`, and `socat`. |
+| `PACKAGES` | Extra Alpine packages, space-separated. The base set is always `nodejs`, `npm`, `python3`, `iproute2`, `socat`, `curl`, and `git`. |
 | `MIN_SIZE` | Smallest sandbox size this image is meant for (`S`, `M`, or `L`). |
 | `DESCRIPTION` | One line for operators. |
 

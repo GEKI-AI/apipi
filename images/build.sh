@@ -168,7 +168,7 @@ fi
 as_root chroot "$MNT" /bin/sh -c "
   set -e
   echo https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/community >> /etc/apk/repositories
-  apk add --no-cache nodejs npm python3 iproute2 socat ${PACKAGES}
+  apk add --no-cache nodejs npm python3 iproute2 socat curl git ${PACKAGES}
   npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PIN}
   if [ -n '${SETUP}' ]; then
     /bin/sh '${SETUP}'

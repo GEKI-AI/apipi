@@ -364,6 +364,14 @@ def test_recipe_ids_list_shipped_images() -> None:
     assert rootfs_script_path().name == "build.sh"
 
 
+def test_build_script_base_packages_include_curl_and_git() -> None:
+    script = rootfs_script_path().read_text()
+    apk = next(line for line in script.splitlines() if "apk add --no-cache" in line)
+    packages = apk.split()
+    assert "curl" in packages
+    assert "git" in packages
+
+
 def test_rootfs_build_args_for_shipped_images(tmp_path: Path) -> None:
     default_args = rootfs_build_args("default", tmp_path)
     browser_args = rootfs_build_args("browser", tmp_path)
