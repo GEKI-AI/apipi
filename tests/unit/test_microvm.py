@@ -498,7 +498,7 @@ def test_tap_setup_nat_without_host_loopback() -> None:
     assert "127.0.0.1" not in flat
     assert "DNAT" not in flat
     assert "--map-host-loopback" not in flat
-    assert "REJECT" not in flat
+    assert "10.0.0.0/8" in flat
     assert "-j ACCEPT" in flat
     assert "50mbit" in flat
     assert "198.51.100.9" not in flat
@@ -524,7 +524,7 @@ def test_tap_setup_allowlist_on_rejects_unlisted() -> None:
     assert "198.51.100.9" not in flat
 
 
-def test_tap_setup_allowlist_off_accepts_all() -> None:
+def test_tap_setup_allowlist_off_accepts_public() -> None:
     net = tap_net("551e7604-e35c-42b3-b825-416853441234")
     argv = tap_setup_argv(
         net,
@@ -536,7 +536,15 @@ def test_tap_setup_allowlist_off_accepts_all() -> None:
     )
     flat = " ".join(" ".join(part) for part in argv)
     assert "-j ACCEPT" in flat
-    assert "REJECT" not in flat
+    assert "10.0.0.0/8" in flat
+    assert "192.168.0.0/16" in flat
+    assert "169.254.0.0/16" in flat
+    assert "100.64.0.0/10" in flat
+    accept_at = next(
+        i for i, cmd in enumerate(argv) if net.subnet in cmd and "ACCEPT" in cmd
+    )
+    reject_at = next(i for i, cmd in enumerate(argv) if "172.16.0.0/12" in cmd)
+    assert accept_at < reject_at
 
 
 def test_tap_teardown_cleans_tc_and_chain() -> None:
@@ -932,7 +940,8 @@ def test_setup_tap_runs_ip_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "MASQUERADE" in flat
     assert "127.0.0.1" not in flat
     assert "25mbit" in flat
-    assert "REJECT" not in flat
+    assert "10.0.0.0/8" in flat
+    assert "REJECT" in flat
 
 
 def test_run_tap_permission_names_rights(monkeypatch: pytest.MonkeyPatch) -> None:

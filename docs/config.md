@@ -363,17 +363,24 @@ vcpus = 1
 
 ### Networking
 
-MicroVM TAP egress is open to the public internet by default and
-capped at 50 Mbit with `tc`. Guest localhost (loopback inside the
-guest) works. The model host from `OPENAI_BASE_URL` is always
-reachable, including when you turn the optional destination allowlist
-on. The guest cannot use **host** loopback, so it cannot open Postgres
-on the worker's `localhost`.
+MicroVM TAP egress may use the public internet by default and is
+capped at 50 Mbit with `tc`. Private and special-use IPv4 ranges are
+always rejected. That includes RFC1918 (`10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`), link-local (`169.254.0.0/16`, including cloud
+metadata), shared address space (`100.64.0.0/10`), and loopback.
+The guest TAP subnet stays open so Pi can reach the host broker.
+Guest localhost (loopback inside the guest) works. The guest cannot
+use **host** loopback, so it cannot open Postgres on the worker's
+`localhost`. Pi reaches the model host through that broker, including
+when the model host itself is on a private address. A session
+allowlist cannot open a private range.
 
 To lock destinations, set `egress_allowlist = true`. Then the guest
 may reach only the model host, this session's HTTP MCP hosts, extra
 `egress_hosts`, package registries when `environment.packages` is set,
-and DNS. Unlisted TCP is rejected. Session `environment.network` can
+and DNS, and only when those addresses are public. Unlisted TCP is
+rejected. Private ranges stay rejected even if a name resolves to
+one. Session `environment.network` can
 still disable TAP egress or restrict it to named hosts. A session
 cannot add a host that this allowlist forbids. If the allowlist is
 off, a session may still set `disabled` or `restricted`. Isolation

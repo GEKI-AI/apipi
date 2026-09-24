@@ -207,8 +207,10 @@ Linux 4.14 `getrandom()` blocks and the turn stays in progress.
 
 RPC is JSON lines over vsock. Egress uses a TAP device and NAT. Guest
 localhost works. There is no host loopback to Postgres. By default the
-guest may use the public internet. The model host from
-`OPENAI_BASE_URL` is always reachable. Each TAP is rate-limited with
+guest may use the public internet. Private and special-use IPv4 ranges
+are rejected. The TAP subnet stays open for the host broker, so the
+model host is reached through that broker even when it is private.
+Each TAP is rate-limited with
 `tc` (`APIPI_MICROVM_EGRESS_MBIT`, default 50).
 
 To lock destinations, set `APIPI_MICROVM_EGRESS_ALLOWLIST=on`. Then the
@@ -258,7 +260,8 @@ Ctrl-C to stop the VM. TAP devices, jailer chroot, and temp dirs are
 removed the same way a session kill does.
 
 This is an operator and lab tool. TAP egress matches agent sessions:
-public internet by default, optional allowlist, same `tc` rate. Agent
+public internet, private IPv4 rejected, optional allowlist, same `tc`
+rate. Agent
 spawn is unchanged.
 
 ## Custom isolation

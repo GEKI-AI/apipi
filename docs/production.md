@@ -167,7 +167,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_MAX_REQUEST_BYTES` | HTTP body cap (`413` `payload_too_large`). |
 | `APIPI_MAX_WORKSPACE_BYTES` / `APIPI_MAX_ARTIFACT_BYTES` | Directory and published-artifact caps. |
 | `APIPI_ARTIFACT_STORE` | `local` or `s3`. Use `s3` when more than one node serves artifact, hosted file, or skill bytes. |
-| `APIPI_MICROVM_EGRESS_ALLOWLIST` / `HOSTS` / `MBIT` | Optional destination allowlist (off by default) and 50 Mbit TAP rate. |
+| `APIPI_MICROVM_EGRESS_ALLOWLIST` / `HOSTS` / `MBIT` | Optional destination allowlist (off by default) and 50 Mbit TAP rate. Private IPv4 ranges are always rejected. |
 | `APIPI_INSTANCE_ID` | Sets `X-ApiPi-Instance` so you can confirm stickiness. |
 | `APIPI_VAULT_MASTER_KEY` | Encrypts MCP vault tokens at rest. Put a 32-byte key in the process environment or a k8s secret. Unset uses a local default and logs a warning; do not leave that in production. Same key on every API process that writes or injects vault secrets. |
 
