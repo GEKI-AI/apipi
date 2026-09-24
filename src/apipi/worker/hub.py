@@ -46,6 +46,14 @@ log = logging.getLogger("apipi.worker")
 
 
 @dataclass
+class WorkerImage:
+    id: str
+    version: str
+    digest: str
+    min_size: str
+
+
+@dataclass
 class WorkerConnection:
     worker_id: uuid.UUID
     generation: int
@@ -56,6 +64,7 @@ class WorkerConnection:
     leases: set[uuid.UUID] = field(default_factory=set)
     lease_mem: dict[uuid.UUID, int] = field(default_factory=dict)
     draining: bool = False
+    images: dict[str, WorkerImage] = field(default_factory=dict)
 
 
 class WorkerHub:
@@ -120,8 +129,20 @@ class WorkerHub:
         self._metric_modes |= {"chat", "microvm", "none"}
         metrics.set_workers(counts, leases, modes=self._metric_modes)
 
+    def has_image(self, run_mode: str, image: str | None) -> bool:
+        if image is None or run_mode != "microvm":
+            return True
+        return any(
+            conn.run_mode == run_mode and image in conn.images
+            for conn in self._conns.values()
+        )
+
     def pick(
-        self, session_mem_mib: int | None = None, *, run_mode: str
+        self,
+        session_mem_mib: int | None = None,
+        *,
+        run_mode: str,
+        image: str | None = None,
     ) -> WorkerConnection | None:
         session_mem = (
             session_mem_mib
@@ -131,6 +152,8 @@ class WorkerHub:
         ready = []
         for conn in self._conns.values():
             if conn.run_mode != run_mode:
+                continue
+            if image is not None and run_mode == "microvm" and image not in conn.images:
                 continue
             if conn.draining:
                 continue
@@ -217,7 +240,18 @@ class WorkerHub:
         session_mem = mem_mib_for_size(
             self.settings, sandbox_size_of(session.environment)
         )
-        conn = self.pick(session_mem, run_mode=required)
+        image = _session_image(session.environment) if required == "microvm" else None
+        mode_live = any(conn.run_mode == required for conn in self._conns.values())
+        if image is not None and mode_live and not self.has_image(required, image):
+            raise ApiError(
+                "api_error",
+                f'No worker has sandbox_image "{image}". '
+                "Run apipi images pull on a worker.",
+                code="image_unavailable",
+                status_code=503,
+                session_id=str(session_id),
+            )
+        conn = self.pick(session_mem, run_mode=required, image=image)
         if conn is None:
             request_id = (
                 payload.get("request_id") if isinstance(payload, dict) else None
@@ -255,7 +289,9 @@ class WorkerHub:
             "session_id": str(session_id),
             "lease_id": str(lease_id),
             "op": op,
-            "payload": _payload_with_run_mode(payload, required),
+            "payload": _payload_with_image(
+                _payload_with_run_mode(payload, required), image
+            ),
         }
         self._unacked[lease_id] = command
         await _send(conn.websocket, command)
@@ -290,6 +326,18 @@ class WorkerHub:
         conn = self._conns.get(worker_id)
         if conn is None or lease_id not in conn.leases:
             return None
+        follow_image = None
+        if required == "microvm" and row is not None:
+            follow_image = _session_image(row.environment)
+            if follow_image not in conn.images:
+                raise ApiError(
+                    "api_error",
+                    f'No worker has sandbox_image "{follow_image}". '
+                    "Run apipi images pull on a worker.",
+                    code="image_unavailable",
+                    status_code=503,
+                    session_id=str(session_id),
+                )
         command_id = uuid.uuid4()
         command = {
             "type": "command",
@@ -297,7 +345,9 @@ class WorkerHub:
             "session_id": str(session_id),
             "lease_id": str(lease_id),
             "op": op,
-            "payload": _payload_with_run_mode(payload, required),
+            "payload": _payload_with_image(
+                _payload_with_run_mode(payload, required), follow_image
+            ),
         }
         self._unacked[lease_id] = command
         await _send(conn.websocket, command)
@@ -445,6 +495,63 @@ def _run_mode(value: object) -> str | None:
     return value.strip()
 
 
+def _session_image(environment: dict[str, Any] | None) -> str:
+    from apipi.worker.pi.sandbox import (
+        image_for_size,
+        sandbox_image_of,
+        sandbox_size_of,
+    )
+
+    stored = sandbox_image_of(environment)
+    if stored is not None:
+        return stored
+    return image_for_size(sandbox_size_of(environment))
+
+
+def _legacy_images() -> dict[str, WorkerImage]:
+    return {
+        "default": WorkerImage("default", "legacy", "legacy", "S"),
+        "browser": WorkerImage("browser", "legacy", "legacy", "M"),
+    }
+
+
+def images_from_message(
+    message: dict[str, Any], run_mode: str
+) -> dict[str, WorkerImage]:
+    if "images" not in message:
+        if run_mode == "microvm":
+            return _legacy_images()
+        return {}
+    raw = message.get("images")
+    found: dict[str, WorkerImage] = {}
+    if not isinstance(raw, list):
+        return found
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        image_id = item.get("id")
+        if not isinstance(image_id, str) or not image_id:
+            continue
+        version = item.get("version")
+        digest = item.get("digest")
+        min_size = item.get("min_size")
+        found[image_id] = WorkerImage(
+            image_id,
+            version if isinstance(version, str) else "",
+            digest if isinstance(digest, str) else "",
+            min_size if isinstance(min_size, str) else "S",
+        )
+    return found
+
+
+def _payload_with_image(payload: dict[str, Any], image: str | None) -> dict[str, Any]:
+    if image is None:
+        return payload
+    out = dict(payload)
+    out["sandbox_image"] = image
+    return out
+
+
 def _payload_with_run_mode(
     payload: dict[str, Any] | None, required: str | None
 ) -> dict[str, Any]:
@@ -494,6 +601,7 @@ async def register_worker(
         capacity=row.capacity,
         memory_mb=row.memory_mb,
         run_mode=run_mode,
+        images=images_from_message(message, run_mode),
     )
     await hub.attach(conn)
     await _send(
@@ -545,6 +653,8 @@ async def heartbeat_worker(
     if parsed_mode is not None:
         conn.run_mode = parsed_mode
         hub._observe()
+    if "images" in message or parsed_mode is not None:
+        conn.images = images_from_message(message, conn.run_mode)
     if message.get("drain") is True:
         conn.draining = True
         hub._observe()
@@ -562,6 +672,50 @@ async def _send(websocket: WebSocket, payload: dict[str, Any]) -> None:
 async def _close(websocket: WebSocket) -> None:
     if websocket.client_state == WebSocketState.CONNECTED:
         await websocket.close()
+
+
+async def _reject_missing_image(
+    execution: Any,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    image: str,
+    request_id: str | None,
+) -> None:
+    message = (
+        f'No worker has sandbox_image "{image}". Run apipi images pull on a worker.'
+    )
+    log_event(
+        log,
+        logging.WARNING,
+        "worker image missing",
+        event="worker.placement.rejected",
+        error_code="image_unavailable",
+        tenant_id=tenant_id,
+        session_id=session_id,
+        request_id=request_id,
+    )
+    store = getattr(execution, "store", None)
+    hub = getattr(execution, "hub", None)
+    if store is None or hub is None:
+        return
+    async with store.session() as db:
+        await persist_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.error",
+            data={"message": message, "code": "image_unavailable"},
+        )
+        await persist_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.turn.failed",
+            data={"message": message},
+        )
 
 
 async def _reject_mismatched_turn(
@@ -708,6 +862,24 @@ async def _run_command(
                 request_id=request_id,
             )
             return
+        wanted = payload.get("sandbox_image")
+        if (
+            isinstance(wanted, str)
+            and worker_mode == "microvm"
+            and isinstance(getattr(execution, "settings", None), object)
+        ):
+            from apipi.worker.pi.image_pull import available_images
+
+            have = {item.id for item in available_images(execution.settings)}
+            if wanted not in have:
+                await _reject_missing_image(
+                    execution,
+                    tenant_id,
+                    session_id,
+                    image=wanted,
+                    request_id=request_id,
+                )
+                return
         text = payload.get("text")
         await execution.run_turn(
             tenant_id,
@@ -787,12 +959,29 @@ def worker_ws_url(base: str) -> str:
     return urlunparse(parsed._replace(path=path, fragment=""))
 
 
+def _heartbeat_images(settings: Settings) -> list[dict[str, str]]:
+    if settings.run_mode != "microvm":
+        return []
+    from apipi.worker.pi.image_pull import available_images
+
+    return [
+        {
+            "id": item.id,
+            "version": item.version,
+            "digest": item.digest,
+            "min_size": item.min_size,
+        }
+        for item in available_images(settings)
+    ]
+
+
 def worker_heartbeat(settings: Settings, *, drain: bool = False) -> dict[str, object]:
     payload: dict[str, object] = {
         "type": "heartbeat",
         "capacity": settings.max_sessions,
         "memory_mb": settings.node_memory_mb(),
         "run_mode": settings.run_mode,
+        "images": _heartbeat_images(settings),
     }
     if drain:
         payload["drain"] = True

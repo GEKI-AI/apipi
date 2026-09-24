@@ -281,7 +281,12 @@ def require_image_rootfs(settings: Settings, image_id: str) -> None:
     try:
         microvm_images(settings, image=image_id)
     except ConfigError as exc:
-        raise ApiError("invalid_request", str(exc), code="invalid_request") from exc
+        raise ApiError(
+            "api_error",
+            str(exc),
+            code="image_unavailable",
+            status_code=503,
+        ) from exc
 
 
 def require_size_rootfs(settings: Settings, size: str) -> None:
