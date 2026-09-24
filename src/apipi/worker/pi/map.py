@@ -8,6 +8,8 @@ from apipi.services.usage import usage_from_messages
 PREVIEW_CHARS = 100
 THINKING_STARTED = "agent.session.turn.thinking.started"
 THINKING_COMPLETED = "agent.session.turn.thinking.completed"
+COMPACTION_STARTED = "agent.session.turn.compaction.started"
+COMPACTION_COMPLETED = "agent.session.turn.compaction.completed"
 
 
 def _tool_item_type(name: object) -> str:
@@ -61,6 +63,10 @@ def map_pi_event(event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
                 text = ""
             return [("agent.session.turn.output_text.done", {"text": text})]
         return []
+    if kind == "compaction_start":
+        return [(COMPACTION_STARTED, _compaction_start(event))]
+    if kind == "compaction_end":
+        return [(COMPACTION_COMPLETED, _compaction_end(event))]
     if kind == "tool_execution_start":
         call_id = event.get("toolCallId")
         name = event.get("toolName")
@@ -89,6 +95,48 @@ def map_pi_event(event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
             )
         ]
     return []
+
+
+def _optional_str(value: object, *, limit: int | None = None) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    if limit is not None and len(value) > limit:
+        return value[:limit]
+    return value
+
+
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _compaction_start(event: dict[str, Any]) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    reason = _optional_str(event.get("reason"))
+    if reason is not None:
+        data["reason"] = reason
+    return data
+
+
+def _compaction_end(event: dict[str, Any]) -> dict[str, Any]:
+    data = _compaction_start(event)
+    if event.get("aborted") is True:
+        data["aborted"] = True
+    if event.get("willRetry") is True:
+        data["will_retry"] = True
+    error = _optional_str(event.get("errorMessage"), limit=300)
+    if error is not None:
+        data["error"] = error
+    result = event.get("result")
+    if isinstance(result, dict):
+        tokens_before = _optional_int(result.get("tokensBefore"))
+        tokens_after = _optional_int(result.get("estimatedTokensAfter"))
+        if tokens_before is not None:
+            data["tokens_before"] = tokens_before
+        if tokens_after is not None:
+            data["tokens_after"] = tokens_after
+    return data
 
 
 def _preview(text: str) -> tuple[str, bool]:

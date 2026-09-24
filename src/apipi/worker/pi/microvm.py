@@ -656,6 +656,8 @@ def write_workspace_image(
     extra_dirs: list[tuple[Path, str]] | None = None,
     shell: bool = False,
     models_json: bytes | None = None,
+    settings_json: bytes | None = None,
+    system_md: bytes | None = None,
 ) -> None:
     guest_py = Path(__file__).with_name("guest.py").read_bytes()
     guest_sh = Path(__file__).with_name("guest.sh").read_bytes()
@@ -674,6 +676,10 @@ def write_workspace_image(
         _add_bytes(tar, ".apipi/guest.sh", guest_sh, mode=0o755)
         if models_json is not None:
             _add_bytes(tar, ".pi/agent/models.json", models_json, mode=0o644)
+        if settings_json is not None:
+            _add_bytes(tar, ".pi/agent/settings.json", settings_json, mode=0o644)
+        if system_md is not None:
+            _add_bytes(tar, ".pi/agent/SYSTEM.md", system_md, mode=0o644)
         _add_bytes(tar, MCP_EXTENSION_REL, mcp_extension_source(), mode=0o644)
         _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
         if shell:
@@ -1249,6 +1255,9 @@ async def start_microvm(
     mem_mib: int | None = None,
     image: str | None = None,
     extra_env: dict[str, str] | None = None,
+    thinking: str | None = None,
+    system_prompt: str | None = None,
+    system_prompt_set: bool = False,
 ) -> StartedMicrovm:
     require_microvm(settings)
     firecracker, jailer = microvm_binaries()
@@ -1322,6 +1331,12 @@ async def start_microvm(
         )
         from apipi.worker.pi.broker import start_broker
         from apipi.worker.pi.model_host import models_json_for_base_url
+        from apipi.worker.pi.settings_json import (
+            apply_pi_agent_files,
+            merged_settings,
+            process_system_prompt,
+            settings_json_text,
+        )
 
         broker = await start_broker(
             settings,
@@ -1335,6 +1350,22 @@ async def start_microvm(
         _link_or_copy(Path(rootfs), chroot_dir / "rootfs.ext4")
         if cwd:
             pi_session_file(Path(cwd)).parent.mkdir(parents=True, exist_ok=True)
+        level = thinking if thinking is not None else settings.pi_thinking
+        prompt = system_prompt if system_prompt_set else process_system_prompt(settings)
+        agent_dir = Path(cwd) / ".pi" / "agent" if cwd else None
+        if agent_dir is not None:
+            pi_settings = apply_pi_agent_files(
+                agent_dir,
+                settings,
+                thinking=level,
+                system_prompt=prompt,
+            )
+        else:
+            pi_settings = merged_settings(settings, thinking=level)
+        system_md = None
+        if prompt:
+            body = prompt if prompt.endswith("\n") else prompt + "\n"
+            system_md = body.encode()
         write_workspace_image(
             chroot_dir / "workspace.tar",
             cwd=cwd,
@@ -1356,11 +1387,14 @@ async def start_microvm(
                 instructions=instructions,
                 session_file=PI_SESSION_REL if cwd else None,
                 extension=GUEST_MCP_EXTENSION,
+                thinking=level,
             ),
             net=net,
             extra_dirs=extra_dirs,
             shell=shell,
             models_json=models_json_for_base_url(settings, broker.openai_base_url),
+            settings_json=settings_json_text(pi_settings).encode(),
+            system_md=system_md,
         )
         config = microvm_config(
             kernel="vmlinux",
@@ -1432,6 +1466,9 @@ async def spawn_microvm_pi(
     mem_mib: int | None = None,
     image: str | None = None,
     extra_env: dict[str, str] | None = None,
+    thinking: str | None = None,
+    system_prompt: str | None = None,
+    system_prompt_set: bool = False,
 ) -> PiProc:
     started = await start_microvm(
         settings,
@@ -1446,6 +1483,9 @@ async def spawn_microvm_pi(
         mem_mib=mem_mib,
         image=image,
         extra_env=extra_env,
+        thinking=thinking,
+        system_prompt=system_prompt,
+        system_prompt_set=system_prompt_set,
     )
     process = started.process
     try:

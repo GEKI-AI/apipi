@@ -53,6 +53,9 @@ class NoneIsolation:
         mem_mib: int | None = None,
         image: str | None = None,
         extra_env: dict[str, str] | None = None,
+        thinking: str | None = None,
+        system_prompt: str | None = None,
+        system_prompt_set: bool = False,
     ) -> PiProc:
         del mem_mib, image
         session_file = None
@@ -69,7 +72,13 @@ class NoneIsolation:
             agent_root = Path(scratch)
         from apipi.worker.pi.broker import start_broker
         from apipi.worker.pi.model_host import models_json_for_base_url
+        from apipi.worker.pi.settings_json import (
+            apply_pi_agent_files,
+            process_system_prompt,
+        )
 
+        level = thinking if thinking is not None else settings.pi_thinking
+        prompt = system_prompt if system_prompt_set else process_system_prompt(settings)
         args = pi_command_args(
             settings,
             tools=tools,
@@ -80,6 +89,7 @@ class NoneIsolation:
             instructions=instructions,
             session_file=session_file,
             extension=host_mcp_extension(settings, cwd),
+            thinking=level,
         )
         broker = await start_broker(
             settings,
@@ -101,6 +111,12 @@ class NoneIsolation:
             agent_dir.mkdir(parents=True, exist_ok=True)
             (agent_dir / "models.json").write_bytes(
                 models_json_for_base_url(settings, broker.openai_base_url)
+            )
+            apply_pi_agent_files(
+                agent_dir,
+                settings,
+                thinking=level,
+                system_prompt=prompt,
             )
             env["PI_CODING_AGENT_DIR"] = str(agent_dir)
             process = await asyncio.create_subprocess_exec(

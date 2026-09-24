@@ -70,6 +70,7 @@ from apipi.worker.pi.sandbox import (
     playwright_attached,
     sandbox_size_of,
 )
+from apipi.worker.pi.settings_json import resolve_system_prompt, resolve_thinking
 
 log = logging.getLogger("apipi")
 
@@ -100,6 +101,8 @@ PUBLIC_EVENT_TYPES = frozenset(
         "agent.session.turn.item.done",
         "agent.session.turn.thinking.started",
         "agent.session.turn.thinking.completed",
+        "agent.session.turn.compaction.started",
+        "agent.session.turn.compaction.completed",
         SUMMARY_COMPLETED,
         SUMMARY_FAILED,
         TITLE_UPDATED,
@@ -368,6 +371,22 @@ def with_env_actions(current: list[Any], actions: list[Any]) -> list[Any]:
     return rest + env
 
 
+def _pi_spawn_overrides(
+    settings: Settings | None,
+    session_metadata: dict[str, Any] | None,
+    agent_metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if settings is None:
+        return {}
+    return {
+        "thinking": resolve_thinking(settings, session_metadata, agent_metadata),
+        "system_prompt": resolve_system_prompt(
+            settings, session_metadata, agent_metadata
+        ),
+        "system_prompt_set": True,
+    }
+
+
 def _skill_dirs(environment: dict[str, Any]) -> list[str]:
     cwd_path, _tools, _env_id = _cwd_and_tools(environment)
     workspace = Path(cwd_path) if cwd_path is not None else None
@@ -398,14 +417,15 @@ async def _stdio_for_turn(
 
 async def _agent_tools_and_model(
     db: AsyncSession, tenant_id: uuid.UUID, row: SessionRow
-) -> tuple[list[dict[str, Any]], str | None, str | None, list[Any]]:
+) -> tuple[list[dict[str, Any]], str | None, str | None, list[Any], dict[str, Any]]:
     if row.agent_id is None:
-        return [], row.model, row.instructions, []
+        return [], row.model, row.instructions, [], {}
     agent = await get_agent(db, tenant_id, row.agent_id)
     if agent is None:
-        return [], row.model, row.instructions, []
+        return [], row.model, row.instructions, [], {}
     raw = agent.tools if isinstance(agent.tools, list) else []
-    return _function_tools(raw), agent.model, agent.instructions, raw
+    meta = agent.metadata_json if isinstance(agent.metadata_json, dict) else {}
+    return _function_tools(raw), agent.model, agent.instructions, raw, meta
 
 
 async def _emit_item(
@@ -1169,6 +1189,8 @@ async def run_turn(
         sandbox_image: str
         extra_env: dict[str, str]
         raw_tools: list[Any]
+        agent_metadata: dict[str, Any]
+        session_metadata: dict[str, Any]
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
@@ -1178,7 +1200,11 @@ async def run_turn(
                 model,
                 instructions,
                 raw_tools,
+                agent_metadata,
             ) = await _agent_tools_and_model(db, tenant_id, row)
+            session_metadata = (
+                row.metadata_json if isinstance(row.metadata_json, dict) else {}
+            )
             model = require_model(model)
             if settings is not None and settings.model_base_url:
                 ids = listed_models(settings.model_base_url, api_key)
@@ -1340,6 +1366,7 @@ async def run_turn(
                     mem_mib=sandbox_mem,
                     image=sandbox_image,
                     extra_env=extra_env,
+                    **_pi_spawn_overrides(settings, session_metadata, agent_metadata),
                 )
                 try:
                     if turn_timeout is None:
@@ -1595,8 +1622,15 @@ async def continue_turn(
             if env_hub is not None and env_id is not None
             else None
         )
-        function_tools, model, instructions, raw_tools = await _agent_tools_and_model(
-            db, tenant_id, row
+        (
+            function_tools,
+            model,
+            instructions,
+            raw_tools,
+            agent_metadata,
+        ) = await _agent_tools_and_model(db, tenant_id, row)
+        session_metadata = (
+            row.metadata_json if isinstance(row.metadata_json, dict) else {}
         )
         model = require_model(model)
         if settings is not None and settings.model_base_url:
@@ -1672,6 +1706,7 @@ async def continue_turn(
                     mem_mib=sandbox_mem,
                     image=sandbox_image,
                     extra_env=extra_env,
+                    **_pi_spawn_overrides(settings, session_metadata, agent_metadata),
                 )
                 try:
                     if turn_timeout is None:

@@ -72,6 +72,10 @@ from apipi.worker.pi.sandbox import (
     resolve_sandbox_size,
     sandbox_size_of,
 )
+from apipi.worker.pi.settings_json import (
+    copy_inline_pi_metadata,
+    validate_pi_metadata,
+)
 from apipi.worker.placement import CHAT, SESSION_KIND_KEY
 
 log = logging.getLogger("apipi")
@@ -405,6 +409,10 @@ class SessionService:
                     ]
             if chat:
                 reject_disallowed_chat_tools(raw_tools)
+            if agent_id is None:
+                metadata = copy_inline_pi_metadata(metadata, agent_metadata)
+            validate_pi_metadata(metadata)
+            validate_pi_metadata(agent_metadata)
             size = resolve_sandbox_size(
                 environment_size=env.get("sandbox_size")
                 if isinstance(env.get("sandbox_size"), str)
@@ -662,7 +670,9 @@ class SessionService:
                 current = await get_session(db, tenant_id, session_id)
                 if current is None:
                     not_found()
-                changes["metadata"] = _keep_title(current.metadata_json, metadata)
+                merged = _keep_title(current.metadata_json, metadata)
+                validate_pi_metadata(merged)
+                changes["metadata"] = merged
             row = await update_session(db, tenant_id, session_id, changes=changes)
             if row is None:
                 not_found()

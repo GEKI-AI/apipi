@@ -57,13 +57,16 @@ Inline config is used for that session only. It is not saved unless
 you `POST /v1/agents`. Inline model and instructions are kept on the
 session for follow-up turns. Saved agents keep reading the agent row.
 
-Pi always receives a gateway platform prompt in addition to its own
-harness default. Composition order is: Pi's default, then the main
-platform prompt (a short built-in text, or an operator override), then
-optional additional platform text, then `agent.instructions`. Empty or
-omitted agent instructions skip only that last block. The platform
-prompt is operator config, not a transcript item. See
-[config](config.md#pi).
+Pi always receives a gateway platform prompt after its harness default,
+unless an operator or caller replaces that default. Composition order
+is: Pi's default, or a replacement system prompt when one is set; then
+the main platform prompt (a short built-in text, or an operator
+override); then optional additional platform text; then
+`agent.instructions`. Empty or omitted agent instructions skip only
+that last block. The platform prompt is operator config, not a
+transcript item. A replacement system prompt is
+`metadata["apipi.system_prompt"]` on the session, then the agent, then
+`[pi].system_prompt`. See [config](config.md#pi).
 
 Changing a saved agent later does not rewrite history on existing
 sessions.

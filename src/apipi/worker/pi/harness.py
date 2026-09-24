@@ -50,6 +50,11 @@ class PiHarness:
             if isinstance(raw_instructions, str) and raw_instructions
             else None
         )
+        raw_thinking = _kwargs.get("thinking")
+        thinking = raw_thinking if isinstance(raw_thinking, str) else None
+        raw_prompt = _kwargs.get("system_prompt")
+        system_prompt = raw_prompt if isinstance(raw_prompt, str) else None
+        system_prompt_set = _kwargs.get("system_prompt_set") is True
         proc = await self.pool.get(
             session_id,
             cwd=cwd,
@@ -66,6 +71,9 @@ class PiHarness:
             mem_mib=mem_mib,
             image=image,
             extra_env=extra_env,
+            thinking=thinking,
+            system_prompt=system_prompt,
+            system_prompt_set=system_prompt_set,
         )
         settled = False
         thinking = ThinkingTracker()

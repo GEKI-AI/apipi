@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Pi compaction, thinking level, and the harness system prompt are
+  written into the session agent directory before Pi starts.
+  `compaction.enabled` replaces the unused `--no-auto-compact` flag.
+  Session `metadata["apipi.thinking"]` and
+  `metadata["apipi.system_prompt"]` override the process defaults.
+- Public events `agent.session.turn.compaction.started` and
+  `agent.session.turn.compaction.completed`. Missing compaction events
+  do not fail the turn.
+
 ## [0.4.0] - 2026-09-24
 
 ### Fixed

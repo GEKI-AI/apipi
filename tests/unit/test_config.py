@@ -770,14 +770,14 @@ def test_env_overrides_nested_toml(
     assert load_settings().run_mode == "none"
 
 
-def test_pi_auto_compact_false_adds_flag() -> None:
+def test_pi_auto_compact_false_does_not_pass_unknown_flag() -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
         pi_auto_compact=False,
     )
     args = pi_command_args(settings, tools=False)
-    assert "--no-auto-compact" in args
+    assert "--no-auto-compact" not in args
 
 
 def test_pi_auto_compact_default_omits_flag() -> None:
@@ -830,6 +830,25 @@ def test_pi_thinking_from_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
         'thinking = "high"\n'
     )
     assert load_settings().pi_thinking == "high"
+
+
+def test_pi_compaction_and_system_prompt_from_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "[pi]\n"
+        "auto_compact = false\n"
+        "compaction_reserve_tokens = 4096\n"
+        "compaction_keep_recent_tokens = 1000\n"
+        'system_prompt = "custom harness"\n'
+    )
+    loaded = load_settings()
+    assert loaded.pi_auto_compact is False
+    assert loaded.pi_compaction_reserve_tokens == 4096
+    assert loaded.pi_compaction_keep_recent_tokens == 1000
+    assert loaded.pi_system_prompt == "custom harness"
 
 
 def test_thinking_summary_requires_model(
