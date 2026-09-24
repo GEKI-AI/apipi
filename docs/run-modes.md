@@ -120,6 +120,11 @@ apipi install --microvm --image browser
 ./scripts/microvm-rootfs --flavor browser
 ```
 
+Prebuilt images use the store format in
+[ADR 0012](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0012-guest-image-store.md).
+A version names the Pi pin, Alpine version, `guest.sh`, and the recipe.
+The sha256 names the bytes.
+
 When `APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` (or the browser
 rootfs) are unset, the process uses those cache files if they exist.
 Env, `.env`, and `[sandbox].kernel` / `rootfs` still override. The

@@ -23,3 +23,4 @@ These files are not on the MkDocs site.
 | 0009 | Pluggable auth, no stored keys |
 | 0010 | ApiPi owns Firecracker |
 | 0011 | Host credential broker |
+| 0012 | Guest image store |
