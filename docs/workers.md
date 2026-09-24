@@ -134,6 +134,17 @@ command, and a `microvm` worker must not run a `chat` command.
 Set `APIPI_RUN_MODE=chat` on dedicated chat workers so they advertise
 `chat`. Advertising `none` matches no Agents placement class.
 
+## Idle reap
+
+Idle Pi reap and hosted workspace wipe run on the process that holds
+Pi. Combined `apipi serve` starts those loops in the API process.
+`apipi worker` starts the same loops. `apipi serve --api-only` does
+not kill idle guests; the worker that owns the session does. `none`
+and `self_hosted` use `APIPI_IDLE_TTL`. Hosted computers use
+`APIPI_SANDBOX_TTL_OPENAI_HOSTED`. A host Pi kill increments
+`apipi_pi_kill_total` with reason `idle` on the worker metrics
+endpoint.
+
 ## Drain and expiry
 
 A heartbeat may include `"drain": true`. That worker keeps its current

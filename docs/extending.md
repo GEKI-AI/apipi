@@ -98,8 +98,8 @@ background tasks and it does **not** register routes. You list
 `startup()` does this:
 
 - `execution.attach_store`
-- idle Pi reap loop
-- hosted workspace reap loop
+- idle Pi reap loop (no-op when `api_only`; `apipi worker` owns it)
+- hosted workspace reap loop (same)
 - usage log purge loop
 - worker-lease expiry loop
 

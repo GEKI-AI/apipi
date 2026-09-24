@@ -862,6 +862,8 @@ async def run_worker(
             },
         )
     tasks.add(asyncio.create_task(execution.observe_loop()))
+    tasks.add(asyncio.create_task(execution.reap_loop()))
+    tasks.add(asyncio.create_task(execution.reap_workspace_loop()))
     log.info("worker connect", extra={"url": ws_url})
     draining = asyncio.Event()
     _install_drain_signals(draining)

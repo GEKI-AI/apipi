@@ -61,7 +61,7 @@ hosted files and skills).
 | `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
 | `APIPI_LOG_FORMAT` | `log_format` | `json` | `json` (one object per line on stderr) or `text` (laptop). |
-| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process for `none` and `self_hosted` sessions to free RAM. Hosted computers use the sandbox TTL instead. |
+| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process for `none` and `self_hosted` sessions to free RAM. Hosted computers use the sandbox TTL instead. The process that holds Pi runs the timer: combined `apipi serve`, or `apipi worker` in a split deploy. |
 | `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | `[sandbox.ttl].openai_hosted` | `1h` | Stop Pi and delete the `openai_hosted` workspace after this idle. Transcript and published artifacts stay. `0` turns the timer off. `APIPI_WORKSPACE_TTL` / `workspace_ttl` is an alias. |
 | `APIPI_SANDBOX_TTL_SELF_HOSTED` | `[sandbox.ttl].self_hosted` | `0` (off) | Idle policy for `self_hosted`. The gateway cannot delete files on the runner. `0` means off. |
 | `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. Workers advertise this as `capacity`. |
@@ -193,7 +193,8 @@ those live processes on the node. `max_sessions_per_tenant` counts them
 for one tenant. `worker_memory_mb` is the RAM budget for the same live
 guests. A new turn that would pass either node cap returns `429` with
 code `capacity`. The session row in Postgres can outlive the process;
-idle TTL kills the process and frees a slot.
+idle TTL kills the process and frees a slot. In a split deploy the
+worker runs that reap, not the API.
 
 | Failure | HTTP or event | Code |
 | --- | --- | --- |

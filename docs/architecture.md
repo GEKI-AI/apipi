@@ -40,8 +40,10 @@ To run the Agents API and your own routes in one process, build a
 your FastAPI lifespan, call `configure` so `app.state`, middleware, and
 exception handlers are installed, then `include_router` for each
 `gateway.routers.*` you want. `apipi serve` does that wiring for
-standalone. `startup` attaches the store and starts the idle-Pi, workspace,
-usage, and worker-lease reap loops. Pass `extend_settings(...)` so host
+standalone. `startup` attaches the store and starts usage and
+worker-lease expiry loops. Combined serve also starts idle-Pi and
+hosted workspace reap. In a split deploy those two loops run on
+`apipi worker`; the API copies are no-ops. Pass `extend_settings(...)` so host
 `DATABASE_URL` and `OPENAI_*` values do not leak in. Pass your `Store` if
 you own the engine; Gateway does not dispose an injected store. Pass
 `authenticate=` to inject the auth callback without `APIPI_AUTH`. Mounting

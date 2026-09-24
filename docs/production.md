@@ -213,5 +213,6 @@ next turn still needs the node that holds Pi.
 
 A full node returns `429` with code `capacity`. A tenant at its cap
 returns `429` with code `capacity_tenant`. Clients should retry later;
-idle reap frees a slot. Request bodies over `APIPI_MAX_REQUEST_BYTES`
+idle reap on the process that holds Pi frees a slot (the worker, when
+the API is `--api-only`). Request bodies over `APIPI_MAX_REQUEST_BYTES`
 return `413`.

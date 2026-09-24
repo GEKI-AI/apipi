@@ -21,9 +21,9 @@ The split is:
 
 | Process | Job |
 | --- | --- |
-| `apipi serve --api-only` | Auth, sessions, event log, SSE, scheduling. No TAP. |
-| `apipi worker` | Firecracker (or `none`), Pi, workspace, harvest. Outbound to the API. |
-| Combined `apipi serve` | Both in one process. Laptop or a single box. |
+| `apipi serve --api-only` | Auth, sessions, event log, SSE, scheduling. No TAP. No idle reap. |
+| `apipi worker` | Firecracker (or `none`), Pi, workspace, harvest, idle reap. Outbound to the API. |
+| Combined `apipi serve` | Both in one process, including idle reap. Laptop or a single box. |
 
 Combined serve is the embedded worker: the same in-process adapter the
 project started with. Production is API-only plus one or more workers.
