@@ -41,8 +41,12 @@ In `microvm`, one guest holds Pi, stdio MCP, and the local computer
 (`environment.openai_hosted` or the `hosted` alias). They share
 `/workspace`. The gateway, Postgres, and tenant secrets stay on the
 host. The model key and HTTP MCP bearers are injected by a per-session
-credential broker on the TAP host IP (or loopback in `none`). Guest
-`.apipi/env` does not contain those values.
+credential broker on the TAP host IP (or loopback in `none`). The
+worker process environment is not copied into the guest. Guest
+`.apipi/env` holds the broker URL, a dummy `OPENAI_API_KEY`, that
+session's MCP settings, and `environment.env`. It does not hold
+`APIPI_WORKER_TOKEN`, database settings, `OPENAI_API_KEY_OVERWRITE`,
+or other worker secrets.
 
 ```
   API / worker process          never enters the guest

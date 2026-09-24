@@ -38,6 +38,7 @@ from apipi.worker.pi.microvm import (
     _run,
     connect_vsock,
     egress_host,
+    env_file,
     guest_env,
     guest_skill_dirs,
     jailer_argv,
@@ -631,6 +632,82 @@ def test_guest_env_drops_host_path(tmp_path: Path) -> None:
     env = guest_env(settings, extra_env={"REPORT": "yes"})
     assert env["REPORT"] == "yes"
     assert "PATH" not in env
+
+
+def test_guest_env_drops_worker_secrets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("APIPI_WORKER_TOKEN", "worker-secret")
+    monkeypatch.setenv("APIPI_DATABASE_URL", "postgresql://apipi:db-secret@db/apipi")
+    monkeypatch.setenv("APIPI_DB_PASSWORD", "db-secret")
+    monkeypatch.setenv("APIPI_DB_USER", "apipi")
+    monkeypatch.setenv("APIPI_API_URL", "http://100.68.58.157:8080")
+    monkeypatch.setenv("OPENAI_API_KEY_OVERWRITE", "operator-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "process-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://172.16.187.113:9/upstream/v1")
+    vault = "aa" * 32
+    monkeypatch.setenv("APIPI_VAULT_MASTER_KEY", vault)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:db-secret@db/apipi")
+    monkeypatch.setenv("APIPI_MCP_0_AUTHORIZATION", "Bearer host-secret")
+
+    class _Broker:
+        openai_base_url = "http://172.16.0.1:1/tok/v1"
+
+        def mcp_url(self, route_id: str) -> str:
+            return f"http://172.16.0.1:1/tok/mcp/{route_id}"
+
+    mcp = [
+        McpHttpServer(
+            server_label="tavily",
+            server_url="https://mcp.example/mcp",
+            headers={"Authorization": "Bearer mcp-secret"},
+        )
+    ]
+    stdio = [McpStdioServer(server_label="local", command="npx", args=["-y", "mcp"])]
+    env = guest_env(
+        _settings(tmp_path),
+        mcp,
+        stdio,
+        api_key="real-key",
+        broker=_Broker(),
+        extra_env={"REPORT": "yes", "OPENAI_API_KEY": "from-session"},
+    )
+    packed = "\n".join(f"{key}={value}" for key, value in env.items())
+    for secret in (
+        "worker-secret",
+        "db-secret",
+        "operator-key",
+        "process-key",
+        vault,
+        "real-key",
+        "mcp-secret",
+        "host-secret",
+        "from-session",
+        "upstream",
+        "100.68.58.157",
+    ):
+        assert secret not in packed
+    assert env["OPENAI_API_KEY"] == "apipi"
+    assert env["OPENAI_BASE_URL"] == "http://172.16.0.1:1/tok/v1"
+    assert env["APIPI_MCP_0_URL"] == "http://172.16.0.1:1/tok/mcp/0"
+    assert "APIPI_MCP_0_AUTHORIZATION" not in env
+    assert env["APIPI_MCP_STDIO_0_COMMAND"] == "npx"
+    assert env["REPORT"] == "yes"
+    assert "APIPI_WORKER_TOKEN" not in env
+    assert "APIPI_API_URL" not in env
+    assert "OPENAI_API_KEY_OVERWRITE" not in env
+    forced = env_file(
+        {
+            **env,
+            "APIPI_DB_PASSWORD": "db-secret",
+            "OPENAI_API_KEY_OVERWRITE": "operator-key",
+            "APIPI_WORKER_TOKEN": "worker-secret",
+        }
+    )
+    assert "db-secret" not in forced
+    assert "operator-key" not in forced
+    assert "worker-secret" not in forced
+    assert "OPENAI_API_KEY=apipi" in forced
 
 
 class _Writer:
