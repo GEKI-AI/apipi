@@ -55,6 +55,7 @@ async def create_agent(
     name: str | None = None,
     model: str | None = None,
     instructions: str | None = None,
+    idle_ttl: str | None = None,
     metadata: dict[str, Any] | None = None,
     tools: list[Any] | None = None,
 ) -> Agent:
@@ -63,6 +64,7 @@ async def create_agent(
         name=name,
         model=model,
         instructions=instructions,
+        idle_ttl=idle_ttl,
         metadata_json=metadata if metadata is not None else {},
         tools=tools if tools is not None else [],
     )
@@ -102,6 +104,8 @@ async def update_agent(
         agent.model = changes["model"]
     if "instructions" in changes:
         agent.instructions = changes["instructions"]
+    if "idle_ttl" in changes:
+        agent.idle_ttl = changes["idle_ttl"]
     if "metadata" in changes:
         agent.metadata_json = changes["metadata"]
     if "tools" in changes:
@@ -129,6 +133,7 @@ async def create_session(
     agent_id: uuid.UUID | None = None,
     model: str | None = None,
     instructions: str | None = None,
+    idle_ttl: str | None = None,
     status: str = "idle",
     environment: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
@@ -140,6 +145,7 @@ async def create_session(
         agent_id=agent_id,
         model=model,
         instructions=instructions,
+        idle_ttl=idle_ttl,
         status=status,
         environment=environment if environment is not None else {},
         metadata_json=metadata if metadata is not None else {},

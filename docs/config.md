@@ -61,9 +61,9 @@ hosted files and skills).
 | `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
 | `APIPI_LOG_FORMAT` | `log_format` | `json` | `json` (one object per line on stderr) or `text` (laptop). |
-| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Kill an idle Pi process for `none` and `self_hosted` sessions to free RAM. Hosted computers use the sandbox TTL instead. The process that holds Pi runs the timer: combined `apipi serve`, or `apipi worker` in a split deploy. |
-| `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | `[sandbox.ttl].openai_hosted` | `1h` | Stop Pi and delete the `openai_hosted` workspace after this idle. Transcript and published artifacts stay. `0` turns the timer off. `APIPI_WORKSPACE_TTL` / `workspace_ttl` is an alias. |
-| `APIPI_SANDBOX_TTL_SELF_HOSTED` | `[sandbox.ttl].self_hosted` | `0` (off) | Idle policy for `self_hosted`. The gateway cannot delete files on the runner. `0` means off. |
+| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Idle timer for `none` and `self_hosted` sessions. Kills Pi to free RAM. Hosted computers use the sandbox TTL instead. This follows environment type, not `APIPI_RUN_MODE`. The process that holds Pi runs the timer: combined `apipi serve`, or `apipi worker` in a split deploy. An agent or session `idle_ttl` overrides it. |
+| `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | `[sandbox.ttl].openai_hosted` | `1h` | Idle timer for an `openai_hosted` computer. One timer stops Pi and deletes the workspace together. There is no separate guest timeout. Transcript and published artifacts stay. `0` turns the timer off. `APIPI_WORKSPACE_TTL` / `workspace_ttl` is an alias. An agent or session `idle_ttl` overrides it. |
+| `APIPI_SANDBOX_TTL_SELF_HOSTED` | `[sandbox.ttl].self_hosted` | `0` (off) | Not used by the Pi idle reap. `self_hosted` Pi uses `APIPI_IDLE_TTL` (or an agent or session override). The gateway cannot delete files on the runner. `0` means off. |
 | `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. Workers advertise this as `capacity`. |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | `max_sessions_per_tenant` | `32` | Live Pi processes for one tenant. A new turn that would pass the cap returns `429` with code `capacity_tenant`. The node cap still applies. |
 | `APIPI_WORKER_MEMORY_MB` | `worker_memory_mb` | `max_sessions × mem_mib` (16384 at defaults) | RAM budget this worker (or combined node) will run, in MiB. Sum of guest `mem_mib` for live leases must stay under this. Set it to usable host RAM minus OS and worker reserve. Do not read `/proc/meminfo` automatically. |
@@ -194,7 +194,12 @@ for one tenant. `worker_memory_mb` is the RAM budget for the same live
 guests. A new turn that would pass either node cap returns `429` with
 code `capacity`. The session row in Postgres can outlive the process;
 idle TTL kills the process and frees a slot. In a split deploy the
-worker runs that reap, not the API.
+worker runs that reap, not the API. The timer is chosen by environment
+type, not by run mode. `none` and `self_hosted` use `APIPI_IDLE_TTL`.
+`openai_hosted` uses the sandbox TTL, and that one timer covers Pi and
+the guest together. A session `idle_ttl`, then the agent `idle_ttl`,
+then that default. `0` on an override turns the timer off for that
+session. `APIPI_SANDBOX_TTL_SELF_HOSTED` does not kill Pi.
 
 | Failure | HTTP or event | Code |
 | --- | --- | --- |

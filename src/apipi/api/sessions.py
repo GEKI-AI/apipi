@@ -52,6 +52,7 @@ class SessionCreate(StrictModel):
     environment: EnvironmentSpec | None = None
     input: str | dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
+    idle_ttl: str | None = None
     stream: bool = False
     vault_ids: list[uuid.UUID] | None = None
 
@@ -209,6 +210,7 @@ async def create_agent_session(
         environment=body.environment,
         input=body.input,
         metadata=body.metadata,
+        idle_ttl=body.idle_ttl,
         vault_ids=body.vault_ids,
         key_id=_key_id(request),
         user_id=_user_id(request),

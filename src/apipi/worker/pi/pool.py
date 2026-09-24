@@ -3,6 +3,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 
 from apipi.config import CapacityError, Settings
 from apipi.gateway.logutil import log_event
@@ -39,6 +40,7 @@ class PiPool:
         self._instructions: dict[uuid.UUID, str | None] = {}
         self._thinking: dict[uuid.UUID, str] = {}
         self._system_prompts: dict[uuid.UUID, str | None] = {}
+        self._ttls: dict[uuid.UUID, float | None] = {}
         self._key_ids: dict[uuid.UUID, str | None] = {}
         self._env_types: dict[uuid.UUID, str | None] = {}
         self._mem: dict[uuid.UUID, int] = {}
@@ -68,6 +70,8 @@ class PiPool:
         thinking: str | None = None,
         system_prompt: str | None = None,
         system_prompt_set: bool = False,
+        idle_ttl: timedelta | None = None,
+        idle_ttl_set: bool = False,
     ) -> PiProc:
         instructions = instructions if instructions else None
         from apipi.worker.pi.settings_json import process_system_prompt
@@ -163,6 +167,10 @@ class PiPool:
                         self._tenants[session_id] = tenant_id
                 elif env_type is not None:
                     self._env_types[session_id] = env_type
+                if idle_ttl_set:
+                    self._ttls[session_id] = (
+                        idle_ttl.total_seconds() if idle_ttl is not None else None
+                    )
                 self._last[session_id] = time.monotonic()
                 return proc
 
@@ -244,6 +252,7 @@ class PiPool:
         self._instructions.pop(session_id, None)
         self._thinking.pop(session_id, None)
         self._system_prompts.pop(session_id, None)
+        self._ttls.pop(session_id, None)
         self._key_ids.pop(session_id, None)
         self._env_types.pop(session_id, None)
         self._mem.pop(session_id, None)
@@ -318,6 +327,8 @@ class PiPool:
         return proc is not None and proc.alive
 
     def _ttl_seconds(self, session_id: uuid.UUID) -> float | None:
+        if session_id in self._ttls:
+            return self._ttls[session_id]
         ttl = self.settings.pi_idle_ttl_for(self._env_types.get(session_id))
         if ttl is None:
             return None

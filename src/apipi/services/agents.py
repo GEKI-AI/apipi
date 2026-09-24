@@ -16,6 +16,7 @@ from apipi.store.repo import (
     list_agents,
     update_agent,
 )
+from apipi.worker.pi.idle import normalize_idle_ttl, validate_idle_metadata
 from apipi.worker.pi.settings_json import validate_pi_metadata
 
 _UNIMPLEMENTED = ("multi_agent", "tool_search", "programmatic_tool_calling")
@@ -69,6 +70,7 @@ class AgentWrite(StrictModel):
     name: str | None = None
     model: str | None = None
     instructions: str | None = None
+    idle_ttl: str | None = None
     metadata: dict[str, Any] | None = None
     tools: list[AgentTool] | None = None
 
@@ -92,6 +94,7 @@ def agent_body(agent: Agent) -> dict[str, Any]:
         "name": agent.name,
         "model": agent.model,
         "instructions": agent.instructions,
+        "idle_ttl": agent.idle_ttl,
         "metadata": agent.metadata_json,
         "tools": agent.tools,
         "created_at": agent.created_at.isoformat(),
@@ -112,7 +115,10 @@ class AgentService:
 
     async def create(self, tenant_id: uuid.UUID, body: AgentWrite) -> dict[str, Any]:
         payload = write_payload(body)
+        if "idle_ttl" in payload:
+            payload["idle_ttl"] = normalize_idle_ttl(payload.get("idle_ttl"))
         validate_pi_metadata(payload.get("metadata"))
+        validate_idle_metadata(payload.get("metadata"))
         if is_chat_profile(payload.get("metadata")):
             reject_disallowed_chat_tools(payload.get("tools"))
         async with self.store.session() as db:
@@ -122,6 +128,7 @@ class AgentService:
                 name=payload.get("name"),
                 model=payload.get("model"),
                 instructions=payload.get("instructions"),
+                idle_ttl=payload.get("idle_ttl"),
                 metadata=payload.get("metadata"),
                 tools=payload.get("tools"),
             )
@@ -147,8 +154,11 @@ class AgentService:
             existing = await get_agent(db, tenant_id, agent_id)
             if existing is None:
                 not_found()
+            if "idle_ttl" in payload:
+                payload["idle_ttl"] = normalize_idle_ttl(payload.get("idle_ttl"))
             metadata = payload.get("metadata", existing.metadata_json)
             validate_pi_metadata(metadata if isinstance(metadata, dict) else None)
+            validate_idle_metadata(metadata if isinstance(metadata, dict) else None)
             tools = payload.get("tools", existing.tools)
             if is_chat_profile(metadata):
                 reject_disallowed_chat_tools(tools)

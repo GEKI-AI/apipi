@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from typing import Any
 
 from apipi.env.computer import Computer
@@ -55,6 +56,9 @@ class PiHarness:
         raw_prompt = _kwargs.get("system_prompt")
         system_prompt = raw_prompt if isinstance(raw_prompt, str) else None
         system_prompt_set = _kwargs.get("system_prompt_set") is True
+        raw_idle = _kwargs.get("idle_ttl")
+        idle_ttl = raw_idle if isinstance(raw_idle, timedelta) else None
+        idle_ttl_set = _kwargs.get("idle_ttl_set") is True
         proc = await self.pool.get(
             session_id,
             cwd=cwd,
@@ -74,6 +78,8 @@ class PiHarness:
             thinking=thinking,
             system_prompt=system_prompt,
             system_prompt_set=system_prompt_set,
+            idle_ttl=idle_ttl,
+            idle_ttl_set=idle_ttl_set,
         )
         settled = False
         thinking = ThinkingTracker()

@@ -63,6 +63,7 @@ async def test_agent_crud(client: AsyncClient) -> None:
         "name",
         "model",
         "instructions",
+        "idle_ttl",
         "metadata",
         "tools",
         "created_at",

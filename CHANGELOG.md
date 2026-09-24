@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional `idle_ttl` on an agent and on session create. Resolve order
+  is session, then agent, then the environment-type default. `0` turns
+  the timer off for that session.
 - Pi compaction, thinking level, and the harness system prompt are
   written into the session agent directory before Pi starts.
   `compaction.enabled` replaces the unused `--no-auto-compact` flag.
