@@ -71,14 +71,15 @@ apipi install --pi --microvm
 `--microvm` checks `/dev/kvm`, `ip`, `iptables`, and `tc` (it names
 the packages; it does not run apt). It downloads pinned Firecracker
 1.17.0 and jailer into `$XDG_DATA_HOME/apipi/firecracker` (or
-`~/.local/share/apipi/firecracker`). It builds the guest kernel and
-rootfs with the packaged rootfs script into
+`~/.local/share/apipi/firecracker`). With `APIPI_IMAGE_SOURCE` set it
+pulls verified images into the images dir. Without that setting, and
+with `--build`, it builds from `images/<id>/` into
 `$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). The
-loop mount still needs sudo, the same way `./images/build.sh`
-does. `./scripts/microvm-rootfs` is a wrapper for that script. It
-prints `export` lines for the
-kernel and rootfs. It does not write `.env` or `apipi.toml`, and it
-does not set `APIPI_RUN_MODE`.
+loop mount for a local build still needs sudo, the same way
+`./images/build.sh` does. `./scripts/microvm-rootfs` is a wrapper for
+that script. A pull prints the images dir. A build prints `export`
+lines for the kernel and rootfs. It does not write `.env` or
+`apipi.toml`, and it does not set `APIPI_RUN_MODE`.
 
 The Firecracker tarball also contains `.debug` binaries. Install
 copies the release `firecracker` and `jailer` only. It skips that

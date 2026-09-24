@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Prebuilt MicroVM guest images. Recipes live in `images/`.
+  `apipi images build` and `apipi images publish` write a zstd rootfs,
+  a manifest, and an index to `file://` or `s3://`. `apipi images pull`
+  and `apipi install --microvm` install them. `environment.sandbox_image`
+  and `metadata["apipi.sandbox_image"]` choose the image. Workers
+  advertise images. A missing image is `503` `image_unavailable`.
 - Optional `idle_ttl` on an agent and on session create. Resolve order
   is session, then agent, then the environment-type default. `0` turns
   the timer off for that session.

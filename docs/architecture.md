@@ -26,6 +26,12 @@ The explanation of the system is under [Concepts](concepts.md):
 | **Run mode** | Where Pi (and stdio MCP) run |
 | **Environment** | Where file/shell tools run |
 
+Guest images are prebuilt files. A worker pulls them from an
+`s3://`, `https://`, or `file://` source before it starts. The session
+picks an image id. Placement uses only a worker that has that image.
+The store format is
+[ADR 0012](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0012-guest-image-store.md).
+
 HTTP routes do not spawn Pi themselves. They call `SessionService`,
 which sits above the session execution adapter. Extenders use the same
 service in-process (`gateway.sessions`), including `stream()` for
