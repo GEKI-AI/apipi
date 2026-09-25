@@ -40,6 +40,12 @@ if [ -f "$WS/.apipi/env" ]; then
   set +a
 fi
 export HOME="$WS"
+mkdir -p /tmp/npm-cache
+if [ -d /var/cache/npm ]; then
+  cp -a /var/cache/npm/. /tmp/npm-cache/ 2>/dev/null || true
+fi
+export NPM_CONFIG_CACHE=/tmp/npm-cache
+export npm_config_cache=/tmp/npm-cache
 if [ -f "$WS/.apipi/setup.sh" ] && [ ! -f "$WS/.apipi/setup.done" ]; then
   if ! /bin/sh "$WS/.apipi/setup.sh" > "$WS/.apipi/setup.log" 2>&1; then
     echo "environment setup failed" >&2

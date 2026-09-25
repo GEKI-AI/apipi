@@ -68,7 +68,6 @@ from apipi.worker.pi.sandbox import (
     image_for_size,
     mem_mib_for_size,
     merge_playwright,
-    playwright_attached,
     sandbox_image_of,
     sandbox_size_of,
 )
@@ -1404,11 +1403,9 @@ async def run_turn(
             async with store.session() as db:
                 await fail_session(db, hub, tenant_id, session_id, str(exc))
             return
-        browser = playwright_attached(mcp_stdio)
         composed = compose_instructions(
             settings,
             instructions,
-            browser=browser,
             sandbox_size=sandbox_size,
         )
         log.info(
@@ -1785,11 +1782,9 @@ async def continue_turn(
             async with store.session() as db:
                 await fail_session(db, hub, tenant_id, session_id, str(exc))
             return
-        browser = playwright_attached(mcp_stdio)
         composed = compose_instructions(
             settings,
             instructions,
-            browser=browser,
             sandbox_size=sandbox_size,
         )
         with start_span(

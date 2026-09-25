@@ -4,6 +4,7 @@ from apipi.config import Settings
 from apipi.gateway.errors import ApiError
 from apipi.worker.pi.sandbox import (
     PLAYWRIGHT_LABEL,
+    PLAYWRIGHT_MCP_CLI,
     has_playwright,
     image_for_size,
     merge_playwright,
@@ -228,8 +229,9 @@ def test_merge_playwright_on_l_microvm() -> None:
     tools = merge_playwright([], size="L", settings=_microvm())
     assert len(tools) == 1
     assert tools[0]["server_label"] == PLAYWRIGHT_LABEL
-    assert tools[0]["transport"]["command"] == "npx"
-    assert "@playwright/mcp@latest" in tools[0]["transport"]["args"]
+    assert tools[0]["transport"]["command"] == "node"
+    assert PLAYWRIGHT_MCP_CLI in tools[0]["transport"]["args"]
+    assert "npx" not in tools[0]["transport"]["args"]
     assert (
         "--executable-path=/usr/bin/chromium-browser" in tools[0]["transport"]["args"]
     )

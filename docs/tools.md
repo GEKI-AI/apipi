@@ -84,13 +84,17 @@ server that speaks MCP.
 browser option. `--headless` is the usual server flag. See
 `examples/playwright.yaml`.
 
-Sandbox size `L` on isolation `microvm` attaches that server for you
-(system Chromium in the browser rootfs). You do not need to list it on
-the agent. A caller-supplied Playwright MCP tool is not duplicated.
-Turn auto-inject off with `APIPI_SANDBOX_AUTO_PLAYWRIGHT=false` if you
-want L RAM and rootfs but manual MCP only. The platform prompt names
-the sandbox size and, on `L`, tells the model to use MCP tools and
-not to install browsers. Save screenshots under `outputs/`.
+Image `browser` on isolation `microvm` attaches the vendored
+Playwright MCP server for you (system Chromium in that rootfs). The
+command is `node` and a fixed `cli.js` path, not `npx`. Install the
+rootfs with `apipi install --microvm --image browser`. You do not
+need to list the server on the agent. A caller-supplied Playwright
+MCP tool is not duplicated. Turn auto-inject off with
+`APIPI_SANDBOX_AUTO_PLAYWRIGHT=false` if you want that image and its
+RAM but manual MCP only. The platform prompt names the sandbox size.
+It does not name Playwright MCP tools. Those names are registered
+only after the guest attach succeeds. Save screenshots under
+`outputs/`.
 
 The browser follows Pi (`none` or `microvm`). Inside a `microvm`,
 Chromium can use its own sandbox in the guest. A small client is

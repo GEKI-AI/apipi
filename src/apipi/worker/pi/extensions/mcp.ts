@@ -4,6 +4,7 @@ import { Type } from "typebox";
 
 const DEFAULT_BASH_TIMEOUT_SEC = 120;
 const MCP_TIMEOUT_MS = 120_000;
+const ATTACH_TIMEOUT_MS = 15_000;
 const INSTALL_RE =
   /\b(?:npm|pnpm|yarn|bun)\s+(?:install|i|add)\b[\s\S]*\bplaywright\b|\b(?:npx\s+)?playwright\s+install\b|\bnpm\s+exec\s+playwright\s+install\b/i;
 
@@ -188,7 +189,10 @@ function stdioServers(): Array<{ label: string; command: string; args: string[];
   return servers;
 }
 
-function waitForSpawn(proc: ChildProcessWithoutNullStreams): Promise<void> {
+function waitForSpawn(
+  proc: ChildProcessWithoutNullStreams,
+  timeoutMs = ATTACH_TIMEOUT_MS,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     let last = Date.now();
     let saw = false;
@@ -221,11 +225,11 @@ function waitForSpawn(proc: ChildProcessWithoutNullStreams): Promise<void> {
         return;
       }
       const idle = Date.now() - last;
-      if ((saw && idle >= 2000) || idle >= 20000) {
+      if ((saw && idle >= 2000) || idle >= Math.min(5000, timeoutMs)) {
         finish();
       }
     }, 200);
-    setTimeout(() => finish(), MCP_TIMEOUT_MS);
+    setTimeout(() => finish(), timeoutMs);
   });
 }
 
@@ -247,6 +251,8 @@ function startServer(server: {
         NPM_CONFIG_LOGLEVEL: "error",
         npm_config_progress: "false",
         npm_config_fund: "false",
+        NPM_CONFIG_CACHE: process.env.NPM_CONFIG_CACHE || "/tmp/npm-cache",
+        npm_config_cache: process.env.npm_config_cache || "/tmp/npm-cache",
       },
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
@@ -274,7 +280,7 @@ function startServer(server: {
   });
 }
 
-function warmupPackage(pkg: string): Promise<void> {
+function warmupPackage(pkg: string, timeoutMs = ATTACH_TIMEOUT_MS): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn("npx", ["-y", `--package=${pkg}`, "node", "-e", "process.exit(0)"], {
       env: {
@@ -282,6 +288,8 @@ function warmupPackage(pkg: string): Promise<void> {
         npm_config_yes: "true",
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
         NPM_CONFIG_LOGLEVEL: "error",
+        NPM_CONFIG_CACHE: process.env.NPM_CONFIG_CACHE || "/tmp/npm-cache",
+        npm_config_cache: process.env.npm_config_cache || "/tmp/npm-cache",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -303,20 +311,32 @@ function warmupPackage(pkg: string): Promise<void> {
       }
       fail(new Error(`npx warmup failed (${code})`));
     });
-    setTimeout(() => fail(new Error("npx warmup timeout")), MCP_TIMEOUT_MS);
+    setTimeout(() => fail(new Error("npx warmup timeout")), timeoutMs);
   });
 }
 
+function isPlaywright(server: { label: string; command: string; args: string[] }): boolean {
+  if (server.label.toLowerCase() === "playwright") {
+    return true;
+  }
+  const blob = [server.command, ...server.args].join(" ");
+  return blob.includes("playwright/mcp") || blob.includes("playwright-mcp");
+}
+
 async function attachStdio(pi: ExtensionAPI): Promise<void> {
+  const deadline = Date.now() + ATTACH_TIMEOUT_MS;
+  const remaining = (): number => Math.max(1, deadline - Date.now());
   for (const server of stdioServers()) {
+    if (Date.now() >= deadline) {
+      throw new Error("mcp attach timeout");
+    }
     const pkg = server.args.find((item) => item.includes("mcp") || item.startsWith("@"));
     if (server.command === "npx" && pkg) {
-      await warmupPackage(pkg);
+      await warmupPackage(pkg, remaining());
     }
     const proc = await startServer(server);
-    await waitForSpawn(proc);
+    await waitForSpawn(proc, remaining());
     const client = new McpClient(proc);
-    const deadline = Date.now() + MCP_TIMEOUT_MS;
     let last = new Error(`mcp ${server.label} initialize failed`);
     while (Date.now() < deadline) {
       try {
@@ -327,7 +347,7 @@ async function attachStdio(pi: ExtensionAPI): Promise<void> {
             capabilities: {},
             clientInfo: { name: "apipi", version: "0.2.0" },
           },
-          8000,
+          Math.min(8000, remaining()),
         );
         last = new Error("");
         break;
@@ -340,7 +360,7 @@ async function attachStdio(pi: ExtensionAPI): Promise<void> {
       throw last;
     }
     client.notify("notifications/initialized");
-    const listed = (await client.request("tools/list", {})) as {
+    const listed = (await client.request("tools/list", {}, remaining())) as {
       tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
     };
     for (const tool of listed.tools ?? []) {
@@ -350,9 +370,14 @@ async function attachStdio(pi: ExtensionAPI): Promise<void> {
         label: `${server.label} ${tool.name}`,
         description: tool.description || `${server.label} MCP tool ${tool.name}`,
         promptSnippet: tool.description || `${server.label} ${tool.name}`,
-        promptGuidelines: [
-          `Use ${name} for ${server.label} MCP (${tool.name}). Do not reimplement it with bash.`,
-        ],
+        promptGuidelines: isPlaywright(server)
+          ? [
+              `Use ${name} for ${server.label} MCP (${tool.name}). Do not reimplement it with bash.`,
+              "Chromium is at /usr/bin/chromium-browser. Drive it only through these MCP tools. Save screenshots under outputs/. Do not npm install playwright or download browsers.",
+            ]
+          : [
+              `Use ${name} for ${server.label} MCP (${tool.name}). Do not reimplement it with bash.`,
+            ],
         parameters: schemaOf(tool.inputSchema),
         async execute(_toolCallId, params, signal) {
           if (signal?.aborted) {
@@ -390,12 +415,22 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await attachStdio(pi);
+      await Promise.race([
+        attachStdio(pi),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("mcp attach timeout")), ATTACH_TIMEOUT_MS);
+        }),
+      ]);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(message);
-      throw err;
+      throw new Error(message);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   });
 }

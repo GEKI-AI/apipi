@@ -9,7 +9,7 @@ It only says what is different.
 | File | Required | What |
 | --- | --- | --- |
 | `image.env` | yes | Small shell file. `build.sh` sources it. |
-| `setup.sh` | no | Extra steps inside the chroot, after `apk` and `npm`. |
+| `setup.sh` | no | Extra steps inside the chroot, after `apk` and `npm`. `browser/setup.sh` installs a pinned `@playwright/mcp` at `/opt/apipi/playwright-mcp`. |
 
 `image.env` fields:
 

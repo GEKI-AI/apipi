@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session placement error. Docs now say the image selects the rootfs,
   with size `L` mapping to `browser` when the image is omitted.
 
+### Fixed
+
+- Browser MicroVM cold start no longer runs `npx -y @playwright/mcp@latest`.
+  The browser image vendors a pinned server, and auto-inject starts it
+  with `node` at a fixed path. Attach soft-fails after 15 seconds so
+  the first turn is not blocked for minutes. The platform prompt does
+  not name Playwright MCP tools; those names are registered only after
+  attach succeeds. Worker logs include the full `extension_error`
+  message. Rebuild with `apipi install --microvm --image browser`.
+
 ## [0.5.1] - 2026-09-25
 
 ### Security

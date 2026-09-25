@@ -501,10 +501,12 @@ later PATCH metadata. Isolation `none` accepts the field and ignores
 RAM and rootfs. Isolation `microvm` uses the size for guest RAM. The
 guest image comes from `environment.sandbox_image` or
 `metadata["apipi.sandbox_image"]`. When those are omitted, size `L`
-selects `browser` and other sizes use the default image. Playwright MCP
-is injected when the resolved image is `browser`, unless the agent
-already has it or auto-inject is off. A known image that no worker has
-is `503` with code `image_unavailable`. See
+selects `browser` and other sizes use the default image. Image
+`browser` injects the vendored Playwright MCP server unless the agent
+already has it or auto-inject is off. Attach does not block the first
+turn for minutes. Install that rootfs with
+`apipi install --microvm --image browser`. A known image that no
+worker has is `503` with code `image_unavailable`. See
 [environments](environments.md).
 
 ## Compatibility
