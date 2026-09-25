@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Auth plugins may take an `AuthRequest` (`method`, `path`, headers)
+  and a `cache_key` so one organization bearer can identify end users
+  without sharing a cache entry. Session create stores `user_id` when
+  the identity has one. List, get, update, delete, and resume then
+  match that user. Identities without `user_id` stay tenant-scoped.
+
 ### Changed
 
 - Agent create and update validate `metadata["apipi.sandbox_size"]` and

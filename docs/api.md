@@ -14,8 +14,10 @@ Auth is `Authorization: Bearer` on every request except `/health` and
 the bearer to `key_id` and `tenant_id`, or rejects with a status,
 `code`, and `message`. Invalid keys are `401` with code
 `unauthorized`. An auth plugin may return `429` for a rate limit or
-quota. See [auth](auth.md). Every query is tenant-scoped. An id that
-belongs to another tenant returns `404`, not `403`.
+quota. See [auth](auth.md). Every query is tenant-scoped. When the
+auth identity includes `user_id`, session reads and writes also
+require that user. An id that belongs to another tenant or another
+user returns `404`, not `403`.
 
 Clients send a bearer and talk to `/v1`.
 
@@ -250,6 +252,12 @@ a client does not wait for a later event.
 Status: `idle | in_progress | requires_action | failed`.
 
 `required_actions`: `function_call`, `environment_connection`.
+
+When auth includes `user_id`, create stores it on the session and
+returns it as `user_id`. List, get, update, delete, and later turns
+then see only that user's sessions. Without `user_id`, `user_id` is
+null and sessions stay visible to the whole tenant. See
+[auth](auth.md).
 
 `POST /v1/agents/sessions/{session_id}` updates `metadata` only.
 `DELETE` stops the live guest on the worker that holds the lease,

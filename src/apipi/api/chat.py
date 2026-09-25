@@ -90,7 +90,7 @@ async def list_chat_sessions(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    listed = await _sessions(request).list(tenant.id)
+    listed = await _sessions(request).list(tenant.id, user_id=_user_id(request))
     return {
         "data": [
             chat_session_body(row) for row in listed["data"] if is_chat_session(row)
@@ -104,7 +104,9 @@ async def read_chat_session(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return _public(await _sessions(request).get(tenant.id, session_id))
+    return _public(
+        await _sessions(request).get(tenant.id, session_id, user_id=_user_id(request))
+    )
 
 
 @router.post("/v1/chat/sessions/{session_id}")
@@ -115,10 +117,12 @@ async def update_chat_session(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     sessions = _sessions(request)
-    _public(await sessions.get(tenant.id, session_id))
+    _public(await sessions.get(tenant.id, session_id, user_id=_user_id(request)))
     metadata = chat_metadata(body.metadata) if body.metadata is not None else None
     return chat_session_body(
-        await sessions.update(tenant.id, session_id, metadata=metadata)
+        await sessions.update(
+            tenant.id, session_id, metadata=metadata, user_id=_user_id(request)
+        )
     )
 
 
@@ -129,8 +133,8 @@ async def delete_chat_session(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     sessions = _sessions(request)
-    _public(await sessions.get(tenant.id, session_id))
-    return await sessions.delete(tenant.id, session_id)
+    _public(await sessions.get(tenant.id, session_id, user_id=_user_id(request)))
+    return await sessions.delete(tenant.id, session_id, user_id=_user_id(request))
 
 
 @router.post("/v1/chat/sessions/{session_id}/events")
@@ -141,7 +145,7 @@ async def post_chat_session_event(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     sessions = _sessions(request)
-    _public(await sessions.get(tenant.id, session_id))
+    _public(await sessions.get(tenant.id, session_id, user_id=_user_id(request)))
     parsed = body.to_session_input() if isinstance(body, OpenAIEventsBody) else body
     return await sessions.post_event(
         tenant.id,
@@ -172,9 +176,11 @@ async def get_chat_session_events(
     after_seq: int | None = Query(default=None),
 ) -> Any:
     sessions = _sessions(request)
-    _public(await sessions.get(tenant.id, session_id))
+    _public(await sessions.get(tenant.id, session_id, user_id=_user_id(request)))
     if not stream:
-        return await sessions.events(tenant.id, session_id, after_seq=after_seq)
+        return await sessions.events(
+            tenant.id, session_id, after_seq=after_seq, user_id=_user_id(request)
+        )
     return _sse_response(
         sessions.store, sessions.event_hub, tenant.id, session_id, after_seq
     )
@@ -187,8 +193,8 @@ async def export_chat_session(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     sessions = _sessions(request)
-    _public(await sessions.get(tenant.id, session_id))
-    return await sessions.export(tenant.id, session_id)
+    _public(await sessions.get(tenant.id, session_id, user_id=_user_id(request)))
+    return await sessions.export(tenant.id, session_id, user_id=_user_id(request))
 
 
 @router.get("/v1/chat/sessions/{session_id}/turns")
@@ -198,8 +204,8 @@ async def list_chat_session_turns(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     sessions = _sessions(request)
-    _public(await sessions.get(tenant.id, session_id))
-    return await sessions.list_turns(tenant.id, session_id)
+    _public(await sessions.get(tenant.id, session_id, user_id=_user_id(request)))
+    return await sessions.list_turns(tenant.id, session_id, user_id=_user_id(request))
 
 
 @router.get("/v1/chat/sessions/{session_id}/turns/{turn_id}")
@@ -210,8 +216,10 @@ async def read_chat_session_turn(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     sessions = _sessions(request)
-    _public(await sessions.get(tenant.id, session_id))
-    return await sessions.get_turn(tenant.id, session_id, turn_id)
+    _public(await sessions.get(tenant.id, session_id, user_id=_user_id(request)))
+    return await sessions.get_turn(
+        tenant.id, session_id, turn_id, user_id=_user_id(request)
+    )
 
 
 @router.get("/v1/chat/sessions/{session_id}/items")
@@ -221,5 +229,5 @@ async def list_chat_session_items(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     sessions = _sessions(request)
-    _public(await sessions.get(tenant.id, session_id))
-    return await sessions.list_items(tenant.id, session_id)
+    _public(await sessions.get(tenant.id, session_id, user_id=_user_id(request)))
+    return await sessions.list_items(tenant.id, session_id, user_id=_user_id(request))

@@ -20,6 +20,7 @@ Each request:
 
 ```
 authenticate(bearer) -> {key_id, tenant_id} | reject
+authenticate(bearer, request) -> {key_id, tenant_id, user_id?, cache_key?} | reject
 ```
 
 The callback is in-process Python. `APIPI_AUTH` (TOML `auth`) is an
@@ -42,13 +43,28 @@ auth, then `await gateway.ensure_tenant(tenant_id)` before
 
 A plugin returns `tenant_id` and `key_id`, or a typed reject. It may
 set its own `tenant_id` (many keys to one tenant). Optional `user_id`
-is the SaaS user when the plugin knows it. ApiPi does not invent
-`user_id` from `key_id`. `key_id` is for logs. Queries stay
-tenant-scoped. The plugin must not expect the gateway to persist the
-raw bearer. After a successful callback, HTTP responses include
-`X-Tenant-Id` and `X-User-Id` (`key_id`, not `user_id`). Incoming
-values of those headers are not trusted for auth. Usage events and
-the usage export include `user_id` when the plugin set it.
+is the end user when the plugin knows it. ApiPi does not invent
+`user_id` from `key_id`. `key_id` is for logs. The plugin must not
+expect the gateway to persist the raw bearer. After a successful
+callback, HTTP responses include `X-Tenant-Id` and `X-User-Id`
+(`key_id`, not `user_id`). Incoming values of those headers are not
+trusted for auth. Usage events and the usage export include `user_id`
+when the plugin set it.
+
+A one-argument `authenticate(bearer)` plugin still works. A
+two-argument plugin also receives `AuthRequest`: `method`, `path`
+(no query string), and `headers`. Header names are lowercase.
+`authorization` is omitted because the bearer is the first argument.
+Those headers are client-supplied. The gateway does not treat
+`x-tenant-id`, `x-user-id`, or any other header as identity. The
+plugin decides which header, if any, names the end user.
+
+When the identity includes `user_id`, session create stores it. List,
+get, update, delete, resume, export, turns, items, and artifacts then
+match tenant and `user_id`. A missing session for that user is `404`.
+An identity without `user_id` stays tenant-scoped, as before. Agents
+stay tenant-scoped. Usage by `day` stays tenant-scoped. Usage by
+`session_id` or `turn_id` uses the same session rule.
 
 Optional `thinking_summary` is a boolean. Omit it, or set it to false,
 and that tenant does not get thinking summaries. Set it to true when
@@ -86,13 +102,30 @@ are not cached.
 
 ## Cache
 
-The gateway caches the callback result by SHA-256 of the bearer. It
-never caches the raw key. TTL is `APIPI_AUTH_CACHE_TTL`, default
-`30s`. A successful identity is cached. A `401` reject is cached as
-that typed reject, so a bad key is not retried on every request and a
-limit is not stored as success. A `429` reject is not cached, so a
-quota can recover before the TTL. Plugin errors are not stored as
-success; the next request calls the plugin again.
+The gateway caches the callback result by SHA-256 of a cache key. It
+never caches the raw key. The default cache key is the bearer, so
+existing plugins keep one entry per token. A plugin that serves many
+end users on one bearer must not share that entry.
+
+Set `authenticate.cache_key` to a callable with the same shape as
+`authenticate`, or define `cache_key` next to the `APIPI_AUTH`
+function. It may return a non-empty string or `None`. A string is
+hashed and used for lookup. `None` falls back to the bearer hash.
+The identity or reject may also include `cache_key`. That string is
+the storage key. If it differs from the lookup key, the gateway
+stores the result only under the result key, so another user on the
+same bearer does not reuse it. Cache hits for that user require the
+`cache_key` callable to return the same string on the next request.
+Do not put the raw bearer in `cache_key` if you can avoid it. The
+value stays in process memory for the TTL. It is not written to
+Postgres.
+
+TTL is `APIPI_AUTH_CACHE_TTL`, default `30s`. A successful identity
+is cached. A `401` reject is cached as that typed reject, so a bad
+key is not retried on every request and a limit is not stored as
+success. A `429` reject is not cached, so a quota can recover before
+the TTL. Plugin errors are not stored as success; the next request
+calls the plugin again.
 
 ## Store
 

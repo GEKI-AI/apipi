@@ -237,7 +237,7 @@ async def list_agent_sessions(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _sessions(request).list(tenant.id)
+    return await _sessions(request).list(tenant.id, user_id=_user_id(request))
 
 
 @router.get("/v1/agents/sessions/{session_id}")
@@ -246,7 +246,9 @@ async def read_agent_session(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _sessions(request).get(tenant.id, session_id)
+    return await _sessions(request).get(
+        tenant.id, session_id, user_id=_user_id(request)
+    )
 
 
 @router.post("/v1/agents/sessions/{session_id}")
@@ -257,7 +259,7 @@ async def update_agent_session(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     return await _sessions(request).update(
-        tenant.id, session_id, metadata=body.metadata
+        tenant.id, session_id, metadata=body.metadata, user_id=_user_id(request)
     )
 
 
@@ -267,7 +269,9 @@ async def delete_agent_session(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _sessions(request).delete(tenant.id, session_id)
+    return await _sessions(request).delete(
+        tenant.id, session_id, user_id=_user_id(request)
+    )
 
 
 @router.post("/v1/agents/sessions/{session_id}/events")
@@ -308,8 +312,10 @@ async def get_session_events(
 ) -> Any:
     sessions = _sessions(request)
     if not stream:
-        return await sessions.events(tenant.id, session_id, after_seq=after_seq)
-    await sessions.get(tenant.id, session_id)
+        return await sessions.events(
+            tenant.id, session_id, after_seq=after_seq, user_id=_user_id(request)
+        )
+    await sessions.get(tenant.id, session_id, user_id=_user_id(request))
     return _sse_response(
         sessions.store, sessions.event_hub, tenant.id, session_id, after_seq
     )
@@ -321,7 +327,9 @@ async def export_agent_session(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _sessions(request).export(tenant.id, session_id)
+    return await _sessions(request).export(
+        tenant.id, session_id, user_id=_user_id(request)
+    )
 
 
 @router.get("/v1/agents/sessions/{session_id}/turns")
@@ -330,7 +338,9 @@ async def list_session_turns(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _sessions(request).list_turns(tenant.id, session_id)
+    return await _sessions(request).list_turns(
+        tenant.id, session_id, user_id=_user_id(request)
+    )
 
 
 @router.get("/v1/agents/sessions/{session_id}/turns/{turn_id}")
@@ -340,7 +350,9 @@ async def read_session_turn(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _sessions(request).get_turn(tenant.id, session_id, turn_id)
+    return await _sessions(request).get_turn(
+        tenant.id, session_id, turn_id, user_id=_user_id(request)
+    )
 
 
 @router.get("/v1/agents/sessions/{session_id}/items")
@@ -349,7 +361,9 @@ async def list_session_items(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _sessions(request).list_items(tenant.id, session_id)
+    return await _sessions(request).list_items(
+        tenant.id, session_id, user_id=_user_id(request)
+    )
 
 
 @router.get("/v1/agents/sessions/{session_id}/artifacts")
@@ -358,7 +372,9 @@ async def list_session_artifacts(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _sessions(request).list_artifacts(tenant.id, session_id)
+    return await _sessions(request).list_artifacts(
+        tenant.id, session_id, user_id=_user_id(request)
+    )
 
 
 @router.get("/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content")
@@ -369,7 +385,7 @@ async def read_session_artifact_content(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> Any:
     data, content_type, filename = await _sessions(request).artifact_content(
-        tenant.id, session_id, artifact_id
+        tenant.id, session_id, artifact_id, user_id=_user_id(request)
     )
     return Response(
         content=data,
@@ -389,7 +405,7 @@ async def download_session_artifact(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     object_id, filename, content_type = await _sessions(request).artifact_object_id(
-        tenant.id, session_id, artifact_id
+        tenant.id, session_id, artifact_id, user_id=_user_id(request)
     )
     return request.app.state.gateway.uploads.download(
         "artifacts",
@@ -406,4 +422,6 @@ async def delete_agent_session_artifact(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _sessions(request).delete_artifact(tenant.id, session_id, artifact_id)
+    return await _sessions(request).delete_artifact(
+        tenant.id, session_id, artifact_id, user_id=_user_id(request)
+    )
