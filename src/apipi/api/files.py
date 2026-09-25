@@ -5,6 +5,7 @@ from fastapi.responses import Response
 
 from apipi.gateway.auth import require_tenant
 from apipi.store.blobs import NS_FILES, file_object_id
+from apipi.store.disposition import content_disposition
 from apipi.store.models import Tenant
 
 router = APIRouter()
@@ -61,7 +62,10 @@ async def read_file_content(
     return Response(
         content=data,
         media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": content_disposition(filename),
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
@@ -71,9 +75,12 @@ async def download_file(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    await _files(request).get(tenant.id, file_id)
+    filename, content_type = await _files(request).meta(tenant.id, file_id)
     return request.app.state.gateway.uploads.download(
-        NS_FILES, file_object_id(tenant.id, file_id)
+        NS_FILES,
+        file_object_id(tenant.id, file_id),
+        filename=filename,
+        content_type=content_type,
     )
 
 

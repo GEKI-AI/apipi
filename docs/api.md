@@ -102,9 +102,11 @@ create with `environment.files` `{ "type": "file_id", "file_id":
 
 Browser and BFF uploads that must not proxy bytes through the gateway
 use [presigned uploads](#uploads) instead of this multipart route.
-`GET /v1/files/{id}/content` still streams through the gateway.
-`POST /v1/files/{id}/download` returns a short-lived GET URL when the
-artifact store is S3.
+`GET /v1/files/{id}/content` still streams through the gateway. The
+response uses `Content-Disposition: attachment` with the stored file
+name, including an RFC 5987 `filename*` when the name is not ASCII, and
+`X-Content-Type-Options: nosniff`. `POST /v1/files/{id}/download`
+returns a short-lived GET URL when the artifact store is S3.
 
 ## Uploads
 
@@ -127,6 +129,14 @@ checks the object with `HeadObject`, enforces `APIPI_MAX_FILE_BYTES`,
 and writes Files or Skills metadata. Complete before PUT is `400` with
 code `upload_incomplete`. Wrong tenant is `404`. The Pi harness session
 cache is not exposed this way.
+
+A presigned GET forces a download. The URL sets
+`Content-Disposition: attachment` to the original file name. A name that
+is not plain ASCII also gets an RFC 5987 `filename*` parameter. The URL
+sets `Content-Type` from the stored type. HTML, SVG, XML, and
+JavaScript are signed as `application/octet-stream` so a browser does
+not render them from the bucket domain. The same attachment header is
+used when the gateway streams `/content`.
 
 Do not put the ApiPi API key in the browser. Do not log the presigned
 URL.

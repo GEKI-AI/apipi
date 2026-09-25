@@ -16,6 +16,7 @@ from apipi.gateway.schemas import StrictModel
 from apipi.services.agents import AgentWrite
 from apipi.services.runtime import EventHub
 from apipi.services.sessions import SessionService, iter_session_events
+from apipi.store.disposition import content_disposition
 from apipi.store.engine import Store
 from apipi.store.models import Tenant
 
@@ -373,7 +374,10 @@ async def read_session_artifact_content(
     return Response(
         content=data,
         media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": content_disposition(filename),
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
@@ -384,10 +388,15 @@ async def download_session_artifact(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    object_id = await _sessions(request).artifact_object_id(
+    object_id, filename, content_type = await _sessions(request).artifact_object_id(
         tenant.id, session_id, artifact_id
     )
-    return request.app.state.gateway.uploads.download("artifacts", object_id)
+    return request.app.state.gateway.uploads.download(
+        "artifacts",
+        object_id,
+        filename=filename,
+        content_type=content_type,
+    )
 
 
 @router.delete("/v1/agents/sessions/{session_id}/artifacts/{artifact_id}")

@@ -47,9 +47,14 @@ async def download_skill(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    await _skills(request).get(tenant.id, skill_id)
+    body = await _skills(request).get(tenant.id, skill_id)
+    name = body.get("name")
+    filename = f"{name}.zip" if isinstance(name, str) and name else "skill.zip"
     return request.app.state.gateway.uploads.download(
-        NS_SKILLS, skill_object_id(tenant.id, skill_id)
+        NS_SKILLS,
+        skill_object_id(tenant.id, skill_id),
+        filename=filename,
+        content_type="application/zip",
     )
 
 

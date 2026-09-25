@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Presigned GET URLs force `Content-Disposition: attachment` with the
+  original file name, including an RFC 5987 `filename*` when the name is
+  not ASCII. HTML, SVG, XML, and JavaScript are signed as
+  `application/octet-stream` so a browser does not render them from the
+  bucket domain. Gateway `/content` routes use the same attachment
+  header and send `X-Content-Type-Options: nosniff`.
+
 ## [0.5.0] - 2026-09-24
 
 ### Added

@@ -210,7 +210,14 @@ async def _persist_files(
             key_id=key_id,
             byte_size=len(data),
         )
-        await store.put(tenant_id, key_id, session_id, artifact.id, data)
+        await store.put(
+            tenant_id,
+            key_id,
+            session_id,
+            artifact.id,
+            data,
+            content_type=_content_type(rel),
+        )
         latest[rel] = data
 
 

@@ -85,6 +85,13 @@ class FileService:
             "has_more": False,
         }
 
+    async def meta(self, tenant_id: uuid.UUID, file_id: str) -> tuple[str, str | None]:
+        async with self.store.session() as db:
+            row = await get_file(db, tenant_id, file_id)
+        if row is None:
+            not_found()
+        return row.filename, row.content_type
+
     async def get(self, tenant_id: uuid.UUID, file_id: str) -> dict[str, Any]:
         async with self.store.session() as db:
             row = await get_file(db, tenant_id, file_id)

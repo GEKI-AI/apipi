@@ -978,7 +978,7 @@ class SessionService:
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         artifact_id: uuid.UUID,
-    ) -> str:
+    ) -> tuple[str, str, str]:
         async with self.store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
@@ -989,7 +989,10 @@ class SessionService:
             if artifact is None:
                 not_found()
             key_id = artifact.key_id
-        return blob_key(tenant_id, key_id, session_id, artifact_id)
+            filename = Path(artifact.path).name
+            content_type = artifact.content_type
+        object_id = blob_key(tenant_id, key_id, session_id, artifact_id)
+        return object_id, filename, content_type
 
     async def delete_artifact(
         self,

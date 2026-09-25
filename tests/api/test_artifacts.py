@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from tests.unit.test_blobs import FakeS3
 
 from apipi.config import DiskLimitError, Settings
+from apipi.store.blobs import S3Blobs
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import create_artifact, get_session_by_id
@@ -72,6 +74,52 @@ async def test_write_host_file_and_fetch_content(
     assert content.status_code == 200
     assert content.content == b"hello"
     assert content.headers["content-type"].startswith("text/plain")
+    assert content.headers["content-disposition"] == 'attachment; filename="note.txt"'
+    assert content.headers["x-content-type-options"] == "nosniff"
+
+
+async def test_artifact_content_disposition_non_ascii(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = "art-unicode"
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "Bericht_Größe_✓.txt").write_text("hi", encoding="utf-8")
+    await _harvest(store, settings, session_id)
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    artifact_id = listed.json()["data"][0]["id"]
+    content = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
+        headers=_auth(token),
+    )
+    assert content.status_code == 200
+    disposition = content.headers["content-disposition"]
+    assert disposition.startswith("attachment;")
+    assert "filename*=UTF-8''" in disposition
+    assert content.headers["x-content-type-options"] == "nosniff"
+
+
+async def test_harvest_puts_guessed_content_type(
+    client: AsyncClient, store: Store, settings: Settings
+) -> None:
+    token = "art-ctype"
+    session_id, directory = await _hosted_session(client, token)
+    (directory / "outputs").mkdir()
+    (directory / "outputs" / "page.html").write_text("<p>hi</p>", encoding="utf-8")
+    client_s3 = FakeS3()
+    s3_settings = settings.model_copy(
+        update={"artifact_store": "s3", "s3_bucket": "bucket"}
+    )
+    blobs = S3Blobs(s3_settings, client=client_s3)
+    async with store.session() as db:
+        await harvest_session(db, settings, uuid.UUID(session_id), None, blobs=blobs)
+    assert "text/html" in client_s3.types.values()
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+    )
+    assert listed.json()["data"][0]["content_type"] == "text/html"
 
 
 async def test_harvest_skips_workspace_artifacts_folder(

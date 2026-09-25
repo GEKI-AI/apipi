@@ -10,6 +10,7 @@ from typing import Any, Literal, Protocol
 from urllib.parse import unquote, urlparse
 
 from apipi.config import ConfigError, Settings
+from apipi.store.disposition import content_disposition, download_content_type
 from apipi.worker.pi.dirs import blob_user, sessions_root
 
 Namespace = Literal["artifacts", "files", "skills"]
@@ -192,6 +193,8 @@ class ArtifactBlobs(Protocol):
         session_id: uuid.UUID,
         artifact_id: uuid.UUID,
         data: bytes,
+        *,
+        content_type: str | None = None,
     ) -> None: ...
 
     async def get(
@@ -394,6 +397,7 @@ class S3Store:
         *,
         expires: timedelta,
         content_type: str | None = None,
+        filename: str | None = None,
     ) -> tuple[str, dict[str, str]]:
         params: dict[str, str] = {
             "Bucket": self._bucket,
@@ -406,6 +410,13 @@ class S3Store:
             if content_type:
                 params["ContentType"] = content_type
                 headers["Content-Type"] = content_type
+        else:
+            params["ResponseContentDisposition"] = content_disposition(
+                filename or "download"
+            )
+            signed = download_content_type(content_type)
+            if signed:
+                params["ResponseContentType"] = signed
         url = self._client.generate_presigned_url(
             client_method,
             Params=params,
@@ -484,9 +495,14 @@ class ArtifactAdapter:
         session_id: uuid.UUID,
         artifact_id: uuid.UUID,
         data: bytes,
+        *,
+        content_type: str | None = None,
     ) -> None:
         await self._store.put(
-            NS_ARTIFACTS, blob_key(tenant_id, key_id, session_id, artifact_id), data
+            NS_ARTIFACTS,
+            blob_key(tenant_id, key_id, session_id, artifact_id),
+            data,
+            content_type=content_type,
         )
 
     async def get(
