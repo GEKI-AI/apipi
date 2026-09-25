@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bucket domain. Gateway `/content` routes use the same attachment
   header and send `X-Content-Type-Options: nosniff`.
 
+### Fixed
+
+- S3 and botocore errors during harvest, cache restore, or hosted file
+  and skill setup fail the turn or environment with code
+  `artifact_store` instead of an unhandled `internal` error. Gateway
+  reads and uploads return `503` with that code. A missing object is
+  still a normal miss.
+
 ## [0.5.0] - 2026-09-24
 
 ### Added

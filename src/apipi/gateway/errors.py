@@ -85,6 +85,8 @@ def _tenant_id(request: Request) -> object:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    from apipi.store.blobs import ObjectStoreError
+
     @app.exception_handler(ApiError)
     async def api_error(request: Request, exc: ApiError) -> JSONResponse:
         request.state.error_code = exc.code or exc.type
@@ -102,6 +104,21 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=exc.status_code,
             content=error_body(
                 exc.type, exc.message, exc.code, session_id=exc.session_id
+            ),
+        )
+
+    @app.exception_handler(ObjectStoreError)
+    async def object_store_error(
+        request: Request, exc: ObjectStoreError
+    ) -> JSONResponse:
+        del exc
+        request.state.error_code = "artifact_store"
+        return JSONResponse(
+            status_code=503,
+            content=error_body(
+                "api_error",
+                "Artifact store unavailable",
+                "artifact_store",
             ),
         )
 

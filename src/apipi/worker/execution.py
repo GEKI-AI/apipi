@@ -19,7 +19,13 @@ from apipi.services.runtime import (
     request_cancel,
     run_turn,
 )
-from apipi.store.blobs import ArtifactBlobs, ObjectStore, blob_store, object_store
+from apipi.store.blobs import (
+    ArtifactBlobs,
+    ObjectStore,
+    ObjectStoreError,
+    blob_store,
+    object_store,
+)
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
@@ -200,6 +206,7 @@ class LocalExecution:
             thinking_summary=thinking_summary,
             auto_title=auto_title,
             objects=self.objects,
+            blobs=self.blobs,
         )
 
     async def continue_turn(
@@ -248,6 +255,7 @@ class LocalExecution:
             user_id=user_id,
             thinking_summary=thinking_summary,
             auto_title=auto_title,
+            blobs=self.blobs,
         )
 
     async def cancel(self, session_id: uuid.UUID, *, status: str) -> None:
@@ -401,7 +409,7 @@ class LocalExecution:
                     sync_workspace=False,
                     blobs=self.blobs,
                 )
-            except OSError:
+            except (OSError, ObjectStoreError):
                 return
             except asyncio.CancelledError:
                 return

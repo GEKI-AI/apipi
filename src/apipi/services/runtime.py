@@ -31,7 +31,7 @@ from apipi.services.skill_store import SkillService
 from apipi.services.skills import discover_skill_dirs
 from apipi.services.usage import add_usage, empty_usage, usage_event, usage_from
 from apipi.services.usage_export import export_usage
-from apipi.store.blobs import ObjectStore, object_store
+from apipi.store.blobs import ArtifactBlobs, ObjectStore, ObjectStoreError, object_store
 from apipi.store.engine import Store
 from apipi.store.events import append_event, list_events
 from apipi.store.models import Event, SessionRow, utc_now
@@ -852,6 +852,7 @@ async def _complete_turn(
     proc: PiProc | None = None,
     env_hub: EnvironmentHub | None = None,
     user_id: str | None = None,
+    blobs: ArtifactBlobs | None = None,
 ) -> None:
     await _emit_item(
         db,
@@ -870,7 +871,13 @@ async def _complete_turn(
         turn.updated_at = utc_now()
     if settings is not None:
         _row, limit_error = await harvest_session(
-            db, settings, session_id, proc, env_hub, turn_id=turn_id
+            db,
+            settings,
+            session_id,
+            proc,
+            env_hub,
+            turn_id=turn_id,
+            blobs=blobs,
         )
         if limit_error is not None:
             if limit_error.code == "artifact_store":
@@ -1098,6 +1105,10 @@ async def _fail_turn(
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
 
+def _cache_expected(row: SessionRow) -> bool:
+    return row.pi_session_id is not None or bool(row.pi_session_uri)
+
+
 def request_cancel(
     hub: EventHub, session_id: uuid.UUID, *, status: str
 ) -> asyncio.Event | None:
@@ -1146,16 +1157,21 @@ async def fail_environment(
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     message: str,
+    *,
+    code: str | None = None,
 ) -> None:
+    data: dict[str, Any] = {"error": message}
+    if code:
+        data["code"] = code
     await persist_event(
         db,
         hub,
         tenant_id,
         session_id,
         type="agent.session.environment.failed",
-        data={"error": message},
+        data=data,
     )
-    await fail_session(db, hub, tenant_id, session_id, message)
+    await fail_session(db, hub, tenant_id, session_id, message, code=code)
 
 
 def _model_span_attrs(
@@ -1205,6 +1221,7 @@ async def run_turn(
     thinking_summary: bool = False,
     auto_title: bool = False,
     objects: ObjectStore | None = None,
+    blobs: ArtifactBlobs | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
     if pool is not None:
@@ -1284,9 +1301,26 @@ async def run_turn(
             except (SetupError, ApiError) as exc:
                 await fail_environment(db, hub, tenant_id, session_id, exc.message)
                 return
+            except ObjectStoreError:
+                await fail_environment(
+                    db,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    "Cannot read artifacts",
+                    code="artifact_store",
+                )
+                return
             cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
+            cache_error: ObjectStoreError | None = None
             if settings is not None and cwd_path:
-                await restore_pi_session(settings, row, Path(cwd_path))
+                try:
+                    await restore_pi_session(settings, row, Path(cwd_path), blobs=blobs)
+                except ObjectStoreError as exc:
+                    if _cache_expected(row):
+                        cache_error = exc
+                    else:
+                        raise
             computer = (
                 bind_computer(env_hub, env_id)
                 if env_hub is not None and env_id is not None
@@ -1342,6 +1376,22 @@ async def run_turn(
                 type="message",
                 data={"role": "user", "content": text},
             )
+            if cache_error is not None:
+                await _fail_turn(
+                    db,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    turn_id,
+                    "Cannot read artifacts",
+                    request_id=request_id,
+                    metrics=metrics,
+                    tracing=tracing,
+                    settings=settings,
+                    code="artifact_store",
+                    user_id=user_id,
+                )
+                return
         try:
             mcp_stdio = await _stdio_for_turn(
                 mcp_stdio,
@@ -1541,6 +1591,7 @@ async def run_turn(
                     proc=pool.peek(session_id) if pool is not None else None,
                     env_hub=env_hub,
                     user_id=user_id,
+                    blobs=blobs,
                 )
             schedule_thinking_summaries(
                 store,
@@ -1595,6 +1646,7 @@ async def continue_turn(
     user_id: str | None = None,
     thinking_summary: bool = False,
     auto_title: bool = False,
+    blobs: ArtifactBlobs | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -1663,7 +1715,26 @@ async def continue_turn(
         ensure_openai_workspace(row.environment)
         cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
         if settings is not None and cwd_path:
-            await restore_pi_session(settings, row, Path(cwd_path))
+            try:
+                await restore_pi_session(settings, row, Path(cwd_path), blobs=blobs)
+            except ObjectStoreError:
+                if _cache_expected(row):
+                    await _fail_turn(
+                        db,
+                        hub,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        "Cannot read artifacts",
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                        settings=settings,
+                        code="artifact_store",
+                        user_id=user_id,
+                    )
+                    return
+                raise
         computer = (
             bind_computer(env_hub, env_id)
             if env_hub is not None and env_id is not None
@@ -1882,6 +1953,7 @@ async def continue_turn(
                     proc=pool.peek(session_id) if pool is not None else None,
                     env_hub=env_hub,
                     user_id=user_id,
+                    blobs=blobs,
                 )
             schedule_thinking_summaries(
                 store,

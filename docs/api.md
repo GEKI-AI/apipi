@@ -528,6 +528,15 @@ An `openai_hosted` directory over `APIPI_MAX_WORKSPACE_BYTES` emits
 artifacts that would pass `APIPI_MAX_ARTIFACT_BYTES` emits
 `agent.session.error` with code `artifact_too_large`. If the artifact
 store cannot be written (`OSError`, including a permission error on
-the local `.artifacts` tree), the turn fails with
-`agent.session.turn.failed` and `agent.session.error` with code
-`artifact_store`. Settings and defaults are in [config](config.md).
+the local `.artifacts` tree, or an S3/botocore error such as
+`AccessDenied`, `NoSuchBucket`, or a connection failure), the turn
+fails with `agent.session.turn.failed` and `agent.session.error` with
+code `artifact_store`. A missing object (`NoSuchKey`) is not that
+error. If a Pi session cache is stored and reading it fails, the turn
+fails the same way and does not continue without the cache. Session
+create that cannot read a hosted file or skill returns `503` with
+code `artifact_store`. A later turn that cannot read those bytes
+fails the environment with the same code. An HTTP read, upload, or
+download that hits the same store error also returns `503` with code
+`artifact_store`, not `500`.
+Settings and defaults are in [config](config.md).

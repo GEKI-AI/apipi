@@ -208,7 +208,8 @@ session. `APIPI_SANDBOX_TTL_SELF_HOSTED` does not kill Pi.
 | Request body too large | `413` | `payload_too_large` |
 | Workspace directory too large | `agent.session.error` | `workspace_too_large` |
 | Artifact store too large | `agent.session.error` | `artifact_too_large` |
-| Artifact store not writable | `agent.session.turn.failed` | `artifact_store` |
+| Artifact store not writable, including S3 errors | `agent.session.turn.failed` | `artifact_store` |
+| Artifact store error on an HTTP read or upload | `503` | `artifact_store` |
 
 The gateway does not intercept every write inside a guest. Guest tmpfs
 is already bounded by `[sandbox.resources].mem_mib`. Workspace and
@@ -243,7 +244,14 @@ origin, including the `Content-Type` header. A presigned GET forces
 RFC 5987 `filename*` when that name is not ASCII. Active content such
 as HTML, SVG, XML, and JavaScript is never served inline: those objects
 are signed as `application/octet-stream`. Local `artifact_store`
-returns `400` with code `presign_unsupported`.
+returns `400` with code `presign_unsupported`. An S3 or botocore
+failure while writing artifacts fails the turn with code
+`artifact_store`, the same code as a local `OSError`. A missing object
+is not that error. If a Pi session cache is already stored and the
+read fails, the turn fails with `artifact_store` instead of starting
+without the cache. Session create that cannot read a hosted file or
+skill returns `503` with code `artifact_store`. The same store error
+on a gateway read or upload returns `503` with that code.
 
 The live `openai_hosted` workspace stays on the node. Published
 artifact content, and hosted file and skill bytes, can be read from any
