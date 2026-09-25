@@ -305,8 +305,10 @@ The gateway always composes the appended blocks before
 `agent.instructions`. Order: Pi's harness default, or
 `system_prompt` when that is set (session metadata, then agent
 metadata, then `[pi].system_prompt`); then the main platform prompt;
-then additional platform text; then the sandbox size hint and browser
-hint when those apply; then `agent.instructions`. Skills, capability
+then additional platform text; then the sandbox size hint. The
+gateway does not add a Playwright MCP hint from the injected tool
+list. Tool names are registered only after the guest attach
+succeeds. Then `agent.instructions`. Skills, capability
 directories, packages, and setup commands are unchanged. Empty main
 (`platform_prompt = ""`) drops only the main block; additional and
 agent instructions still apply. An empty `system_prompt` keeps Pi's
@@ -318,9 +320,9 @@ The built-in main prompt tells the model that hosted cwd is
 `/workspace`, durable files go under `outputs/` only, `none` has no
 computer, scratch is deleted with the sandbox, and it must not invent
 unavailable APIs. The gateway also appends the resolved sandbox size
-(`S` / `M` / `L`). When Playwright is attached, which is the `browser`
-image unless auto-inject is off, it adds a browser block: system
-Chromium is already there, use MCP tools, do not install browsers.
+(`S` / `M` / `L`). It does not name Playwright MCP tools just
+because auto-inject added a stdio server. Those names appear only
+after the guest attach succeeds.
 
 ```toml
 [pi]
@@ -362,9 +364,9 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | `APIPI_SANDBOX_IMAGES` | `[sandbox].images` | unset (every id in the index) | Image ids this host pulls and serves. |
 | `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser`. Used by `apipi install` and `apipi microvm shell`. Live session guests follow `sandbox_image`, not this process-wide setting. When the image is omitted, size `L` selects `browser` and other sizes use the default image. Explicit `kernel` / `rootfs` / `rootfs_browser` override the images dir. Resolution is explicit path, then `<id>/current` in the images dir, then the legacy `~/.cache/apipi/microvm` files. |
 | `APIPI_SANDBOX_DEFAULT_IMAGE` | `[sandbox].default_image` | `default` | Guest image when the session does not set `environment.sandbox_image` or `metadata["apipi.sandbox_image"]`, and the size is not `L`. `L` still selects `browser`. This is not `APIPI_MICROVM_IMAGE`, which only selects the image for `apipi install` and `apipi microvm shell`. |
-| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. Playwright MCP is injected when the image is `browser` unless you turn that off. Size `L` still selects that image when none is set. |
-| `APIPI_SANDBOX_AUTO_PLAYWRIGHT` | `[sandbox.browser].auto_playwright` | on | When on, image `browser` on `microvm` injects Playwright MCP (system Chromium). Off keeps that image and its RAM but does not attach browser tools. |
-| `APIPI_SANDBOX_PLAYWRIGHT_MCP` | `[sandbox.browser].playwright_mcp` | `@playwright/mcp@latest` | npm package passed to `npx -y` for the injected server. Pin a version for reproducible guests. |
+| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. Playwright MCP is injected when the image is `browser` unless you turn that off. Size `L` still selects that image when none is set. Install that rootfs with `apipi install --microvm --image browser`. |
+| `APIPI_SANDBOX_AUTO_PLAYWRIGHT` | `[sandbox.browser].auto_playwright` | on | When on, image `browser` on `microvm` injects the vendored Playwright MCP server (system Chromium). Off keeps that image and its RAM but does not attach browser tools. |
+| `APIPI_SANDBOX_PLAYWRIGHT_MCP` | `[sandbox.browser].playwright_mcp` | `@playwright/mcp@latest` | Kept so existing config still loads. Auto-inject does not pass this to `npx`. The browser image vendors the server. Rebuild with `apipi install --microvm --image browser`. |
 
 ```toml
 [sandbox]

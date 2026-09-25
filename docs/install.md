@@ -64,6 +64,13 @@ apipi install --microvm --image browser
 apipi install --pi --microvm
 ```
 
+`--image browser` is the durable way to install the browser rootfs.
+That image contains Alpine Chromium and a pinned Playwright MCP
+server. Auto-inject starts the vendored server. It does not run
+`npx` inside the guest. After upgrading ApiPi, run
+`apipi install --microvm --image browser` again so workers pick up
+that rootfs. See [run modes](run-modes.md).
+
 `--microvm` pulls a prebuilt image when `APIPI_IMAGE_SOURCE` is set.
 `--build` keeps the local recipe build for an air-gapped host.
 `--dry-run` prints which of those it would run.

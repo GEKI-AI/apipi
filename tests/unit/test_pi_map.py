@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from apipi.services.runtime import LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES
 from apipi.worker.pi.map import (
     THINKING_COMPLETED,
@@ -80,6 +82,25 @@ def test_agent_end_error_passes_plain_message() -> None:
     )
     error = next(item[1] for item in mapped if item[0] == "pi_error")
     assert error["message"] == "No model configured for provider"
+
+
+def test_extension_error_is_logged_in_full(caplog: pytest.LogCaptureFixture) -> None:
+    from apipi.worker.pi.proc import log_extension_error
+
+    detail = "mcp attach failed: " + ("x" * 800)
+    with caplog.at_level("WARNING", logger="apipi.worker.pi"):
+        log_extension_error(
+            {
+                "type": "extension_error",
+                "error": detail,
+                "stack": "Error: mcp attach failed\n    at attachStdio",
+            }
+        )
+    record = caplog.records[-1]
+    assert record.getMessage() == "pi extension error"
+    logged = record.__dict__["error"]
+    assert detail in logged
+    assert "at attachStdio" in logged
 
 
 def test_internal_pi_events_are_dropped() -> None:

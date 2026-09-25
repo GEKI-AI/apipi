@@ -13,6 +13,7 @@ IMAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 _SIZE_RANK = {"S": 0, "M": 1, "L": 2}
 PLAYWRIGHT_LABEL = "playwright"
 PLAYWRIGHT_CHROMIUM = "/usr/bin/chromium-browser"
+PLAYWRIGHT_MCP_CLI = "/opt/apipi/playwright-mcp/node_modules/@playwright/mcp/cli.js"
 
 
 def parse_sandbox_size(value: object) -> str | None:
@@ -164,16 +165,15 @@ def mem_mib_for_size(settings: Settings, size: str | None) -> int:
     return settings.sandbox_mem_mib(size if size is not None else "S")
 
 
-def playwright_tool(settings: Settings) -> dict[str, Any]:
+def playwright_tool(_settings: Settings) -> dict[str, Any]:
     return {
         "type": "mcp",
         "server_label": PLAYWRIGHT_LABEL,
         "transport": {
             "type": "stdio",
-            "command": "npx",
+            "command": "node",
             "args": [
-                "-y",
-                settings.sandbox_playwright_mcp,
+                PLAYWRIGHT_MCP_CLI,
                 "--headless",
                 "--isolated",
                 "--no-sandbox",

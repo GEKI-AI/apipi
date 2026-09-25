@@ -23,6 +23,7 @@ def main() -> None:
             "apipi/worker/pi/images/build.sh",
             "apipi/worker/pi/images/default/image.env",
             "apipi/worker/pi/images/browser/image.env",
+            "apipi/worker/pi/images/browser/setup.sh",
         )
         missing = [name for name in required if name not in names]
         if missing:

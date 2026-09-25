@@ -125,19 +125,21 @@ Isolation `microvm` applies both, including when `environment.type` is
 `none` (Pi still runs in a guest). Each live lease consumes that
 size's RAM against worker `memory_mb` and still counts as one session.
 
-On `microvm`, a resolved image of `browser` injects a Playwright stdio
-MCP server (`npx @playwright/mcp`, headless, isolated, system Chromium
-at `/usr/bin/chromium-browser`) so the browser just works without
-`examples/playwright.yaml`. Size `L` still selects `browser` when the
-image is omitted, so those sessions keep the tools. If the agent
-already has a Playwright MCP tool (`server_label` `playwright` or the
-same package), that tool is kept and nothing is duplicated. Set
+On `microvm`, image `browser` starts the Playwright MCP server that
+the browser rootfs already contains. The command is `node` and
+`/opt/apipi/playwright-mcp/node_modules/@playwright/mcp/cli.js`, with
+the same headless Chromium flags. It does not run `npx`. Size `L`
+still selects `browser` when the image is omitted. Install that
+rootfs with `apipi install --microvm --image browser`. An older
+browser rootfs without that file cannot attach. Attach waits at most
+15 seconds, then the turn continues without those tools. The platform
+prompt does not name Playwright MCP tools. Those names are registered
+only after attach succeeds. If the agent already has a Playwright MCP
+tool, that tool is kept and nothing is duplicated. Set
 `[sandbox.browser].auto_playwright = false` to keep the browser image
-and its RAM but attach MCP yourself. A Playwright process that cannot
-start makes Pi exit instead of running that image without browser
-tools. The platform prompt always names the sandbox size. It
-mentions Chromium and MCP tool names only when those tools are
-attached, and it tells the model not to install Playwright or browsers.
+and its RAM but attach MCP yourself. A failed attach does not fail
+the turn. The platform prompt always names the sandbox size. It tells
+the model not to install Playwright or browsers.
 
 ### Packages, files, env, network, and setup commands
 

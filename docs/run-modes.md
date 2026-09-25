@@ -106,12 +106,15 @@ overwrite each other. The script needs `curl`, `tar`, `mkfs.ext4`,
 `default` installs Alpine, Node, the pinned Pi CLI, Python 3, `ip`,
 `socat`, `curl`, and `git`, and copies `src/apipi/worker/pi/guest.sh` to
 `/sbin/apipi-guest`.
-`browser` is that image plus Alpine Chromium and font/NSS packages so
-stdio MCP such as Playwright can drive a **system** browser
-(`/usr/bin/chromium-browser`). Playwright's own glibc browser builds
-do not run on this musl guest. The image is 4 GiB unless you set
-`SIZE_MIB`. Use sandbox size `L` (2 GiB guest RAM by default) for
-browser guests. See [production sizing](production.md#sizing).
+`browser` is that image plus Alpine Chromium, font/NSS packages, and
+a pinned `@playwright/mcp` installed at
+`/opt/apipi/playwright-mcp`. Auto-inject starts that file with
+`node`. It does not download the server with `npx` on a cold guest.
+Playwright's own glibc browser builds do not run on this musl guest.
+The image is 4 GiB unless you set `SIZE_MIB`. Use sandbox size `L`
+(2 GiB guest RAM by default) for browser guests. Rebuild after this
+change with `apipi install --microvm --image browser`. See
+[install](install.md) and [production sizing](production.md#sizing).
 
 ```
 apipi install --microvm
@@ -144,9 +147,10 @@ still selects the image for `apipi install` and `apipi microvm shell`.
 To make every session browser-class without callers setting an image,
 set `[sandbox].default_size = "L"` (and size `worker_memory_mb` for ~2
 GiB guests) or set `[sandbox].default_image = "browser"` with a size of
-at least `M`. Playwright MCP is injected when the resolved image is
-`browser`, unless `auto_playwright` is off. Session `packages` and
-`setup_commands` still run on whichever image that session booted.
+at least `M`. Image `browser` injects the vendored Playwright MCP
+server against system Chromium unless `auto_playwright` is off. Session
+`packages` and `setup_commands` still run on whichever image that
+session booted.
 
 If the kernel download fails, get a Firecracker-compatible `vmlinux`
 from the [Firecracker getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)

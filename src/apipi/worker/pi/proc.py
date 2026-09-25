@@ -9,12 +9,44 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from apipi.config import Settings
+from apipi.gateway.logutil import log_event
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
 from apipi.worker.pi.orphan import host_pi_stamp
 from apipi.worker.pi.version import PINNED_PI
 
 log = logging.getLogger("apipi.worker.pi")
+
+
+def extension_error_text(event: dict[str, Any]) -> str:
+    raw = event.get("error")
+    stack = event.get("stack")
+    if isinstance(raw, str) and raw:
+        if isinstance(stack, str) and stack and stack not in raw:
+            return f"{raw}\n{stack}"
+        return raw
+    if isinstance(raw, dict):
+        message = raw.get("message")
+        nested = raw.get("stack")
+        if isinstance(message, str) and message:
+            if isinstance(nested, str) and nested and nested not in message:
+                return f"{message}\n{nested}"
+            return message
+        return json.dumps(raw)
+    message = event.get("message")
+    if isinstance(message, str) and message:
+        return message
+    return json.dumps(event)
+
+
+def log_extension_error(event: dict[str, Any]) -> None:
+    log_event(
+        log,
+        logging.WARNING,
+        "pi extension error",
+        event="pi.extension_error",
+        error=extension_error_text(event),
+    )
 
 
 def _is_session_leader(pid: int) -> bool:
@@ -146,6 +178,8 @@ class PiProc:
                 continue
             if event.get("type") == "response":
                 continue
+            if event.get("type") == "extension_error":
+                log_extension_error(event)
             yield event
 
     async def terminate(self) -> None:
