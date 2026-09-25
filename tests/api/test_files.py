@@ -134,3 +134,24 @@ async def test_delete_file_then_attach_is_not_found(client: AsyncClient) -> None
         },
     )
     assert response.status_code == 404
+
+
+async def test_file_content_disposition_non_ascii(client: AsyncClient) -> None:
+    token = "files-unicode"
+    name = "Bericht_Größe_✓.pdf"
+    uploaded = await client.post(
+        "/v1/files",
+        headers=_auth(token),
+        data={"purpose": "user_data"},
+        files={"file": (name, b"%PDF", "application/pdf")},
+    )
+    assert uploaded.status_code == 200
+    file_id = uploaded.json()["id"]
+    content = await client.get(f"/v1/files/{file_id}/content", headers=_auth(token))
+    assert content.status_code == 200
+    disposition = content.headers["content-disposition"]
+    assert disposition.startswith("attachment;")
+    assert "filename*=UTF-8''" in disposition
+    assert "\r" not in disposition
+    assert "\n" not in disposition
+    assert content.headers["x-content-type-options"] == "nosniff"

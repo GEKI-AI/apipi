@@ -1,8 +1,10 @@
 import io
 import os
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote, urlencode
 
 import pytest
 
@@ -11,6 +13,7 @@ from apipi.store.blobs import (
     NS_ARTIFACTS,
     NS_FILES,
     NS_SKILLS,
+    ArtifactAdapter,
     LocalBlobs,
     LocalStore,
     MemoryBlobs,
@@ -29,6 +32,7 @@ from apipi.store.blobs import (
     s3_object_key,
     skill_object_id,
 )
+from apipi.store.disposition import content_disposition
 
 
 def _settings(
@@ -63,6 +67,7 @@ class FakeS3:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.types: dict[str, str] = {}
+        self.presigns: list[dict[str, str]] = []
 
     def put_object(self, **kwargs: object) -> None:
         key = kwargs["Key"]
@@ -99,9 +104,17 @@ class FakeS3:
         HttpMethod: str | None = None,
     ) -> str:
         del ClientMethod, ExpiresIn
+        self.presigns.append(dict(Params))
         key = Params["Key"]
         method = HttpMethod or "GET"
-        return f"https://bucket.example/{key}?presign=1&method={method}"
+        query = {"presign": "1", "method": method}
+        disposition = Params.get("ResponseContentDisposition")
+        if isinstance(disposition, str):
+            query["response-content-disposition"] = disposition
+        response_type = Params.get("ResponseContentType")
+        if isinstance(response_type, str):
+            query["response-content-type"] = response_type
+        return f"https://bucket.example/{key}?{urlencode(query)}"
 
     def delete_object(self, **kwargs: object) -> None:
         key = kwargs["Key"]
@@ -339,3 +352,89 @@ def test_root_writer_gives_files_to_sudo_user(
     _give_to_operator(root, nested)
     assert nested in chowned
     assert nested.parent in chowned
+
+
+def test_content_disposition_ascii_and_unicode() -> None:
+    plain = content_disposition("report.html")
+    assert plain == 'attachment; filename="report.html"'
+    name = "Bericht_Größe_✓.pdf"
+    header = content_disposition(name)
+    assert header.startswith("attachment;")
+    assert 'filename="Bericht_Gr__e__.pdf"' in header
+    assert f"filename*=UTF-8''{quote(name, safe='')}" in header
+    assert "inline" not in header
+
+
+def test_content_disposition_sanitizes() -> None:
+    header = content_disposition('../secret"\r\n.html')
+    assert header == 'attachment; filename="secret.html"'
+    assert "\r" not in header
+    assert "\n" not in header
+    assert "../" not in header
+    assert content_disposition("") == 'attachment; filename="download"'
+    assert content_disposition("..") == 'attachment; filename="download"'
+
+
+def test_presign_get_forces_download(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path, artifact_store="s3", s3_bucket="bucket", s3_prefix="apipi/artifacts"
+    )
+    client = FakeS3()
+    store = S3Store(settings, client=client)
+    url, _headers = store.presign(
+        "GET",
+        NS_FILES,
+        "tenant/file-1",
+        expires=timedelta(minutes=5),
+        filename="report.html",
+        content_type="text/html",
+    )
+    params = client.presigns[-1]
+    assert params["ResponseContentDisposition"] == 'attachment; filename="report.html"'
+    assert params["ResponseContentType"] == "application/octet-stream"
+    assert "response-content-disposition" in url
+    assert "inline" not in params["ResponseContentDisposition"]
+    svg_url, _headers = store.presign(
+        "GET",
+        NS_FILES,
+        "tenant/file-2",
+        expires=timedelta(minutes=5),
+        filename="icon.svg",
+        content_type="image/svg+xml",
+    )
+    del svg_url
+    assert client.presigns[-1]["ResponseContentDisposition"].startswith("attachment;")
+    assert client.presigns[-1]["ResponseContentType"] == "application/octet-stream"
+    store.presign(
+        "GET",
+        NS_FILES,
+        "tenant/file-3",
+        expires=timedelta(minutes=5),
+        filename="notes.txt",
+        content_type="text/plain",
+    )
+    assert client.presigns[-1]["ResponseContentType"] == "text/plain"
+    store.presign(
+        "GET",
+        NS_FILES,
+        "tenant/file-4",
+        expires=timedelta(minutes=5),
+        filename="notes.txt",
+    )
+    assert "ResponseContentType" not in client.presigns[-1]
+
+
+async def test_artifact_adapter_put_content_type(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path, artifact_store="s3", s3_bucket="bucket", s3_prefix="apipi/artifacts"
+    )
+    client = FakeS3()
+    blobs = ArtifactAdapter(S3Store(settings, client=client))
+    tenant = uuid.uuid4()
+    session = uuid.uuid4()
+    artifact = uuid.uuid4()
+    await blobs.put(
+        tenant, "user-a", session, artifact, b"<p>hi</p>", content_type="text/html"
+    )
+    key = f"apipi/artifacts/{blob_key(tenant, 'user-a', session, artifact)}"
+    assert client.types[key] == "text/html"

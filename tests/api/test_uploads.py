@@ -1,5 +1,7 @@
 import io
+import uuid
 import zipfile
+from urllib.parse import parse_qs, urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 from httpx import ASGITransport, AsyncClient
@@ -11,6 +13,7 @@ from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import FakeHarness
 from apipi.store.blobs import S3Store, file_object_id, skill_object_id
 from apipi.store.engine import Store
+from apipi.store.repo import create_artifact
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -28,6 +31,10 @@ def _s3_settings(settings: Settings) -> Settings:
         s3_endpoint="https://hel1.your-objectstorage.com",
         s3_region="hel1",
     )
+
+
+def _query(url: str) -> dict[str, list[str]]:
+    return parse_qs(urlsplit(url).query)
 
 
 def _zip_skill() -> bytes:
@@ -111,7 +118,11 @@ async def test_file_presign_put_then_complete(settings: Settings, store: Store) 
         )
         assert download.status_code == 200
         assert download.json()["method"] == "GET"
+        query = _query(download.json()["url"])
         assert "presign=1" in download.json()["url"]
+        disposition = query["response-content-disposition"][0]
+        assert disposition == 'attachment; filename="a.txt"'
+        assert query["response-content-type"] == ["text/plain"]
 
 
 async def test_skill_presign_complete(settings: Settings, store: Store) -> None:
@@ -160,6 +171,11 @@ async def test_skill_presign_complete(settings: Settings, store: Store) -> None:
         )
         assert download.status_code == 200
         assert download.json()["method"] == "GET"
+        query = _query(download.json()["url"])
+        assert query["response-content-disposition"] == [
+            'attachment; filename="demo.zip"'
+        ]
+        assert query["response-content-type"] == ["application/zip"]
 
 
 async def test_upload_oversize_rejected(client: AsyncClient) -> None:
@@ -174,3 +190,50 @@ async def test_upload_oversize_rejected(client: AsyncClient) -> None:
     )
     assert created.status_code == 413
     assert created.json()["error"]["code"] == "payload_too_large"
+
+
+async def test_artifact_download_forces_attachment(
+    settings: Settings, store: Store
+) -> None:
+    client_s3 = FakeS3()
+    s3_settings = _s3_settings(settings)
+    app = create_app(
+        s3_settings,
+        store=store,
+        harness=FakeHarness(),
+        objects=S3Store(s3_settings, client=client_s3),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = "art-dl"
+        agent = await client.post(
+            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        )
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent.json()["id"]},
+        )
+        assert created.status_code == 200
+        session_id = uuid.UUID(created.json()["id"])
+        tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+        async with store.session() as db:
+            artifact = await create_artifact(
+                db,
+                tenant_id,
+                session_id,
+                path="outputs/report.html",
+                content_type="text/html",
+            )
+            artifact_id = artifact.id
+        download = await client.post(
+            f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/download",
+            headers=_auth(token),
+        )
+        assert download.status_code == 200
+        query = _query(download.json()["url"])
+        disposition = query["response-content-disposition"][0]
+        assert disposition == 'attachment; filename="report.html"'
+        assert "inline" not in disposition
+        assert query["response-content-type"] == ["application/octet-stream"]

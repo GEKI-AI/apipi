@@ -205,6 +205,9 @@ class UploadService:
         self,
         namespace: Literal["artifacts", "files", "skills"],
         object_id: str,
+        *,
+        filename: str,
+        content_type: str | None = None,
     ) -> dict[str, Any]:
         s3 = _s3(self.objects)
         url, headers = s3.presign(
@@ -212,6 +215,8 @@ class UploadService:
             namespace,
             object_id,
             expires=self.settings.presign_ttl,
+            content_type=content_type,
+            filename=filename,
         )
         expires = utc_now() + self.settings.presign_ttl
         return {

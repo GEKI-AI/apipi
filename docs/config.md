@@ -238,7 +238,11 @@ Presigned uploads (`POST /v1/uploads`) send bytes straight to the bucket.
 The browser never holds the ApiPi API key. Virtual-hosted URLs match
 Hetzner (`https://bucket.hel1.your-objectstorage.com/…`). Set a CORS
 rule on the bucket that allows `PUT`, `GET`, and `HEAD` from your SPA
-origin, including the `Content-Type` header. Local `artifact_store`
+origin, including the `Content-Type` header. A presigned GET forces
+`Content-Disposition: attachment` with the original file name, and an
+RFC 5987 `filename*` when that name is not ASCII. Active content such
+as HTML, SVG, XML, and JavaScript is never served inline: those objects
+are signed as `application/octet-stream`. Local `artifact_store`
 returns `400` with code `presign_unsupported`.
 
 The live `openai_hosted` workspace stays on the node. Published
