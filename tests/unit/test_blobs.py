@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import uuid
 from datetime import timedelta
@@ -7,6 +8,7 @@ from typing import Literal
 from urllib.parse import quote, urlencode
 
 import pytest
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 from apipi.config import ConfigError, Settings, load_settings
 from apipi.store.blobs import (
@@ -18,6 +20,7 @@ from apipi.store.blobs import (
     LocalStore,
     MemoryBlobs,
     MemoryStore,
+    ObjectStoreError,
     S3Blobs,
     S3Store,
     _give_to_operator,
@@ -438,3 +441,71 @@ async def test_artifact_adapter_put_content_type(tmp_path: Path) -> None:
     )
     key = f"apipi/artifacts/{blob_key(tenant, 'user-a', session, artifact)}"
     assert client.types[key] == "text/html"
+
+
+def _client_error(code: str, operation: str) -> ClientError:
+    return ClientError(
+        {
+            "Error": {
+                "Code": code,
+                "Message": "AWS_SECRET_ACCESS_KEY=supersecret",
+            }
+        },
+        operation,
+    )
+
+
+class _Boom:
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+
+    def put_object(self, **kwargs: object) -> None:
+        del kwargs
+        raise self.exc
+
+    def get_object(self, **kwargs: object) -> None:
+        del kwargs
+        raise self.exc
+
+    def list_objects_v2(self, **kwargs: object) -> None:
+        del kwargs
+        raise self.exc
+
+
+async def test_s3_errors_become_store_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = _settings(tmp_path, artifact_store="s3", s3_bucket="bucket")
+    denied = S3Store(settings, client=_Boom(_client_error("AccessDenied", "PutObject")))
+    caplog.set_level(logging.ERROR, logger="apipi")
+    with pytest.raises(ObjectStoreError) as put_exc:
+        await denied.put(NS_FILES, "tenant/file-1", b"x")
+    assert put_exc.value.code == "AccessDenied"
+    assert put_exc.value.operation == "put"
+    assert put_exc.value.bucket == "bucket"
+    assert put_exc.value.key.endswith("tenant/file-1")
+    record = next(
+        item
+        for item in caplog.records
+        if item.__dict__.get("event") == "store.s3.error"
+    )
+    assert record.__dict__["operation"] == "put"
+    assert record.__dict__["bucket"] == "bucket"
+    assert record.__dict__["s3_code"] == "AccessDenied"
+    assert "supersecret" not in caplog.text
+    internal = S3Store(
+        settings, client=_Boom(_client_error("InternalError", "GetObject"))
+    )
+    with pytest.raises(ObjectStoreError) as get_exc:
+        await internal.get(NS_FILES, "tenant/file-1")
+    assert get_exc.value.code == "InternalError"
+    missing = S3Store(settings, client=_Boom(_client_error("NoSuchKey", "GetObject")))
+    assert await missing.get(NS_FILES, "tenant/missing") is None
+    offline = S3Store(
+        settings,
+        client=_Boom(EndpointConnectionError(endpoint_url="https://s3.example")),
+    )
+    with pytest.raises(ObjectStoreError) as list_exc:
+        await offline.used_bytes(NS_FILES, "tenant")
+    assert list_exc.value.operation == "list"
+    assert list_exc.value.code == "EndpointConnectionError"

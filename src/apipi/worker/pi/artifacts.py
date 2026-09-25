@@ -15,6 +15,7 @@ from apipi.env.hub import EnvDisconnected, EnvironmentHub
 from apipi.services.skills import copy_capability_directories
 from apipi.store.blobs import (
     ArtifactBlobs,
+    ObjectStoreError,
     artifact_blob_uri,
     blob_store,
     read_blob_uri,
@@ -338,7 +339,7 @@ async def harvest_session(
             )
         except DiskLimitError as exc:
             persist_error = exc
-        except OSError:
+        except (OSError, ObjectStoreError):
             persist_error = DiskLimitError(
                 "Cannot write artifacts", code="artifact_store"
             )
@@ -351,7 +352,7 @@ async def harvest_session(
             dest=_hosted_dest(row),
             blobs=blobs,
         )
-    except OSError:
+    except (OSError, ObjectStoreError):
         persist_error = persist_error or DiskLimitError(
             "Cannot write artifacts", code="artifact_store"
         )

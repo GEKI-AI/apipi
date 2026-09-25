@@ -41,7 +41,7 @@ from apipi.services.vault_crypto import (
     vault_aad,
     vault_key_bytes,
 )
-from apipi.store.blobs import ArtifactBlobs, blob_key
+from apipi.store.blobs import ArtifactBlobs, ObjectStoreError, blob_key
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import Artifact, Item, SessionRow, Turn
@@ -393,7 +393,15 @@ class SessionService:
         env = environment_payload(environment)
         extra_files: list[tuple[str, bytes]] = []
         if env.get("type") == "openai_hosted":
-            extra_files = await self.files.workspace_files(tenant_id, env)
+            try:
+                extra_files = await self.files.workspace_files(tenant_id, env)
+            except ObjectStoreError as exc:
+                raise ApiError(
+                    "api_error",
+                    "Artifact store unavailable",
+                    code="artifact_store",
+                    status_code=503,
+                ) from exc
         raw_tools: list[Any] = []
         env_key: str | None = None
         env_id: uuid.UUID | None = None
@@ -491,6 +499,13 @@ class SessionService:
                         "invalid_request",
                         exc.message,
                         code="invalid_request",
+                    ) from exc
+                except ObjectStoreError as exc:
+                    raise ApiError(
+                        "api_error",
+                        "Artifact store unavailable",
+                        code="artifact_store",
+                        status_code=503,
                     ) from exc
                 env = {**env, "directory": str(directory)}
                 row.environment = env

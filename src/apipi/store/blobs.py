@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import pwd
 import shutil
@@ -6,10 +7,11 @@ import uuid
 from collections.abc import MutableMapping
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, NoReturn, Protocol
 from urllib.parse import unquote, urlparse
 
 from apipi.config import ConfigError, Settings
+from apipi.gateway.logutil import log_event
 from apipi.store.disposition import content_disposition, download_content_type
 from apipi.worker.pi.dirs import blob_user, sessions_root
 
@@ -18,6 +20,25 @@ Namespace = Literal["artifacts", "files", "skills"]
 NS_ARTIFACTS: Namespace = "artifacts"
 NS_FILES: Namespace = "files"
 NS_SKILLS: Namespace = "skills"
+
+log = logging.getLogger("apipi")
+
+
+class ObjectStoreError(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation: str,
+        bucket: str,
+        key: str,
+        code: str,
+    ) -> None:
+        super().__init__(message)
+        self.operation = operation
+        self.bucket = bucket
+        self.key = key
+        self.code = code
 
 
 def blob_key(
@@ -347,7 +368,10 @@ class S3Store:
         }
         if content_type:
             kwargs["ContentType"] = content_type
-        await asyncio.to_thread(self._client.put_object, **kwargs)
+        try:
+            await asyncio.to_thread(self._client.put_object, **kwargs)
+        except Exception as exc:
+            self._fail(exc, operation="put", key=key)
 
     async def get(self, namespace: Namespace, object_id: str) -> bytes | None:
         return await self.get_raw(self._bucket, self._key(namespace, object_id))
@@ -360,14 +384,17 @@ class S3Store:
         except Exception as exc:
             if _s3_missing(exc):
                 return None
-            raise
+            self._fail(exc, operation="get", key=key, bucket=bucket)
         body = response.get("Body")
         if body is None:
             return None
         read = getattr(body, "read", None)
         if read is None:
             return None
-        data = await asyncio.to_thread(read)
+        try:
+            data = await asyncio.to_thread(read)
+        except Exception as exc:
+            self._fail(exc, operation="get", key=key, bucket=bucket)
         return data if isinstance(data, bytes) else None
 
     async def head(
@@ -381,7 +408,7 @@ class S3Store:
         except Exception as exc:
             if _s3_missing(exc):
                 return None
-            raise
+            self._fail(exc, operation="head", key=key)
         size = response.get("ContentLength")
         content_type = response.get("ContentType")
         if not isinstance(size, int):
@@ -417,33 +444,78 @@ class S3Store:
             signed = download_content_type(content_type)
             if signed:
                 params["ResponseContentType"] = signed
-        url = self._client.generate_presigned_url(
-            client_method,
-            Params=params,
-            ExpiresIn=max(1, int(expires.total_seconds())),
-            HttpMethod=method,
-        )
+        try:
+            url = self._client.generate_presigned_url(
+                client_method,
+                Params=params,
+                ExpiresIn=max(1, int(expires.total_seconds())),
+                HttpMethod=method,
+            )
+        except Exception as exc:
+            self._fail(exc, operation="presign", key=params["Key"])
         if not isinstance(url, str) or not url:
             raise ConfigError("S3 presign returned no URL")
         return url, headers
 
     async def delete(self, namespace: Namespace, object_id: str) -> None:
         key = self._key(namespace, object_id)
-        await asyncio.to_thread(
-            self._client.delete_object, Bucket=self._bucket, Key=key
-        )
-
-    async def delete_prefix(self, namespace: Namespace, prefix: str) -> None:
-        head = self._prefix(namespace, prefix)
-        keys = await asyncio.to_thread(self._list_keys, head)
-        for key in keys:
+        try:
             await asyncio.to_thread(
                 self._client.delete_object, Bucket=self._bucket, Key=key
             )
+        except Exception as exc:
+            self._fail(exc, operation="delete", key=key)
+
+    async def delete_prefix(self, namespace: Namespace, prefix: str) -> None:
+        head = self._prefix(namespace, prefix)
+        try:
+            keys = await asyncio.to_thread(self._list_keys, head)
+        except Exception as exc:
+            self._fail(exc, operation="list", key=head)
+        for key in keys:
+            try:
+                await asyncio.to_thread(
+                    self._client.delete_object, Bucket=self._bucket, Key=key
+                )
+            except Exception as exc:
+                self._fail(exc, operation="delete", key=key)
 
     async def used_bytes(self, namespace: Namespace, prefix: str) -> int:
         head = self._prefix(namespace, prefix)
-        return await asyncio.to_thread(self._sum_sizes, head)
+        try:
+            return await asyncio.to_thread(self._sum_sizes, head)
+        except Exception as exc:
+            self._fail(exc, operation="list", key=head)
+
+    def _fail(
+        self,
+        exc: BaseException,
+        *,
+        operation: str,
+        key: str,
+        bucket: str | None = None,
+    ) -> NoReturn:
+        if not _is_s3_error(exc):
+            raise exc
+        code = _s3_error_code(exc)
+        bucket_name = self._bucket if bucket is None else bucket
+        log_event(
+            log,
+            logging.ERROR,
+            "s3 request failed",
+            event="store.s3.error",
+            operation=operation,
+            bucket=bucket_name,
+            key=key,
+            s3_code=code,
+        )
+        raise ObjectStoreError(
+            "Artifact store unavailable",
+            operation=operation,
+            bucket=bucket_name,
+            key=key,
+            code=code,
+        ) from exc
 
     def _list_keys(self, prefix: str) -> list[str]:
         keys: list[str] = []
@@ -605,7 +677,26 @@ def _s3_missing(exc: BaseException) -> bool:
     if not isinstance(error, dict):
         return False
     code = error.get("Code")
-    return code in {"NoSuchKey", "404", "NotFound", "NoSuchBucket"}
+    return code in {"NoSuchKey", "404", "NotFound"}
+
+
+def _is_s3_error(exc: BaseException) -> bool:
+    try:
+        from botocore.exceptions import BotoCoreError, ClientError
+    except ImportError:
+        return False
+    return isinstance(exc, (ClientError, BotoCoreError))
+
+
+def _s3_error_code(exc: BaseException) -> str:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error")
+        if isinstance(error, dict):
+            code = error.get("Code")
+            if isinstance(code, str) and code:
+                return code
+    return type(exc).__name__
 
 
 def make_s3_client(settings: Settings, *, missing: str) -> object:
