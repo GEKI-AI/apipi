@@ -134,7 +134,7 @@ class Gateway:
             mcp_http=self.mcp_http,
             mcp_stdio=self.mcp_stdio,
         )
-        self.agents = AgentService(store)
+        self.agents = AgentService(store, settings)
         self.vaults = VaultService(store, settings)
         self.usage = UsageService(store)
         self.models = ModelsService(settings)
