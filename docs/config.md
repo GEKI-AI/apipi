@@ -318,9 +318,9 @@ The built-in main prompt tells the model that hosted cwd is
 `/workspace`, durable files go under `outputs/` only, `none` has no
 computer, scratch is deleted with the sandbox, and it must not invent
 unavailable APIs. The gateway also appends the resolved sandbox size
-(`S` / `M` / `L`). Size `L` with Playwright attached adds a browser
-block: system Chromium is already there, use MCP tools, do not
-install browsers.
+(`S` / `M` / `L`). When Playwright is attached, which is the `browser`
+image unless auto-inject is off, it adds a browser block: system
+Chromium is already there, use MCP tools, do not install browsers.
 
 ```toml
 [pi]
@@ -360,10 +360,10 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | `APIPI_IMAGE_SOURCE` | `[sandbox].image_source` | unset | `s3://bucket/prefix`, `https://host/path`, or `file:///path`. Directory that holds `index.json`. |
 | `APIPI_IMAGES_DIR` | `[sandbox].images_dir` | `$XDG_CACHE_HOME/apipi/images` | Local images directory. Root uses the same home rule as the MicroVM cache, so `sudo apipi install` and the worker agree. |
 | `APIPI_SANDBOX_IMAGES` | `[sandbox].images` | unset (every id in the index) | Image ids this host pulls and serves. |
-| `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser`. Used by `apipi install` and `apipi microvm shell`. Live session guests follow sandbox size (`S`/`M` → default rootfs, `L` → browser), not this process-wide setting. Explicit `kernel` / `rootfs` / `rootfs_browser` override the images dir. Resolution is explicit path, then `<id>/current` in the images dir, then the legacy `~/.cache/apipi/microvm` files. |
+| `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser`. Used by `apipi install` and `apipi microvm shell`. Live session guests follow `sandbox_image`, not this process-wide setting. When the image is omitted, size `L` selects `browser` and other sizes use the default image. Explicit `kernel` / `rootfs` / `rootfs_browser` override the images dir. Resolution is explicit path, then `<id>/current` in the images dir, then the legacy `~/.cache/apipi/microvm` files. |
 | `APIPI_SANDBOX_DEFAULT_IMAGE` | `[sandbox].default_image` | `default` | Guest image when the session does not set `environment.sandbox_image` or `metadata["apipi.sandbox_image"]`, and the size is not `L`. `L` still selects `browser`. This is not `APIPI_MICROVM_IMAGE`, which only selects the image for `apipi install` and `apipi microvm shell`. |
-| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. Playwright MCP is injected on `L` unless you turn that off. |
-| `APIPI_SANDBOX_AUTO_PLAYWRIGHT` | `[sandbox.browser].auto_playwright` | on | When on, size `L` on `microvm` injects Playwright MCP (system Chromium). Off keeps L RAM and rootfs but does not attach browser tools. |
+| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. Playwright MCP is injected when the image is `browser` unless you turn that off. Size `L` still selects that image when none is set. |
+| `APIPI_SANDBOX_AUTO_PLAYWRIGHT` | `[sandbox.browser].auto_playwright` | on | When on, image `browser` on `microvm` injects Playwright MCP (system Chromium). Off keeps that image and its RAM but does not attach browser tools. |
 | `APIPI_SANDBOX_PLAYWRIGHT_MCP` | `[sandbox.browser].playwright_mcp` | `@playwright/mcp@latest` | npm package passed to `npx -y` for the injected server. Pin a version for reproducible guests. |
 
 ```toml

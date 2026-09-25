@@ -4,6 +4,7 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import Field, model_validator
 from pydantic_core import PydanticCustomError
 
+from apipi.config import Settings
 from apipi.gateway.auth import not_found
 from apipi.gateway.schemas import StrictModel
 from apipi.services.chat_tools import is_chat_profile, reject_disallowed_chat_tools
@@ -17,6 +18,7 @@ from apipi.store.repo import (
     update_agent,
 )
 from apipi.worker.pi.idle import normalize_idle_ttl, validate_idle_metadata
+from apipi.worker.pi.sandbox import validate_sandbox_metadata
 from apipi.worker.pi.settings_json import validate_pi_metadata
 
 _UNIMPLEMENTED = ("multi_agent", "tool_search", "programmatic_tool_calling")
@@ -110,8 +112,9 @@ def write_payload(body: AgentWrite) -> dict[str, Any]:
 
 
 class AgentService:
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: Store, settings: Settings) -> None:
         self.store = store
+        self.settings = settings
 
     async def create(self, tenant_id: uuid.UUID, body: AgentWrite) -> dict[str, Any]:
         payload = write_payload(body)
@@ -119,6 +122,7 @@ class AgentService:
             payload["idle_ttl"] = normalize_idle_ttl(payload.get("idle_ttl"))
         validate_pi_metadata(payload.get("metadata"))
         validate_idle_metadata(payload.get("metadata"))
+        validate_sandbox_metadata(self.settings, payload.get("metadata"))
         if is_chat_profile(payload.get("metadata")):
             reject_disallowed_chat_tools(payload.get("tools"))
         async with self.store.session() as db:
@@ -157,8 +161,10 @@ class AgentService:
             if "idle_ttl" in payload:
                 payload["idle_ttl"] = normalize_idle_ttl(payload.get("idle_ttl"))
             metadata = payload.get("metadata", existing.metadata_json)
-            validate_pi_metadata(metadata if isinstance(metadata, dict) else None)
-            validate_idle_metadata(metadata if isinstance(metadata, dict) else None)
+            stored = metadata if isinstance(metadata, dict) else None
+            validate_pi_metadata(stored)
+            validate_idle_metadata(stored)
+            validate_sandbox_metadata(self.settings, stored)
             tools = payload.get("tools", existing.tools)
             if is_chat_profile(metadata):
                 reject_disallowed_chat_tools(tools)

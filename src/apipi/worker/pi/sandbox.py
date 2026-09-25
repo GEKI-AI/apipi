@@ -256,6 +256,30 @@ def merge_playwright(
     return [*out, playwright_tool(settings)]
 
 
+def validate_sandbox_metadata(
+    settings: Settings, metadata: dict[str, Any] | None
+) -> None:
+    if not metadata:
+        return
+    if SANDBOX_SIZE_KEY not in metadata and SANDBOX_IMAGE_KEY not in metadata:
+        return
+    size = resolve_sandbox_size(
+        environment_size=None,
+        session_metadata=None,
+        agent_metadata=metadata,
+        default=settings.sandbox_default_size,
+    )
+    image = resolve_sandbox_image(
+        environment_image=None,
+        session_metadata=None,
+        agent_metadata=metadata,
+        size=size,
+        default=settings.sandbox_default_image,
+    )
+    require_known_image(settings, image)
+    require_image_size(image, size)
+
+
 def require_known_image(settings: Settings, image_id: str) -> None:
     if settings.sandbox_images is not None:
         known = image_id in settings.sandbox_images

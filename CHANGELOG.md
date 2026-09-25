@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Agent create and update validate `metadata["apipi.sandbox_size"]` and
+  `metadata["apipi.sandbox_image"]`. A bad size, an unknown image, or a
+  size below the image minimum is `400`. Worker availability is still a
+  session placement error. Docs now say the image selects the rootfs,
+  with size `L` mapping to `browser` when the image is omitted.
+
 ## [0.5.1] - 2026-09-25
 
 ### Security

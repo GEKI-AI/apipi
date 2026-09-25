@@ -12,6 +12,7 @@ from apipi.worker.pi.sandbox import (
     resolve_sandbox_image,
     resolve_sandbox_size,
     sandbox_size_of,
+    validate_sandbox_metadata,
 )
 
 
@@ -149,6 +150,73 @@ def test_browser_image_rejects_size_s() -> None:
     with pytest.raises(ApiError, match="needs sandbox_size M"):
         require_image_size("browser", "S")
     require_image_size("default", "L")
+
+
+def _none_settings(sandbox_images: list[str] | None = None) -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        sandbox_images=sandbox_images,
+    )
+
+
+def test_validate_sandbox_metadata_rejects_bad_size() -> None:
+    with pytest.raises(ApiError) as exc:
+        validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_size": "xl"})
+    assert exc.value.status_code == 400
+    assert exc.value.code == "invalid_request"
+
+
+def test_validate_sandbox_metadata_rejects_unknown_image() -> None:
+    settings = _none_settings(sandbox_images=["default", "browser"])
+    with pytest.raises(ApiError, match="unknown sandbox_image") as exc:
+        validate_sandbox_metadata(settings, {"apipi.sandbox_image": "notreal"})
+    assert exc.value.status_code == 400
+
+
+def test_validate_sandbox_metadata_rejects_browser_on_s() -> None:
+    with pytest.raises(ApiError, match="needs sandbox_size M"):
+        validate_sandbox_metadata(
+            _none_settings(),
+            {"apipi.sandbox_image": "browser", "apipi.sandbox_size": "S"},
+        )
+
+
+def test_validate_sandbox_metadata_accepts_browser_on_m() -> None:
+    validate_sandbox_metadata(
+        _none_settings(),
+        {"apipi.sandbox_image": "browser", "apipi.sandbox_size": "M"},
+    )
+
+
+def test_validate_sandbox_metadata_size_only_l_selects_browser() -> None:
+    validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_size": "L"})
+
+
+def test_validate_sandbox_metadata_image_only_uses_default_size() -> None:
+    with pytest.raises(ApiError, match="needs sandbox_size M"):
+        validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_image": "browser"})
+
+
+def test_validate_sandbox_metadata_ignores_other_keys() -> None:
+    validate_sandbox_metadata(_none_settings(), {"keep": "me"})
+    validate_sandbox_metadata(_none_settings(), None)
+
+
+def test_validate_sandbox_metadata_skips_worker_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("worker availability checked")
+
+    monkeypatch.setattr(
+        "apipi.worker.pi.sandbox.require_image_rootfs",
+        boom,
+    )
+    validate_sandbox_metadata(
+        _microvm(),
+        {"apipi.sandbox_image": "browser", "apipi.sandbox_size": "M"},
+    )
 
 
 def test_merge_playwright_follows_image_not_size() -> None:

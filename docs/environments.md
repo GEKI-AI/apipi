@@ -94,6 +94,16 @@ separate from size. Size is RAM. Official clients can set
 5. `APIPI_SANDBOX_DEFAULT_IMAGE` / `[sandbox].default_image` (shipped
    default `default`)
 
+Pin both keys on an org bot so later sessions start in that guest:
+
+```json
+{"name": "org-bot", "metadata": {"apipi.sandbox_image": "browser", "apipi.sandbox_size": "M"}}
+```
+
+Agent create and update reject a bad size, an unknown image, or a size
+below that image's minimum. Worker availability is still checked when a
+session is created.
+
 The resolved id is stored on the session `environment` as
 `sandbox_image`. A later metadata update does not reimage a live guest.
 An id must match `^[a-z0-9][a-z0-9-]{0,31}$`. An unknown id is `400`.
@@ -115,15 +125,17 @@ Isolation `microvm` applies both, including when `environment.type` is
 `none` (Pi still runs in a guest). Each live lease consumes that
 size's RAM against worker `memory_mb` and still counts as one session.
 
-On `microvm`, size `L` injects a Playwright stdio MCP server
-(`npx @playwright/mcp`, headless, isolated, system Chromium at
-`/usr/bin/chromium-browser`) so the browser just works without
-`examples/playwright.yaml`. If the agent already has a Playwright MCP
-tool (`server_label` `playwright` or the same package), that tool is
-kept and nothing is duplicated. Set `[sandbox.browser].auto_playwright
-= false` to keep L RAM and rootfs but attach MCP yourself. A Playwright
-process that cannot start makes Pi exit instead of running L without
-browser tools. The platform prompt always names the sandbox size. It
+On `microvm`, a resolved image of `browser` injects a Playwright stdio
+MCP server (`npx @playwright/mcp`, headless, isolated, system Chromium
+at `/usr/bin/chromium-browser`) so the browser just works without
+`examples/playwright.yaml`. Size `L` still selects `browser` when the
+image is omitted, so those sessions keep the tools. If the agent
+already has a Playwright MCP tool (`server_label` `playwright` or the
+same package), that tool is kept and nothing is duplicated. Set
+`[sandbox.browser].auto_playwright = false` to keep the browser image
+and its RAM but attach MCP yourself. A Playwright process that cannot
+start makes Pi exit instead of running that image without browser
+tools. The platform prompt always names the sandbox size. It
 mentions Chromium and MCP tool names only when those tools are
 attached, and it tells the model not to install Playwright or browsers.
 

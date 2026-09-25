@@ -38,6 +38,13 @@ Fields: `id`, `name`, `model`, `instructions`, `idle_ttl`, `metadata`,
 or `0` to turn the idle timer off. Omit it to keep the environment
 default. See [config](config.md).
 
+`metadata["apipi.sandbox_size"]` and `metadata["apipi.sandbox_image"]`
+are the per-agent defaults for later sessions. Create and update reject
+an unknown size, an unknown image id, or a size below that image's
+minimum with `400`. A missing key keeps the gateway default. Worker
+availability is not checked until a session is created. See
+[environments](environments.md).
+
 Rejected: `multi_agent`, `tool_search`, `programmatic_tool_calling`.
 
 A session may pass `agent_id` or an inline `agent`. You must provide
@@ -257,8 +264,9 @@ wins over the agent field. Stock clients can set
 
 `metadata` is a JSON object. Keys that start with `apipi.` are
 reserved. The gateway interprets `apipi.sandbox_size`,
-`apipi.session_kind`, `apipi.thinking`, `apipi.system_prompt`,
-`apipi.idle_ttl`, `apipi.title`, and `apipi.title_status`. It
+`apipi.sandbox_image`, `apipi.session_kind`, `apipi.thinking`,
+`apipi.system_prompt`, `apipi.idle_ttl`, `apipi.title`, and
+`apipi.title_status`. It
 stores `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`
 and does not branch on them. There is no top-level `actor_type`
 field. See [reserved metadata](extending.md#reserved-metadata).
@@ -490,12 +498,14 @@ is a default for later sessions. The gateway default is
 `APIPI_SANDBOX_DEFAULT_SIZE` (`S` unless you change it). The resolved
 size is stored on the session `environment` and does not change if you
 later PATCH metadata. Isolation `none` accepts the field and ignores
-RAM and rootfs. Isolation `microvm` uses it for guest RAM and image:
-`S`/`M` boot the default rootfs, `L` boots the browser rootfs. `L`
-without that rootfs fails clearly (combined create returns `400`;
-API-only fails when the worker spawns). On `microvm`, `L` also injects
-Playwright MCP unless the agent already has it or auto-inject is off.
-See [environments](environments.md).
+RAM and rootfs. Isolation `microvm` uses the size for guest RAM. The
+guest image comes from `environment.sandbox_image` or
+`metadata["apipi.sandbox_image"]`. When those are omitted, size `L`
+selects `browser` and other sizes use the default image. Playwright MCP
+is injected when the resolved image is `browser`, unless the agent
+already has it or auto-inject is off. A known image that no worker has
+is `503` with code `image_unavailable`. See
+[environments](environments.md).
 
 ## Compatibility
 

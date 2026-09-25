@@ -135,17 +135,18 @@ Env, `.env`, and `[sandbox].kernel` / `rootfs` still override. The
 install command also prints `export` lines. Production should set
 explicit paths.
 
-Live session guests pick a rootfs from sandbox size: `S` and `M` boot
-the default image, `L` boots the browser image. Both rootfs files
-should be installed on workers that accept `L`. Missing browser rootfs
-when a session resolves to `L` fails clearly; the process does not
-fall back to the default image. `APIPI_MICROVM_IMAGE` still selects
-the image for `apipi install` and `apipi microvm shell`. To make every
-session browser-class without callers setting a size, set
-`[sandbox].default_size = "L"` (and size `worker_memory_mb` for ~2 GiB
-guests). Size `L` also injects Playwright MCP against system Chromium
-unless `auto_playwright` is off. Session `packages` and `setup_commands`
-still run on whichever image that session booted.
+Live session guests pick a rootfs from `sandbox_image`, not from size
+alone. When the image is omitted, size `L` selects `browser` and other
+sizes use the default image. Install the rootfs for each image a worker
+accepts. A missing rootfs for the resolved image fails clearly; the
+process does not fall back to another image. `APIPI_MICROVM_IMAGE`
+still selects the image for `apipi install` and `apipi microvm shell`.
+To make every session browser-class without callers setting an image,
+set `[sandbox].default_size = "L"` (and size `worker_memory_mb` for ~2
+GiB guests) or set `[sandbox].default_image = "browser"` with a size of
+at least `M`. Playwright MCP is injected when the resolved image is
+`browser`, unless `auto_playwright` is off. Session `packages` and
+`setup_commands` still run on whichever image that session booted.
 
 If the kernel download fails, get a Firecracker-compatible `vmlinux`
 from the [Firecracker getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)
