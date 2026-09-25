@@ -125,6 +125,7 @@ class SessionRow(Base):
         JSONType, default=list, nullable=False
     )
     key_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     worker_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), nullable=True
     )

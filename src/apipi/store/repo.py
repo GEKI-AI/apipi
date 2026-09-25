@@ -138,6 +138,7 @@ async def create_session(
     environment: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     key_id: str = "",
+    user_id: str | None = None,
     vault_ids: list[str] | None = None,
 ) -> SessionRow:
     row = SessionRow(
@@ -150,6 +151,7 @@ async def create_session(
         environment=environment if environment is not None else {},
         metadata_json=metadata if metadata is not None else {},
         key_id=key_id,
+        user_id=user_id,
         vault_ids=vault_ids if vault_ids is not None else [],
     )
     db.add(row)
@@ -157,12 +159,24 @@ async def create_session(
     return row
 
 
+def _user_clause(user_id: str | None) -> list[Any]:
+    if user_id is None:
+        return []
+    return [SessionRow.user_id == user_id]
+
+
 async def get_session(
-    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    user_id: str | None = None,
 ) -> SessionRow | None:
     return await db.scalar(
         select(SessionRow).where(
-            SessionRow.tenant_id == tenant_id, SessionRow.id == session_id
+            SessionRow.tenant_id == tenant_id,
+            SessionRow.id == session_id,
+            *_user_clause(user_id),
         )
     )
 
@@ -173,10 +187,12 @@ async def get_session_by_id(
     return await db.scalar(select(SessionRow).where(SessionRow.id == session_id))
 
 
-async def list_sessions(db: AsyncSession, tenant_id: uuid.UUID) -> list[SessionRow]:
+async def list_sessions(
+    db: AsyncSession, tenant_id: uuid.UUID, *, user_id: str | None = None
+) -> list[SessionRow]:
     result = await db.scalars(
         select(SessionRow)
-        .where(SessionRow.tenant_id == tenant_id)
+        .where(SessionRow.tenant_id == tenant_id, *_user_clause(user_id))
         .order_by(SessionRow.created_at)
     )
     return list(result)
@@ -188,8 +204,9 @@ async def update_session(
     session_id: uuid.UUID,
     *,
     changes: dict[str, Any],
+    user_id: str | None = None,
 ) -> SessionRow | None:
-    row = await get_session(db, tenant_id, session_id)
+    row = await get_session(db, tenant_id, session_id, user_id=user_id)
     if row is None:
         return None
     if "status" in changes:
@@ -271,9 +288,13 @@ async def update_environment(
 
 
 async def delete_session(
-    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    user_id: str | None = None,
 ) -> bool:
-    row = await get_session(db, tenant_id, session_id)
+    row = await get_session(db, tenant_id, session_id, user_id=user_id)
     if row is None:
         return False
     await db.delete(row)

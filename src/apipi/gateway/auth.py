@@ -1,8 +1,11 @@
+import contextlib
 import importlib
-from collections.abc import AsyncIterator, Callable
+import inspect
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from time import monotonic
+from types import MappingProxyType
 from typing import Annotated, NoReturn
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -20,7 +23,14 @@ from apipi.store.repo import ensure_tenant
 _bearer = HTTPBearer(auto_error=False)
 _MISS = object()
 
-Authenticate = Callable[[str], object]
+Authenticate = Callable[..., object]
+
+
+@dataclass(frozen=True)
+class AuthRequest:
+    method: str
+    path: str
+    headers: Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -30,6 +40,7 @@ class AuthIdentity:
     user_id: str | None = None
     thinking_summary: bool = False
     auto_title: bool = False
+    cache_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +49,7 @@ class AuthReject:
     code: str
     message: str
     type: str = "invalid_request"
+    cache_key: str | None = None
 
 
 UNAUTHORIZED = AuthReject(
@@ -107,7 +119,83 @@ def load_authenticate(path: str | None) -> Authenticate:
         raise ConfigError("APIPI_AUTH must be package.mod:func") from exc
     if not callable(fn):
         raise ConfigError("APIPI_AUTH must be package.mod:func")
+    sibling = getattr(module, "cache_key", None)
+    if (
+        callable(sibling)
+        and sibling is not fn
+        and getattr(fn, "cache_key", None) is None
+    ):
+        with contextlib.suppress(AttributeError, TypeError):
+            fn.cache_key = sibling
     return fn
+
+
+def auth_request_of(request: Request) -> AuthRequest:
+    headers = {
+        key.lower(): value
+        for key, value in request.headers.items()
+        if key.lower() != "authorization"
+    }
+    return AuthRequest(
+        method=request.method,
+        path=request.url.path,
+        headers=MappingProxyType(headers),
+    )
+
+
+def _takes_context(fn: Callable[..., object]) -> bool:
+    try:
+        params = list(inspect.signature(fn).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    if any(param.kind is inspect.Parameter.VAR_POSITIONAL for param in params):
+        return True
+    positional = [
+        param
+        for param in params
+        if param.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    return len(positional) >= 2
+
+
+def invoke_authenticate(
+    fn: Callable[..., object], token: str, ctx: AuthRequest
+) -> object:
+    if _takes_context(fn):
+        return fn(token, ctx)
+    return fn(token)
+
+
+def _plugin_cache_key(
+    fn: Callable[..., object], token: str, ctx: AuthRequest
+) -> str | None:
+    cache_fn = getattr(fn, "cache_key", None)
+    if not callable(cache_fn):
+        return None
+    try:
+        raw = invoke_authenticate(cache_fn, token, ctx)
+    except Exception:
+        return None
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    return None
+
+
+def resolve_cache_key(fn: Callable[..., object], token: str, ctx: AuthRequest) -> str:
+    explicit = _plugin_cache_key(fn, token, ctx)
+    if explicit is not None:
+        return hash_token(explicit)
+    return hash_token(token)
+
+
+def _text_cache_key(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
 
 
 def _reject_from_dict(result: dict[str, object]) -> AuthReject:
@@ -131,6 +219,7 @@ def _reject_from_dict(result: dict[str, object]) -> AuthReject:
         code=str(code) if code else default_code,
         message=str(message) if message else default_message,
         type=str(err_type) if err_type else "invalid_request",
+        cache_key=_text_cache_key(result.get("cache_key")),
     )
 
 
@@ -154,6 +243,7 @@ def auth_from_result(result: object) -> AuthIdentity | AuthReject:
                 user_id=user_id,
                 thinking_summary=result.get("thinking_summary") is True,
                 auto_title=result.get("auto_title") is True,
+                cache_key=_text_cache_key(result.get("cache_key")),
             )
         if "status_code" in result or "code" in result:
             return _reject_from_dict(result)
@@ -184,6 +274,12 @@ def _cache_reject(reject: AuthReject) -> bool:
     return reject.status_code != 429
 
 
+def stored_cache_key(parsed: AuthIdentity | AuthReject, fallback: str) -> str:
+    if isinstance(parsed.cache_key, str) and parsed.cache_key.strip():
+        return hash_token(parsed.cache_key)
+    return fallback
+
+
 async def require_tenant(
     creds: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     request: Request,
@@ -191,7 +287,9 @@ async def require_tenant(
     if creds is None or creds.scheme.lower() != "bearer" or not creds.credentials:
         unauthorized()
     token = creds.credentials
-    key_hash = hash_token(token)
+    ctx = auth_request_of(request)
+    fn: Authenticate = request.app.state.authenticate
+    key_hash = resolve_cache_key(fn, token, ctx)
     cache: AuthCache = request.app.state.auth_cache
     cached = cache.get(key_hash)
     if isinstance(cached, AuthReject):
@@ -199,9 +297,8 @@ async def require_tenant(
     if isinstance(cached, AuthIdentity):
         identity = cached
     else:
-        fn: Authenticate = request.app.state.authenticate
         try:
-            parsed = auth_from_result(fn(token))
+            parsed = auth_from_result(invoke_authenticate(fn, token, ctx))
         except Exception as exc:
             raise ApiError(
                 "invalid_request",
@@ -209,11 +306,12 @@ async def require_tenant(
                 code="unauthorized",
                 status_code=401,
             ) from exc
+        store_key = stored_cache_key(parsed, key_hash)
         if isinstance(parsed, AuthReject):
             if _cache_reject(parsed):
-                cache.put(key_hash, parsed)
+                cache.put(store_key, parsed)
             raise_auth(parsed)
-        cache.put(key_hash, parsed)
+        cache.put(store_key, parsed)
         identity = parsed
     request.state.tenant_id = identity.tenant_id
     request.state.key_id = identity.key_id

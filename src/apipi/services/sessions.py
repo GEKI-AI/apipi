@@ -131,6 +131,7 @@ def session_body(row: SessionRow) -> dict[str, Any]:
         "idle_ttl": row.idle_ttl,
         "metadata": row.metadata_json,
         "required_actions": row.required_actions,
+        "user_id": row.user_id,
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
         "vault_ids": [str(item) for item in (row.vault_ids or [])],
@@ -477,6 +478,7 @@ class SessionService:
                 environment=env,
                 metadata=metadata,
                 key_id=key_id,
+                user_id=user_id,
                 vault_ids=vault_id_strs,
             )
             if env.get("type") == "openai_hosted":
@@ -680,9 +682,11 @@ class SessionService:
                 payload["key"] = env_key
         return payload
 
-    async def list(self, tenant_id: uuid.UUID) -> dict[str, Any]:
+    async def list(
+        self, tenant_id: uuid.UUID, *, user_id: str | None = None
+    ) -> dict[str, Any]:
         async with self.store.session() as db:
-            rows = await list_sessions(db, tenant_id)
+            rows = await list_sessions(db, tenant_id, user_id=user_id)
             out: list[dict[str, Any]] = []
             for row in rows:
                 if (
@@ -696,9 +700,15 @@ class SessionService:
                 out.append(session_body(row))
             return {"data": out}
 
-    async def get(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> dict[str, Any]:
+    async def get(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
         async with self.store.session() as db:
-            row = await get_session(db, tenant_id, session_id)
+            row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
             if (
@@ -718,27 +728,34 @@ class SessionService:
         session_id: uuid.UUID,
         *,
         metadata: dict[str, Any] | None = None,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         changes: dict[str, Any] = {}
         async with self.store.session() as db:
             if metadata is not None:
-                current = await get_session(db, tenant_id, session_id)
+                current = await get_session(db, tenant_id, session_id, user_id=user_id)
                 if current is None:
                     not_found()
                 merged = _keep_title(current.metadata_json, metadata)
                 validate_pi_metadata(merged)
                 validate_idle_metadata(merged)
                 changes["metadata"] = merged
-            row = await update_session(db, tenant_id, session_id, changes=changes)
+            row = await update_session(
+                db, tenant_id, session_id, changes=changes, user_id=user_id
+            )
             if row is None:
                 not_found()
             return session_body(row)
 
     async def delete(
-        self, tenant_id: uuid.UUID, session_id: uuid.UUID
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         async with self.store.session() as db:
-            row = await get_session(db, tenant_id, session_id)
+            row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
             env_id_raw = row.environment.get("id")
@@ -751,7 +768,7 @@ class SessionService:
             wipe_workspace(Path(directory))
         await wipe_artifact_store(self.blobs, tenant_id, key_id, session_id)
         async with self.store.session() as db:
-            deleted = await delete_session(db, tenant_id, session_id)
+            deleted = await delete_session(db, tenant_id, session_id, user_id=user_id)
             if not deleted:
                 not_found()
         self.mcp_http.pop(session_id, None)
@@ -788,7 +805,7 @@ class SessionService:
         cancel_status = ""
         follow_size = "S"
         async with self.store.session() as db:
-            row = await get_session(db, tenant_id, session_id)
+            row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
             follow_size = sandbox_size_of(row.environment)
@@ -900,19 +917,24 @@ class SessionService:
         session_id: uuid.UUID,
         *,
         after_seq: int | None = None,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         async with self.store.session() as db:
-            row = await get_session(db, tenant_id, session_id)
+            row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
             events = await list_events(db, tenant_id, session_id, after_seq=after_seq)
             return {"data": [event_body(event) for event in events]}
 
     async def export(
-        self, tenant_id: uuid.UUID, session_id: uuid.UUID
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         async with self.store.session() as db:
-            row = await get_session(db, tenant_id, session_id)
+            row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
             events = await list_events(db, tenant_id, session_id)
@@ -927,9 +949,15 @@ class SessionService:
             }
 
     async def list_turns(
-        self, tenant_id: uuid.UUID, session_id: uuid.UUID
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         async with self.store.session() as db:
+            if await get_session(db, tenant_id, session_id, user_id=user_id) is None:
+                not_found()
             turns = await list_turns(db, tenant_id, session_id)
             if turns is None:
                 not_found()
@@ -940,26 +968,42 @@ class SessionService:
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         turn_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         async with self.store.session() as db:
+            if await get_session(db, tenant_id, session_id, user_id=user_id) is None:
+                not_found()
             turn = await get_session_turn(db, tenant_id, session_id, turn_id)
             if turn is None:
                 not_found()
             return turn_body(turn)
 
     async def list_items(
-        self, tenant_id: uuid.UUID, session_id: uuid.UUID
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         async with self.store.session() as db:
+            if await get_session(db, tenant_id, session_id, user_id=user_id) is None:
+                not_found()
             items = await list_items(db, tenant_id, session_id)
             if items is None:
                 not_found()
             return {"data": [item_body(item) for item in items]}
 
     async def list_artifacts(
-        self, tenant_id: uuid.UUID, session_id: uuid.UUID
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         async with self.store.session() as db:
+            if await get_session(db, tenant_id, session_id, user_id=user_id) is None:
+                not_found()
             artifacts = await list_artifacts(db, tenant_id, session_id)
             if artifacts is None:
                 not_found()
@@ -970,9 +1014,11 @@ class SessionService:
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         artifact_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
     ) -> tuple[bytes, str, str]:
         async with self.store.session() as db:
-            row = await get_session(db, tenant_id, session_id)
+            row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
             artifact = await get_session_artifact(
@@ -993,9 +1039,11 @@ class SessionService:
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         artifact_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
     ) -> tuple[str, str, str]:
         async with self.store.session() as db:
-            row = await get_session(db, tenant_id, session_id)
+            row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
             artifact = await get_session_artifact(
@@ -1014,9 +1062,11 @@ class SessionService:
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         artifact_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         async with self.store.session() as db:
-            row = await get_session(db, tenant_id, session_id)
+            row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
             artifact = await get_session_artifact(

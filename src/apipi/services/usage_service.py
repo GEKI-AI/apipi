@@ -33,6 +33,7 @@ class UsageService:
         session_id: uuid.UUID | None = None,
         turn_id: uuid.UUID | None = None,
         day: date | None = None,
+        user_id: str | None = None,
     ) -> dict[str, int]:
         if sum(value is not None for value in (session_id, turn_id, day)) != 1:
             raise ApiError(
@@ -42,12 +43,18 @@ class UsageService:
             )
         async with self.store.session() as db:
             if session_id is not None:
-                if await get_session(db, tenant_id, session_id) is None:
+                if (
+                    await get_session(db, tenant_id, session_id, user_id=user_id)
+                    is None
+                ):
                     not_found()
                 return await usage_totals(db, tenant_id, session_id=session_id)
             if turn_id is not None:
                 turn = await get_turn(db, tenant_id, turn_id)
-                if turn is None:
+                if turn is None or (
+                    await get_session(db, tenant_id, turn.session_id, user_id=user_id)
+                    is None
+                ):
                     not_found()
                 row = await get_turn_log(db, tenant_id, turn_id)
                 if row is None:

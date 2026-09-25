@@ -31,4 +31,5 @@ def test_alembic_revisions_chain() -> None:
         "0009_pi_session_uri.py",
         "0010_uploads.py",
         "0011_idle_ttl.py",
+        "0012_session_user.py",
     ]
