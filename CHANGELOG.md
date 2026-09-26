@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `apipi images push` uploads the newest local guest image build.
+  `apipi images publish` is the same command. `--to` defaults to
+  `APIPI_IMAGE_SOURCE`. An identical image already in the store is
+  skipped instead of failing. `--force` uploads again.
+- Guest image S3 settings `APIPI_IMAGE_S3_ENDPOINT`,
+  `APIPI_IMAGE_S3_REGION`, and `APIPI_IMAGE_S3_ADDRESSING`, plus
+  env-only credentials `APIPI_IMAGE_S3_ACCESS_KEY_ID`,
+  `APIPI_IMAGE_S3_SECRET_ACCESS_KEY`, and `APIPI_IMAGE_S3_PROFILE`.
+  Unset values fall back to `APIPI_S3_*` and the default AWS
+  credential chain. The artifact store is unchanged.
+
+### Fixed
+
+- Pushing guest images to a missing S3 bucket fails with a clear
+  error instead of starting a new index.
+- S3 guest image pull streams the blob to disk. Peak RAM no longer
+  grows with image size. The kernel download uses the same path.
+
 ## [0.5.2] - 2026-09-25
 
 ### Added

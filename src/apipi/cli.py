@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 
@@ -169,11 +170,18 @@ def _images_command(args: argparse.Namespace) -> int:
         manifest = build_image(args.id, out_dir=out, arch=args.arch)
         print(f"built {manifest.id} {manifest.version} at {out}")
         return 0
+    if args.images_command in {"push", "publish"}:
+        return _images_push(args)
+    return 1
+
+
+def _images_push(args: argparse.Namespace) -> int:
+    settings = load_settings(config_path=args.config)
+    target = args.to or settings.image_source
+    if not target:
+        raise ConfigError("APIPI_IMAGE_SOURCE is unset. Set it, or pass --to.")
     source = Path(args.source) if args.source else _default_image_build_dir()
-    settings = None
-    if not str(args.to).startswith("file:"):
-        settings = load_settings(config_path=args.config)
-    store = open_image_store(args.to, settings, write=True)
+    store = open_image_store(target, settings, write=True)
     planned = publish_images(
         store,
         source,
@@ -182,8 +190,37 @@ def _images_command(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
     for name in planned:
+        if name.startswith("skip "):
+            log.info(name)
         print(name)
     return 0
+
+
+def _add_image_push_parser(subparsers: Any, name: str, help_text: str) -> None:
+    parser = subparsers.add_parser(name, help=help_text)
+    parser.add_argument("--config", default=None, help="TOML config file")
+    parser.add_argument(
+        "--to",
+        default=None,
+        help="s3:// or file:// store (default: APIPI_IMAGE_SOURCE)",
+    )
+    parser.add_argument(
+        "--from",
+        dest="source",
+        default=None,
+        help="Build directory (default: last images build output)",
+    )
+    parser.add_argument("ids", nargs="*", help="Image ids to push")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-upload an image that is already in the store",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print objects that would be uploaded",
+    )
 
 
 def _default_image_build_dir() -> Path:
@@ -327,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Host directory packed into guest /workspace",
     )
-    images_parser = sub.add_parser("images", help="Build and publish guest images")
+    images_parser = sub.add_parser("images", help="Build, push, and pull guest images")
     images_sub = images_parser.add_subparsers(dest="images_command", required=True)
     build_parser = images_sub.add_parser("build", help="Build one guest image")
     build_parser.add_argument("id", help="Recipe id")
@@ -337,26 +374,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Host arch check only; cross-build is not supported",
     )
-    publish_parser = images_sub.add_parser("publish", help="Publish built images")
-    publish_parser.add_argument("--config", default=None, help="TOML config file")
-    publish_parser.add_argument("--to", required=True, help="s3:// or file:// store")
-    publish_parser.add_argument(
-        "--from",
-        dest="source",
-        default=None,
-        help="Build directory (default: last images build output)",
-    )
-    publish_parser.add_argument("ids", nargs="*", help="Image ids to publish")
-    publish_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Replace an existing id, version, and arch",
-    )
-    publish_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print objects that would be uploaded",
-    )
+    _add_image_push_parser(images_sub, "push", "Push built images to the image store")
+    _add_image_push_parser(images_sub, "publish", "Alias for push")
     pull_parser = images_sub.add_parser("pull", help="Pull guest images")
     pull_parser.add_argument("--config", default=None, help="TOML config file")
     pull_parser.add_argument("ids", nargs="*", help="Image ids to pull")

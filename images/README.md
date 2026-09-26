@@ -45,6 +45,13 @@ The script needs `curl`, `tar`, `mkfs.ext4`, `mount`, and root (or
 `sudo`) for the loop mount and chroot. `apipi install --microvm` runs
 it for you.
 
+`apipi images build <id>` writes a manifest and a zstd rootfs into the
+build directory. `apipi images push` uploads only the newest build of
+each id and arch to `APIPI_IMAGE_SOURCE`, or to `--to`. `apipi images
+publish` is the same command. Workers then run `apipi images pull`.
+`apipi images list --remote` shows whether the local copy matches the
+store. See [install](../docs/install.md).
+
 ## Add an image
 
 1. Create `images/<id>/image.env` with `IMAGE_ID` equal to `<id>`.

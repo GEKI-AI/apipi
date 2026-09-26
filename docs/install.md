@@ -108,25 +108,48 @@ itself with `sudo -E`, the absolute Python interpreter, and `PATH` /
 `sudo uv`. `apipi serve` does not re-exec. TAP and jailer still need
 root or the capabilities in [run modes](run-modes.md).
 
-## Build and publish guest images
+## Build, push, and pull guest images
 
-`apipi images build <id>` runs the recipe in `images/<id>/` and writes
-a zstd rootfs plus `manifest.json`. It needs the same root, loop
+Build once, push to a store, and pull on every worker. `apipi images
+build <id>` runs the recipe in `images/<id>/` and writes a zstd rootfs
+plus `manifest.json` under the build directory (default
+`$XDG_CACHE_HOME/apipi/image-build`). It needs the same root, loop
 mount, and packages as `./images/build.sh`. `--arch` only checks that
 you asked for this host. Cross-build is not supported.
 
-`apipi images publish --to <uri>` uploads those files. `<uri>` is
-`s3://bucket/prefix` or `file:///path`. `https://` is read-only and is
-rejected. S3 uses `APIPI_S3_ENDPOINT`, `APIPI_S3_REGION`, and
-`APIPI_S3_ADDRESSING`. Credentials come from the AWS environment or
-the instance role, not from TOML. Install the client with
-`uv sync --extra s3`. Publishing the same image version again fails
-unless you pass `--force`. `--dry-run` prints the object names.
+`apipi images push` uploads the newest local build of each image id
+and arch. Newest means the manifest `created_at`, not the file name.
+Older manifests left in the build directory are ignored. `apipi images
+publish` is the same command. `--to` is `s3://bucket/prefix` or
+`file:///path`. When `--to` is omitted, push uses `APIPI_IMAGE_SOURCE`
+or `[sandbox].image_source`. If neither is set, push exits with an
+error. `https://` is read-only and is rejected.
+
+If that exact image version is already in the store and the sha256
+matches, push prints a skip line and exits 0. `--force` uploads again.
+`--dry-run` prints the object names and does not write. A missing S3
+bucket fails with a clear error. A missing `index.json` in an existing
+bucket starts a new index. The pushed version becomes `latest` for
+that id and arch.
+
+S3 endpoint, region, and addressing come from `APIPI_IMAGE_S3_ENDPOINT`,
+`APIPI_IMAGE_S3_REGION`, and `APIPI_IMAGE_S3_ADDRESSING` when those are
+set. Otherwise push and pull use `APIPI_S3_ENDPOINT`, `APIPI_S3_REGION`,
+and `APIPI_S3_ADDRESSING`. Credentials are
+`APIPI_IMAGE_S3_ACCESS_KEY_ID` and `APIPI_IMAGE_S3_SECRET_ACCESS_KEY`,
+or the profile `APIPI_IMAGE_S3_PROFILE`. If none of those is set, the
+AWS credential chain is used, including the instance role. Keys are
+never read from TOML. Install the client with `uv sync --extra s3`.
+
+`apipi images pull` installs `latest` for this host's arch into the
+images directory. It checks the compressed sha256, decompresses as a
+stream, then checks the ext4 sha256. Peak RAM does not grow with the
+image size. `apipi images list --remote` compares the local images
+with that source. See [production](production.md).
 
 The optional Images workflow builds the official `default` and
 `browser` images and attaches them to a GitHub release. After that
-runs, the release asset URL is an `https://` image source. See
-[production](production.md).
+runs, the release asset URL is an `https://` image source.
 
 ## From a git checkout
 
