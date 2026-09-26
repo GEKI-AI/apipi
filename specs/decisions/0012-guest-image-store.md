@@ -35,8 +35,9 @@ keys fail the same way.
 
 ## Manifest
 
-`sha256` is the digest of the uncompressed ext4. Workers and placement
-compare that digest. `compressed_sha256` is checked while downloading.
+`sha256` is the digest of the uncompressed ext4. Workers check that
+digest when they pull. Placement matches a worker by image id, not by
+digest. `compressed_sha256` is checked while downloading.
 `size` and `compressed_size` are byte lengths.
 
 The image version names the inputs, not the bytes. Two builds of the
@@ -77,8 +78,21 @@ may be listed. Exactly one entry per `(id, arch)` has `latest: true`.
 Pull uses that latest entry, then checks the manifest. If it is not
 compatible, pull fails. It does not silently pick an older version.
 
-Publish writes new objects first and rewrites `index.json` last. It
-does not overwrite an existing `(id, version, arch)` unless `--force`.
+`apipi images push` writes new objects first and rewrites `index.json`
+last. `apipi images publish` is the same command. For each image id
+and arch it uploads only the newest local build, chosen by manifest
+`created_at`. Older manifests left in the build directory are ignored.
+If that exact `(id, version, arch)` is already in the store and the
+compressed sha256 matches, push skips it and exits 0. `--force`
+uploads again. The pushed version becomes `latest` for that id and
+arch. `--to` defaults to `APIPI_IMAGE_SOURCE`. A missing bucket fails
+with a clear error instead of starting a new index. A missing
+`index.json` in an existing bucket still starts a new index.
+
+Pull streams the compressed blob to a temp file, checks
+`compressed_sha256`, decompresses as a stream, checks `sha256`, then
+renames the ext4 into place. Peak RAM does not grow with image size.
+The kernel download uses the same path.
 
 ## Local layout
 
@@ -94,3 +108,15 @@ does not overwrite an existing `(id, version, arch)` unless `--force`.
 `<id>/current` is a one-line file with the version, not a symlink. A
 symlink breaks some copy tools. Writers replace it by writing a temp
 file and renaming it.
+
+## Image store S3
+
+The image URI names the bucket and prefix. Endpoint, region, and
+addressing come from `APIPI_IMAGE_S3_ENDPOINT`,
+`APIPI_IMAGE_S3_REGION`, and `APIPI_IMAGE_S3_ADDRESSING` when set.
+Otherwise they fall back to `APIPI_S3_ENDPOINT`, `APIPI_S3_REGION`,
+and `APIPI_S3_ADDRESSING`. Credentials are
+`APIPI_IMAGE_S3_ACCESS_KEY_ID` and
+`APIPI_IMAGE_S3_SECRET_ACCESS_KEY`, or `APIPI_IMAGE_S3_PROFILE`.
+If none of those is set, the process uses the standard AWS credential
+chain. Secrets are not read from TOML. The artifact store is unchanged.

@@ -699,7 +699,14 @@ def _s3_error_code(exc: BaseException) -> str:
     return type(exc).__name__
 
 
-def make_s3_client(settings: Settings, *, missing: str) -> object:
+def make_s3_client(
+    settings: Settings,
+    *,
+    missing: str,
+    aws_access_key_id: str | None = None,
+    aws_secret_access_key: str | None = None,
+    profile_name: str | None = None,
+) -> object:
     try:
         import boto3
         from botocore.config import Config
@@ -720,6 +727,12 @@ def make_s3_client(settings: Settings, *, missing: str) -> object:
     endpoint = kwargs.get("endpoint_url")
     if endpoint is not None:
         client_kwargs["endpoint_url"] = endpoint
+    if aws_access_key_id is not None:
+        client_kwargs["aws_access_key_id"] = aws_access_key_id
+    if aws_secret_access_key is not None:
+        client_kwargs["aws_secret_access_key"] = aws_secret_access_key
+    if profile_name:
+        return boto3.Session(profile_name=profile_name).client("s3", **client_kwargs)
     return boto3.client("s3", **client_kwargs)
 
 

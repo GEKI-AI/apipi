@@ -1,7 +1,8 @@
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlparse
 
 import httpx
@@ -47,14 +48,76 @@ def _safe_name(name: str) -> str:
     return name
 
 
-def _s3_missing(exc: BaseException) -> bool:
+def _s3_code(exc: BaseException) -> str | None:
     response = getattr(exc, "response", None)
     if not isinstance(response, dict):
-        return False
+        return None
     error = response.get("Error")
     if not isinstance(error, dict):
-        return False
-    return error.get("Code") in {"NoSuchKey", "404", "NotFound", "NoSuchBucket"}
+        return None
+    code = error.get("Code")
+    if isinstance(code, str) and code:
+        return code
+    return None
+
+
+def _s3_missing(exc: BaseException) -> bool:
+    return _s3_code(exc) in {"NoSuchKey", "404", "NotFound"}
+
+
+def _blank(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    return text or None
+
+
+def image_s3_credentials() -> tuple[str | None, str | None, str | None]:
+    access = _blank(os.environ.get("APIPI_IMAGE_S3_ACCESS_KEY_ID"))
+    secret = _blank(os.environ.get("APIPI_IMAGE_S3_SECRET_ACCESS_KEY"))
+    profile = _blank(os.environ.get("APIPI_IMAGE_S3_PROFILE"))
+    if (access is None) != (secret is None):
+        raise ConfigError(
+            "APIPI_IMAGE_S3_ACCESS_KEY_ID and "
+            "APIPI_IMAGE_S3_SECRET_ACCESS_KEY must both be set"
+        )
+    if profile and access:
+        raise ConfigError(
+            "set APIPI_IMAGE_S3_PROFILE or "
+            "APIPI_IMAGE_S3_ACCESS_KEY_ID and "
+            "APIPI_IMAGE_S3_SECRET_ACCESS_KEY, not both"
+        )
+    return access, secret, profile
+
+
+def image_s3_settings(settings: Settings) -> Settings:
+    endpoint = _blank(settings.image_s3_endpoint)
+    if endpoint is None:
+        endpoint = settings.s3_endpoint
+    region = _blank(settings.image_s3_region)
+    if region is None:
+        region = settings.s3_region
+    addressing = settings.image_s3_addressing
+    if addressing is None:
+        addressing = settings.s3_addressing
+    return settings.model_copy(
+        update={
+            "s3_endpoint": endpoint,
+            "s3_region": region,
+            "s3_addressing": addressing,
+        }
+    )
+
+
+def make_image_s3_client(settings: Settings) -> object:
+    access, secret, profile = image_s3_credentials()
+    return make_s3_client(
+        image_s3_settings(settings),
+        missing=S3_MISSING,
+        aws_access_key_id=access,
+        aws_secret_access_key=secret,
+        profile_name=profile,
+    )
 
 
 class FileImageStore:
@@ -98,8 +161,15 @@ class S3ImageStore:
         self.bucket = uri.bucket
         self.prefix = uri.prefix
         if client is None:
-            client = make_s3_client(settings, missing=S3_MISSING)
+            client = make_image_s3_client(settings)
         self.client: Any = client
+
+    def _raise_s3(self, name: str, exc: BaseException) -> NoReturn:
+        if _s3_code(exc) == "NoSuchBucket":
+            raise ConfigError(f"bucket {self.bucket} does not exist") from exc
+        if _s3_missing(exc):
+            raise ConfigError(f"image store is missing {name}") from exc
+        raise exc
 
     def key(self, name: str) -> str:
         safe = _safe_name(name)
@@ -111,6 +181,8 @@ class S3ImageStore:
         try:
             self.client.head_object(Bucket=self.bucket, Key=self.key(name))
         except Exception as exc:
+            if _s3_code(exc) == "NoSuchBucket":
+                raise ConfigError(f"bucket {self.bucket} does not exist") from exc
             if _s3_missing(exc):
                 return False
             raise
@@ -120,22 +192,67 @@ class S3ImageStore:
         try:
             response = self.client.get_object(Bucket=self.bucket, Key=self.key(name))
         except Exception as exc:
-            if _s3_missing(exc):
-                raise ConfigError(f"image store is missing {name}") from exc
-            raise
+            self._raise_s3(name, exc)
         body = response["Body"]
         data = body.read()
         if not isinstance(data, bytes):
             raise ConfigError(f"image store returned no bytes for {name}")
         return data
 
+    def get_to(self, name: str, dest: Path) -> None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".part")
+        try:
+            self._stream_to(name, tmp)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+        tmp.replace(dest)
+
+    def _stream_to(self, name: str, dest: Path) -> None:
+        download = getattr(self.client, "download_file", None)
+        if callable(download):
+            try:
+                download(self.bucket, self.key(name), str(dest))
+            except Exception as exc:
+                self._raise_s3(name, exc)
+            return
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=self.key(name))
+        except Exception as exc:
+            self._raise_s3(name, exc)
+        body = response["Body"]
+        try:
+            with dest.open("wb") as out:
+                while True:
+                    chunk = body.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    if not isinstance(chunk, bytes):
+                        raise ConfigError(f"image store returned no bytes for {name}")
+                    out.write(chunk)
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
+
     def put_bytes(self, name: str, data: bytes) -> None:
-        self.client.put_object(Bucket=self.bucket, Key=self.key(name), Body=data)
+        try:
+            self.client.put_object(Bucket=self.bucket, Key=self.key(name), Body=data)
+        except Exception as exc:
+            if _s3_code(exc) == "NoSuchBucket":
+                raise ConfigError(f"bucket {self.bucket} does not exist") from exc
+            raise
 
     def put_file(self, name: str, source: Path) -> None:
         upload = getattr(self.client, "upload_file", None)
         if callable(upload):
-            upload(str(source), self.bucket, self.key(name))
+            try:
+                upload(str(source), self.bucket, self.key(name))
+            except Exception as exc:
+                if _s3_code(exc) == "NoSuchBucket":
+                    raise ConfigError(f"bucket {self.bucket} does not exist") from exc
+                raise
             return
         self.put_bytes(name, source.read_bytes())
 
@@ -205,7 +322,7 @@ def open_image_store(
     if parsed.scheme == "https":
         if write:
             raise ConfigError(
-                "https:// image stores are read-only; publish to s3:// or file://"
+                "https:// image stores are read-only; push to s3:// or file://"
             )
         http = client if isinstance(client, httpx.Client) else None
         return HttpImageStore(parsed.path, client=http)

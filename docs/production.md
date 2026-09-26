@@ -57,15 +57,26 @@ Postgres. Give each process its own SQLite file if you are not sharing.
 
 ## Guest image store
 
-Build images with `apipi images build`, then publish them with
-`apipi images publish --to s3://your-bucket/apipi-images` or
-`file:///path` on storage the workers can read. An `https://` static
-host is a valid source once the files are there; publish itself
-rejects `https://`. Point workers at that prefix with one image
-source setting. The official Images workflow can publish `default`
-and `browser` as GitHub release assets. S3 credentials are the AWS
-environment or the instance role, the same endpoint settings as the
-artifact store, and never a key in TOML.
+Build images once with `apipi images build`, push them with
+`apipi images push` (`apipi images publish` is the same command), and
+pull on every worker with `apipi images pull`. `apipi images list
+--remote` shows whether the local copy matches the store. `--to`
+defaults to `APIPI_IMAGE_SOURCE`. An `https://` static host is a valid
+source once the files are there; push itself rejects `https://`.
+
+The image store can use a different S3 endpoint and account than the
+artifact store. Set `APIPI_IMAGE_S3_ENDPOINT`, `APIPI_IMAGE_S3_REGION`,
+and `APIPI_IMAGE_S3_ADDRESSING` when they differ. Each falls back to
+the matching `APIPI_S3_*` value when unset. Put image credentials in
+the process environment: `APIPI_IMAGE_S3_ACCESS_KEY_ID` and
+`APIPI_IMAGE_S3_SECRET_ACCESS_KEY`, or `APIPI_IMAGE_S3_PROFILE`. If
+none of those is set, the worker uses the standard AWS credential
+chain, the same chain as the artifact store. Never put those keys in
+TOML. The artifact and session store keep using `APIPI_S3_*` and are
+not affected by the image settings.
+
+The official Images workflow can publish `default` and `browser` as
+GitHub release assets.
 
 ## Scale-out
 

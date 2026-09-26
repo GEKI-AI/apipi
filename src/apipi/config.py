@@ -85,6 +85,9 @@ _SANDBOX_TOML = {
     "default_size": "sandbox_default_size",
     "default_image": "sandbox_default_image",
     "image_source": "image_source",
+    "image_s3_endpoint": "image_s3_endpoint",
+    "image_s3_region": "image_s3_region",
+    "image_s3_addressing": "image_s3_addressing",
     "images_dir": "images_dir",
     "images": "sandbox_images",
 }
@@ -576,6 +579,20 @@ class Settings(BaseSettings):
     image_source: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_IMAGE_SOURCE", "image_source"),
+    )
+    image_s3_endpoint: OtelEndpoint = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_IMAGE_S3_ENDPOINT", "image_s3_endpoint"),
+    )
+    image_s3_region: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_IMAGE_S3_REGION", "image_s3_region"),
+    )
+    image_s3_addressing: S3Addressing | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "APIPI_IMAGE_S3_ADDRESSING", "image_s3_addressing"
+        ),
     )
     images_dir: str | None = Field(
         default=None,
@@ -1139,6 +1156,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_ARTIFACT_STORE must be local or s3"
         if "s3_bucket" in loc or "APIPI_S3_BUCKET" in loc:
             return "APIPI_S3_BUCKET is required"
+        if "image_s3_addressing" in loc or "APIPI_IMAGE_S3_ADDRESSING" in loc:
+            return "APIPI_IMAGE_S3_ADDRESSING must be auto, path, or virtual"
         if "s3_addressing" in loc:
             return "APIPI_S3_ADDRESSING must be auto, path, or virtual"
         if "presign_ttl" in loc or "APIPI_PRESIGN_TTL" in loc:
