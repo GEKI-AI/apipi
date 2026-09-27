@@ -9,11 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `APIPI_MODEL_LIST=probe|turn|off` (default `probe`) and
-  `APIPI_MODEL_LIST_TTL` (default 5 minutes). Agent create and model
-  edit check the list. Turns do not. `probe` lists at `apipi serve`
-  and `apipi worker` start. `off` never calls `/models` and uses
-  `APIPI_MODELS`.
+- `APIPI_MODEL_LIST=probe|turn|off` (default `probe`). Agent create
+  and model edit check the list. Turns do not. `off` never calls
+  `/models` and uses `APIPI_MODELS`.
 
 ### Fixed
 

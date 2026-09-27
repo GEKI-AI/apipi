@@ -70,6 +70,7 @@ from apipi.worker.pi.idle import (
     normalize_idle_ttl,
     validate_idle_metadata,
 )
+from apipi.worker.pi.model_host import require_model
 from apipi.worker.pi.sandbox import (
     mem_mib_for_size,
     merge_playwright,
@@ -599,6 +600,7 @@ class SessionService:
             self.execution.put_stdio(session_id, stdio)
             text = input_text(input)
             if text:
+                require_model(model)
                 self._require_capacity(
                     session_id,
                     tenant_id,

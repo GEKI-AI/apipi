@@ -59,17 +59,15 @@ Postgres. Give each process its own SQLite file if you are not sharing.
 
 Point `OPENAI_BASE_URL` at an OpenAI-compatible host. Production should
 use `APIPI_MODEL_LIST=probe` (the default). Serve and each worker list
-`/models` once at start. Agent create and model edit reuse that list
-until `APIPI_MODEL_LIST_TTL` (default 5 minutes). Turns do not call
-`/models`. If a refresh fails, the last good list is kept.
+`/models` once at start. Agent create and model edit use that list.
+Turns do not call `/models`.
 
 Use `APIPI_MODEL_LIST=off` when the host has no `GET /models`. Set
-`APIPI_MODELS` to the ids you allow, or leave it empty to accept any
-model on agent write. `apipi serve` starts in that mode without
-calling `/models`. `turn` fetches a fresh list only when an agent is
-created or its model is edited. A model can still be rejected later
-by the host. That fails the turn with `model_host_error`. The
-contract is in [configuration](config.md#model-host).
+`APIPI_MODELS` to the ids you allow, or leave it empty to skip the
+check. `turn` lists only when an agent is created or its model is
+edited. If the host later rejects the model, the turn fails with
+`model_host_error`. The contract is in
+[configuration](config.md#model-host).
 
 ## Guest image store
 

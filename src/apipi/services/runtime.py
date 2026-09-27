@@ -55,7 +55,7 @@ from apipi.worker.pi.artifacts import (
 )
 from apipi.worker.pi.idle import resolve_idle_ttl
 from apipi.worker.pi.isolation import load_isolation
-from apipi.worker.pi.model_host import ensure_pi_model, require_model
+from apipi.worker.pi.model_host import note_pi_model, require_model
 from apipi.worker.pi.platform_prompt import compose_instructions
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
@@ -1119,15 +1119,8 @@ def request_cancel(
 def _bind_turn_model(settings: Settings | None, model: str | None) -> str:
     resolved = require_model(model)
     if settings is not None and settings.model_base_url:
-        ensure_pi_model(settings, resolved)
+        note_pi_model(settings, resolved)
     return resolved
-
-
-def _error_code(exc: BaseException) -> str | None:
-    code = getattr(exc, "code", None)
-    if isinstance(code, str) and code:
-        return code
-    return None
 
 
 async def fail_session(
@@ -1303,17 +1296,10 @@ async def run_turn(
                             tenant_id, row.environment, Path(directory)
                         )
             except (SetupError, ApiError) as exc:
+                code = exc.code if isinstance(exc, ApiError) and exc.code else None
                 await fail_environment(
-                    db,
-                    hub,
-                    tenant_id,
-                    session_id,
-                    exc.message,
-                    code=_error_code(exc),
+                    db, hub, tenant_id, session_id, exc.message, code=code
                 )
-                if isinstance(exc, ApiError):
-                    await db.commit()
-                    raise
                 return
             except ObjectStoreError:
                 await fail_environment(
@@ -1768,15 +1754,9 @@ async def continue_turn(
             model = _bind_turn_model(settings, model)
         except ApiError as exc:
             await fail_environment(
-                db,
-                hub,
-                tenant_id,
-                session_id,
-                exc.message,
-                code=_error_code(exc),
+                db, hub, tenant_id, session_id, exc.message, code=exc.code or None
             )
-            await db.commit()
-            raise
+            return
         skill_dirs = _skill_dirs(row.environment)
         env_type = row.environment.get("type")
         sandbox_size = sandbox_size_of(row.environment)

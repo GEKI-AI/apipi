@@ -1,5 +1,4 @@
 import json
-import time
 from pathlib import Path
 
 import httpx
@@ -12,15 +11,13 @@ from apipi.worker.pi.model_host import (
     fetch_model_ids,
     fetch_models_json,
     listed_models,
-    model_cache,
-    models_for_turn,
     models_json_for_base_url,
     models_url,
     parse_model_ids,
     probe_model_host,
-    remember_models,
     require_listed_model,
     require_model,
+    require_saved_model,
     write_pi_models_json,
 )
 from apipi.worker.pi.proc import pi_command_args, pi_env
@@ -261,7 +258,6 @@ def test_probe_model_host_writes_catalog(
     settings = _settings(tmp_path)
     probe_model_host(settings)
     assert (tmp_path / "sessions" / ".pi" / "agent" / "models.json").is_file()
-    assert model_cache.ids == ["m1"]
 
 
 def _pin_pi(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,7 +301,7 @@ def test_probe_turn_skips_models(
     probe_model_host(_settings(tmp_path).model_copy(update={"model_list": "turn"}))
 
 
-async def test_models_for_turn_modes(
+async def test_require_saved_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = 0
@@ -317,40 +313,15 @@ async def test_models_for_turn_modes(
 
     monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", fake_list)
     settings = _settings(tmp_path).model_copy(update={"model_list": "turn"})
-    assert await models_for_turn(settings, "k") == ["m1"]
-    assert await models_for_turn(settings, "k") == ["m1"]
+    await require_saved_model(settings, "m1", "k")
+    with pytest.raises(ApiError) as exc:
+        await require_saved_model(settings, "missing", "k")
+    assert exc.value.code == "model_not_found"
     assert calls == 2
-
     off = settings.model_copy(update={"model_list": "off", "models": ["static"]})
-    assert await models_for_turn(off, "k") == ["static"]
+    await require_saved_model(off, "static")
+    with pytest.raises(ApiError, match="not available"):
+        await require_saved_model(off, "other")
     assert calls == 2
     empty = settings.model_copy(update={"model_list": "off", "models": []})
-    assert await models_for_turn(empty, "k") is None
-
-
-async def test_probe_cache_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = 0
-
-    async def fake_list(*_args: object, **_kwargs: object) -> list[str]:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return ["m1"]
-        raise ApiError(
-            "invalid_request",
-            "Model host /models is unreachable",
-            code="model_host_unreachable",
-            status_code=400,
-        )
-
-    monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", fake_list)
-    settings = _settings(tmp_path).model_copy(update={"model_list": "probe"})
-    remember_models(["cached"])
-    assert await models_for_turn(settings, "k") == ["cached"]
-    assert calls == 0
-    model_cache.fetched_at = time.monotonic() - 301
-    assert await models_for_turn(settings, "k") == ["m1"]
-    assert calls == 1
-    model_cache.fetched_at = time.monotonic() - 301
-    assert await models_for_turn(settings, "k") == ["m1"]
-    assert calls == 2
+    await require_saved_model(empty, "anything")

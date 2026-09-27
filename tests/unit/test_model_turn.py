@@ -4,7 +4,6 @@ from typing import cast
 import pytest
 
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError
 from apipi.services.runtime import (
     EventHub,
     FakeHarness,
@@ -51,7 +50,7 @@ async def test_run_turn_does_not_list_models(
     async def boom(*_args: object, **_kwargs: object) -> list[str]:
         raise AssertionError("listed")
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.models_for_turn", boom)
+    monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", boom)
     tenant_id, session_id = await _session(store)
     host = settings.model_copy(
         update={"model_base_url": "http://model.test/v1", "model_list": "turn"}
@@ -74,17 +73,15 @@ async def test_run_turn_model_required_reaches_session(
 ) -> None:
     tenant_id, session_id = await _session(store, model=None)
     host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
-    with pytest.raises(ApiError) as exc:
-        await run_turn(
-            store,
-            EventHub(),
-            cast(Harness, FakeHarness()),
-            tenant_id,
-            session_id,
-            "hello",
-            settings=host,
-        )
-    assert exc.value.code == "model_required"
+    await run_turn(
+        store,
+        EventHub(),
+        cast(Harness, FakeHarness()),
+        tenant_id,
+        session_id,
+        "hello",
+        settings=host,
+    )
     types = await _types(store, tenant_id, session_id)
     assert "agent.session.error" in types
     assert "agent.session.failed" in types
@@ -119,7 +116,7 @@ async def test_continue_turn_does_not_list_models(
     async def boom(*_args: object, **_kwargs: object) -> list[str]:
         raise AssertionError("listed")
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.models_for_turn", boom)
+    monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", boom)
     async with store.session() as db:
         tenant = await create_tenant(db, name="t")
         row = await create_session(

@@ -1,10 +1,6 @@
-import asyncio
 import json
-import logging
 import shutil
 import subprocess
-import time
-from datetime import timedelta
 from pathlib import Path
 
 import httpx
@@ -15,36 +11,17 @@ from apipi.worker.pi.dirs import sessions_root
 from apipi.worker.pi.version import PINNED_PI
 
 PI_PROVIDER = "apipi"
-log = logging.getLogger("apipi")
-
-
-class ModelListCache:
-    def __init__(self) -> None:
-        self.ids: list[str] | None = None
-        self.fetched_at: float = 0.0
-
-
-model_cache = ModelListCache()
-_refresh_lock = asyncio.Lock()
+_listed: list[str] | None = None
 
 
 def clear_model_cache() -> None:
-    model_cache.ids = None
-    model_cache.fetched_at = 0.0
+    global _listed
+    _listed = None
 
 
 def remember_models(ids: list[str]) -> None:
-    model_cache.ids = list(ids)
-    model_cache.fetched_at = time.monotonic()
-
-
-def _fresh_models(ttl: timedelta) -> list[str] | None:
-    if model_cache.ids is None:
-        return None
-    age = time.monotonic() - model_cache.fetched_at
-    if age >= ttl.total_seconds():
-        return None
-    return list(model_cache.ids)
+    global _listed
+    _listed = list(ids)
 
 
 def _headers(api_key: str | None) -> dict[str, str]:
@@ -141,37 +118,27 @@ async def listed_models(base_url: str, api_key: str | None = None) -> list[str]:
     return parse_model_ids(await fetch_models_json(base_url, api_key))
 
 
-async def models_for_turn(
-    settings: Settings, api_key: str | None = None
-) -> list[str] | None:
+async def require_saved_model(
+    settings: Settings, model: str | None, api_key: str | None = None
+) -> None:
+    if not isinstance(model, str) or not model.strip():
+        return
+    name = model.strip()
     if settings.model_list == "off":
-        if not settings.models:
-            return None
-        return list(settings.models)
-    base = settings.model_base_url
-    if not base:
-        raise ConfigError("OPENAI_BASE_URL is required")
-    if settings.model_list == "turn":
-        return await listed_models(base, api_key)
-    fresh = _fresh_models(settings.model_list_ttl)
-    if fresh is not None:
-        return fresh
-    async with _refresh_lock:
-        fresh = _fresh_models(settings.model_list_ttl)
-        if fresh is not None:
-            return fresh
-        try:
-            ids = await listed_models(base, api_key)
-        except ApiError:
-            if model_cache.ids is not None:
-                log.warning(
-                    "model list refresh failed; keeping the last list",
-                    extra={"event": "model.list.refresh_failed"},
-                )
-                return list(model_cache.ids)
-            raise
+        if settings.models:
+            require_listed_model(name, list(settings.models))
+        return
+    if settings.model_list == "probe" and _listed is not None:
+        require_listed_model(name, _listed)
+        return
+    if not settings.model_base_url:
+        return
+    ids = await listed_models(
+        settings.model_base_url, api_key or settings.model_api_key_overwrite
+    )
+    if settings.model_list == "probe":
         remember_models(ids)
-        return ids
+    require_listed_model(name, ids)
 
 
 def require_model(model: str | None) -> str:
@@ -209,48 +176,10 @@ def _model_row(model_id: str, settings: Settings) -> dict[str, object]:
     return row
 
 
-def _saved_model_ids(path: Path) -> list[str]:
+def note_pi_model(settings: Settings, model: str) -> None:
+    path = pi_agent_dir(settings) / "models.json"
     if not path.is_file():
-        return []
-    try:
-        payload = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return []
-    providers = payload.get("providers")
-    if not isinstance(providers, dict):
-        return []
-    provider = providers.get(PI_PROVIDER)
-    if not isinstance(provider, dict):
-        return []
-    models = provider.get("models")
-    if not isinstance(models, list):
-        return []
-    ids: list[str] = []
-    for item in models:
-        if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]:
-            ids.append(item["id"])
-    return ids
-
-
-def ensure_pi_model(settings: Settings, model: str) -> Path:
-    directory = pi_agent_dir(settings)
-    ids = _saved_model_ids(directory / "models.json")
-    if model not in ids:
-        ids.append(model)
-    return write_pi_models_json(settings, ids)
-
-
-async def require_saved_model(
-    settings: Settings, model: str | None, api_key: str | None = None
-) -> None:
-    if not isinstance(model, str) or not model.strip():
-        return
-    if not settings.model_base_url:
-        return
-    ids = await models_for_turn(settings, api_key or settings.model_api_key_overwrite)
-    if ids is None:
-        return
-    require_listed_model(model.strip(), ids)
+        write_pi_models_json(settings, [model])
 
 
 def write_pi_models_json(settings: Settings, model_ids: list[str]) -> Path:

@@ -576,10 +576,6 @@ class Settings(BaseSettings):
         default="probe",
         validation_alias=AliasChoices("APIPI_MODEL_LIST", "model_list"),
     )
-    model_list_ttl: IdleTtl = Field(
-        default=timedelta(minutes=5),
-        validation_alias=AliasChoices("APIPI_MODEL_LIST_TTL", "model_list_ttl"),
-    )
     models: ModelNameList = Field(
         default_factory=list,
         validation_alias=AliasChoices("APIPI_MODELS", "models"),
@@ -1114,8 +1110,6 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_GUEST_SAMPLE_INTERVAL must be like 15s or empty"
         if "forward_models" in loc or "APIPI_FORWARD_MODELS" in loc:
             return "APIPI_FORWARD_MODELS must be on or off"
-        if "model_list_ttl" in loc or "APIPI_MODEL_LIST_TTL" in loc:
-            return "APIPI_MODEL_LIST_TTL must be like 5m"
         if "model_list" in loc or "APIPI_MODEL_LIST" in loc:
             return "APIPI_MODEL_LIST must be probe, turn, or off"
         if "pi_auto_compact" in loc or "APIPI_PI_AUTO_COMPACT" in loc:
