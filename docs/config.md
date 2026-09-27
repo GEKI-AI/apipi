@@ -92,9 +92,9 @@ hosted files and skills).
 | `OPENAI_BASE_URL` | `model_base_url` | required for serve | Model host passed to Pi. Not the gateway URL. Put this in `.env`. |
 | `OPENAI_API_KEY_OVERWRITE` | `model_api_key_overwrite` | unset | Optional operator model key. When unset, Pi gets the request bearer. A process `OPENAI_API_KEY` is ignored. |
 | `APIPI_FORWARD_MODELS` | `forward_models` | on | Proxy `GET /v1/models` to `{OPENAI_BASE_URL}/models` when `APIPI_MODEL_LIST` is `probe` or `turn`. Off returns `400` with code `forward_models`. With `APIPI_MODEL_LIST=off`, the route returns the static `APIPI_MODELS` list instead of calling the host. |
-| `APIPI_MODEL_LIST` | `model_list` | `probe` | `probe` \| `turn` \| `off`. `probe` lists `{OPENAI_BASE_URL}/models` once at `apipi serve` and `apipi worker` start, then refreshes after `APIPI_MODEL_LIST_TTL`. `turn` lists on every turn and does not call `/models` at startup. `off` never calls `/models`. |
-| `APIPI_MODEL_LIST_TTL` | `model_list_ttl` | `5m` | How long a `probe` list stays fresh. After it expires, the next turn refreshes. A failed refresh keeps the last good list and logs a warning. |
-| `APIPI_MODELS` | `models` | empty | Comma-separated model ids, or a TOML list. Used when `APIPI_MODEL_LIST=off`. An empty list skips the listed-model check and passes `agent.model` to Pi. |
+| `APIPI_MODEL_LIST` | `model_list` | `probe` | `probe` \| `turn` \| `off`. Used when an agent is created or its model is edited, not on turns. `probe` lists `{OPENAI_BASE_URL}/models` at `apipi serve` and `apipi worker` start, then reuses that list until `APIPI_MODEL_LIST_TTL`. `turn` fetches a fresh list on each agent write and does not call `/models` at startup. `off` never calls `/models`. |
+| `APIPI_MODEL_LIST_TTL` | `model_list_ttl` | `5m` | How long a `probe` list stays fresh. After it expires, the next agent write refreshes it. A failed refresh keeps the last good list and logs a warning. |
+| `APIPI_MODELS` | `models` | empty | Comma-separated model ids, or a TOML list. Used when `APIPI_MODEL_LIST=off`. An empty list skips the listed-model check on agent write. |
 | `APIPI_USAGE_STORE` | `usage_store` | `turns` | How much agent usage hits Postgres: `off` \| `rollups` \| `turns`. See [usage](usage.md). |
 | `APIPI_USAGE_RETENTION` | `usage_retention` | `15d` | Delete turn log rows older than this. Empty means no purge. Rollups stay. |
 | `APIPI_USAGE_EXPORT_URL` | `usage_export_url` | unset | HTTPS POST of one non-text agent usage event per turn. Off when unset. |
@@ -213,10 +213,11 @@ session. `APIPI_SANDBOX_TTL_SELF_HOSTED` does not kill Pi.
 | Artifact store too large | `agent.session.error` | `artifact_too_large` |
 | Artifact store not writable, including S3 errors | `agent.session.turn.failed` | `artifact_store` |
 | Artifact store error on an HTTP read or upload | `503` | `artifact_store` |
-| Missing `agent.model` | `400` and `agent.session.error` | `model_required` |
-| Model id not in the list | `400` and `agent.session.error` | `model_not_found` |
-| Model host `/models` unreachable, including `404` | `400` and `agent.session.error` | `model_host_unreachable` |
-| Model host rejects the key (`401` or `403`) | `401` and `agent.session.error` | `model_host_unauthorized` |
+| Missing `agent.model` on a turn | `400` and `agent.session.error` | `model_required` |
+| Unknown model on agent create or edit | `400` | `model_not_found` |
+| Model list unreachable on agent write, including `404` | `400` | `model_host_unreachable` |
+| Model host rejects the key on agent write (`401` or `403`) | `401` | `model_host_unauthorized` |
+| Host rejects the model during a turn | `agent.session.turn.failed` | `model_host_error` |
 
 The gateway does not intercept every write inside a guest. Guest tmpfs
 is already bounded by `[sandbox.resources].mem_mib`. Workspace and
@@ -284,18 +285,23 @@ is `probe` or `turn`, and when `GET /v1/models` forwards. The body is
 `{"object": "list", "data": [{"id": "<model>"}]}`. Only `data[].id` is
 read. A host `401` or `403` becomes `model_host_unauthorized`. Any
 other failure, including `404`, becomes `model_host_unreachable`.
-Those errors are written on the session as `agent.session.error` and
-`agent.session.failed`. They are not dropped.
+Agent create and model edit return that error directly. Turns do not
+call `/models`.
 
-`probe` is the default. Startup pays for one list, and turns inside
-the TTL do not call `/models`. The list can be a few minutes old. A
-failed refresh keeps the last good list. `turn` is fresh on every
-turn. That turn waits up to 10 seconds for the host. The call does
-not stall other turns on the event loop. `off` is how you run a host
-that has no `/models`. Set `APIPI_MODELS` to the ids you allow, or
-leave it empty to accept any `agent.model`. `apipi serve` and
-`apipi worker` still require `OPENAI_BASE_URL` and the pinned Pi.
-They do not call `/models` in `off` or `turn`.
+`probe` is the default. Startup pays for one list. Agent writes inside
+the TTL do not call `/models` again. The list can be a few minutes
+old. A failed refresh keeps the last good list. `turn` fetches a fresh
+list on each agent write, not on each conversation turn. `off` is how
+you run a host that has no `/models`. Set `APIPI_MODELS` to the ids
+you allow, or leave it empty to accept any `agent.model` on write.
+`apipi serve` and `apipi worker` still require `OPENAI_BASE_URL` and
+the pinned Pi. They do not call `/models` in `off` or `turn`.
+
+A turn does not check the catalog again. The selected model can be
+missing later, or rejected for another reason. Pi's error becomes
+`agent.session.turn.failed` and `agent.session.error` with code
+`model_host_error`. A missing `agent.model` is still
+`model_required` before the turn starts.
 
 ## Pi
 

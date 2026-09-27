@@ -55,12 +55,7 @@ from apipi.worker.pi.artifacts import (
 )
 from apipi.worker.pi.idle import resolve_idle_ttl
 from apipi.worker.pi.isolation import load_isolation
-from apipi.worker.pi.model_host import (
-    models_for_turn,
-    require_listed_model,
-    require_model,
-    write_pi_models_json,
-)
+from apipi.worker.pi.model_host import ensure_pi_model, require_model
 from apipi.worker.pi.platform_prompt import compose_instructions
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
@@ -1121,18 +1116,10 @@ def request_cancel(
     return abort
 
 
-async def _bind_turn_model(
-    settings: Settings | None, api_key: str | None, model: str | None
-) -> str:
+def _bind_turn_model(settings: Settings | None, model: str | None) -> str:
     resolved = require_model(model)
-    if settings is None or not settings.model_base_url:
-        return resolved
-    ids = await models_for_turn(settings, api_key)
-    if ids is None:
-        write_pi_models_json(settings, [resolved])
-        return resolved
-    require_listed_model(resolved, ids)
-    write_pi_models_json(settings, ids)
+    if settings is not None and settings.model_base_url:
+        ensure_pi_model(settings, resolved)
     return resolved
 
 
@@ -1283,7 +1270,7 @@ async def run_turn(
             session_idle = row.idle_ttl
             ensure_openai_workspace(row.environment)
             try:
-                model = await _bind_turn_model(settings, api_key, model)
+                model = _bind_turn_model(settings, model)
                 gateway_allowlist = False
                 gateway_hosts: tuple[str, ...] = ()
                 extra_files: list[tuple[str, bytes]] = []
@@ -1778,7 +1765,7 @@ async def continue_turn(
         )
         session_idle = row.idle_ttl
         try:
-            model = await _bind_turn_model(settings, api_key, model)
+            model = _bind_turn_model(settings, model)
         except ApiError as exc:
             await fail_environment(
                 db,

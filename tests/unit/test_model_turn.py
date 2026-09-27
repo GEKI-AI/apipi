@@ -22,15 +22,6 @@ from apipi.store.repo import (
 )
 
 
-def _unreachable() -> ApiError:
-    return ApiError(
-        "invalid_request",
-        "Model host /models is unreachable",
-        code="model_host_unreachable",
-        status_code=400,
-    )
-
-
 async def _session(
     store: Store, *, model: str | None = "m1", status: str = "idle"
 ) -> tuple[uuid.UUID, uuid.UUID]:
@@ -46,46 +37,36 @@ async def _session(
         return tenant.id, row.id
 
 
-async def _codes(
+async def _types(
     store: Store, tenant_id: uuid.UUID, session_id: uuid.UUID
 ) -> list[str]:
     async with store.session() as db:
         events = await list_events(db, tenant_id, session_id)
-    codes: list[str] = []
-    for event in events:
-        if event.type != "agent.session.error":
-            continue
-        data = event.data if isinstance(event.data, dict) else {}
-        code = data.get("code")
-        if isinstance(code, str):
-            codes.append(code)
-    return codes
+    return [event.type for event in events]
 
 
-async def test_run_turn_404_reaches_session(
+async def test_run_turn_does_not_list_models(
     store: Store, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def boom(*_args: object, **_kwargs: object) -> list[str]:
-        raise _unreachable()
+        raise AssertionError("listed")
 
-    monkeypatch.setattr("apipi.services.runtime.models_for_turn", boom)
+    monkeypatch.setattr("apipi.worker.pi.model_host.models_for_turn", boom)
     tenant_id, session_id = await _session(store)
     host = settings.model_copy(
         update={"model_base_url": "http://model.test/v1", "model_list": "turn"}
     )
-    with pytest.raises(ApiError) as exc:
-        await run_turn(
-            store,
-            EventHub(),
-            cast(Harness, FakeHarness()),
-            tenant_id,
-            session_id,
-            "hello",
-            settings=host,
-            api_key="k",
-        )
-    assert exc.value.code == "model_host_unreachable"
-    assert "model_host_unreachable" in await _codes(store, tenant_id, session_id)
+    await run_turn(
+        store,
+        EventHub(),
+        cast(Harness, FakeHarness()),
+        tenant_id,
+        session_id,
+        "hello",
+        settings=host,
+        api_key="k",
+    )
+    assert "agent.session.turn.completed" in await _types(store, tenant_id, session_id)
 
 
 async def test_run_turn_model_required_reaches_session(
@@ -104,39 +85,41 @@ async def test_run_turn_model_required_reaches_session(
             settings=host,
         )
     assert exc.value.code == "model_required"
-    assert "model_required" in await _codes(store, tenant_id, session_id)
+    types = await _types(store, tenant_id, session_id)
+    assert "agent.session.error" in types
+    assert "agent.session.failed" in types
 
 
-async def test_run_turn_unknown_model_reaches_session(
-    store: Store, settings: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def other(*_args: object, **_kwargs: object) -> list[str]:
-        return ["other"]
-
-    monkeypatch.setattr("apipi.services.runtime.models_for_turn", other)
+async def test_turn_catches_unavailable_model(store: Store, settings: Settings) -> None:
     tenant_id, session_id = await _session(store)
     host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
-    with pytest.raises(ApiError) as exc:
-        await run_turn(
-            store,
-            EventHub(),
-            cast(Harness, FakeHarness()),
-            tenant_id,
-            session_id,
-            "hello",
-            settings=host,
-        )
-    assert exc.value.code == "model_not_found"
-    assert "model_not_found" in await _codes(store, tenant_id, session_id)
+    harness = FakeHarness()
+    harness.fail_message = "model missing is not available"
+    await run_turn(
+        store,
+        EventHub(),
+        cast(Harness, harness),
+        tenant_id,
+        session_id,
+        "hello",
+        settings=host,
+    )
+    async with store.session() as db:
+        events = await list_events(db, tenant_id, session_id)
+    error = next(event for event in events if event.type == "agent.session.error")
+    assert isinstance(error.data, dict)
+    assert error.data["code"] == "model_host_error"
+    assert "not available" in str(error.data["message"])
+    assert "agent.session.turn.failed" in [event.type for event in events]
 
 
-async def test_continue_turn_404_reaches_session(
+async def test_continue_turn_does_not_list_models(
     store: Store, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def boom(*_args: object, **_kwargs: object) -> list[str]:
-        raise _unreachable()
+        raise AssertionError("listed")
 
-    monkeypatch.setattr("apipi.services.runtime.models_for_turn", boom)
+    monkeypatch.setattr("apipi.worker.pi.model_host.models_for_turn", boom)
     async with store.session() as db:
         tenant = await create_tenant(db, name="t")
         row = await create_session(
@@ -158,23 +141,19 @@ async def test_continue_turn_404_reaches_session(
         tenant_id = tenant.id
         session_id = row.id
         turn_id = turn.id
-    host = settings.model_copy(
-        update={"model_base_url": "http://model.test/v1", "model_list": "turn"}
+    host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
+    await continue_turn(
+        store,
+        EventHub(),
+        cast(Harness, FakeHarness()),
+        tenant_id,
+        session_id,
+        turn_id=turn_id,
+        call_id="call-1",
+        success=True,
+        output="ok",
+        error=None,
+        settings=host,
+        api_key="k",
     )
-    with pytest.raises(ApiError) as exc:
-        await continue_turn(
-            store,
-            EventHub(),
-            cast(Harness, FakeHarness()),
-            tenant_id,
-            session_id,
-            turn_id=turn_id,
-            call_id="call-1",
-            success=True,
-            output="ok",
-            error=None,
-            settings=host,
-            api_key="k",
-        )
-    assert exc.value.code == "model_host_unreachable"
-    assert "model_host_unreachable" in await _codes(store, tenant_id, session_id)
+    assert "agent.session.turn.completed" in await _types(store, tenant_id, session_id)

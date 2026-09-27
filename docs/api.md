@@ -52,9 +52,11 @@ Rejected: `multi_agent`, `tool_search`, `programmatic_tool_calling`.
 A session may pass `agent_id` or an inline `agent`. You must provide
 exactly one of those. Inline config is used for that session only. It
 is not saved unless you `POST /v1/agents`. A live turn needs
-`agent.model`. That id must exist on `OPENAI_BASE_URL`. Missing model
-is `400` with code `model_required`. Unknown model is `400` with code
-`model_not_found`. Inline `model` and `instructions` are kept on the
+`agent.model`. Missing model is `400` with code `model_required`.
+Creating or editing an agent checks that id against the model list.
+An unknown id is `400` with code `model_not_found`. A later turn does
+not repeat that check. If the host then rejects the model, the turn
+fails with `model_host_error`. Inline `model` and `instructions` are kept on the
 session for follow-up turns. Saved agents keep reading the agent row.
 The gateway appends a platform prompt, then `agent.instructions` when
 those are set. A system prompt may replace Pi's harness default first.

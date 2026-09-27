@@ -10,17 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `APIPI_MODEL_LIST=probe|turn|off` (default `probe`) and
-  `APIPI_MODEL_LIST_TTL` (default 5 minutes). `probe` lists models at
-  `apipi serve` and `apipi worker` start, then refreshes after the TTL.
-  `turn` lists on every turn. `off` never calls `/models` and uses
-  `APIPI_MODELS`. Listing on the turn path is async.
+  `APIPI_MODEL_LIST_TTL` (default 5 minutes). Agent create and model
+  edit check the list. Turns do not. `probe` lists at `apipi serve`
+  and `apipi worker` start. `off` never calls `/models` and uses
+  `APIPI_MODELS`.
 
 ### Fixed
 
-- A model host that rejects `GET /models` no longer drops the turn.
-  The session gets `agent.session.error` and `agent.session.failed`
-  with the model error code. Worker turn tasks log that failure,
-  including 4xx, instead of leaving an unretrieved exception.
+- A missing `agent.model` fails the session instead of hanging.
+  If the host later rejects the selected model, the turn fails with
+  `model_host_error`. Worker turn tasks log that failure, including
+  4xx, instead of leaving an unretrieved exception.
 
 ## [0.5.3] - 2026-09-26
 

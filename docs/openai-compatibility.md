@@ -56,8 +56,10 @@ You can:
 - Authenticate with `Authorization: Bearer` on every route except
   `/health` and `/metrics`.
 
-`agent.model` must exist on the model host. Missing model is
-`model_required`. Unknown id is `model_not_found`.
+`agent.model` is checked against the model list when an agent is
+created or its model is edited. Missing model is `model_required`.
+Unknown id is `model_not_found`. A later turn does not repeat that
+check.
 
 ## Same shape, different backend
 

@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 import httpx
@@ -347,9 +348,9 @@ async def test_probe_cache_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     remember_models(["cached"])
     assert await models_for_turn(settings, "k") == ["cached"]
     assert calls == 0
-    model_cache.fetched_at = 0.0
+    model_cache.fetched_at = time.monotonic() - 301
     assert await models_for_turn(settings, "k") == ["m1"]
     assert calls == 1
-    model_cache.fetched_at = 0.0
+    model_cache.fetched_at = time.monotonic() - 301
     assert await models_for_turn(settings, "k") == ["m1"]
     assert calls == 2

@@ -209,6 +209,50 @@ def _model_row(model_id: str, settings: Settings) -> dict[str, object]:
     return row
 
 
+def _saved_model_ids(path: Path) -> list[str]:
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    providers = payload.get("providers")
+    if not isinstance(providers, dict):
+        return []
+    provider = providers.get(PI_PROVIDER)
+    if not isinstance(provider, dict):
+        return []
+    models = provider.get("models")
+    if not isinstance(models, list):
+        return []
+    ids: list[str] = []
+    for item in models:
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]:
+            ids.append(item["id"])
+    return ids
+
+
+def ensure_pi_model(settings: Settings, model: str) -> Path:
+    directory = pi_agent_dir(settings)
+    ids = _saved_model_ids(directory / "models.json")
+    if model not in ids:
+        ids.append(model)
+    return write_pi_models_json(settings, ids)
+
+
+async def require_saved_model(
+    settings: Settings, model: str | None, api_key: str | None = None
+) -> None:
+    if not isinstance(model, str) or not model.strip():
+        return
+    if not settings.model_base_url:
+        return
+    ids = await models_for_turn(settings, api_key or settings.model_api_key_overwrite)
+    if ids is None:
+        return
+    require_listed_model(model.strip(), ids)
+
+
 def write_pi_models_json(settings: Settings, model_ids: list[str]) -> Path:
     base = settings.model_base_url
     if not base:

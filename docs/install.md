@@ -322,11 +322,13 @@ passed into the live Pi process as `OPENAI_API_KEY`. Optional
 want one operator key instead of the caller's bearer. A process
 `OPENAI_API_KEY` is ignored.
 
-The `agent.model` on the request must exist on that host. An unknown id
-returns `400` with code `model_not_found`. Clients can list those ids
-with `GET /v1/models`, which proxies to the model host unless
-`APIPI_FORWARD_MODELS` is off. Pi is started with that id and a
-gateway-owned `models.json`.
+Creating or editing an agent checks `agent.model` against the model
+list. An unknown id returns `400` with code `model_not_found`. Turns
+do not repeat that check. If the host rejects the model later, the
+turn fails with `model_host_error`. Clients can list ids with
+`GET /v1/models`, which proxies to the model host unless
+`APIPI_FORWARD_MODELS` is off or `APIPI_MODEL_LIST` is `off`. Pi is
+started with that id and a gateway-owned `models.json`.
 
 Live turns also need Pi on `PATH`. You can override the binary with
 `APIPI_PI_COMMAND`.
