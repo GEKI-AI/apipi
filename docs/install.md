@@ -325,7 +325,9 @@ want one operator key instead of the caller's bearer. A process
 Creating or editing an agent checks `agent.model` against the model
 list. An unknown id returns `400` with code `model_not_found`. Turns
 do not repeat that check. If the host rejects the model later, the
-turn fails with `model_host_error`. Clients can list ids with
+turn fails. In this release the public code is still
+`model_host_error`. The specific code is `detail_code`. See
+[failure codes](errors.md). Clients can list ids with
 `GET /v1/models`, which proxies to the model host unless
 `APIPI_FORWARD_MODELS` is off or `APIPI_MODEL_LIST` is `off`. Pi is
 started with that id and a gateway-owned `models.json`.

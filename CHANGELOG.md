@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Turn failures carry `failure_source`, a specific `code`,
+  `upstream_status`, and `retryable`. `agent.session.turn.failed`,
+  the turn log, and the usage event use the specific code.
+  `agent.session.error` and the non-stream `502` body keep
+  `model_host_error` for upstream failures in this release, and put
+  the specific code in `detail_code`. Set `APIPI_ERROR_CODES=specific`
+  to use the specific code on those two surfaces now. The next minor
+  release will make `specific` the default and keep
+  `legacy_code: model_host_error` for one release after that. See
+  [failure codes](docs/errors.md).
+
+### Changed
+
+- A turn that exceeds `turn_timeout` fails with `turn_timeout` instead
+  of looking like a user cancel. A Pi process that dies mid-turn is
+  `pi_exited`. A host Pi killed for `APIPI_PI_MEM_MIB` is `pi_memory`.
+  Both still report `model_host_error` on `agent.session.error` until
+  the next minor release.
+- `turn.failed` and `worker.command.failed` log upstream `429` and
+  caller errors at warning. Internal failures and upstream `5xx`,
+  timeouts, and connection errors stay at error. A user cancel stays
+  info.
+
 ## [0.6.1] - 2026-09-27
 
 ### Added

@@ -20,6 +20,7 @@ class ApiError(Exception):
         code: str = "",
         status_code: int = 400,
         session_id: str | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.type = type
@@ -27,6 +28,16 @@ class ApiError(Exception):
         self.code = code
         self.status_code = status_code
         self.session_id = session_id
+        self.extra = extra or {}
+
+
+_ERROR_EXTRA = (
+    "failure_source",
+    "detail_code",
+    "upstream_status",
+    "retryable",
+    "legacy_code",
+)
 
 
 def error_body(
@@ -34,10 +45,15 @@ def error_body(
     message: str,
     code: str = "",
     session_id: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     error: dict[str, Any] = {"type": type, "code": code, "message": message}
     if session_id:
         error["session_id"] = session_id
+    if extra:
+        for key in _ERROR_EXTRA:
+            if key in extra:
+                error[key] = extra[key]
     return {"error": error}
 
 
@@ -103,7 +119,11 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_body(
-                exc.type, exc.message, exc.code, session_id=exc.session_id
+                exc.type,
+                exc.message,
+                exc.code,
+                session_id=exc.session_id,
+                extra=exc.extra,
             ),
         )
 

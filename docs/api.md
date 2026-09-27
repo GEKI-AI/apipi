@@ -136,8 +136,11 @@ checks that id against the model list. An unknown id is `400` with
 code `model_not_found`. A host that cannot list models is `400`
 `model_host_unreachable`, or `401` `model_host_unauthorized`. A later
 turn does not repeat that check. If the host then rejects the model,
-the turn fails with `model_host_error` and the session returns to
-`idle`. Failure modes are in [configuration](config.md#failure-modes).
+the turn fails and the session returns to `idle`. The public code on
+`agent.session.error` stays `model_host_error` in this release. The
+specific code is `detail_code`. Failure modes are in
+[configuration](config.md#failure-modes) and
+[failure codes](errors.md).
 Inline `model` and `instructions` are kept on the
 session for follow-up turns. Saved agents keep reading the agent row.
 The gateway appends a platform prompt, then `agent.instructions` when
@@ -623,10 +626,15 @@ example is `examples/sessions/openai_sdk.py`. Create-and-stream steps are in
 `session_id` is set when create already stored a session and the first
 turn failed. The session stays `idle` so a follow-up message works.
 That is a turn failure (`agent.session.turn.failed`), not
-`agent.session.failed`. A terminal session failure emits
+`agent.session.failed`. A non-stream create that fails the first turn
+returns `502`. In this release the body `code` stays
+`model_host_error` for an upstream failure, and `detail_code` is the
+specific code. The body also has `failure_source`, `upstream_status`,
+and `retryable`. A terminal session failure emits
 `agent.session.error` and then `agent.session.failed`, and status
-becomes `failed`. Model codes and which path uses which outcome are
-in [configuration](config.md#failure-modes).
+becomes `failed`. Codes, sources, and log levels are in
+[failure codes](errors.md). Model-list outcomes are in
+[configuration](config.md#failure-modes).
 
 Missing or invalid bearer is `401` with code `unauthorized`. An auth
 plugin may return `429` with a plugin `code` such as `rate_limited` or

@@ -223,6 +223,11 @@ async def test_chat_create_failed_turn_is_502(settings: Settings, store: Store) 
         assert created.status_code == 502
         error = created.json()["error"]
         assert error["code"] == "model_host_error"
+        assert error["detail_code"] == "upstream_error"
+        assert error["failure_source"] == "upstream"
+        assert error["upstream_status"] is None
+        assert error["retryable"] is False
+        assert error["legacy_code"] == "model_host_error"
         assert error["message"] == "No model configured for provider"
         assert error["session_id"]
         got = await client.get(

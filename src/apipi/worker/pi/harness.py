@@ -6,6 +6,7 @@ from typing import Any
 from apipi.env.computer import Computer
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer
+from apipi.services.failures import failure_for, pi_payload
 from apipi.worker.pi.map import ThinkingTracker, map_pi_event
 from apipi.worker.pi.pool import PiPool
 
@@ -89,6 +90,7 @@ class PiHarness:
         )
         settled = False
         thinking = ThinkingTracker()
+        abort = _kwargs.get("abort")
         async for event in proc.prompt(text):
             if event.get("type") == "agent_settled":
                 settled = True
@@ -97,9 +99,13 @@ class PiHarness:
             for public in thinking.feed(event):
                 yield public
         if not settled:
+            if getattr(abort, "is_set", lambda: False)():
+                self.pool.touch(session_id)
+                return
+            code = "pi_memory" if proc.stop_reason == "memory" else "pi_exited"
             yield (
                 "pi_error",
-                {"message": "Pi stopped before the turn finished"},
+                pi_payload(failure_for(code, "Pi stopped before the turn finished")),
             )
         self.pool.touch(session_id)
 
