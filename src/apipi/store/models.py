@@ -60,6 +60,9 @@ class Agent(Base):
         "metadata", JSONType, default=dict, nullable=False
     )
     tools: Mapped[list[Any]] = mapped_column(JSONType, default=list, nullable=False)
+    session_defaults: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONType, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

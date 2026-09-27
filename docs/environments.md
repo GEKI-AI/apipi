@@ -71,10 +71,11 @@ from them. The full list is in
 
 Resolution, highest wins:
 
-1. `environment.sandbox_size`
+1. `environment.sandbox_size` on the session
 2. Session create `metadata["apipi.sandbox_size"]`
-3. Agent `metadata["apipi.sandbox_size"]`
-4. Gateway `APIPI_SANDBOX_DEFAULT_SIZE` / `[sandbox].default_size`
+3. Agent `session_defaults.environment.sandbox_size`
+4. Agent `metadata["apipi.sandbox_size"]` (deprecated alias)
+5. Gateway `APIPI_SANDBOX_DEFAULT_SIZE` / `[sandbox].default_size`
    (shipped default `S`)
 
 The resolved size is stored on the session `environment` and is fixed
@@ -87,22 +88,31 @@ not resize or reimage an already chosen size.
 separate from size. Size is RAM. Official clients can set
 `metadata["apipi.sandbox_image"]` instead. Resolution, highest wins:
 
-1. `environment.sandbox_image`
+1. `environment.sandbox_image` on the session
 2. Session create `metadata["apipi.sandbox_image"]`
-3. Agent `metadata["apipi.sandbox_image"]`
-4. Size `L` selects `browser`. Other sizes fall through.
-5. `APIPI_SANDBOX_DEFAULT_IMAGE` / `[sandbox].default_image` (shipped
+3. Agent `session_defaults.environment.sandbox_image`
+4. Agent `metadata["apipi.sandbox_image"]` (deprecated alias)
+5. Size `L` selects `browser`. Other sizes fall through.
+6. `APIPI_SANDBOX_DEFAULT_IMAGE` / `[sandbox].default_image` (shipped
    default `default`)
 
-Pin both keys on an org bot so later sessions start in that guest:
+Pin both on an org bot so later sessions start in that guest. Prefer
+`session_defaults`. The metadata keys are still accepted and are copied
+into `session_defaults` on write.
 
 ```json
-{"name": "org-bot", "metadata": {"apipi.sandbox_image": "browser", "apipi.sandbox_size": "M"}}
+{
+  "name": "org-bot",
+  "session_defaults": {
+    "environment": {"type": "openai_hosted", "sandbox_image": "browser", "sandbox_size": "M"}
+  }
+}
 ```
 
 Agent create and update reject a bad size, an unknown image, or a size
-below that image's minimum. Worker availability is still checked when a
-session is created.
+below that image's minimum, whether you set the field on
+`session_defaults` or the metadata alias. Worker availability is still
+checked when a session is created.
 
 The resolved id is stored on the session `environment` as
 `sandbox_image`. A later metadata update does not reimage a live guest.
@@ -146,7 +156,14 @@ the model not to install Playwright or browsers.
 Session create may include `environment.packages`,
 `environment.setup_commands`, `environment.env`,
 `environment.files`, and `environment.network` on `openai_hosted`.
-Those fields are stored on the session. Prep runs before the first
+The same fields can be stored on the agent as
+`session_defaults.environment`. A session that omits them, or that uses
+the same environment type, inherits them. A session value replaces a
+scalar or a list. `env` merges by key. `packages` merges by ecosystem
+and the session list replaces that ecosystem. Files merge by path.
+`inherit_agent_defaults: false` skips the agent defaults for that
+session. The merged values are what the session stores. Prep runs
+before the first
 agent turn that needs the computer:
 
 1. Write `files` into the session directory. Paths use the same
@@ -280,8 +297,13 @@ environment, not in the file. Setup is in `examples/README.md`.
 contain skill directories (`SKILL.md`). They are discovered when the
 session starts. Hosted packs upload at `/v1/skills` and attach with
 `environment.skills` `{ "type": "skill_reference", "skill_id": "…" }`.
-Those zips unpack under `.agents/skills/` in the session workspace.
-See [tools](tools.md).
+An agent can store those references in
+`session_defaults.environment.skills`. Session create unions them with
+the session's own skills, agent first, and drops duplicates. A skill
+deleted after the agent was saved does not block the delete. The next
+session that inherits it fails with `400` and names the agent and the
+skill id. Those zips unpack under `.agents/skills/` in the session
+workspace. See [tools](tools.md).
 
 Stdio MCP (for example Playwright) follows Pi, not the remote runner.
 HTTP MCP is reached from the gateway and handed to Pi.

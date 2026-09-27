@@ -69,6 +69,7 @@ def resolve_sandbox_image(
     agent_metadata: dict[str, Any] | None,
     size: str,
     default: str,
+    agent_default: str | None = None,
 ) -> str:
     if environment_image is not None:
         parsed = parse_sandbox_image(environment_image)
@@ -77,6 +78,10 @@ def resolve_sandbox_image(
     session_image = image_from_metadata(session_metadata)
     if session_image is not None:
         return session_image
+    if agent_default is not None:
+        parsed = parse_sandbox_image(agent_default)
+        if parsed is not None:
+            return parsed
     agent_image = image_from_metadata(agent_metadata)
     if agent_image is not None:
         return agent_image
@@ -146,6 +151,7 @@ def resolve_sandbox_size(
     session_metadata: dict[str, Any] | None,
     agent_metadata: dict[str, Any] | None,
     default: str,
+    agent_default: str | None = None,
 ) -> str:
     if environment_size is not None:
         parsed = parse_sandbox_size(environment_size)
@@ -154,6 +160,10 @@ def resolve_sandbox_size(
     session_size = size_from_metadata(session_metadata)
     if session_size is not None:
         return session_size
+    if agent_default is not None:
+        parsed = parse_sandbox_size(agent_default)
+        if parsed is not None:
+            return parsed
     agent_size = size_from_metadata(agent_metadata)
     if agent_size is not None:
         return agent_size

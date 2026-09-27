@@ -31,6 +31,7 @@ from apipi.services.runtime import (
     fail_stale_in_progress,
     persist_event,
 )
+from apipi.services.session_defaults import merge_session_create, require_default_refs
 from apipi.services.sidekick import TITLE_KEY, TITLE_STATUS_KEY
 from apipi.services.skill_store import SkillService
 from apipi.services.skills import copy_capability_directories
@@ -367,6 +368,24 @@ class SessionService:
             session_id=str(session_id),
         )
 
+    async def _saved_defaults(
+        self,
+        tenant_id: uuid.UUID,
+        agent: AgentWrite | None,
+        agent_id: uuid.UUID | None,
+    ) -> dict[str, Any] | None:
+        if agent_id is not None:
+            async with self.store.session() as db:
+                saved = await get_agent(db, tenant_id, agent_id)
+                if saved is None:
+                    not_found()
+                if isinstance(saved.session_defaults, dict):
+                    return saved.session_defaults
+            return None
+        if agent is None or agent.session_defaults is None:
+            return None
+        return agent.session_defaults.model_dump(mode="json", exclude_none=True)
+
     async def create(
         self,
         tenant_id: uuid.UUID,
@@ -378,6 +397,7 @@ class SessionService:
         metadata: dict[str, Any] | None = None,
         idle_ttl: str | None = None,
         vault_ids: list[uuid.UUID] | None = None,
+        inherit_agent_defaults: bool = True,
         key_id: str = "",
         user_id: str | None = None,
         thinking_summary: bool = False,
@@ -392,6 +412,23 @@ class SessionService:
                 "Provide agent or agent_id",
                 code="invalid_request",
             )
+        agent_defaults = await self._saved_defaults(tenant_id, agent, agent_id)
+        if inherit_agent_defaults and agent_defaults:
+            label = f"agent {agent_id}" if agent_id is not None else "inline agent"
+            async with self.store.session() as db:
+                await require_default_refs(
+                    db,
+                    tenant_id,
+                    agent_defaults,
+                    agent_label=label,
+                    dangling=True,
+                )
+        environment, vault_ids, agent_size, agent_image = merge_session_create(
+            agent_defaults=agent_defaults if inherit_agent_defaults else None,
+            environment=environment,
+            vault_ids=vault_ids,
+            inherit=inherit_agent_defaults,
+        )
         env = environment_payload(environment)
         extra_files: list[tuple[str, bytes]] = []
         if env.get("type") == "openai_hosted":
@@ -444,12 +481,14 @@ class SessionService:
                 and not metadata_has_idle_ttl(metadata)
             ):
                 idle_ttl = normalize_idle_ttl(agent.idle_ttl)
+            sandbox_agent_metadata = agent_metadata if inherit_agent_defaults else None
             size = resolve_sandbox_size(
                 environment_size=env.get("sandbox_size")
                 if isinstance(env.get("sandbox_size"), str)
                 else None,
                 session_metadata=metadata,
-                agent_metadata=agent_metadata,
+                agent_metadata=sandbox_agent_metadata,
+                agent_default=agent_size,
                 default=self.settings.sandbox_default_size,
             )
             image = resolve_sandbox_image(
@@ -457,7 +496,8 @@ class SessionService:
                 if isinstance(env.get("sandbox_image"), str)
                 else None,
                 session_metadata=metadata,
-                agent_metadata=agent_metadata,
+                agent_metadata=sandbox_agent_metadata,
+                agent_default=agent_image,
                 size=size,
                 default=self.settings.sandbox_default_image,
             )

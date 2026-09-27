@@ -56,6 +56,7 @@ class SessionCreate(StrictModel):
     idle_ttl: str | None = None
     stream: bool = False
     vault_ids: list[uuid.UUID] | None = None
+    inherit_agent_defaults: bool = True
 
 
 class SessionUpdate(StrictModel):
@@ -213,6 +214,7 @@ async def create_agent_session(
         metadata=body.metadata,
         idle_ttl=body.idle_ttl,
         vault_ids=body.vault_ids,
+        inherit_agent_defaults=body.inherit_agent_defaults,
         key_id=_key_id(request),
         user_id=_user_id(request),
         thinking_summary=_thinking_summary(request),

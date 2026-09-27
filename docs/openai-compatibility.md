@@ -103,6 +103,7 @@ yours.
 | Field or tool | Status |
 | --- | --- |
 | `name`, `model`, `instructions`, `metadata` | Same API |
+| `session_defaults` | ApiPi extension. Environment and `vault_ids` inherited by later sessions. |
 | `idle_ttl` | ApiPi extension. Duration (`30m`, `1h`) or `0` to turn idle off. Stock SDKs can set `metadata["apipi.idle_ttl"]` instead. |
 | `tools` type `function` | Same API |
 | `tools` type `mcp` with nested `transport` (`http` or `stdio`) | Same API |

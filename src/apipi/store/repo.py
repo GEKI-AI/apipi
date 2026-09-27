@@ -58,6 +58,7 @@ async def create_agent(
     idle_ttl: str | None = None,
     metadata: dict[str, Any] | None = None,
     tools: list[Any] | None = None,
+    session_defaults: dict[str, Any] | None = None,
 ) -> Agent:
     agent = Agent(
         tenant_id=tenant_id,
@@ -67,6 +68,7 @@ async def create_agent(
         idle_ttl=idle_ttl,
         metadata_json=metadata if metadata is not None else {},
         tools=tools if tools is not None else [],
+        session_defaults=session_defaults,
     )
     db.add(agent)
     await db.flush()
@@ -110,6 +112,8 @@ async def update_agent(
         agent.metadata_json = changes["metadata"]
     if "tools" in changes:
         agent.tools = changes["tools"]
+    if "session_defaults" in changes:
+        agent.session_defaults = changes["session_defaults"]
     agent.updated_at = utc_now()
     await db.flush()
     return agent

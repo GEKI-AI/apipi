@@ -35,15 +35,44 @@ agents until you create one.
 | `DELETE` | `/v1/agents/{agent_id}` |
 
 Fields: `id`, `name`, `model`, `instructions`, `idle_ttl`, `metadata`,
-`tools` (function, mcp HTTP, mcp stdio), `created_at`, `updated_at`.
+`tools` (function, mcp HTTP, mcp stdio), `session_defaults`,
+`created_at`, `updated_at`.
 `idle_ttl` is an ApiPi extension: a duration such as `30m` or `1h`,
 or `0` to turn the idle timer off. Omit it to keep the environment
 default. See [config](config.md).
 
+`session_defaults` stores the environment and vaults that later
+sessions inherit. It has `environment` (the same object as session
+create) and `vault_ids`. Create and update replace the whole object
+when the field is present. `null` clears it. Skill, file, and vault
+ids must already exist in the tenant. A missing id is `404`. Hosted-only
+fields on a non-hosted type, too many skills or files, an unknown
+image, or a size below that image's minimum are `400`, the same as
+session create. Deleting a skill, file, or vault does not block the
+delete. A later session that still inherits that id fails with `400`
+and names the agent and the missing id.
+
+Session create resolves each field as explicit session value, then
+agent default, then the server default. `inherit_agent_defaults`
+defaults to true. Set it to false to ignore `session_defaults` for
+that session, including the sandbox aliases below. Maps merge by key
+(`env`, and `packages` per ecosystem). Files merge by path. Skills and
+vault ids are unions, agent first, with duplicates dropped. Type,
+sandbox size, sandbox image, capability directories, setup commands,
+and network replace as a whole. The agent's environment defaults apply
+only when the session omits `environment` or uses the same type (after
+the `hosted` alias). A different type, including chat sessions which
+force `none`, keeps the session environment and still applies sandbox
+size and image. The session row stores the merged environment. `environment.env`
+values are stored on the agent row in plain text. Use `vault_ids` for
+credentials.
+
 `metadata["apipi.sandbox_size"]` and `metadata["apipi.sandbox_image"]`
-are the per-agent defaults for later sessions. Create and update reject
-an unknown size, an unknown image id, or a size below that image's
-minimum with `400`. A missing key keeps the gateway default. Worker
+are deprecated aliases of `session_defaults.environment.sandbox_size`
+and `sandbox_image`. Create and update copy them into
+`session_defaults` and mirror the stored value back into metadata so
+older clients still see the keys. If both are set and they differ, the
+write is `400`. A missing value keeps the gateway default. Worker
 availability is not checked until a session is created. See
 [environments](environments.md).
 
@@ -510,13 +539,15 @@ return `400`. Decoded files must fit
 `environment.sandbox_size` is an ApiPi extension: `S`, `M`, or `L`.
 Unknown values return `400`. A top-level `sandbox_size` on the session
 body is still `unknown_field`. Stock OpenAI clients can set
-`metadata["apipi.sandbox_size"]` instead. Agent metadata with that key
-is a default for later sessions. The gateway default is
+`metadata["apipi.sandbox_size"]` instead. Agent
+`session_defaults.environment.sandbox_size` is the default for later
+sessions. The metadata key is a deprecated alias of that field. The gateway default is
 `APIPI_SANDBOX_DEFAULT_SIZE` (`S` unless you change it). The resolved
 size is stored on the session `environment` and does not change if you
 later PATCH metadata. Isolation `none` accepts the field and ignores
 RAM and rootfs. Isolation `microvm` uses the size for guest RAM. The
-guest image comes from `environment.sandbox_image` or
+guest image comes from `environment.sandbox_image`,
+`session_defaults.environment.sandbox_image`, or
 `metadata["apipi.sandbox_image"]`. When those are omitted, size `L`
 selects `browser` and other sizes use the default image. Image
 `browser` injects the vendored Playwright MCP server unless the agent
