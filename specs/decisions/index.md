@@ -24,3 +24,4 @@ These files are not on the MkDocs site.
 | 0010 | ApiPi owns Firecracker |
 | 0011 | Host credential broker |
 | 0012 | Guest image store |
+| 0013 | Agent templates |

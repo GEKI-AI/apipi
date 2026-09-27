@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Agent templates. `POST /v1/templates` stores a zip of an agent's
+  configuration. Import, download, and create a new agent from that
+  zip. Secrets and credential values are not included. See
+  [agent templates](docs/agent-templates.md).
 - Agents accept `session_defaults` (`environment` and `vault_ids`).
   Session create inherits those values unless the request overrides
   them. `inherit_agent_defaults: false` skips them.

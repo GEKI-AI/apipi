@@ -33,4 +33,5 @@ def test_alembic_revisions_chain() -> None:
         "0011_idle_ttl.py",
         "0012_session_user.py",
         "0013_agent_session_defaults.py",
+        "0014_templates.py",
     ]

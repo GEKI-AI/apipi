@@ -197,6 +197,15 @@ Unknown top-level fields are rejected.
 | `apipi.actor_type` | Extender | Stored and returned. Not interpreted. |
 | `apipi.schedule_id` | Extender | Stored and returned. Not interpreted. |
 | `apipi.source` | Extender | Stored and returned. Not interpreted. |
+| `apipi.template_id` | Gateway, when an agent is created from a template | Stored and returned. Not interpreted. Dropped on template export. |
+| `apipi.template_updated_at` | Gateway, when an agent is created from a template | Stored and returned. Not interpreted. Dropped on template export. |
+
+Template export keeps host keys (anything that does not start with
+`apipi.`) and the portable agent keys `apipi.thinking`,
+`apipi.system_prompt`, `apipi.idle_ttl`, and `apipi.session_kind`.
+Other `apipi.` keys are dropped on export. On import, a non-portable
+`apipi.` key is ignored and listed in `warnings`. Sandbox size and
+image travel in `session_defaults`, not in metadata.
 
 `apipi.actor_type` says who started the run. Recommended values are
 `user`, `schedule`, `channel`, and `webhook`. The gateway does not
