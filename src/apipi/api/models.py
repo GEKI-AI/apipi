@@ -14,4 +14,4 @@ async def list_models(
     request: Request,
     _tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> Any:
-    return request.app.state.gateway.models.list(model_key(request))
+    return await request.app.state.gateway.models.list(model_key(request))

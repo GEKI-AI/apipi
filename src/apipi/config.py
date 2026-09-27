@@ -25,6 +25,7 @@ LogFormat = Literal["json", "text"]
 ArtifactStore = Literal["local", "s3"]
 S3Addressing = Literal["auto", "path", "virtual"]
 UsageStore = Literal["off", "rollups", "turns"]
+ModelList = Literal["probe", "turn", "off"]
 MicrovmImage = Literal["default", "browser"]
 SandboxSize = Literal["S", "M", "L"]
 EnvNonePlacement = Literal["chat", "microvm", "reject"]
@@ -306,6 +307,14 @@ def parse_hosts(value: object) -> object:
     return value
 
 
+def parse_model_names(value: object) -> object:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return value
+
+
 def parse_image_list(value: object) -> object:
     if value is None or value == "":
         return None
@@ -343,6 +352,7 @@ HostList = Annotated[str, BeforeValidator(parse_hosts)]
 InstanceId = Annotated[str | None, BeforeValidator(parse_instance_id)]
 MicrovmImageName = Annotated[MicrovmImage, BeforeValidator(parse_microvm_image)]
 ImageIdList = Annotated[list[str] | None, BeforeValidator(parse_image_list)]
+ModelNameList = Annotated[list[str], BeforeValidator(parse_model_names)]
 SandboxSizeName = Annotated[SandboxSize, BeforeValidator(parse_sandbox_size_setting)]
 
 
@@ -561,6 +571,18 @@ class Settings(BaseSettings):
     forward_models: bool = Field(
         default=True,
         validation_alias=AliasChoices("APIPI_FORWARD_MODELS", "forward_models"),
+    )
+    model_list: ModelList = Field(
+        default="probe",
+        validation_alias=AliasChoices("APIPI_MODEL_LIST", "model_list"),
+    )
+    model_list_ttl: IdleTtl = Field(
+        default=timedelta(minutes=5),
+        validation_alias=AliasChoices("APIPI_MODEL_LIST_TTL", "model_list_ttl"),
+    )
+    models: ModelNameList = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("APIPI_MODELS", "models"),
     )
     microvm_kernel: str | None = Field(
         default=None,
@@ -1092,6 +1114,10 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_GUEST_SAMPLE_INTERVAL must be like 15s or empty"
         if "forward_models" in loc or "APIPI_FORWARD_MODELS" in loc:
             return "APIPI_FORWARD_MODELS must be on or off"
+        if "model_list_ttl" in loc or "APIPI_MODEL_LIST_TTL" in loc:
+            return "APIPI_MODEL_LIST_TTL must be like 5m"
+        if "model_list" in loc or "APIPI_MODEL_LIST" in loc:
+            return "APIPI_MODEL_LIST must be probe, turn, or off"
         if "pi_auto_compact" in loc or "APIPI_PI_AUTO_COMPACT" in loc:
             return "APIPI_PI_AUTO_COMPACT must be on or off"
         if "pi_thinking" in loc or "APIPI_PI_THINKING" in loc:

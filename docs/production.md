@@ -55,6 +55,22 @@ Postgres. Give each process its own SQLite file if you are not sharing.
 | Many concurrent writers on one DB | Single writer / lock |
 | HA, backups, pooling at scale | Operator story |
 
+## Model host
+
+Point `OPENAI_BASE_URL` at an OpenAI-compatible host. Production should
+use `APIPI_MODEL_LIST=probe` (the default). Serve and each worker list
+`/models` once at start, then refresh after `APIPI_MODEL_LIST_TTL`
+(default 5 minutes). Turns inside that window do not call `/models`.
+If a refresh fails, the last good list is kept.
+
+Use `APIPI_MODEL_LIST=off` when the host has no `GET /models`. Set
+`APIPI_MODELS` to the ids you allow, or leave it empty to pass
+`agent.model` through. `apipi serve` starts in that mode without
+calling `/models`. `turn` lists on every turn. Use it only when the
+catalog changes faster than the TTL and you accept the extra host
+load. The contract, including which routes are required, is in
+[configuration](config.md#model-host).
+
 ## Guest image store
 
 Build images once with `apipi images build`, push them with

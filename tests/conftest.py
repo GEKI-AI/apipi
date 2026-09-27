@@ -1,5 +1,5 @@
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +52,15 @@ async def store() -> AsyncIterator[Store]:
 async def db(store: Store) -> AsyncIterator[AsyncSession]:
     async with store.session() as session:
         yield session
+
+
+@pytest.fixture(autouse=True)
+def _clear_model_list_cache() -> Iterator[None]:
+    from apipi.worker.pi.model_host import clear_model_cache
+
+    clear_model_cache()
+    yield
+    clear_model_cache()
 
 
 @pytest.fixture

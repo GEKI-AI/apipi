@@ -11,10 +11,13 @@ from apipi.worker.pi.model_host import (
     fetch_model_ids,
     fetch_models_json,
     listed_models,
+    model_cache,
+    models_for_turn,
     models_json_for_base_url,
     models_url,
     parse_model_ids,
     probe_model_host,
+    remember_models,
     require_listed_model,
     require_model,
     write_pi_models_json,
@@ -181,28 +184,49 @@ def test_fetch_model_ids_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     assert fetch_model_ids("http://model.test/v1", "k") == ["m1"]
 
 
-def test_listed_models_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
+def _forbid_sync_get(*_args: object, **_kwargs: object) -> httpx.Response:
+    raise AssertionError("sync get")
+
+
+def _async_client(transport: httpx.MockTransport):
+    real = httpx.AsyncClient
+
+    def factory(*_args: object, **_kwargs: object) -> httpx.AsyncClient:
+        return real(transport=transport, timeout=10.0)
+
+    return factory
+
+
+async def test_listed_models_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "apipi.worker.pi.model_host.httpx.get",
-        lambda *_args, **_kwargs: httpx.Response(401, json={"error": "no"}),
+        _forbid_sync_get,
+    )
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(401, json={"error": "no"})
+    )
+    monkeypatch.setattr(
+        "apipi.worker.pi.model_host.httpx.AsyncClient", _async_client(transport)
     )
     with pytest.raises(ApiError) as exc:
-        listed_models("http://model.test/v1", "k")
+        await listed_models("http://model.test/v1", "k")
     assert exc.value.code == "model_host_unauthorized"
 
 
-def test_fetch_models_json_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_models_json_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = {"object": "list", "data": [{"id": "m1", "object": "model"}]}
 
-    def fake_get(url: str, **kwargs: object) -> httpx.Response:
-        assert url.endswith("/models")
-        headers = kwargs.get("headers")
-        assert isinstance(headers, dict)
-        assert headers["Authorization"] == "Bearer k"
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/models")
+        assert request.headers["Authorization"] == "Bearer k"
         return httpx.Response(200, json=payload)
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
-    assert fetch_models_json("http://model.test/v1", "k") == payload
+    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", _forbid_sync_get)
+    monkeypatch.setattr(
+        "apipi.worker.pi.model_host.httpx.AsyncClient",
+        _async_client(httpx.MockTransport(handler)),
+    )
+    assert await fetch_models_json("http://model.test/v1", "k") == payload
 
 
 def test_probe_model_host_requires_base_url(tmp_path: Path) -> None:
@@ -236,3 +260,96 @@ def test_probe_model_host_writes_catalog(
     settings = _settings(tmp_path)
     probe_model_host(settings)
     assert (tmp_path / "sessions" / ".pi" / "agent" / "models.json").is_file()
+    assert model_cache.ids == ["m1"]
+
+
+def _pin_pi(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "apipi.worker.pi.model_host.shutil.which", lambda _name: "/bin/pi"
+    )
+    monkeypatch.setattr(
+        "apipi.worker.pi.model_host.subprocess.check_output",
+        lambda *_args, **_kwargs: PINNED_PI + "\n",
+    )
+
+
+def test_probe_off_skips_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_pi(monkeypatch)
+
+    def boom(*_args: object, **_kwargs: object) -> list[str]:
+        raise AssertionError("fetched")
+
+    monkeypatch.setattr("apipi.worker.pi.model_host.fetch_model_ids", boom)
+    settings = _settings(tmp_path).model_copy(
+        update={"model_list": "off", "models": ["static"]}
+    )
+    probe_model_host(settings)
+    payload = json.loads(
+        (tmp_path / "sessions" / ".pi" / "agent" / "models.json").read_text()
+    )
+    assert payload["providers"][PI_PROVIDER]["models"] == [{"id": "static"}]
+
+
+def test_probe_turn_skips_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_pi(monkeypatch)
+
+    def boom(*_args: object, **_kwargs: object) -> list[str]:
+        raise AssertionError("fetched")
+
+    monkeypatch.setattr("apipi.worker.pi.model_host.fetch_model_ids", boom)
+    probe_model_host(_settings(tmp_path).model_copy(update={"model_list": "turn"}))
+
+
+async def test_models_for_turn_modes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+
+    async def fake_list(*_args: object, **_kwargs: object) -> list[str]:
+        nonlocal calls
+        calls += 1
+        return ["m1"]
+
+    monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", fake_list)
+    settings = _settings(tmp_path).model_copy(update={"model_list": "turn"})
+    assert await models_for_turn(settings, "k") == ["m1"]
+    assert await models_for_turn(settings, "k") == ["m1"]
+    assert calls == 2
+
+    off = settings.model_copy(update={"model_list": "off", "models": ["static"]})
+    assert await models_for_turn(off, "k") == ["static"]
+    assert calls == 2
+    empty = settings.model_copy(update={"model_list": "off", "models": []})
+    assert await models_for_turn(empty, "k") is None
+
+
+async def test_probe_cache_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    async def fake_list(*_args: object, **_kwargs: object) -> list[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ["m1"]
+        raise ApiError(
+            "invalid_request",
+            "Model host /models is unreachable",
+            code="model_host_unreachable",
+            status_code=400,
+        )
+
+    monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", fake_list)
+    settings = _settings(tmp_path).model_copy(update={"model_list": "probe"})
+    remember_models(["cached"])
+    assert await models_for_turn(settings, "k") == ["cached"]
+    assert calls == 0
+    model_cache.fetched_at = 0.0
+    assert await models_for_turn(settings, "k") == ["m1"]
+    assert calls == 1
+    model_cache.fetched_at = 0.0
+    assert await models_for_turn(settings, "k") == ["m1"]
+    assert calls == 2

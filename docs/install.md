@@ -308,9 +308,12 @@ API replicas do not need sticky routing for Pi. See
 ## Model URL
 
 `OPENAI_BASE_URL` is required. It is the model host Pi calls. Clients
-use a different URL for this gateway. On `apipi serve`, the process
-lists `{OPENAI_BASE_URL}/models`, checks that `pi --version` is 0.85.1,
-and exits before it binds HTTP if those checks fail.
+use a different URL for this gateway. On `apipi serve` and
+`apipi worker`, the process checks that `pi --version` is 0.85.1 and
+exits before it binds if that check fails. With the default
+`APIPI_MODEL_LIST=probe` it also lists `{OPENAI_BASE_URL}/models` at
+start and exits if that list fails. `turn` and `off` do not call
+`/models` at start. See [configuration](config.md#model-host).
 
 The model key is the request `Authorization: Bearer` value. Auth maps
 that bearer to a tenant. The raw bearer stays out of Postgres. It is

@@ -23,7 +23,12 @@ from apipi.gateway.otel import (
     detach_traceparent,
     start_span,
 )
-from apipi.services.runtime import PUBLIC_EVENT_TYPES, EventHub, persist_event
+from apipi.services.runtime import (
+    PUBLIC_EVENT_TYPES,
+    EventHub,
+    fail_session,
+    persist_event,
+)
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import (
@@ -764,6 +769,32 @@ async def _reject_mismatched_turn(
         )
 
 
+_TURN_OPS = frozenset({"turn.start", "turn.continue"})
+
+
+async def _report_escaped_turn(
+    execution: Any,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    exc: BaseException,
+) -> None:
+    store = getattr(execution, "store", None)
+    hub = getattr(execution, "hub", None)
+    if store is None or hub is None:
+        return
+    async with store.session() as db:
+        row = await get_session(db, tenant_id, session_id)
+        if row is not None and row.status == "failed":
+            return
+        if isinstance(exc, ApiError):
+            message = exc.message
+            code = exc.code or "internal"
+        else:
+            message = "Turn failed"
+            code = "internal"
+        await fail_session(db, hub, tenant_id, session_id, message, code=code)
+
+
 async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
     op = message.get("op")
     payload = message.get("payload")
@@ -801,18 +832,20 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
             auto_title=auto_title,
         )
     except ApiError as exc:
-        if exc.status_code >= 500:
-            log_event(
-                log,
-                logging.ERROR,
-                "worker command failed",
-                event="worker.command.failed",
-                error_code=exc.code or "internal",
-                exc_info=exc,
-                tenant_id=tenant_id,
-                session_id=session_id,
-                request_id=request_id,
-            )
+        log_event(
+            log,
+            logging.ERROR,
+            "worker command failed",
+            event="worker.command.failed",
+            error_code=exc.code or "internal",
+            exc_info=exc,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            request_id=request_id,
+        )
+        if op in _TURN_OPS:
+            await _report_escaped_turn(execution, tenant_id, session_id, exc)
+            return
         raise
     except Exception as exc:
         log_event(
@@ -826,6 +859,9 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
             session_id=session_id,
             request_id=request_id,
         )
+        if op in _TURN_OPS:
+            await _report_escaped_turn(execution, tenant_id, session_id, exc)
+            return
         raise
     finally:
         detach_traceparent(token)

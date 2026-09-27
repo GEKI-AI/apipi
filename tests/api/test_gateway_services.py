@@ -1,7 +1,6 @@
 import logging
 import uuid
 
-import httpx
 import pytest
 
 from apipi.config import VAULT_MASTER_KEY_UNSET, Settings
@@ -122,14 +121,15 @@ async def test_in_process_models_list(
         "data": [{"id": "gpt-4.1", "object": "model", "owned_by": "host"}],
     }
 
-    def fake_get(url: str, **kwargs: object) -> httpx.Response:
-        assert url.endswith("/models")
-        return httpx.Response(200, json=payload)
+    async def fake_fetch(base_url: str, api_key: str | None = None) -> object:
+        assert base_url == "http://model.test/v1"
+        assert api_key == "t"
+        return payload
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
+    monkeypatch.setattr("apipi.services.models.fetch_models_json", fake_fetch)
     gateway = Gateway.create(
         settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
         store=store,
         harness=FakeHarness(),
     )
-    assert gateway.models.list("t") == payload
+    assert await gateway.models.list("t") == payload

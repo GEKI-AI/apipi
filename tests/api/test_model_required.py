@@ -35,9 +35,11 @@ async def test_unknown_model_on_host(
         update={"model_base_url": "http://model.test/v1"}
     )
     app = create_app(host_settings, store=store, harness=FakeHarness())
-    monkeypatch.setattr(
-        "apipi.services.runtime.listed_models", lambda *_args, **_kwargs: ["other"]
-    )
+
+    async def fake_ids(*_args: object, **_kwargs: object) -> list[str]:
+        return ["other"]
+
+    monkeypatch.setattr("apipi.services.runtime.models_for_turn", fake_ids)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

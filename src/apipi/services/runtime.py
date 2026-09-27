@@ -56,7 +56,7 @@ from apipi.worker.pi.artifacts import (
 from apipi.worker.pi.idle import resolve_idle_ttl
 from apipi.worker.pi.isolation import load_isolation
 from apipi.worker.pi.model_host import (
-    listed_models,
+    models_for_turn,
     require_listed_model,
     require_model,
     write_pi_models_json,
@@ -1121,6 +1121,28 @@ def request_cancel(
     return abort
 
 
+async def _bind_turn_model(
+    settings: Settings | None, api_key: str | None, model: str | None
+) -> str:
+    resolved = require_model(model)
+    if settings is None or not settings.model_base_url:
+        return resolved
+    ids = await models_for_turn(settings, api_key)
+    if ids is None:
+        write_pi_models_json(settings, [resolved])
+        return resolved
+    require_listed_model(resolved, ids)
+    write_pi_models_json(settings, ids)
+    return resolved
+
+
+def _error_code(exc: BaseException) -> str | None:
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code
+    return None
+
+
 async def fail_session(
     db: AsyncSession,
     hub: EventHub,
@@ -1259,13 +1281,9 @@ async def run_turn(
                 row.metadata_json if isinstance(row.metadata_json, dict) else {}
             )
             session_idle = row.idle_ttl
-            model = require_model(model)
-            if settings is not None and settings.model_base_url:
-                ids = listed_models(settings.model_base_url, api_key)
-                require_listed_model(model, ids)
-                write_pi_models_json(settings, ids)
             ensure_openai_workspace(row.environment)
             try:
+                model = await _bind_turn_model(settings, api_key, model)
                 gateway_allowlist = False
                 gateway_hosts: tuple[str, ...] = ()
                 extra_files: list[tuple[str, bytes]] = []
@@ -1298,7 +1316,17 @@ async def run_turn(
                             tenant_id, row.environment, Path(directory)
                         )
             except (SetupError, ApiError) as exc:
-                await fail_environment(db, hub, tenant_id, session_id, exc.message)
+                await fail_environment(
+                    db,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    exc.message,
+                    code=_error_code(exc),
+                )
+                if isinstance(exc, ApiError):
+                    await db.commit()
+                    raise
                 return
             except ObjectStoreError:
                 await fail_environment(
@@ -1749,11 +1777,19 @@ async def continue_turn(
             row.metadata_json if isinstance(row.metadata_json, dict) else {}
         )
         session_idle = row.idle_ttl
-        model = require_model(model)
-        if settings is not None and settings.model_base_url:
-            ids = listed_models(settings.model_base_url, api_key)
-            require_listed_model(model, ids)
-            write_pi_models_json(settings, ids)
+        try:
+            model = await _bind_turn_model(settings, api_key, model)
+        except ApiError as exc:
+            await fail_environment(
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                exc.message,
+                code=_error_code(exc),
+            )
+            await db.commit()
+            raise
         skill_dirs = _skill_dirs(row.environment)
         env_type = row.environment.get("type")
         sandbox_size = sandbox_size_of(row.environment)

@@ -651,6 +651,9 @@ class SessionService:
                             else:
                                 message = "Turn failed"
                             async with self.store.session() as db:
+                                row = await get_session(db, tenant_id, session_id)
+                                if row is not None and row.status == "failed":
+                                    return
                                 await fail_session(
                                     db,
                                     self.event_hub,

@@ -175,11 +175,14 @@ endpoints.
 | --- | --- |
 | `GET` | `/v1/models` |
 
-When `APIPI_FORWARD_MODELS` is on (the default), this route proxies to
-`{OPENAI_BASE_URL}/models` on the model host. The JSON body is the
-host's list, unchanged. Auth is the usual bearer. The host call uses
-`OPENAI_API_KEY_OVERWRITE` when that is set, otherwise the request
-bearer: the same key Pi uses.
+When `APIPI_FORWARD_MODELS` is on (the default) and `APIPI_MODEL_LIST`
+is `probe` or `turn`, this route proxies to `{OPENAI_BASE_URL}/models`
+on the model host. The JSON body is the host's list, unchanged. Auth
+is the usual bearer. The host call uses `OPENAI_API_KEY_OVERWRITE`
+when that is set, otherwise the request bearer: the same key Pi uses.
+When `APIPI_MODEL_LIST` is `off`, the route returns the static
+`APIPI_MODELS` list and does not call the host. An empty static list
+is `{"object": "list", "data": []}`.
 
 A host `401` or `403` is `401` with code `model_host_unauthorized`. If
 the host is unreachable, the response is `400` with code

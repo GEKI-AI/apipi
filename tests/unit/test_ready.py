@@ -107,6 +107,20 @@ def test_cli_check_skip(
     assert "model host" in text
 
 
+def test_run_checks_off_and_turn_skip_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args: object, **_kwargs: object) -> list[str]:
+        raise AssertionError("fetched")
+
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "ping_store", lambda _url: None)
+    monkeypatch.setattr(ready, "fetch_model_ids", boom)
+    off = run_checks(_settings().model_copy(update={"model_list": "off"}))
+    turn = run_checks(_settings().model_copy(update={"model_list": "turn"}))
+    assert {row.name: row for row in off}["model host"].detail == "APIPI_MODEL_LIST=off"
+    assert {row.name: row for row in turn}["model host"].detail == "listed on each turn"
+
+
 def test_run_checks_role_api_skips_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
     monkeypatch.setattr(ready, "ping_store", lambda _url: None)

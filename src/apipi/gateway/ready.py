@@ -115,6 +115,10 @@ def run_checks(
         checks.append(Check("skip", "model host", detail))
     elif not settings.model_base_url:
         checks.append(Check("fail", "model host", "OPENAI_BASE_URL is required"))
+    elif settings.model_list == "off":
+        checks.append(Check("ok", "model host", "APIPI_MODEL_LIST=off"))
+    elif settings.model_list == "turn":
+        checks.append(Check("ok", "model host", "listed on each turn"))
     else:
         try:
             fetch_model_ids(settings.model_base_url, settings.model_api_key_overwrite)
