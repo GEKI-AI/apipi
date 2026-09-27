@@ -809,10 +809,12 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
     api_key = payload.get("api_key")
     key_id = payload.get("key_id")
     user_id = payload.get("user_id")
+    org_id = payload.get("org_id")
     request_id = request_id if isinstance(request_id, str) else None
     api_key = api_key if isinstance(api_key, str) else None
     key_id = key_id if isinstance(key_id, str) else None
     user_id = user_id if isinstance(user_id, str) else None
+    org_id = org_id if isinstance(org_id, str) else None
     thinking_summary = payload.get("thinking_summary") is True
     auto_title = payload.get("auto_title") is True
     raw_parent = payload.get("traceparent")
@@ -828,6 +830,7 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
             api_key=api_key,
             key_id=key_id,
             user_id=user_id,
+            org_id=org_id,
             thinking_summary=thinking_summary,
             auto_title=auto_title,
         )
@@ -878,6 +881,7 @@ async def _run_command(
     api_key: str | None,
     key_id: str | None,
     user_id: str | None,
+    org_id: str | None = None,
     thinking_summary: bool = False,
     auto_title: bool = False,
 ) -> None:
@@ -925,6 +929,7 @@ async def _run_command(
             api_key=api_key,
             key_id=key_id,
             user_id=user_id,
+            org_id=org_id,
             thinking_summary=thinking_summary,
             auto_title=auto_title,
         )
@@ -951,6 +956,7 @@ async def _run_command(
             api_key=api_key,
             key_id=key_id,
             user_id=user_id,
+            org_id=org_id,
             thinking_summary=thinking_summary,
             auto_title=auto_title,
         )
@@ -1089,6 +1095,12 @@ async def run_worker(
     tasks.add(asyncio.create_task(execution.observe_loop()))
     tasks.add(asyncio.create_task(execution.reap_loop()))
     tasks.add(asyncio.create_task(execution.reap_workspace_loop()))
+    lifecycle = getattr(execution, "lifecycle_loop", None)
+    if lifecycle is not None:
+        tasks.add(asyncio.create_task(lifecycle()))
+    emitter = getattr(getattr(execution, "pool", None), "lifecycle", None)
+    if emitter is not None:
+        emitter.start()
     log.info("worker connect", extra={"url": ws_url})
     draining = asyncio.Event()
     _install_drain_signals(draining)
@@ -1120,6 +1132,9 @@ async def run_worker(
                 )
                 raise ConfigError(f"worker register failed: {error}")
             log.info("worker hello", extra={"worker_id": hello.get("worker_id")})
+            raw_worker = hello.get("worker_id")
+            if emitter is not None:
+                emitter.set_worker_id(str(raw_worker) if raw_worker else None)
 
             async def send_heartbeat() -> None:
                 await sock.send(
@@ -1131,7 +1146,7 @@ async def run_worker(
                     drain_deadline = time.monotonic() + wait
                     log.info("worker drain")
                     await send_heartbeat()
-                    await execution.pool.kill_unheld(reason="idle")
+                    await execution.pool.kill_unheld(reason="drain")
                     if drain_idle(execution.pool.live(), command_tasks):
                         break
                 recv_timeout = 0.5 if draining.is_set() else heartbeat
@@ -1140,7 +1155,7 @@ async def run_worker(
                 except TimeoutError:
                     await send_heartbeat()
                     if draining.is_set():
-                        await execution.pool.kill_unheld(reason="idle")
+                        await execution.pool.kill_unheld(reason="drain")
                         if drain_idle(execution.pool.live(), command_tasks):
                             break
                         if (

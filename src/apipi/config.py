@@ -55,6 +55,8 @@ USAGE_EXPORT_ON = "usage export on"
 USAGE_EXPORT_OFF = "usage export off"
 PAYLOAD_EXPORT_ON = "payload export on"
 PAYLOAD_EXPORT_OFF = "payload export off"
+LIFECYCLE_EXPORT_ON = "lifecycle export on"
+LIFECYCLE_EXPORT_OFF = "lifecycle export off"
 METRICS_ON = "APIPI_METRICS on"
 METRICS_OFF = "APIPI_METRICS off"
 OTEL_SET = "APIPI_OTEL_ENDPOINT set"
@@ -803,6 +805,72 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("APIPI_PAYLOAD_SINKS", "payload_sinks"),
     )
+    lifecycle_export_url: ExportUrl = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "APIPI_LIFECYCLE_EXPORT_URL", "lifecycle_export_url"
+        ),
+    )
+    lifecycle_export_token: OtelEndpoint = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "APIPI_LIFECYCLE_EXPORT_TOKEN", "lifecycle_export_token"
+        ),
+    )
+    lifecycle_export_timeout: IdleTtl = Field(
+        default=timedelta(seconds=5),
+        validation_alias=AliasChoices(
+            "APIPI_LIFECYCLE_EXPORT_TIMEOUT", "lifecycle_export_timeout"
+        ),
+    )
+    lifecycle_sinks: HostList = Field(
+        default="",
+        validation_alias=AliasChoices("APIPI_LIFECYCLE_SINKS", "lifecycle_sinks"),
+    )
+    lifecycle_heartbeat: OptionalTtl = Field(
+        default=timedelta(seconds=60),
+        validation_alias=AliasChoices(
+            "APIPI_LIFECYCLE_HEARTBEAT", "lifecycle_heartbeat"
+        ),
+    )
+    lifecycle_queue: int = Field(
+        default=10000,
+        ge=1,
+        validation_alias=AliasChoices("APIPI_LIFECYCLE_QUEUE", "lifecycle_queue"),
+    )
+    lifecycle_batch: int = Field(
+        default=100,
+        ge=1,
+        validation_alias=AliasChoices("APIPI_LIFECYCLE_BATCH", "lifecycle_batch"),
+    )
+    lifecycle_batch_wait: IdleTtl = Field(
+        default=timedelta(seconds=1),
+        validation_alias=AliasChoices(
+            "APIPI_LIFECYCLE_BATCH_WAIT", "lifecycle_batch_wait"
+        ),
+    )
+    lifecycle_retry_max: IdleTtl = Field(
+        default=timedelta(seconds=60),
+        validation_alias=AliasChoices(
+            "APIPI_LIFECYCLE_RETRY_MAX", "lifecycle_retry_max"
+        ),
+    )
+    lifecycle_user_id: Literal["raw", "hash", "omit"] = Field(
+        default="raw",
+        validation_alias=AliasChoices("APIPI_LIFECYCLE_USER_ID", "lifecycle_user_id"),
+    )
+    lifecycle_user_id_key: OtelEndpoint = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "APIPI_LIFECYCLE_USER_ID_KEY", "lifecycle_user_id_key"
+        ),
+    )
+    lifecycle_run_modes: HostList = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "APIPI_LIFECYCLE_RUN_MODES", "lifecycle_run_modes"
+        ),
+    )
     thinking_summary: bool = Field(
         default=False,
         validation_alias=AliasChoices("APIPI_THINKING_SUMMARY", "thinking_summary"),
@@ -852,6 +920,14 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "APIPI_SIDEKICK_MODEL is required when a sidekick feature is on"
+            )
+        if self.lifecycle_user_id == "hash" and not (
+            isinstance(self.lifecycle_user_id_key, str)
+            and self.lifecycle_user_id_key.strip()
+        ):
+            raise ValueError(
+                "APIPI_LIFECYCLE_USER_ID_KEY is required when "
+                "APIPI_LIFECYCLE_USER_ID=hash"
             )
         return self
 
@@ -1198,6 +1274,27 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_PAYLOAD_EXPORT_TIMEOUT must be like 15m"
         if "payload_export_retries" in loc or "APIPI_PAYLOAD_EXPORT_RETRIES" in loc:
             return "APIPI_PAYLOAD_EXPORT_RETRIES must be at least 0"
+        if "lifecycle_export_url" in loc or "APIPI_LIFECYCLE_EXPORT_URL" in loc:
+            return "APIPI_LIFECYCLE_EXPORT_URL must be an http URL"
+        if "lifecycle_export_timeout" in loc or "APIPI_LIFECYCLE_EXPORT_TIMEOUT" in loc:
+            return "APIPI_LIFECYCLE_EXPORT_TIMEOUT must be like 5s"
+        if "lifecycle_heartbeat" in loc or "APIPI_LIFECYCLE_HEARTBEAT" in loc:
+            return "APIPI_LIFECYCLE_HEARTBEAT must be like 60s or 0"
+        if "lifecycle_queue" in loc or "APIPI_LIFECYCLE_QUEUE" in loc:
+            return "APIPI_LIFECYCLE_QUEUE must be at least 1"
+        if "lifecycle_batch" in loc or "APIPI_LIFECYCLE_BATCH" in loc:
+            return "APIPI_LIFECYCLE_BATCH must be at least 1"
+        if "lifecycle_batch_wait" in loc or "APIPI_LIFECYCLE_BATCH_WAIT" in loc:
+            return "APIPI_LIFECYCLE_BATCH_WAIT must be like 1s"
+        if "lifecycle_retry_max" in loc or "APIPI_LIFECYCLE_RETRY_MAX" in loc:
+            return "APIPI_LIFECYCLE_RETRY_MAX must be like 60s"
+        if "lifecycle_user_id" in loc or "APIPI_LIFECYCLE_USER_ID" in loc:
+            return "APIPI_LIFECYCLE_USER_ID must be raw, hash, or omit"
+        if "APIPI_LIFECYCLE_USER_ID_KEY is required" in msg:
+            return (
+                "APIPI_LIFECYCLE_USER_ID_KEY is required when "
+                "APIPI_LIFECYCLE_USER_ID=hash"
+            )
         if "vault_master_key" in loc or "APIPI_VAULT_MASTER_KEY" in loc:
             return "APIPI_VAULT_MASTER_KEY must be 32 bytes (base64 or hex)"
     return "invalid configuration"

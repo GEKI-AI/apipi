@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Session lifecycle export. The pool owner emits `session.live.start`,
+  `session.live.stop`, and `session.live.heartbeat` when
+  `APIPI_LIFECYCLE_EXPORT_URL` or `APIPI_LIFECYCLE_SINKS` is set.
+  Events carry environment, image id, version, and digest so usage can
+  be split by sandbox image. Off by default. See
+  [usage](docs/usage.md#session-lifecycle-export).
+- Auth callbacks may return `org_id`. Session create stores it and
+  returns it on the session. It does not change list or get scope.
+
+### Changed
+
+- `apipi_pi_kill_total` now uses `crash` when a Pi process exits by
+  itself, and `drain` when a worker drain kills sessions that are not
+  in a turn. Drain previously incremented `idle`.
+
 ## [0.6.0] - 2026-09-27
 
 ### Added

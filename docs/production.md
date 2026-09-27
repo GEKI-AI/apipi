@@ -244,7 +244,18 @@ does not kill another live worker's Pi, and it does not match on the
 
 Checklist after `kill -9` of a host worker: start the worker again,
 then confirm no leftover processes remain whose `APIPI_WORKER_PID`
-is the old worker PID.
+is the old worker PID. The new process has a new `boot_id` and does
+not emit stops for sessions it did not start. A lifecycle consumer
+closes the old `boot_id` when heartbeats stop, or when the same
+`worker_id` or `instance_id` appears on a new `boot_id`. See
+[session lifecycle export](usage.md#session-lifecycle-export).
+
+Run NTP on workers if you export lifecycle events. `live_ms` does not
+depend on the wall clock, but `ts` does, and consumers order across
+hosts by that timestamp only as an approximation. Size
+`APIPI_LIFECYCLE_QUEUE` for the exporter outage you can lose. The
+default is 10000 events. A full queue drops the newest event and
+increments `apipi_lifecycle_export_total{result="overflow"}`.
 
 If SSE drops, reconnect with `after_seq` to replay from the store. The
 next turn still needs the node that holds Pi.

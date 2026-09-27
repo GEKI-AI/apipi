@@ -437,6 +437,16 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.payload_export_retries == 1
     assert settings.usage_sinks == ""
     assert settings.payload_sinks == ""
+    assert settings.lifecycle_export_url is None
+    assert settings.lifecycle_export_token is None
+    assert settings.lifecycle_export_timeout == timedelta(seconds=5)
+    assert settings.lifecycle_heartbeat == timedelta(seconds=60)
+    assert settings.lifecycle_queue == 10000
+    assert settings.lifecycle_batch == 100
+    assert settings.lifecycle_batch_wait == timedelta(seconds=1)
+    assert settings.lifecycle_retry_max == timedelta(seconds=60)
+    assert settings.lifecycle_user_id == "raw"
+    assert settings.lifecycle_run_modes == ""
     assert settings.pi_auto_compact is True
     assert "example_ui" not in type(settings).model_fields
 

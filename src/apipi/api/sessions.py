@@ -39,6 +39,11 @@ def _user_id(request: Request) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _org_id(request: Request) -> str | None:
+    value = getattr(request.state, "org_id", None)
+    return value if isinstance(value, str) and value else None
+
+
 def _thinking_summary(request: Request) -> bool:
     return getattr(request.state, "thinking_summary", False) is True
 
@@ -217,6 +222,7 @@ async def create_agent_session(
         inherit_agent_defaults=body.inherit_agent_defaults,
         key_id=_key_id(request),
         user_id=_user_id(request),
+        org_id=_org_id(request),
         thinking_summary=_thinking_summary(request),
         auto_title=_auto_title(request),
         request_id=request_id_of(request),
@@ -297,6 +303,7 @@ async def post_session_event(
         error=parsed.error,
         key_id=_key_id(request) or None,
         user_id=_user_id(request),
+        org_id=_org_id(request),
         thinking_summary=_thinking_summary(request),
         auto_title=_auto_title(request),
         request_id=request_id_of(request),

@@ -115,11 +115,18 @@ class TapNet(NamedTuple):
         return f"{self.network}/{self.prefix}"
 
 
+class ResolvedImage(NamedTuple):
+    id: str | None
+    version: str | None
+    digest: str | None
+
+
 class StartedMicrovm(NamedTuple):
     process: asyncio.subprocess.Process
     chroot_dir: Path
     cleanup: Callable[[], None]
     broker: Any | None = None
+    image: ResolvedImage | None = None
 
     @property
     def vsock(self) -> Path:
@@ -272,6 +279,35 @@ def _images_dir_kernel(settings: Settings | None) -> Path | None:
 
     path = local_kernel_path(configured_images_dir(settings), os.uname().machine)
     return path if path.is_file() else None
+
+
+def _digest_from_manifest(path: Path) -> str:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"sandbox image manifest is invalid: {path}") from exc
+    rootfs = data.get("rootfs") if isinstance(data, dict) else None
+    digest = rootfs.get("sha256") if isinstance(rootfs, dict) else None
+    if not isinstance(digest, str) or not digest:
+        raise ConfigError(f"sandbox image manifest missing rootfs.sha256: {path}")
+    return digest
+
+
+def resolve_spawn_image(
+    settings: Settings | None, image: str | None, rootfs: str
+) -> ResolvedImage:
+    selected = image if image is not None else microvm_image_name(settings)
+    from apipi.worker.pi.image_pull import configured_images_dir
+    from apipi.worker.pi.images import read_current
+
+    root = configured_images_dir(settings)
+    version = read_current(root, selected)
+    if version is not None:
+        pulled = root / selected / version / "rootfs.ext4"
+        if pulled.is_file() and Path(rootfs).resolve() == pulled.resolve():
+            digest = _digest_from_manifest(pulled.parent / "manifest.json")
+            return ResolvedImage(id=selected, version=version, digest=digest)
+    return ResolvedImage(id=selected, version="legacy", digest="legacy")
 
 
 def microvm_images(
@@ -1312,6 +1348,7 @@ async def start_microvm(
     ip_bin, iptables_bin, tc_bin = microvm_net_binaries()
     selected = image if image is not None else microvm_image_name(settings)
     kernel, rootfs = microvm_images(settings, image=selected)
+    resolved = resolve_spawn_image(settings, selected, rootfs)
     guest_mem = mem_mib if mem_mib is not None else settings.microvm_mem_mib
     vm_id = str(uuid.uuid4())
     net = tap_net(vm_id)
@@ -1497,7 +1534,7 @@ async def start_microvm(
     if not inherit_stdio:
         console_tasks.append(asyncio.create_task(_log_console(process.stdout)))
         console_tasks.append(asyncio.create_task(_log_console(process.stderr)))
-    return StartedMicrovm(process, chroot_dir, cleanup, broker)
+    return StartedMicrovm(process, chroot_dir, cleanup, broker, resolved)
 
 
 async def spawn_microvm_pi(
@@ -1589,6 +1626,7 @@ async def spawn_microvm_pi(
         pull_session=pull_session,
         pull_metrics=pull_metrics,
         vm_id=started.chroot_dir.parent.name,
+        image=started.image,
     )
 
 

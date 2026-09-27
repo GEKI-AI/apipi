@@ -106,6 +106,18 @@ hosted files and skills).
 | `APIPI_PAYLOAD_EXPORT_RETRIES` | `payload_export_retries` | `1` | Extra tries after the first, then drop. A failed export does not break the turn. |
 | `APIPI_USAGE_SINKS` | `usage_sinks` | empty | Extra usage sinks, comma-separated `package.mod:Class`. |
 | `APIPI_PAYLOAD_SINKS` | `payload_sinks` | empty | Extra payload sinks, comma-separated `package.mod:Class`. |
+| `APIPI_LIFECYCLE_EXPORT_URL` | `lifecycle_export_url` | unset | HTTPS POST of session live start, stop, and heartbeat batches. Off when unset and `APIPI_LIFECYCLE_SINKS` is empty. See [usage](usage.md#session-lifecycle-export). |
+| `APIPI_LIFECYCLE_EXPORT_TOKEN` | `lifecycle_export_token` | unset | Bearer for the lifecycle export URL. Put this in the process environment. |
+| `APIPI_LIFECYCLE_EXPORT_TIMEOUT` | `lifecycle_export_timeout` | `5s` | HTTP timeout, and the shutdown flush limit. |
+| `APIPI_LIFECYCLE_SINKS` | `lifecycle_sinks` | empty | Extra lifecycle sinks, comma-separated `package.mod:Class`. Each sink implements `emit(event)`. |
+| `APIPI_LIFECYCLE_HEARTBEAT` | `lifecycle_heartbeat` | `60s` | How often the pool owner posts its live set. `0` or `off` disables heartbeats. |
+| `APIPI_LIFECYCLE_QUEUE` | `lifecycle_queue` | `10000` | Max queued lifecycle events. A full queue drops the new event. |
+| `APIPI_LIFECYCLE_BATCH` | `lifecycle_batch` | `100` | Max events in one HTTP POST. |
+| `APIPI_LIFECYCLE_BATCH_WAIT` | `lifecycle_batch_wait` | `1s` | Flush a short batch after this wait. |
+| `APIPI_LIFECYCLE_RETRY_MAX` | `lifecycle_retry_max` | `60s` | Cap for exponential backoff on 5xx, 429, 408, and network errors. |
+| `APIPI_LIFECYCLE_USER_ID` | `lifecycle_user_id` | `raw` | `raw`, `hash`, or `omit`. `hash` needs `APIPI_LIFECYCLE_USER_ID_KEY`. |
+| `APIPI_LIFECYCLE_USER_ID_KEY` | — | unset | HMAC key for `hash`. Process environment only. Required when `APIPI_LIFECYCLE_USER_ID=hash`. |
+| `APIPI_LIFECYCLE_RUN_MODES` | `lifecycle_run_modes` | empty | Comma-separated run modes that emit lifecycle events. Empty means all. |
 | `APIPI_THINKING_SUMMARY` | `thinking_summary` | off | Global switch for thinking summaries. Off never calls the sidekick, even if the auth callback asks for summaries. |
 | `APIPI_AUTO_TITLE` | `auto_title` | off | Global switch for automatic session titles. Independent of thinking summaries. Off never calls the sidekick for titles. |
 | `APIPI_SIDEKICK_MODEL` | `sidekick_model` | unset | Model name for the sidekick. Required when `APIPI_THINKING_SUMMARY` is on. |

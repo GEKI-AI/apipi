@@ -143,7 +143,8 @@ not kill idle guests; the worker that owns the session does. `none`
 and `self_hosted` use `APIPI_IDLE_TTL`. Hosted computers use
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED`. A host Pi kill increments
 `apipi_pi_kill_total` with reason `idle` on the worker metrics
-endpoint.
+endpoint. A process that exits by itself is `crash`. Worker drain
+uses `drain`, not `idle`.
 
 ## Drain and expiry
 
@@ -184,6 +185,16 @@ The next worker start reaps leftovers stamped with a dead
 `APIPI_WORKER_PID`. Set `KillMode=control-group` on the systemd unit
 (`deploy/systemd/apipi-worker.service`) so `systemctl stop` kills the
 cgroup. See [production](production.md#failure-and-drain).
+
+## Lifecycle export
+
+Session live start, stop, and heartbeat events are emitted by the
+process that owns the `PiPool`. That is `apipi worker`, or combined
+`apipi serve`. `apipi serve --api-only` does not emit them and does
+not relay them. The worker learns its `worker_id` from `hello` and
+puts that id on each event. Embedded serve leaves `worker_id` null.
+The hub does not forward lifecycle events. See
+[session lifecycle export](usage.md#session-lifecycle-export).
 
 ## What runs where
 

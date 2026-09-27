@@ -1199,6 +1199,25 @@ def _model_span_attrs(
     }
 
 
+def _spawn_identity_empty(
+    user_id: str | None, org_id: str | None
+) -> dict[str, str | None]:
+    return {"agent_id": None, "user_id": user_id, "org_id": org_id}
+
+
+def _spawn_identity(
+    row: Any, user_id: str | None, org_id: str | None
+) -> dict[str, str | None]:
+    stored_org = getattr(row, "org_id", None)
+    stored_user = getattr(row, "user_id", None)
+    agent = getattr(row, "agent_id", None)
+    return {
+        "agent_id": str(agent) if agent is not None else None,
+        "user_id": user_id if user_id is not None else stored_user,
+        "org_id": org_id if org_id is not None else stored_org,
+    }
+
+
 async def run_turn(
     store: Store,
     hub: EventHub,
@@ -1219,6 +1238,7 @@ async def run_turn(
     api_key: str | None = None,
     key_id: str | None = None,
     user_id: str | None = None,
+    org_id: str | None = None,
     thinking_summary: bool = False,
     auto_title: bool = False,
     objects: ObjectStore | None = None,
@@ -1245,6 +1265,7 @@ async def run_turn(
         session_metadata: dict[str, Any]
         session_idle: str | None
         agent_idle: str | None
+        spawn_ids = _spawn_identity_empty(user_id, org_id)
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
@@ -1337,6 +1358,7 @@ async def run_turn(
             stored_image = sandbox_image_of(row.environment)
             sandbox_image = stored_image or image_for_size(sandbox_size)
             extra_env = session_env_from(row.environment)
+            spawn_ids = _spawn_identity(row, user_id, org_id)
             await update_session(
                 db,
                 tenant_id,
@@ -1454,6 +1476,7 @@ async def run_turn(
                     mem_mib=sandbox_mem,
                     image=sandbox_image,
                     extra_env=extra_env,
+                    **spawn_ids,
                     **_pi_spawn_overrides(settings, session_metadata, agent_metadata),
                     **_idle_spawn(
                         settings,
@@ -1642,6 +1665,7 @@ async def continue_turn(
     api_key: str | None = None,
     key_id: str | None = None,
     user_id: str | None = None,
+    org_id: str | None = None,
     thinking_summary: bool = False,
     auto_title: bool = False,
     blobs: ArtifactBlobs | None = None,
@@ -1655,6 +1679,7 @@ async def continue_turn(
     instructions: str | None = None
     computer: Computer | None
     env_type: str | None
+    spawn_ids = _spawn_identity_empty(user_id, org_id)
     async with store.session() as db:
         row = await get_session(db, tenant_id, session_id)
         if row is None:
@@ -1766,6 +1791,7 @@ async def continue_turn(
         stored_image = sandbox_image_of(row.environment)
         sandbox_image = stored_image or image_for_size(sandbox_size)
         extra_env = session_env_from(row.environment)
+        spawn_ids = _spawn_identity(row, user_id, org_id)
         result = {
             "call_id": call_id,
             "success": success,
@@ -1826,6 +1852,7 @@ async def continue_turn(
                     mem_mib=sandbox_mem,
                     image=sandbox_image,
                     extra_env=extra_env,
+                    **spawn_ids,
                     **_pi_spawn_overrides(settings, session_metadata, agent_metadata),
                     **_idle_spawn(
                         settings,

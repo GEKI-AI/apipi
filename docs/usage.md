@@ -188,6 +188,158 @@ comma-separated list of `package.mod:Class`. Each sink implements
 fails at startup. A failed `emit` is logged and does not break the
 turn. The HTTPS URL, when set, is one sink on that list.
 
+## Session lifecycle export
+
+Per-turn usage export answers how many tokens a turn used. It does not
+answer how long a session's sandbox was alive, or how many sandboxes a
+tenant held at a given minute. Session lifecycle export is that
+signal. The process that owns the `PiPool` emits it: `apipi worker` in
+hub mode, or combined `apipi serve` in embedded mode. The API process
+in `--api-only` mode does not emit these events, because it does not
+spawn Pi.
+
+The feature is off unless `APIPI_LIFECYCLE_EXPORT_URL` or
+`APIPI_LIFECYCLE_SINKS` is set. When it is off, the pool does not build
+events and does not start a sender task. Hooks never wait on the
+network. They enqueue a dict and return.
+
+An image has no tag. Consumers identify a guest image by `sandbox_image`
+(the image id), `image_version`, and `image_digest`. The version is the
+computed `<pi_version>-<hash>` recorded in `<id>/current` at spawn. The
+digest is `rootfs.sha256` from that version's `manifest.json`. An
+explicit or legacy rootfs reports `legacy` for both version and digest.
+`none` and non-microvm run modes send null for all three image fields.
+`sandbox_size` is still set, because it drives the memory budget in
+every run mode. Chat sessions are `environment_type: "none"` with
+`run_mode: "chat"`. Split sandbox time from chat concurrency with
+those two fields.
+
+The version and digest are captured when the process is spawned and
+stored on that live interval. A later `apipi images pull` that flips
+`<id>/current` does not change an already-live session. The next
+respawn captures the new version.
+
+### Events
+
+`session.live.start` is emitted once when a session goes from not live
+to live. Reusing an already-live process for the next turn is not a
+new start. A respawn after idle reap, or after a config change, is a
+new start. `cause` is `spawn` or `respawn`.
+
+`session.live.stop` is emitted once per start, just before the pool
+runs its kill hook. `live_ms` is the duration from the monotonic clock
+taken at spawn, so an NTP step does not change the billed duration.
+`start_seq` is the `seq` of the matching start.
+
+| `reason` | When |
+| --- | --- |
+| `idle` | Idle TTL expired |
+| `stop` | Session stop or delete |
+| `respawn` | Config change killed the process; a new start follows |
+| `memory` | Host Pi exceeded `APIPI_PI_MEM_MIB` |
+| `crash` | The process exited by itself |
+| `drain` | Worker drain killed sessions that were not in a turn |
+| `shutdown` | The pool owner is exiting |
+
+`session.live.heartbeat` is one event per pool owner per interval,
+including when the live set is empty. Set
+`APIPI_LIFECYCLE_HEARTBEAT` to `0` or `off` to disable heartbeats.
+Start and stop events still export. Each heartbeat entry repeats the
+spawn-time fields: `session_id`, `start_seq`, `started_at`,
+`tenant_id`, `org_id`, `agent_id`, `user_id`, `key_id`,
+`environment_type`, `sandbox_image`, `image_version`, `image_digest`,
+`sandbox_size`, and `run_mode`. The envelope carries `worker_id`,
+`instance_id`, and `boot_id`. Entries do not repeat those, and they do
+not include `reason`, `live_ms`, or `cause`.
+
+There is no pre-warmed sandbox pool. A process is spawned only inside
+`get(session_id)` during a turn, so it is bound to a session from
+birth. A sandbox that is not bound to a session must not emit `start`
+and must not appear in a heartbeat. If pre-warming is added later,
+`start` is emitted when the sandbox is bound to a session, not when it
+boots.
+
+### Envelope
+
+Every event has `schema_version` `1`, `type`, `event_id`, `boot_id`,
+`seq`, and `ts`. `boot_id` is a new UUID for each process start.
+`seq` starts at 1 and increases by one for each lifecycle event on that
+`boot_id`, including heartbeats. `event_id` is `{boot_id}:{seq}` and
+is the idempotency key. Order events for one `boot_id` by `seq`, not
+by `ts`. `ts` is the worker's UTC wall clock and is approximate across
+hosts. Workers should run NTP.
+
+`worker_id` is the id from the hub `hello` message. It is null in
+embedded mode. `instance_id` is `APIPI_INSTANCE_ID`, the same value
+usage events use. `org_id` is optional. The auth callback may return
+it. ApiPi stores it on the session and forwards it to the worker. It
+is null when the callback does not set it.
+
+`user_id` defaults to the raw auth value, the same as usage export.
+`APIPI_LIFECYCLE_USER_ID=omit` drops it. `hash` sends HMAC-SHA256 hex
+of the raw id, keyed by `APIPI_LIFECYCLE_USER_ID_KEY` (process
+environment only). The sink still receives tenant identifiers.
+
+`APIPI_LIFECYCLE_RUN_MODES` is a comma-separated allow list. Empty
+means every run mode. A process whose run mode is not listed builds no
+lifecycle events.
+
+### Reconciliation
+
+Consumers should apply these rules. A reference implementation lives
+in `apipi.services.lifecycle_export.reconcile`.
+
+1. A `start` opens a live interval keyed by `(boot_id, start seq)`.
+2. A `stop` closes it. `live_ms` is the duration. The interval end is
+   the stop event's `ts`.
+3. If a session with an open interval is missing from a later heartbeat
+   of the same `boot_id`, close it at the last heartbeat `ts` that
+   still listed it, with reason `lost`.
+4. If no heartbeat arrives for a `boot_id` for `2 × interval_s` plus a
+   grace you choose, close every open interval on that `boot_id` at the
+   last heartbeat `ts`, with reason `worker_lost`.
+5. A new `boot_id` for the same `worker_id` or `instance_id` means the
+   old process is gone. Close its open intervals at its last heartbeat
+   `ts`, with reason `worker_lost`. That also covers orphans swept
+   after a crash. The new process does not emit stops for sessions it
+   did not start.
+6. Deduplicate by `event_id`. Order within a `boot_id` by `seq`.
+7. If a heartbeat lists a session whose `start` was never received,
+   open the interval from the entry so that usage is still attributed.
+
+The worst over-count after a crash is one heartbeat interval.
+
+### Delivery
+
+The HTTP sender posts `{"events": [...]}` with at most
+`APIPI_LIFECYCLE_BATCH` events, or sooner after
+`APIPI_LIFECYCLE_BATCH_WAIT`. It retries 5xx, 429, 408, and network
+errors with exponential backoff and jitter, up to
+`APIPI_LIFECYCLE_RETRY_MAX`, and it does not skip the head batch.
+Other 4xx responses drop the batch, log `lifecycle.export.dropped`,
+and count `drop`. Custom sinks implement `emit(event)` and are called
+from the sender task, not from the spawn hook. A failing sink is
+logged and does not affect the others.
+
+Delivery is at-least-once while the process lives. Retries can
+duplicate events; dedupe on `event_id`. There is no durable outbox.
+Events still queued when the process dies are lost. Heartbeat rules
+above cover that gap. On shutdown the pool emits `shutdown` stops,
+then flushes the queue for at most `APIPI_LIFECYCLE_EXPORT_TIMEOUT`.
+
+When the queue is full, the new event is dropped.
+`apipi_lifecycle_export_total{result="overflow"}` increments, and a
+rate-limited warning is logged with `type` and `session_id`.
+`apipi_lifecycle_queue_depth` is the current depth. Size
+`APIPI_LIFECYCLE_QUEUE` for the burst you can tolerate losing. A full
+queue drops the newest event, so a long outage loses the tail, not the
+head that is already retrying.
+
+Prometheus sandbox series stay aggregate and low-cardinality. Lifecycle
+events are per session, pushed, and joinable, for metering. Both are
+fed from the same pool hooks. `apipi_pi_kill_total` now includes
+`crash` and `drain`. Worker drain used to increment `idle`.
+
 ## Payload export
 
 Set `APIPI_PAYLOAD_EXPORT_URL` to POST one JSON agent payload per
@@ -257,7 +409,7 @@ Prometheus text format. `/health` and `/metrics` are not counted.
 | `apipi_pi_rss_bytes` | gauge | sum of host Pi process-group RSS |
 | `apipi_pi_pss_bytes` | gauge | sum of host Pi process-group PSS |
 | `apipi_pi_spawn_total` | counter | `result` (`ok` or `error`) |
-| `apipi_pi_kill_total` | counter | `reason` (`idle`, `session`, `respawn`, `shutdown`, `memory`) |
+| `apipi_pi_kill_total` | counter | `reason` (`idle`, `session`, `respawn`, `shutdown`, `memory`, `crash`, `drain`) |
 
 `tenant` is the tenant id. Empty when the request has no tenant.
 `path` is the route template, not the raw URL. `kind` is `prompt`,

@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from datetime import timedelta
+from pathlib import Path
 from typing import cast
 
 from apipi.config import Settings
@@ -75,3 +76,32 @@ async def test_kill_unheld_skips_held_sessions() -> None:
     await pool.kill_unheld(reason="idle")
     assert pool.alive(idle) is False
     assert pool.alive(busy) is True
+
+
+async def test_drain_reason_is_not_idle() -> None:
+    from apipi.services.lifecycle_export import attach_lifecycle
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        lifecycle_export_url="http://export.test/life",
+    )
+    pool = PiPool(settings)
+    attach_lifecycle(pool, settings)
+    sid = uuid.uuid4()
+    pool._procs[sid] = cast(PiProc, _Proc())
+    pool._live[sid] = {
+        "session_id": sid,
+        "start_seq": 1,
+        "started_at": "2026-09-27T18:00:00.000Z",
+        "born": 0.0,
+        "sandbox_size": "S",
+    }
+    pool._born[sid] = 0.0
+    await pool.kill_unheld(reason="drain")
+    assert pool.lifecycle is not None
+    event = pool.lifecycle.pending()[-1]
+    assert event["reason"] == "drain"
+    text = Path("src/apipi/worker/hub.py").read_text(encoding="utf-8")
+    assert 'kill_unheld(reason="drain")' in text
+    assert 'kill_unheld(reason="idle")' not in text

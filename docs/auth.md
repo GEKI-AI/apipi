@@ -20,7 +20,7 @@ Each request:
 
 ```
 authenticate(bearer) -> {key_id, tenant_id} | reject
-authenticate(bearer, request) -> {key_id, tenant_id, user_id?, cache_key?} | reject
+authenticate(bearer, request) -> {key_id, tenant_id, user_id?, org_id?, cache_key?} | reject
 ```
 
 The callback is in-process Python. `APIPI_AUTH` (TOML `auth`) is an
@@ -43,8 +43,9 @@ auth, then `await gateway.ensure_tenant(tenant_id)` before
 
 A plugin returns `tenant_id` and `key_id`, or a typed reject. It may
 set its own `tenant_id` (many keys to one tenant). Optional `user_id`
-is the end user when the plugin knows it. ApiPi does not invent
-`user_id` from `key_id`. `key_id` is for logs. The plugin must not
+is the end user when the plugin knows it. Optional `org_id` is the
+billing org when the plugin knows it. ApiPi does not invent
+`user_id` or `org_id` from `key_id`. `key_id` is for logs. The plugin must not
 expect the gateway to persist the raw bearer. After a successful
 callback, HTTP responses include `X-Tenant-Id` and `X-User-Id`
 (`key_id`, not `user_id`). Incoming values of those headers are not
@@ -62,6 +63,10 @@ plugin decides which header, if any, names the end user.
 When the identity includes `user_id`, session create stores it. List,
 get, update, delete, resume, export, turns, items, and artifacts then
 match tenant and `user_id`. A missing session for that user is `404`.
+When the identity includes `org_id`, session create stores it and
+returns it on the session. `org_id` does not change which sessions a
+caller can see. Lifecycle export forwards it to the pool owner. See
+[usage](usage.md#session-lifecycle-export).
 An identity without `user_id` stays tenant-scoped, as before. Agents
 stay tenant-scoped. Usage by `day` stays tenant-scoped. Usage by
 `session_id` or `turn_id` uses the same session rule.

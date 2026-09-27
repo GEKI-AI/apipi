@@ -99,6 +99,17 @@ class Metrics:
             ["result"],
             registry=self.registry,
         )
+        self.lifecycle_export = Counter(
+            "apipi_lifecycle_export_total",
+            "Lifecycle export attempts",
+            ["result"],
+            registry=self.registry,
+        )
+        self.lifecycle_queue_depth = Gauge(
+            "apipi_lifecycle_queue_depth",
+            "Queued lifecycle export events",
+            registry=self.registry,
+        )
         self.workers = Gauge(
             "apipi_workers",
             "Connected sandbox workers",
@@ -286,6 +297,12 @@ class Metrics:
 
     def observe_payload_export(self, result: str) -> None:
         self.payload_export.labels(result=result).inc()
+
+    def observe_lifecycle_export(self, result: str) -> None:
+        self.lifecycle_export.labels(result=result).inc()
+
+    def set_lifecycle_queue_depth(self, depth: int) -> None:
+        self.lifecycle_queue_depth.set(depth)
 
     def set_workers(
         self,

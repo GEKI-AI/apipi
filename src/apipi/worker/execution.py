@@ -66,9 +66,12 @@ class Execution(Protocol):
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        org_id: str | None = None,
         thinking_summary: bool = False,
         auto_title: bool = False,
     ) -> None: ...
+
+    async def lifecycle_loop(self) -> None: ...
 
     async def continue_turn(
         self,
@@ -86,6 +89,7 @@ class Execution(Protocol):
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        org_id: str | None = None,
         thinking_summary: bool = False,
         auto_title: bool = False,
     ) -> None: ...
@@ -179,6 +183,7 @@ class LocalExecution:
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        org_id: str | None = None,
         thinking_summary: bool = False,
         auto_title: bool = False,
     ) -> None:
@@ -203,6 +208,7 @@ class LocalExecution:
             api_key=api_key,
             key_id=key_id,
             user_id=user_id,
+            org_id=org_id,
             thinking_summary=thinking_summary,
             auto_title=auto_title,
             objects=self.objects,
@@ -225,6 +231,7 @@ class LocalExecution:
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        org_id: str | None = None,
         thinking_summary: bool = False,
         auto_title: bool = False,
     ) -> None:
@@ -253,6 +260,7 @@ class LocalExecution:
             api_key=api_key,
             key_id=key_id,
             user_id=user_id,
+            org_id=org_id,
             thinking_summary=thinking_summary,
             auto_title=auto_title,
             blobs=self.blobs,
@@ -288,6 +296,7 @@ class LocalExecution:
         sample_every = sample.total_seconds() if sample is not None else None
         last_sample = 0.0
         while True:
+            await self.pool.sweep_dead()
             await self.pool.enforce_memory()
             if self.metrics is not None:
                 self.pool.refresh_metrics()
@@ -391,8 +400,19 @@ class LocalExecution:
                 workspace_avail_bytes=bucket["workspace_avail_bytes"],
             )
 
+    async def lifecycle_loop(self) -> None:
+        from apipi.services.lifecycle_export import heartbeat_loop
+
+        emitter = self.pool.lifecycle
+        if emitter is None or emitter.heartbeat_s is None:
+            return
+        await heartbeat_loop(self.pool, emitter)
+
     async def close(self) -> None:
         await self.pool.close()
+        emitter = self.pool.lifecycle
+        if emitter is not None:
+            await emitter.close()
 
     async def _harvest_killed(self, session_id: uuid.UUID, proc: PiProc | None) -> None:
         store = self.store
@@ -426,6 +446,9 @@ def local_execution(
     tracing: Tracing | None = None,
 ) -> LocalExecution:
     pool = PiPool(settings, tracing=tracing, metrics=metrics)
+    from apipi.services.lifecycle_export import attach_lifecycle
+
+    attach_lifecycle(pool, settings, metrics)
     isolation = load_isolation(settings.run_mode)
     resolved_harness = harness if harness is not None else PiHarness(pool)
     return LocalExecution(
@@ -501,6 +524,7 @@ class RemoteExecution:
         api_key: str | None,
         key_id: str | None,
         user_id: str | None = None,
+        org_id: str | None = None,
         thinking_summary: bool = False,
         auto_title: bool = False,
     ) -> dict[str, Any]:
@@ -510,6 +534,7 @@ class RemoteExecution:
             "api_key": api_key,
             "key_id": key_id,
             "user_id": user_id,
+            "org_id": org_id,
             "thinking_summary": thinking_summary,
             "auto_title": auto_title,
             **extra,
@@ -553,6 +578,7 @@ class RemoteExecution:
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        org_id: str | None = None,
         thinking_summary: bool = False,
         auto_title: bool = False,
     ) -> None:
@@ -571,6 +597,7 @@ class RemoteExecution:
                 api_key=api_key,
                 key_id=key_id,
                 user_id=user_id,
+                org_id=org_id,
                 thinking_summary=thinking_summary,
                 auto_title=auto_title,
             ),
@@ -588,6 +615,7 @@ class RemoteExecution:
                     api_key=api_key,
                     key_id=key_id,
                     user_id=user_id,
+                    org_id=org_id,
                     thinking_summary=thinking_summary,
                     auto_title=auto_title,
                 ),
@@ -612,6 +640,7 @@ class RemoteExecution:
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        org_id: str | None = None,
         thinking_summary: bool = False,
         auto_title: bool = False,
     ) -> None:
@@ -636,6 +665,7 @@ class RemoteExecution:
                 api_key=api_key,
                 key_id=key_id,
                 user_id=user_id,
+                org_id=org_id,
                 thinking_summary=thinking_summary,
                 auto_title=auto_title,
             ),
@@ -745,6 +775,9 @@ class RemoteExecution:
     async def observe_loop(self) -> None:
         while True:
             await asyncio.sleep(3600)
+
+    async def lifecycle_loop(self) -> None:
+        return None
 
     async def close(self) -> None:
         return None
