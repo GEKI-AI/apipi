@@ -6,6 +6,7 @@ import pytest
 from apipi.cli import main, prepare_serve, prepare_worker
 from apipi.config import (
     CHAT_MODE_NOTE,
+    LIFECYCLE_EXPORT_OFF,
     METRICS_OFF,
     METRICS_ON,
     NONE_MODE_WARNING,
@@ -98,6 +99,7 @@ def test_prepare_serve_logs_default_observability(
     assert "usage retention 15d" in messages
     assert USAGE_EXPORT_OFF in messages
     assert PAYLOAD_EXPORT_OFF in messages
+    assert LIFECYCLE_EXPORT_OFF in messages
     assert METRICS_OFF in messages
     assert OTEL_UNSET in messages
     assert METRICS_ON not in messages

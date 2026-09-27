@@ -105,6 +105,7 @@ class PiProc:
         pull_session: Callable[[], Awaitable[bytes]] | None = None,
         pull_metrics: Callable[[], Awaitable[bytes]] | None = None,
         vm_id: str | None = None,
+        image: Any | None = None,
         process_group: bool = False,
         scratch_dir: str | None = None,
         stderr_task: asyncio.Task[None] | None = None,
@@ -119,6 +120,7 @@ class PiProc:
         self.pull_session = pull_session
         self.pull_metrics = pull_metrics
         self.vm_id = vm_id
+        self.image = image
         self.process_group = process_group
         self.scratch_dir = scratch_dir
         self._stderr_task = stderr_task

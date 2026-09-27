@@ -4,6 +4,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from typing import Any
 
 from apipi.config import CapacityError, Settings
 from apipi.gateway.logutil import log_event
@@ -11,8 +12,19 @@ from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing, start_span
 from apipi.mcp.http import McpHttpServer
 from apipi.mcp.stdio import McpStdioServer, stop_mcp_stdio
+from apipi.services.lifecycle_export import LifecycleEmitter, utc_ts
 from apipi.worker.pi.proc import PiProc, spawn_pi
 from apipi.worker.pi.sandbox import size_for_mem
+
+_EVENT_REASON = {
+    "session": "stop",
+    "idle": "idle",
+    "respawn": "respawn",
+    "memory": "memory",
+    "crash": "crash",
+    "drain": "drain",
+    "shutdown": "shutdown",
+}
 
 OnKill = Callable[[uuid.UUID, PiProc | None], Awaitable[None]]
 log = logging.getLogger("apipi.worker.pi")
@@ -46,7 +58,9 @@ class PiPool:
         self._mem: dict[uuid.UUID, int] = {}
         self._sizes: dict[uuid.UUID, str] = {}
         self._born: dict[uuid.UUID, float] = {}
+        self._live: dict[uuid.UUID, dict[str, Any]] = {}
         self._held: set[uuid.UUID] = set()
+        self.lifecycle: LifecycleEmitter | None = None
         self._lock = asyncio.Lock()
 
     async def get(
@@ -72,6 +86,9 @@ class PiPool:
         system_prompt_set: bool = False,
         idle_ttl: timedelta | None = None,
         idle_ttl_set: bool = False,
+        agent_id: str | None = None,
+        user_id: str | None = None,
+        org_id: str | None = None,
     ) -> PiProc:
         instructions = instructions if instructions else None
         from apipi.worker.pi.settings_json import process_system_prompt
@@ -81,8 +98,12 @@ class PiPool:
             system_prompt if system_prompt_set else process_system_prompt(self.settings)
         )
         session_mem = mem_mib if mem_mib is not None else self.settings.microvm_mem_mib
+        cause = "spawn"
         async with self._lock:
             proc = self._procs.get(session_id)
+            if proc is not None and not proc.alive:
+                await self.kill(session_id, reason="crash")
+                proc = None
             spawned = self._spawn_tools.get(session_id)
             same = spawned == tools and self._models.get(session_id) == model
             same = same and self._instructions.get(session_id) == instructions
@@ -92,6 +113,7 @@ class PiPool:
             if proc is not None and proc.alive and not same:
                 await self.kill(session_id, reason="respawn")
                 proc = None
+                cause = "respawn"
             reused = proc is not None and proc.alive
             with start_span(
                 self.tracing,
@@ -162,9 +184,23 @@ class PiPool:
                     self._env_types[session_id] = env_type
                     self._mem[session_id] = session_mem
                     self._sizes[session_id] = size
-                    self._born[session_id] = time.monotonic()
+                    born = time.monotonic()
+                    self._born[session_id] = born
                     if tenant_id is not None:
                         self._tenants[session_id] = tenant_id
+                    self._note_start(
+                        session_id,
+                        proc,
+                        cause=cause,
+                        born=born,
+                        tenant_id=tenant_id,
+                        agent_id=agent_id,
+                        user_id=user_id,
+                        org_id=org_id,
+                        key_id=key_id,
+                        env_type=env_type,
+                        size=size,
+                    )
                 elif env_type is not None:
                     self._env_types[session_id] = env_type
                 if idle_ttl_set:
@@ -245,6 +281,7 @@ class PiPool:
         self._stdio[session_id] = servers
 
     async def kill(self, session_id: uuid.UUID, *, reason: str = "session") -> None:
+        live = self._live.pop(session_id, None)
         proc = self._procs.pop(session_id, None)
         self._last.pop(session_id, None)
         self._spawn_tools.pop(session_id, None)
@@ -260,6 +297,8 @@ class PiPool:
         size = self._sizes.pop(session_id, "S")
         born = self._born.pop(session_id, None)
         stdio = self._stdio.pop(session_id, None)
+        if live is not None:
+            self._emit_stop(live, reason=reason, born=born)
         if proc is not None and self.metrics is not None:
             hold = time.monotonic() - born if born is not None else 0.0
             self.metrics.observe_sandbox_destroy(size=size, hold_seconds=hold)
@@ -333,6 +372,94 @@ class PiPool:
         if ttl is None:
             return None
         return ttl.total_seconds()
+
+    def live_entries(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for sid, proc in self._procs.items():
+            if not proc.alive:
+                continue
+            live = self._live.get(sid)
+            if live is None:
+                continue
+            rows.append({key: value for key, value in live.items() if key != "born"})
+        return rows
+
+    async def sweep_dead(self) -> None:
+        dead = [sid for sid, proc in list(self._procs.items()) if not proc.alive]
+        for sid in dead:
+            await self.kill(sid, reason="crash")
+
+    def _note_start(
+        self,
+        session_id: uuid.UUID,
+        proc: PiProc,
+        *,
+        cause: str,
+        born: float,
+        tenant_id: uuid.UUID | None,
+        agent_id: str | None,
+        user_id: str | None,
+        org_id: str | None,
+        key_id: str | None,
+        env_type: str | None,
+        size: str,
+    ) -> None:
+        emitter = self.lifecycle
+        if emitter is None or not emitter.active:
+            return
+        image_id, image_version, image_digest = self._image_fields(proc, env_type)
+        fields = {
+            "session_id": session_id,
+            "tenant_id": tenant_id,
+            "org_id": org_id,
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "key_id": key_id,
+            "environment_type": env_type,
+            "sandbox_size": size,
+            "sandbox_image": image_id,
+            "image_version": image_version,
+            "image_digest": image_digest,
+            "run_mode": self.settings.run_mode,
+            "born": born,
+            "started_at": utc_ts(),
+        }
+        seq = emitter.emit_start(fields, cause=cause)
+        if seq is None:
+            return
+        fields["start_seq"] = seq
+        self._live[session_id] = fields
+
+    def _emit_stop(
+        self, live: dict[str, Any], *, reason: str, born: float | None
+    ) -> None:
+        emitter = self.lifecycle
+        if emitter is None or not emitter.active:
+            return
+        started = born if born is not None else live.get("born")
+        if isinstance(started, (int, float)):
+            live_ms = int(max(0.0, time.monotonic() - started) * 1000)
+        else:
+            live_ms = 0
+        event_reason = _EVENT_REASON.get(reason, reason)
+        emitter.emit_stop(live, reason=event_reason, live_ms=live_ms)
+
+    def _image_fields(
+        self, proc: PiProc, env_type: str | None
+    ) -> tuple[str | None, str | None, str | None]:
+        if self.settings.run_mode != "microvm" or env_type == "none":
+            return None, None, None
+        image = getattr(proc, "image", None)
+        if image is None:
+            return None, None, None
+        image_id = getattr(image, "id", None)
+        version = getattr(image, "version", None)
+        digest = getattr(image, "digest", None)
+        return (
+            image_id if isinstance(image_id, str) else None,
+            version if isinstance(version, str) else None,
+            digest if isinstance(digest, str) else None,
+        )
 
     async def reap(self) -> None:
         now = time.monotonic()

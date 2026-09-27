@@ -343,8 +343,9 @@ Status: `idle | in_progress | requires_action | failed`.
 When auth includes `user_id`, create stores it on the session and
 returns it as `user_id`. List, get, update, delete, and later turns
 then see only that user's sessions. Without `user_id`, `user_id` is
-null and sessions stay visible to the whole tenant. See
-[auth](auth.md).
+null and sessions stay visible to the whole tenant. When auth
+includes `org_id`, create stores it and returns it as `org_id`.
+`org_id` does not filter list or get. See [auth](auth.md).
 
 `POST /v1/agents/sessions/{session_id}` updates `metadata` only.
 `DELETE` stops the live guest on the worker that holds the lease,

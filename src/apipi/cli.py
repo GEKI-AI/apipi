@@ -11,6 +11,8 @@ import uvicorn
 from apipi import __version__
 from apipi.config import (
     CHAT_MODE_NOTE,
+    LIFECYCLE_EXPORT_OFF,
+    LIFECYCLE_EXPORT_ON,
     METRICS_OFF,
     METRICS_ON,
     NONE_MODE_WARNING,
@@ -88,6 +90,10 @@ def prepare_serve(
     log.info(usage_retention_log(resolved.usage_retention))
     log.info(USAGE_EXPORT_ON if resolved.usage_export_url else USAGE_EXPORT_OFF)
     log.info(PAYLOAD_EXPORT_ON if resolved.payload_export_url else PAYLOAD_EXPORT_OFF)
+    lifecycle_on = bool(
+        resolved.lifecycle_export_url or resolved.lifecycle_sinks.strip()
+    )
+    log.info(LIFECYCLE_EXPORT_ON if lifecycle_on else LIFECYCLE_EXPORT_OFF)
     log.info(METRICS_ON if resolved.metrics else METRICS_OFF)
     log.info(OTEL_SET if resolved.otel_endpoint else OTEL_UNSET)
     return resolved

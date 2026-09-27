@@ -137,6 +137,25 @@ Auth plugins may return `user_id`. ApiPi does not invent it from
 `key_id`. `X-User-Id` on HTTP responses is still `key_id`. See
 [auth](auth.md) and [usage](usage.md).
 
+## Session lifecycle export
+
+`APIPI_LIFECYCLE_EXPORT_URL` is the per-session live-phase feed:
+sandbox start, stop, and a heartbeat of the live set. It is how a
+host meters active sandbox time by environment, image, and size.
+Prometheus stays aggregate. `apipi_sandboxes_active` and
+`apipi_pi_kill_total` do not carry `session_id`. Join billing rows on
+`event_id` (`{boot_id}:{seq}`), not on a scrape.
+
+The pool owner emits the events. Scrape `apipi_lifecycle_export_total`
+and `apipi_lifecycle_queue_depth` on that same process (the worker, or
+combined `apipi serve`). `result` is `ok`, `retry`, `drop`, or
+`overflow`. Size the queue for the exporter outage you can tolerate.
+A full queue drops the newest event.
+
+Run NTP on workers. `ts` is wall clock and is only for ordering across
+hosts. `live_ms` comes from the monotonic clock and is the duration to
+bill. See [usage](usage.md#session-lifecycle-export).
+
 ## Suggested alerts
 
 | Signal | Why |
@@ -149,6 +168,7 @@ Auth plugins may return `user_id`. ApiPi does not invent it from
 | `apipi_pi_rss_bytes` near host RAM on a chat worker | Dense Pi packing |
 | `apipi_worker_assign_seconds` p95 | Lease wait |
 | `apipi_usage_export_total{result="drop"}` | Warehouse gaps |
+| `apipi_lifecycle_export_total{result="overflow"}` | Lifecycle queue full; live intervals may be missing |
 | `event=worker.lease.expired` | Worker died or heartbeat failed |
 
 ## Cardinality
@@ -158,3 +178,4 @@ Auth plugins may return `user_id`. ApiPi does not invent it from
 | Prometheus | `tenant` ok. Not `user_id` or `session_id`. Guest series use `size` (`S` / `M` / `L`). |
 | Logs and traces | `request_id`, `tenant_id`, `session_id`, `turn_id`, `worker_id` when known |
 | Usage export | `tenant_id`, `user_id`, `key_id`, `agent_id`, `session_id`, `turn_id`, `request_id` |
+| Lifecycle export | Same identity as usage, plus image id, version, and digest. Not a Prometheus label. |

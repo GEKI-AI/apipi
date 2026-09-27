@@ -216,6 +216,10 @@ class Gateway:
             resolved_tracing = None
         resolved_pool.tracing = resolved_tracing
         resolved_pool.metrics = resolved_metrics
+        if not resolved.api_only:
+            from apipi.services.lifecycle_export import attach_lifecycle
+
+            attach_lifecycle(resolved_pool, resolved, resolved_metrics)
         resolved_workers = (
             workers
             if workers is not None
@@ -308,10 +312,14 @@ class Gateway:
             from apipi.worker.pi.orphan import sweep_host_orphans
 
             await sweep_host_orphans()
+        emitter = getattr(self.pool, "lifecycle", None)
+        if emitter is not None:
+            emitter.start()
         self._tasks = [
             asyncio.create_task(self.execution.reap_loop()),
             asyncio.create_task(self.execution.reap_workspace_loop()),
             asyncio.create_task(self.execution.observe_loop()),
+            asyncio.create_task(self.execution.lifecycle_loop()),
             asyncio.create_task(_purge_usage_loop(self.settings, self.store)),
             asyncio.create_task(self._expire_worker_leases()),
         ]

@@ -144,6 +144,7 @@ async def create_session(
     metadata: dict[str, Any] | None = None,
     key_id: str = "",
     user_id: str | None = None,
+    org_id: str | None = None,
     vault_ids: list[str] | None = None,
 ) -> SessionRow:
     row = SessionRow(
@@ -157,6 +158,7 @@ async def create_session(
         metadata_json=metadata if metadata is not None else {},
         key_id=key_id,
         user_id=user_id,
+        org_id=org_id,
         vault_ids=vault_ids if vault_ids is not None else [],
     )
     db.add(row)

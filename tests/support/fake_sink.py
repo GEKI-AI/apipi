@@ -10,3 +10,8 @@ def reset() -> None:
 class FakeSink:
     def emit(self, event: dict[str, Any]) -> None:
         events.append(event)
+
+
+class BoomSink:
+    def emit(self, event: dict[str, Any]) -> None:
+        raise RuntimeError("boom")

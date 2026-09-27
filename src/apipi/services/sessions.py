@@ -134,6 +134,7 @@ def session_body(row: SessionRow) -> dict[str, Any]:
         "metadata": row.metadata_json,
         "required_actions": row.required_actions,
         "user_id": row.user_id,
+        "org_id": row.org_id,
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
         "vault_ids": [str(item) for item in (row.vault_ids or [])],
@@ -400,6 +401,7 @@ class SessionService:
         inherit_agent_defaults: bool = True,
         key_id: str = "",
         user_id: str | None = None,
+        org_id: str | None = None,
         thinking_summary: bool = False,
         auto_title: bool = False,
         request_id: str | None = None,
@@ -520,6 +522,7 @@ class SessionService:
                 metadata=metadata,
                 key_id=key_id,
                 user_id=user_id,
+                org_id=org_id,
                 vault_ids=vault_id_strs,
             )
             if env.get("type") == "openai_hosted":
@@ -658,6 +661,7 @@ class SessionService:
                         api_key=api_key,
                         key_id=key_id or None,
                         user_id=user_id,
+                        org_id=org_id,
                         thinking_summary=thinking_summary,
                         auto_title=auto_title,
                     )
@@ -676,6 +680,7 @@ class SessionService:
                                 api_key=api_key,
                                 key_id=key_id or None,
                                 user_id=user_id,
+                                org_id=org_id,
                                 thinking_summary=thinking_summary,
                                 auto_title=auto_title,
                             )
@@ -837,6 +842,7 @@ class SessionService:
         error: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
+        org_id: str | None = None,
         thinking_summary: bool = False,
         auto_title: bool = False,
         request_id: str | None = None,
@@ -903,6 +909,7 @@ class SessionService:
                     api_key=api_key,
                     key_id=key_id,
                     user_id=user_id,
+                    org_id=org_id,
                     thinking_summary=thinking_summary,
                     auto_title=auto_title,
                 )
@@ -930,6 +937,7 @@ class SessionService:
                     api_key=api_key,
                     key_id=key_id,
                     user_id=user_id,
+                    org_id=org_id,
                     thinking_summary=thinking_summary,
                     auto_title=auto_title,
                 )

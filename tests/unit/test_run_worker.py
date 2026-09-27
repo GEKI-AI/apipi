@@ -129,3 +129,61 @@ async def test_run_worker_reaps_idle_sessions(
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+async def test_run_worker_sets_lifecycle_worker_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apipi.services.lifecycle_export import LifecycleEmitter
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        worker_token="secret",
+        lifecycle_export_url="http://export.test/life",
+        lifecycle_heartbeat="off",
+    )
+    pool = PiPool(settings)
+    emitter = LifecycleEmitter(settings)
+    pool.lifecycle = emitter
+    started = asyncio.Event()
+    closed = asyncio.Event()
+
+    class _LifeExecution(_Execution):
+        async def lifecycle_loop(self) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        async def close(self) -> None:
+            closed.set()
+            await emitter.close()
+
+    execution = _LifeExecution(pool, asyncio.Event())
+    monkeypatch.setattr(
+        "apipi.worker.execution.local_execution",
+        lambda *_args, **_kwargs: execution,
+    )
+    monkeypatch.setattr(
+        "apipi.worker.execution.worker_observability",
+        lambda _settings: (None, None),
+    )
+    monkeypatch.setattr("apipi.store.engine.Store", _Store)
+    monkeypatch.setattr(
+        "apipi.store.engine.create_engine", lambda *_args, **_kwargs: object()
+    )
+    monkeypatch.setattr(
+        "apipi.worker.hub.websockets.connect", lambda *_a, **_k: _Connect()
+    )
+    monkeypatch.setattr("apipi.worker.hub._install_drain_signals", lambda _event: None)
+    task = asyncio.create_task(run_worker(settings, url="http://127.0.0.1:8000"))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        deadline = time.monotonic() + 2
+        while emitter.worker_id is None and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+        assert emitter.worker_id
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert closed.is_set()
