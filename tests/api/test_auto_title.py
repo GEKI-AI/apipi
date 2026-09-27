@@ -8,7 +8,7 @@ from apipi.gateway import create_app
 from apipi.gateway.auth import tenant_from_key
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import FakeHarness
-from apipi.services.sidekick import SidekickError
+from apipi.services.sidekick import SidekickError, _tasks
 from apipi.store.engine import Store
 
 
@@ -46,6 +46,8 @@ async def _events(client: AsyncClient, token: str, session_id: str) -> list[dict
 
 
 async def _wait_title(client: AsyncClient, token: str, session_id: str) -> list[dict]:
+    if _tasks:
+        await asyncio.wait(set(_tasks), timeout=5)
     events: list[dict] = []
     for _ in range(50):
         events = await _events(client, token, session_id)
