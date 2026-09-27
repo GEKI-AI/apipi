@@ -212,7 +212,7 @@ session. `APIPI_SANDBOX_TTL_SELF_HOSTED` does not kill Pi.
 | Artifact store too large | `agent.session.error` | `artifact_too_large` |
 | Artifact store not writable, including S3 errors | `agent.session.turn.failed` | `artifact_store` |
 | Artifact store error on an HTTP read or upload | `503` | `artifact_store` |
-| Missing `agent.model` on a turn | `400` and `agent.session.error` | `model_required` |
+| Missing `agent.model` on session create | `400` | `model_required` |
 | Unknown model on agent create or edit | `400` | `model_not_found` |
 | Model list unreachable on agent write, including `404` | `400` | `model_host_unreachable` |
 | Model host rejects the key on agent write (`401` or `403`) | `401` | `model_host_unauthorized` |
@@ -294,9 +294,45 @@ you allow, or leave it empty to skip the check. `apipi serve` and
 `apipi worker` still require `OPENAI_BASE_URL` and the pinned Pi.
 They do not call `/models` in `off` or `turn`.
 
-Turns do not check the catalog. If the host rejects the model, for
-any reason, the turn fails with `model_host_error`. A missing
-`agent.model` is `model_required`.
+### Failure modes
+
+There are three outcomes. Do not treat them as the same error.
+
+An HTTP error rejects the request. Pi does not start. `POST /v1/agents`
+and a model edit return `400` with `model_not_found` when the id is
+not in the list, `400` with `model_host_unreachable` when `GET /models`
+fails (including `404`), and `401` with `model_host_unauthorized` when
+the host returns `401` or `403`. The agent row is not written. Session
+create with a non-empty input and no `agent.model` returns `400` with
+`model_required` before Pi starts. The session row may already exist.
+`GET /v1/models` uses the same host codes when it proxies.
+`APIPI_FORWARD_MODELS=off` returns `400` with code `forward_models`
+and does not call the host.
+
+A turn failure happens after Pi has started. The host can reject the
+model for any reason: it is missing, overloaded, or the key is bad.
+ApiPi does not inspect that reason. Pi's error becomes
+`agent.session.turn.failed` and `agent.session.error` with code
+`model_host_error` and the host message. The session returns to
+`idle`, so a follow-up message can try again. The same shape is used
+for an artifact-store failure during the turn (`artifact_store`).
+
+A session failure is terminal. Status becomes `failed`. The events are
+`agent.session.error` (with `code` and `message`) and then
+`agent.session.failed`. A worker turn that still has no model uses
+code `model_required`. An unexpected exception on `turn.start` or
+`turn.continue` uses the `ApiError` code, or `internal` when it is
+not an `ApiError`. The worker logs `worker.command.failed` at error,
+including 4xx, with `session_id`, `tenant_id`, and `request_id`. The
+task does not raise again, so the client is not left waiting on a
+silent turn. If the session is already `failed`, that log is the only
+extra record.
+
+`probe` startup is not a turn error. If `GET /models` fails, `apipi
+serve` and `apipi worker` exit before they listen. `turn` and `off`
+do not call `/models` at start. A host without that route must use
+`off`, or agent writes in `turn` mode fail with
+`model_host_unreachable`.
 
 ## Pi
 

@@ -66,8 +66,9 @@ Use `APIPI_MODEL_LIST=off` when the host has no `GET /models`. Set
 `APIPI_MODELS` to the ids you allow, or leave it empty to skip the
 check. `turn` lists only when an agent is created or its model is
 edited. If the host later rejects the model, the turn fails with
-`model_host_error`. The contract is in
-[configuration](config.md#model-host).
+`model_host_error` and the session returns to `idle`. A terminal
+failure emits `agent.session.failed`. See
+[failure modes](config.md#failure-modes).
 
 ## Guest image store
 

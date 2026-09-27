@@ -52,11 +52,15 @@ Rejected: `multi_agent`, `tool_search`, `programmatic_tool_calling`.
 A session may pass `agent_id` or an inline `agent`. You must provide
 exactly one of those. Inline config is used for that session only. It
 is not saved unless you `POST /v1/agents`. A live turn needs
-`agent.model`. Missing model is `400` with code `model_required`.
-Creating or editing an agent checks that id against the model list.
-An unknown id is `400` with code `model_not_found`. A later turn does
-not repeat that check. If the host then rejects the model, the turn
-fails with `model_host_error`. Inline `model` and `instructions` are kept on the
+`agent.model`. Session create with input and no model is `400` with
+code `model_required`, before Pi starts. Creating or editing an agent
+checks that id against the model list. An unknown id is `400` with
+code `model_not_found`. A host that cannot list models is `400`
+`model_host_unreachable`, or `401` `model_host_unauthorized`. A later
+turn does not repeat that check. If the host then rejects the model,
+the turn fails with `model_host_error` and the session returns to
+`idle`. Failure modes are in [configuration](config.md#failure-modes).
+Inline `model` and `instructions` are kept on the
 session for follow-up turns. Saved agents keep reading the agent row.
 The gateway appends a platform prompt, then `agent.instructions` when
 those are set. A system prompt may replace Pi's harness default first.
@@ -537,6 +541,11 @@ example is `examples/sessions/openai_sdk.py`. Create-and-stream steps are in
 
 `session_id` is set when create already stored a session and the first
 turn failed. The session stays `idle` so a follow-up message works.
+That is a turn failure (`agent.session.turn.failed`), not
+`agent.session.failed`. A terminal session failure emits
+`agent.session.error` and then `agent.session.failed`, and status
+becomes `failed`. Model codes and which path uses which outcome are
+in [configuration](config.md#failure-modes).
 
 Missing or invalid bearer is `401` with code `unauthorized`. An auth
 plugin may return `429` with a plugin `code` such as `rate_limited` or
