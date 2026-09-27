@@ -30,6 +30,7 @@ MicrovmImage = Literal["default", "browser"]
 SandboxSize = Literal["S", "M", "L"]
 EnvNonePlacement = Literal["chat", "microvm", "reject"]
 ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+ErrorCodes = Literal["legacy", "specific"]
 THINKING_HELP = (
     "APIPI_PI_THINKING must be off, minimal, low, medium, high, xhigh, or max"
 )
@@ -444,6 +445,10 @@ class Settings(BaseSettings):
     turn_timeout: IdleTtl = Field(
         default=timedelta(minutes=10),
         validation_alias=AliasChoices("APIPI_TURN_TIMEOUT", "turn_timeout"),
+    )
+    error_codes: ErrorCodes = Field(
+        default="legacy",
+        validation_alias=AliasChoices("APIPI_ERROR_CODES", "error_codes"),
     )
     worker_token: str | None = Field(
         default=None,

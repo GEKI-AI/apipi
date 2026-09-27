@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -272,6 +273,10 @@ class TurnLog(Base):
     cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    failure_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    upstream_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    legacy_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     tool_names: Mapped[list[Any]] = mapped_column(
         JSONType, default=list, nullable=False

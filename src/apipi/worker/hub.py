@@ -23,6 +23,13 @@ from apipi.gateway.otel import (
     detach_traceparent,
     start_span,
 )
+from apipi.services.failures import (
+    failure_for,
+    log_extra,
+    log_level_for_code,
+    session_error_data,
+    turn_failed_data,
+)
 from apipi.services.runtime import (
     PUBLIC_EVENT_TYPES,
     EventHub,
@@ -409,15 +416,18 @@ class WorkerHub:
                 lease_id = row.lease_id
                 worker_id = row.worker_id
                 await clear_session_lease(db, row.tenant_id, row.id)
+                lease_failure = failure_for(
+                    "worker_lease_expired", "Worker lease expired"
+                )
                 log_event(
                     log,
-                    logging.WARNING,
+                    logging.ERROR,
                     "worker lease expired",
                     event="worker.lease.expired",
-                    error_code="worker_lease_expired",
                     tenant_id=row.tenant_id,
                     session_id=row.id,
                     worker_id=worker_id,
+                    **log_extra(lease_failure),
                 )
                 await persist_event(
                     db,
@@ -425,10 +435,7 @@ class WorkerHub:
                     row.tenant_id,
                     row.id,
                     type="agent.session.error",
-                    data={
-                        "message": "Worker lease expired",
-                        "code": "worker_lease_expired",
-                    },
+                    data=session_error_data(lease_failure, mode="legacy"),
                 )
                 expired.append(row.id)
                 if lease_id is not None:
@@ -754,18 +761,21 @@ async def _reject_mismatched_turn(
             tenant_id,
             session_id,
             type="agent.session.error",
-            data={
-                "message": "Worker run_mode does not match the session",
-                "code": "placement",
-            },
+            data=session_error_data(
+                failure_for("placement", "Worker run_mode does not match the session"),
+                mode="legacy",
+            ),
         )
+        placed = failure_for("placement", "Worker run_mode does not match the session")
+        failed = turn_failed_data("", placed)
+        failed.pop("turn_id", None)
         await persist_event(
             db,
             hub,
             tenant_id,
             session_id,
             type="agent.session.turn.failed",
-            data={"message": "Worker run_mode does not match the session"},
+            data=failed,
         )
 
 
@@ -835,32 +845,34 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
             auto_title=auto_title,
         )
     except ApiError as exc:
+        command_failure = failure_for(exc.code or "internal", exc.message)
         log_event(
             log,
-            logging.ERROR,
+            log_level_for_code(command_failure.code, command_failure.failure_source),
             "worker command failed",
             event="worker.command.failed",
-            error_code=exc.code or "internal",
             exc_info=exc,
             tenant_id=tenant_id,
             session_id=session_id,
             request_id=request_id,
+            **log_extra(command_failure),
         )
         if op in _TURN_OPS:
             await _report_escaped_turn(execution, tenant_id, session_id, exc)
             return
         raise
     except Exception as exc:
+        internal = failure_for("internal", "Turn failed")
         log_event(
             log,
             logging.ERROR,
             "worker command failed",
             event="worker.command.failed",
-            error_code="internal",
             exc_info=exc,
             tenant_id=tenant_id,
             session_id=session_id,
             request_id=request_id,
+            **log_extra(internal),
         )
         if op in _TURN_OPS:
             await _report_escaped_turn(execution, tenant_id, session_id, exc)

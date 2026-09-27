@@ -64,6 +64,8 @@ def test_agent_end_error_is_model_host_failure() -> None:
     assert "pi_error" in kinds
     error = next(item[1] for item in mapped if item[0] == "pi_error")
     assert error["message"] == "Model host error (401)"
+    assert error["code"] == "upstream_unauthorized"
+    assert error["upstream_status"] == 401
     assert "secret" not in error["message"]
 
 
@@ -82,6 +84,8 @@ def test_agent_end_error_passes_plain_message() -> None:
     )
     error = next(item[1] for item in mapped if item[0] == "pi_error")
     assert error["message"] == "No model configured for provider"
+    assert error["code"] == "upstream_error"
+    assert error["upstream_status"] is None
 
 
 def test_extension_error_is_logged_in_full(caplog: pytest.LogCaptureFixture) -> None:

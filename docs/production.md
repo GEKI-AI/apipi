@@ -65,9 +65,13 @@ Turns do not call `/models`.
 Use `APIPI_MODEL_LIST=off` when the host has no `GET /models`. Set
 `APIPI_MODELS` to the ids you allow, or leave it empty to skip the
 check. `turn` lists only when an agent is created or its model is
-edited. If the host later rejects the model, the turn fails with
-`model_host_error` and the session returns to `idle`. A terminal
-failure emits `agent.session.failed`. See
+edited. If the host later rejects the model, the turn fails and the
+session returns to `idle`. Alert on `failure_source=internal` and on
+upstream `5xx`, timeouts, and connection errors. A `429` from the
+host is retryable and is logged at warning, not error. In this release
+the public error code is still `model_host_error`. A terminal failure
+emits `agent.session.failed`. See
+[failure codes](errors.md) and
 [failure modes](config.md#failure-modes).
 
 ## Guest image store

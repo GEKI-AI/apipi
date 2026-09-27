@@ -23,6 +23,7 @@ from apipi.mcp.http import (
 from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.services.agents import AgentWrite
 from apipi.services.chat_tools import is_chat_profile, reject_disallowed_chat_tools
+from apipi.services.failures import error_extra
 from apipi.services.files import FileService
 from apipi.services.runtime import (
     EventHub,
@@ -349,6 +350,7 @@ class SessionService:
                 return
             code = "model_host_error"
             message = "Model host error"
+            extra: dict[str, Any] = {}
             events = await list_events(db, tenant_id, session_id)
             for event in reversed(events):
                 if event.type != "agent.session.error":
@@ -360,6 +362,7 @@ class SessionService:
                     code = raw_code
                 if isinstance(raw_message, str) and raw_message:
                     message = raw_message
+                extra = error_extra(data)
                 break
         raise ApiError(
             "api_error",
@@ -367,6 +370,7 @@ class SessionService:
             code=code,
             status_code=502,
             session_id=str(session_id),
+            extra=extra,
         )
 
     async def _saved_defaults(

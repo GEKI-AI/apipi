@@ -67,7 +67,8 @@ hosted files and skills).
 | `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. Workers advertise this as `capacity`. |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | `max_sessions_per_tenant` | `32` | Live Pi processes for one tenant. A new turn that would pass the cap returns `429` with code `capacity_tenant`. The node cap still applies. |
 | `APIPI_WORKER_MEMORY_MB` | `worker_memory_mb` | `max_sessions × mem_mib` (16384 at defaults) | RAM budget this worker (or combined node) will run, in MiB. Sum of guest `mem_mib` for live leases must stay under this. Set it to usable host RAM minus OS and worker reserve. Do not read `/proc/meminfo` automatically. |
-| `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Cancel a stuck turn. |
+| `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Fail a stuck turn with code `turn_timeout`. This is not a user cancel. |
+| `APIPI_ERROR_CODES` | `error_codes` | `legacy` | `legacy` or `specific`. `legacy` keeps `model_host_error` on `agent.session.error` and the non-stream `502` body for upstream failures. The specific code is `detail_code`. `specific` puts that code in `code` now. `turn.failed`, logs, and usage always use the specific code. See [failure codes](errors.md). |
 | `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. The callback may return a typed reject (`401` or `429`). |
 | `APIPI_WORKER_TOKEN` | `worker_token` | unset | Shared secret for `apipi worker` connections. Compared in memory. Not a tenant key and not stored in the database. Unset rejects the worker socket. Put this in the process environment. See [workers](workers.md). |
 | `APIPI_VAULT_MASTER_KEY` | `vault_master_key` | local default | 32-byte AES-256-GCM key for MCP vault tokens at rest (standard or urlsafe base64, or 64-char hex). Unset uses a local default so laptop try-outs keep working, and logs a warning. Production must set a real key from the deploy secret store. Never commit it. `apipi migrate` rewrites leftover plaintext rows to ciphertext. Generate with `python -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"`. |
@@ -228,7 +229,7 @@ session. `APIPI_SANDBOX_TTL_SELF_HOSTED` does not kill Pi.
 | Unknown model on agent create or edit | `400` | `model_not_found` |
 | Model list unreachable on agent write, including `404` | `400` | `model_host_unreachable` |
 | Model host rejects the key on agent write (`401` or `403`) | `401` | `model_host_unauthorized` |
-| Host rejects the model during a turn | `agent.session.turn.failed` | `model_host_error` |
+| Host rejects the model during a turn | `agent.session.turn.failed` | specific upstream code (`model_host_error` on `agent.session.error` while `APIPI_ERROR_CODES=legacy`) |
 
 The gateway does not intercept every write inside a guest. Guest tmpfs
 is already bounded by `[sandbox.resources].mem_mib`. Workspace and
@@ -323,19 +324,30 @@ and does not call the host.
 
 A turn failure happens after Pi has started. The host can reject the
 model for any reason: it is missing, overloaded, or the key is bad.
-ApiPi does not inspect that reason. Pi's error becomes
-`agent.session.turn.failed` and `agent.session.error` with code
-`model_host_error` and the host message. The session returns to
-`idle`, so a follow-up message can try again. The same shape is used
-for an artifact-store failure during the turn (`artifact_store`).
+ApiPi classifies Pi's `errorMessage` into a specific code, a
+`failure_source`, an `upstream_status` when the text contains one, and
+`retryable`. The parser matches the pinned Pi version and is
+best-effort: Pi does not send the HTTP status as a field. A secret in
+the message is still masked. `agent.session.turn.failed` carries the
+specific code. In this release `agent.session.error` and the
+non-stream `502` body keep `model_host_error` for upstream failures,
+with the specific code in `detail_code`. Set `APIPI_ERROR_CODES=specific`
+to opt in early. The session returns to `idle`, so a follow-up message
+can try again. An artifact-store failure during the turn uses
+`artifact_store` and `failure_source` `internal`. A Pi process that
+exits before the turn settles is `pi_exited`. A host Pi killed for
+memory is `pi_memory`. A turn that exceeds `turn_timeout` is
+`turn_timeout`, not a cancel. The full list is in
+[failure codes](errors.md).
 
 A session failure is terminal. Status becomes `failed`. The events are
 `agent.session.error` (with `code` and `message`) and then
 `agent.session.failed`. A worker turn that still has no model uses
 code `model_required`. An unexpected exception on `turn.start` or
 `turn.continue` uses the `ApiError` code, or `internal` when it is
-not an `ApiError`. The worker logs `worker.command.failed` at error,
-including 4xx, with `session_id`, `tenant_id`, and `request_id`. The
+not an `ApiError`. The worker logs `worker.command.failed` at the
+same level as a turn failure: warning for caller errors, error for
+internal faults, with `session_id`, `tenant_id`, and `request_id`. The
 task does not raise again, so the client is not left waiting on a
 silent turn. If the session is already `failed`, that log is the only
 extra record.
@@ -359,7 +371,7 @@ Firecracker.
 | `APIPI_PI_COMPACTION_RESERVE_TOKENS` | `[pi].compaction_reserve_tokens` | unset (Pi default 16384) | `compaction.reserveTokens` in Pi `settings.json`. Tokens reserved for the model reply. Unset leaves Pi's default. |
 | `APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS` | `[pi].compaction_keep_recent_tokens` | unset (Pi default 20000) | `compaction.keepRecentTokens` in Pi `settings.json`. Recent tokens kept out of the summary. Unset leaves Pi's default. |
 | `APIPI_PI_THINKING` | `[pi].thinking` | `off` | Process default thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. A session or agent may override it. |
-| `APIPI_PI_MEM_MIB` | `[pi].mem_mib` | unset | Soft ceiling for one host Pi (`none` / `chat`) in MiB. Unset is off. Sets Node `NODE_OPTIONS=--max-old-space-size` and kills the process group when RSS goes over the limit (`apipi_pi_kill_total` reason `memory`). A turn in progress fails with `model_host_error`. Not a microVM hard cap. |
+| `APIPI_PI_MEM_MIB` | `[pi].mem_mib` | unset | Soft ceiling for one host Pi (`none` / `chat`) in MiB. Unset is off. Sets Node `NODE_OPTIONS=--max-old-space-size` and kills the process group when RSS goes over the limit (`apipi_pi_kill_total` reason `memory`). A turn in progress fails with `pi_memory`. Not a microVM hard cap. |
 | `APIPI_PI_SYSTEM_PROMPT` | `[pi].system_prompt` | unset | Replaces Pi's harness default system prompt. Unset or empty keeps Pi's default. This does not replace the platform prompt or agent instructions. |
 | `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | built-in text | Main platform prompt appended after Pi's harness default (or after `system_prompt` when that is set). Unset keeps the built-in. Set to `""` to disable the main block. A non-empty value replaces the built-in entirely. |
 | `APIPI_PLATFORM_PROMPT_ADDITIONAL` | `[pi].platform_prompt_additional` | empty | Optional extra platform text appended after the main block. Does not replace the main prompt. |

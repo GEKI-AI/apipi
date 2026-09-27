@@ -86,7 +86,11 @@ on, POSTs the full object.
 | `instance_id` | Process name, if set |
 | `artifact_bytes` | Bytes published this turn |
 | `request_id` | Request id |
-| `error_code` | Public error code, if any |
+| `error_code` | Specific failure code, if the turn failed or was cancelled |
+| `failure_source` | `upstream`, `user`, or `internal`, if classified |
+| `upstream_status` | Model-host HTTP status when the text contained one |
+| `retryable` | Whether an identical retry may succeed |
+| `legacy_code` | `model_host_error` for upstream failures during the migration |
 | `created_at` | When the usage row was written |
 
 Reads are tenant-scoped. The object must not contain message text.
@@ -120,19 +124,21 @@ are never logged.
 
 | `event` | Level | When |
 | --- | --- | --- |
-| `turn.failed` | error | A turn failed. `error_code` is the public turn code. |
+| `turn.failed` | warning or error | A turn failed. `error_code` is the specific code. `failure_source`, `upstream_status`, `retryable`, and `legacy_code` are set when known. Caller and `429` failures are warning. Upstream `5xx`, timeouts, connection errors, and internal failures are error. See [failure codes](errors.md). |
 | `api.error` | error | HTTP 5xx or an unexpected exception. |
-| `sandbox.boot.failed` | error | MicroVM jailer or vsock attach failed. |
-| `worker.command.failed` | error | A worker command raised. Logged for 4xx and 5xx, with `session_id`, `tenant_id`, and `request_id`. Turn commands also emit a session failure event unless the session is already `failed`. |
+| `sandbox.boot.failed` | error | MicroVM jailer or vsock attach failed. `error_code` is `sandbox_boot_failed`. |
+| `worker.command.failed` | warning or error | A worker command raised. Caller errors are warning. Internal faults are error. Fields include `session_id`, `tenant_id`, and `request_id`. Turn commands also emit a session failure event unless the session is already `failed`. |
 | `worker.assign.failed` | warning | No worker capacity (`capacity` or `capacity_tenant`). |
-| `worker.lease.expired` | warning | A worker lease TTL elapsed. |
+| `worker.lease.expired` | error | A worker lease TTL elapsed. `error_code` is `worker_lease_expired`. |
 | `usage.export.dropped` | warning | Usage HTTPS export or sink dropped the event. |
 | `payload.export.dropped` | warning | Payload HTTPS export or sink dropped the event. |
 
-Failed turns use level `error`. Completed and cancelled turns stay
-`info` with `event` `turn`. HTTP request lines stay `info` and include
-`error_code` when the response is an ApiPi error. Ship stderr with a
-log collector; ApiPi does not bundle Grafana or Loki.
+Cancelled turns stay `info` with `event` `turn` and code `cancelled`.
+Completed turns use the same info line. HTTP request lines stay `info`
+and include `error_code` when the response is an ApiPi error. Ship
+stderr with a log collector; ApiPi does not bundle Grafana or Loki.
+Alert on `failure_source=internal` and on upstream `5xx`, timeouts,
+and connection errors. Do not page on each `upstream_rate_limited`.
 
 ## Query
 

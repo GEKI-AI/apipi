@@ -157,6 +157,7 @@ async def test_dispatch_reports_escaped_turn(
         event.type == "agent.session.error"
         and isinstance(event.data, dict)
         and event.data.get("code") == "internal"
+        and event.data.get("failure_source") == "internal"
         for event in events
     )
     assert any(
@@ -194,7 +195,7 @@ async def test_dispatch_logs_4xx_and_does_not_raise(
                 status_code=400,
             )
 
-    caplog.set_level(logging.ERROR, logger="apipi.worker")
+    caplog.set_level(logging.WARNING, logger="apipi.worker")
     await dispatch_command(
         Denied(),
         {
@@ -203,7 +204,11 @@ async def test_dispatch_logs_4xx_and_does_not_raise(
             "payload": {"tenant_id": str(tenant_id), "request_id": "req-2"},
         },
     )
-    assert any(
-        getattr(record, "error_code", None) == "model_host_unreachable"
+    matched = [
+        record
         for record in caplog.records
-    )
+        if getattr(record, "error_code", None) == "model_host_unreachable"
+    ]
+    assert matched
+    assert matched[-1].levelno == logging.WARNING
+    assert matched[-1].__dict__["failure_source"] == "user"

@@ -88,6 +88,10 @@ def usage_event(
     error_code: str | None,
     created_at: datetime,
     user_id: str | None = None,
+    failure_source: str | None = None,
+    upstream_status: int | None = None,
+    retryable: bool | None = None,
+    legacy_code: str | None = None,
 ) -> dict[str, Any]:
     stored = usage_from(usage)
     return {
@@ -115,5 +119,9 @@ def usage_event(
         "artifact_bytes": artifact_bytes,
         "request_id": request_id,
         "error_code": error_code,
+        "failure_source": failure_source,
+        "upstream_status": upstream_status,
+        "retryable": retryable,
+        "legacy_code": legacy_code,
         "created_at": created_at.isoformat(),
     }

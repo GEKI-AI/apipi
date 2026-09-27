@@ -307,6 +307,7 @@ class PiPool:
         if self.on_kill is not None:
             await self.on_kill(session_id, proc)
         if proc is not None:
+            proc.stop_reason = reason
             await proc.terminate()
         if stdio:
             await stop_mcp_stdio(stdio)

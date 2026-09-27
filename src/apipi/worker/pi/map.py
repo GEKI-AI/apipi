@@ -3,6 +3,7 @@ from collections.abc import Callable
 from time import monotonic
 from typing import Any
 
+from apipi.services.failures import classify_host_message, pi_payload
 from apipi.services.usage import usage_from_messages
 
 PREVIEW_CHARS = 100
@@ -19,19 +20,7 @@ def _tool_item_type(name: object) -> str:
 
 
 def _host_error(raw: object) -> list[tuple[str, dict[str, Any]]]:
-    text = raw if isinstance(raw, str) else ""
-    if "(401)" in text:
-        message = "Model host error (401)"
-    elif "(403)" in text:
-        message = "Model host error (403)"
-    elif text.strip():
-        message = text.strip().split("\n")[0][:300]
-        lowered = message.lower()
-        if "api key" in lowered or "bearer " in lowered:
-            message = "Model host error"
-    else:
-        message = "Model host error"
-    return [("pi_error", {"message": message})]
+    return [("pi_error", pi_payload(classify_host_message(raw)))]
 
 
 def map_pi_event(event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:

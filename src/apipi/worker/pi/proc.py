@@ -125,6 +125,7 @@ class PiProc:
         self.scratch_dir = scratch_dir
         self._stderr_task = stderr_task
         self._buf = b""
+        self.stop_reason: str | None = None
 
     @property
     def alive(self) -> bool:

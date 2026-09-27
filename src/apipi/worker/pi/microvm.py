@@ -92,6 +92,8 @@ def log_sandbox_boot_failed(exc: BaseException, *, vm_id: str | None = None) -> 
         "sandbox boot failed",
         event="sandbox.boot.failed",
         error_code="sandbox_boot_failed",
+        failure_source="internal",
+        retryable=True,
         exc_info=exc,
         vm_id=vm_id,
     )

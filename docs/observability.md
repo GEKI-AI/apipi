@@ -77,8 +77,13 @@ Fluent Bit, Alloy, and cloud agents work the same way: JSON lines on
 stderr, no ApiPi-side shipper.
 
 The event table is in [usage](usage.md#logs). Alert on
-`turn.failed`, `api.error`, `sandbox.boot.failed`,
-`worker.assign.failed`, `worker.lease.expired`, and export drops.
+`turn.failed` when `failure_source` is `internal`, and when the code
+is `upstream_5xx`, `upstream_timeout`, `upstream_connection`, or
+`upstream_error`. A host `429` (`upstream_rate_limited`) is warning:
+alert on the rate, not on each line. Also alert on `api.error`,
+`sandbox.boot.failed`, `worker.assign.failed`,
+`worker.lease.expired`, and export drops. Codes are listed in
+[failure codes](errors.md).
 
 ## Prometheus
 
@@ -160,7 +165,7 @@ bill. See [usage](usage.md#session-lifecycle-export).
 
 | Signal | Why |
 | --- | --- |
-| Rate of `event=turn.failed` or `apipi_turns_total{status="failed"}` | Turns dying |
+| Rate of `event=turn.failed` with `failure_source=internal`, or `apipi_turns_total{status="failed"}` | Turns dying inside ApiPi |
 | `apipi_errors_total` 5xx / `event=api.error` | Gateway faults |
 | HTTP `429` with `capacity` / `event=worker.assign.failed` | Node or tenant full |
 | `apipi_sandbox_boot_total{result="error"}` / `event=sandbox.boot.failed` | Guests not starting |

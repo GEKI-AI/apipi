@@ -18,6 +18,18 @@ from apipi.gateway.metrics import Metrics, observe_turn
 from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.mcp.http import McpConnectError
 from apipi.mcp.stdio import start_mcp_stdio_tools
+from apipi.services.failures import (
+    Failure,
+    cancel_data,
+    error_mode,
+    failure_for,
+    failure_from_payload,
+    log_extra,
+    log_level_for,
+    session_error_data,
+    turn_failed_data,
+    usage_fields,
+)
 from apipi.services.files import FileService
 from apipi.services.payload_export import export_payload
 from apipi.services.sidekick import (
@@ -72,10 +84,17 @@ log = logging.getLogger("apipi")
 
 
 class TurnFailed(Exception):
-    def __init__(self, message: str, *, code: str = "model_host_error") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure: Failure | None = None,
+        code: str = "model_host_error",
+    ) -> None:
         super().__init__(message)
         self.message = message
-        self.code = code
+        self.failure = failure or failure_for(code, message)
+        self.code = self.failure.code
 
 
 PUBLIC_EVENT_TYPES = frozenset(
@@ -510,10 +529,8 @@ async def _consume_generate(
                 thinking.append({"item_id": item_id, "text": text})
             continue
         if etype == "pi_error":
-            message = data.get("message")
-            raise TurnFailed(
-                message if isinstance(message, str) and message else "Model host error"
-            )
+            failure = failure_from_payload(data)
+            raise TurnFailed(failure.message, failure=failure)
         payload = dict(data)
         payload.setdefault("turn_id", str(turn_id))
         if etype in LIVE_EVENT_TYPES:
@@ -640,6 +657,7 @@ async def _write_turn_log(
     settings: Settings | None = None,
     artifact_bytes: int = 0,
     user_id: str | None = None,
+    failure: Failure | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is None:
@@ -695,6 +713,7 @@ async def _write_turn_log(
         error_code=error_code,
         created_at=created,
         user_id=user_id,
+        **usage_fields(failure),
     )
     if store == "turns":
         await append_turn_log(
@@ -712,6 +731,10 @@ async def _write_turn_log(
             cache_write_tokens=stored["cache_write_tokens"],
             total_tokens=stored["total_tokens"],
             error_code=error_code,
+            failure_source=failure.failure_source if failure is not None else None,
+            upstream_status=failure.upstream_status if failure is not None else None,
+            retryable=failure.retryable if failure is not None else None,
+            legacy_code=failure.legacy_code if failure is not None else None,
             request_id=request_id,
             tool_names=tool_names,
             tool_counts=tool_counts,
@@ -736,7 +759,21 @@ async def _write_turn_log(
             turns=1,
             artifact_bytes=artifact_bytes,
         )
-    if status == "failed":
+    if status == "failed" and failure is not None:
+        log_event(
+            log,
+            log_level_for(failure),
+            "turn failed",
+            event="turn.failed",
+            tenant_id=tenant_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            status=status,
+            latency_ms=latency_ms,
+            **log_extra(failure),
+        )
+    elif status == "failed":
         log_event(
             log,
             logging.ERROR,
@@ -751,6 +788,7 @@ async def _write_turn_log(
             latency_ms=latency_ms,
         )
     else:
+        extra = log_extra(failure) if failure is not None else {}
         log_event(
             log,
             logging.INFO,
@@ -762,6 +800,7 @@ async def _write_turn_log(
             request_id=request_id,
             status=status,
             latency_ms=latency_ms,
+            **extra,
         )
     observe_turn(
         metrics,
@@ -949,6 +988,7 @@ async def _cancel_turn(
     if turn is not None:
         turn.status = "cancelled"
         turn.updated_at = utc_now()
+    cancelled = failure_for("cancelled", "Cancelled")
     await _write_turn_log(
         db,
         tenant_id,
@@ -960,6 +1000,8 @@ async def _cancel_turn(
         tracing=tracing,
         settings=settings,
         user_id=user_id,
+        error_code=cancelled.code,
+        failure=cancelled,
     )
     await persist_event(
         db,
@@ -967,7 +1009,7 @@ async def _cancel_turn(
         tenant_id,
         session_id,
         type="agent.session.turn.cancelled",
-        data={"turn_id": str(turn_id)},
+        data=cancel_data(str(turn_id)),
     )
     row = await get_session(db, tenant_id, session_id)
     current = row.required_actions if row is not None else []
@@ -1054,7 +1096,9 @@ async def _fail_turn(
     settings: Settings | None = None,
     code: str = "model_host_error",
     user_id: str | None = None,
+    failure: Failure | None = None,
 ) -> None:
+    resolved = failure or failure_for(code, message)
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is not None:
         turn.status = "failed"
@@ -1070,7 +1114,8 @@ async def _fail_turn(
         tracing=tracing,
         settings=settings,
         user_id=user_id,
-        error_code=code,
+        error_code=resolved.code,
+        failure=resolved,
     )
     await persist_event(
         db,
@@ -1078,7 +1123,7 @@ async def _fail_turn(
         tenant_id,
         session_id,
         type="agent.session.turn.failed",
-        data={"turn_id": str(turn_id), "message": message},
+        data=turn_failed_data(str(turn_id), resolved),
     )
     await persist_event(
         db,
@@ -1086,7 +1131,7 @@ async def _fail_turn(
         tenant_id,
         session_id,
         type="agent.session.error",
-        data={"message": message, "code": code},
+        data=session_error_data(resolved, mode=error_mode(settings)),
     )
     row = await get_session(db, tenant_id, session_id)
     current = row.required_actions if row is not None else []
@@ -1138,9 +1183,10 @@ async def fail_session(
         session_id,
         changes={"status": "failed", "required_actions": []},
     )
-    data: dict[str, Any] = {"message": message}
     if code:
-        data["code"] = code
+        data = session_error_data(failure_for(code, message), mode="legacy")
+    else:
+        data = {"message": message}
     await persist_event(
         db,
         hub,
@@ -1525,6 +1571,26 @@ async def run_turn(
                             settings=settings,
                             code=exc.code,
                             user_id=user_id,
+                            failure=exc.failure,
+                        )
+                    return
+                except TimeoutError:
+                    abort.set()
+                    await harness.abort(session_id)
+                    async with store.session() as db:
+                        await _fail_turn(
+                            db,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            "Turn timed out",
+                            request_id=request_id,
+                            metrics=metrics,
+                            tracing=tracing,
+                            settings=settings,
+                            code="turn_timeout",
+                            user_id=user_id,
                         )
                     return
                 except OSError as exc:
@@ -1544,10 +1610,6 @@ async def run_turn(
                             user_id=user_id,
                         )
                     return
-                except TimeoutError:
-                    abort.set()
-                    await harness.abort(session_id)
-                    reply, pending, usage = "", [], empty_usage()
                 set_span(
                     tracing,
                     model_span,
@@ -1887,6 +1949,25 @@ async def continue_turn(
                             settings=settings,
                             code=exc.code,
                             user_id=user_id,
+                            failure=exc.failure,
+                        )
+                    return
+                except TimeoutError:
+                    await harness.abort(session_id)
+                    async with store.session() as db:
+                        await _fail_turn(
+                            db,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            "Turn timed out",
+                            request_id=request_id,
+                            metrics=metrics,
+                            tracing=tracing,
+                            settings=settings,
+                            code="turn_timeout",
+                            user_id=user_id,
                         )
                     return
                 except OSError as exc:
@@ -1913,21 +1994,6 @@ async def continue_turn(
                         code=exc.code,
                         status_code=429,
                     ) from exc
-                except TimeoutError:
-                    await harness.abort(session_id)
-                    async with store.session() as db:
-                        await _cancel_turn(
-                            db,
-                            hub,
-                            tenant_id,
-                            session_id,
-                            turn_id,
-                            request_id=request_id,
-                            metrics=metrics,
-                            tracing=tracing,
-                            settings=settings,
-                        )
-                    return
                 set_span(
                     tracing,
                     model_span,

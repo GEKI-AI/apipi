@@ -35,4 +35,5 @@ def test_alembic_revisions_chain() -> None:
         "0013_agent_session_defaults.py",
         "0014_templates.py",
         "0015_session_org.py",
+        "0016_turn_failure.py",
     ]
