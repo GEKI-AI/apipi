@@ -83,6 +83,7 @@ nav:
       - Workers: worker-concepts.md
   - Reference:
       - API: api.md
+      - Agent templates: agent-templates.md
       - Auth: auth.md
       - Environments: environments.md
       - Sandbox workers: workers.md

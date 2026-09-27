@@ -33,6 +33,7 @@ agents until you create one.
 | `GET` | `/v1/agents/{agent_id}` |
 | `POST` | `/v1/agents/{agent_id}` |
 | `DELETE` | `/v1/agents/{agent_id}` |
+| `GET` | `/v1/agents/{agent_id}/export` |
 
 Fields: `id`, `name`, `model`, `instructions`, `idle_ttl`, `metadata`,
 `tools` (function, mcp HTTP, mcp stdio), `session_defaults`,
@@ -77,6 +78,54 @@ availability is not checked until a session is created. See
 [environments](environments.md).
 
 Rejected: `multi_agent`, `tool_search`, `programmatic_tool_calling`.
+
+`GET /v1/agents/{agent_id}/export` downloads a template bundle for that
+agent without storing a template. The zip is the same format as
+[agent templates](agent-templates.md). Secrets and credential values
+are not included.
+
+## Templates
+
+A template is a stored zip of one agent's configuration. It is
+tenant-scoped. Creating an agent from a template always creates a new
+agent. It does not update an existing agent, and deleting the template
+does not change agents already created from it.
+
+| Method | Path |
+| --- | --- |
+| `POST` | `/v1/templates` |
+| `POST` | `/v1/templates/import` |
+| `GET` | `/v1/templates` |
+| `GET` | `/v1/templates/{template_id}` |
+| `GET` | `/v1/templates/{template_id}/download` |
+| `DELETE` | `/v1/templates/{template_id}` |
+| `POST` | `/v1/templates/{template_id}/agents` |
+
+`POST /v1/templates` takes `{"agent_id", "name"?, "description"?}` and
+returns the template object. `POST /v1/templates/import` uploads a zip
+as multipart field `bundle`, with optional form fields `name` and
+`description`. Both return the template object: `id`, `name`,
+`description`, `schema_version`, `visibility` (`tenant` only),
+`created_by`, `size`, `sha256`, `requires`, `warnings`, `created_at`,
+`updated_at`. `created_by` is the auth `user_id` when the plugin sets
+one. It does not grant or deny access.
+
+Download streams the zip when the artifact store is local. When the
+store is S3, the response is `302` to a presigned GET. Another tenant's
+id is `404`.
+
+`POST /v1/templates/{template_id}/agents` takes `secrets`,
+`credentials`, and `overrides` (`name`, `model`). It returns `agent`,
+`skills`, `missing`, and `warnings`. A missing secret or credential
+mapping still creates the agent and lists the name under
+`missing.secrets` or `missing.credentials`. A supplied credential id
+from another tenant is `400`. An unknown model is listed under
+`missing.models` and the agent is still created. An unknown image or
+an invalid size fails the create with `400` and stores no agent, skill,
+or file. Upload of that same bundle succeeds with a warning.
+
+The bundle layout, placeholders, and version rules are in
+[agent templates](agent-templates.md).
 
 A session may pass `agent_id` or an inline `agent`. You must provide
 exactly one of those. Inline config is used for that session only. It

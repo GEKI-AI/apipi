@@ -16,6 +16,7 @@ from apipi.api.health import router as health_router
 from apipi.api.models import router as models_router
 from apipi.api.sessions import router as sessions_router
 from apipi.api.skills import router as skills_router
+from apipi.api.templates import router as templates_router
 from apipi.api.uploads import router as uploads_router
 from apipi.api.usage import router as usage_router
 from apipi.api.vaults import router as vaults_router
@@ -36,6 +37,7 @@ from apipi.services.payload_export import load_payload_sinks
 from apipi.services.runtime import EventHub, FakeHarness
 from apipi.services.sessions import SessionService
 from apipi.services.skill_store import SkillService
+from apipi.services.templates import TemplateService
 from apipi.services.uploads import UploadService
 from apipi.services.usage_export import load_usage_sinks
 from apipi.services.usage_service import UsageService
@@ -75,6 +77,7 @@ class GatewayRouters:
     files: APIRouter
     uploads: APIRouter
     skills: APIRouter
+    templates: APIRouter
     environments: APIRouter
     usage: APIRouter
     models: APIRouter
@@ -135,6 +138,14 @@ class Gateway:
             mcp_stdio=self.mcp_stdio,
         )
         self.agents = AgentService(store, settings)
+        self.templates = TemplateService(
+            store,
+            objects,
+            settings,
+            self.agents,
+            self.files,
+            self.skill_store,
+        )
         self.vaults = VaultService(store, settings)
         self.usage = UsageService(store)
         self.models = ModelsService(settings)
@@ -146,6 +157,7 @@ class Gateway:
             files=files_router,
             uploads=uploads_router,
             skills=skills_router,
+            templates=templates_router,
             environments=environments_router,
             usage=usage_router,
             models=models_router,
@@ -365,6 +377,7 @@ def create_app(
     app.include_router(gateway.routers.files)
     app.include_router(gateway.routers.uploads)
     app.include_router(gateway.routers.skills)
+    app.include_router(gateway.routers.templates)
     app.include_router(gateway.routers.agents)
     app.include_router(gateway.routers.environments)
     app.include_router(gateway.routers.usage)

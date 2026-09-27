@@ -15,11 +15,12 @@ from apipi.gateway.logutil import log_event
 from apipi.store.disposition import content_disposition, download_content_type
 from apipi.worker.pi.dirs import blob_user, sessions_root
 
-Namespace = Literal["artifacts", "files", "skills"]
+Namespace = Literal["artifacts", "files", "skills", "templates"]
 
 NS_ARTIFACTS: Namespace = "artifacts"
 NS_FILES: Namespace = "files"
 NS_SKILLS: Namespace = "skills"
+NS_TEMPLATES: Namespace = "templates"
 
 log = logging.getLogger("apipi")
 
@@ -60,6 +61,10 @@ def file_object_id(tenant_id: uuid.UUID, file_id: str) -> str:
 
 def skill_object_id(tenant_id: uuid.UUID, skill_id: str) -> str:
     return f"{tenant_id}/{_object_id(skill_id)}"
+
+
+def template_object_id(tenant_id: uuid.UUID, template_id: str) -> str:
+    return f"{tenant_id}/{_object_id(template_id)}"
 
 
 def s3_namespace_prefix(settings: Settings, namespace: Namespace) -> str:

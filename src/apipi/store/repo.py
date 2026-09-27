@@ -15,6 +15,7 @@ from apipi.store.models import (
     Item,
     SessionRow,
     SkillRow,
+    TemplateRow,
     Tenant,
     Turn,
     TurnLog,
@@ -1122,6 +1123,77 @@ async def delete_skill(db: AsyncSession, tenant_id: uuid.UUID, skill_id: str) ->
     await db.delete(row)
     await db.flush()
     return True
+
+
+async def create_template(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    template_id: str,
+    created_by: str | None,
+    name: str | None,
+    description: str | None,
+    schema_version: str,
+    object_id: str,
+    size: int,
+    sha256: str,
+) -> TemplateRow:
+    row = TemplateRow(
+        id=template_id,
+        tenant_id=tenant_id,
+        created_by=created_by,
+        name=name,
+        description=description,
+        schema_version=schema_version,
+        visibility="tenant",
+        object_id=object_id,
+        size=size,
+        sha256=sha256,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def get_template(
+    db: AsyncSession, tenant_id: uuid.UUID, template_id: str
+) -> TemplateRow | None:
+    return await db.scalar(
+        select(TemplateRow).where(
+            TemplateRow.tenant_id == tenant_id, TemplateRow.id == template_id
+        )
+    )
+
+
+async def list_templates(db: AsyncSession, tenant_id: uuid.UUID) -> list[TemplateRow]:
+    result = await db.scalars(
+        select(TemplateRow)
+        .where(TemplateRow.tenant_id == tenant_id)
+        .order_by(TemplateRow.created_at)
+    )
+    return list(result)
+
+
+async def delete_template(
+    db: AsyncSession, tenant_id: uuid.UUID, template_id: str
+) -> bool:
+    row = await get_template(db, tenant_id, template_id)
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.flush()
+    return True
+
+
+async def get_credential_by_id(
+    db: AsyncSession, tenant_id: uuid.UUID, credential_id: uuid.UUID
+) -> VaultCredential | None:
+    return await db.scalar(
+        select(VaultCredential).where(
+            VaultCredential.tenant_id == tenant_id,
+            VaultCredential.id == credential_id,
+        )
+    )
 
 
 async def create_upload(

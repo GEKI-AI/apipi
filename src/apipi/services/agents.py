@@ -144,6 +144,7 @@ class AgentService:
         body: AgentWrite,
         *,
         api_key: str | None = None,
+        check_model: bool = True,
     ) -> dict[str, Any]:
         payload = write_payload(body)
         if "idle_ttl" in payload:
@@ -157,7 +158,8 @@ class AgentService:
         validate_defaults_shape(self.settings, payload.get("session_defaults"))
         if is_chat_profile(payload.get("metadata")):
             reject_disallowed_chat_tools(payload.get("tools"))
-        await require_saved_model(self.settings, payload.get("model"), api_key)
+        if check_model:
+            await require_saved_model(self.settings, payload.get("model"), api_key)
         async with self.store.session() as db:
             await require_default_refs(db, tenant_id, payload.get("session_defaults"))
             agent = await create_agent(
