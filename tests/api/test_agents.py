@@ -66,6 +66,7 @@ async def test_agent_crud(client: AsyncClient) -> None:
         "idle_ttl",
         "metadata",
         "tools",
+        "session_defaults",
         "created_at",
         "updated_at",
     }

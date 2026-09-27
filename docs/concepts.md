@@ -48,8 +48,11 @@ process uses SQLite. Several processes share Postgres.
 
 ## Agents
 
-An agent is saved configuration: model, instructions, tools, and
-metadata. You create them; a fresh database has none.
+An agent is saved configuration: model, instructions, tools,
+metadata, and session defaults. You create them; a fresh database has
+none. Session defaults are the environment and vaults that a new
+session inherits unless the request overrides them. See
+[API](api.md#agents).
 
 You create agents with `POST /v1/agents`. They live in the store until
 you delete them. A session may pass `agent_id` or an inline `agent`.
