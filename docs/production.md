@@ -55,6 +55,21 @@ Postgres. Give each process its own SQLite file if you are not sharing.
 | Many concurrent writers on one DB | Single writer / lock |
 | HA, backups, pooling at scale | Operator story |
 
+## Model host
+
+Point `OPENAI_BASE_URL` at an OpenAI-compatible host. Production should
+use `APIPI_MODEL_LIST=probe` (the default). Serve and each worker list
+`/models` once at start. Agent create and model edit use that list.
+Turns do not call `/models`.
+
+Use `APIPI_MODEL_LIST=off` when the host has no `GET /models`. Set
+`APIPI_MODELS` to the ids you allow, or leave it empty to skip the
+check. `turn` lists only when an agent is created or its model is
+edited. If the host later rejects the model, the turn fails with
+`model_host_error` and the session returns to `idle`. A terminal
+failure emits `agent.session.failed`. See
+[failure modes](config.md#failure-modes).
+
 ## Guest image store
 
 Build images once with `apipi images build`, push them with

@@ -18,6 +18,7 @@ from apipi.store.repo import (
     update_agent,
 )
 from apipi.worker.pi.idle import normalize_idle_ttl, validate_idle_metadata
+from apipi.worker.pi.model_host import require_saved_model
 from apipi.worker.pi.sandbox import validate_sandbox_metadata
 from apipi.worker.pi.settings_json import validate_pi_metadata
 
@@ -116,7 +117,13 @@ class AgentService:
         self.store = store
         self.settings = settings
 
-    async def create(self, tenant_id: uuid.UUID, body: AgentWrite) -> dict[str, Any]:
+    async def create(
+        self,
+        tenant_id: uuid.UUID,
+        body: AgentWrite,
+        *,
+        api_key: str | None = None,
+    ) -> dict[str, Any]:
         payload = write_payload(body)
         if "idle_ttl" in payload:
             payload["idle_ttl"] = normalize_idle_ttl(payload.get("idle_ttl"))
@@ -125,6 +132,7 @@ class AgentService:
         validate_sandbox_metadata(self.settings, payload.get("metadata"))
         if is_chat_profile(payload.get("metadata")):
             reject_disallowed_chat_tools(payload.get("tools"))
+        await require_saved_model(self.settings, payload.get("model"), api_key)
         async with self.store.session() as db:
             agent = await create_agent(
                 db,
@@ -151,9 +159,16 @@ class AgentService:
             return agent_body(agent)
 
     async def update(
-        self, tenant_id: uuid.UUID, agent_id: uuid.UUID, body: AgentWrite
+        self,
+        tenant_id: uuid.UUID,
+        agent_id: uuid.UUID,
+        body: AgentWrite,
+        *,
+        api_key: str | None = None,
     ) -> dict[str, Any]:
         payload = write_payload(body)
+        if "model" in payload:
+            await require_saved_model(self.settings, payload.get("model"), api_key)
         async with self.store.session() as db:
             existing = await get_agent(db, tenant_id, agent_id)
             if existing is None:

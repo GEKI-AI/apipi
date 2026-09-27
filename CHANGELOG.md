@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `APIPI_MODEL_LIST=probe|turn|off` (default `probe`). Agent create
+  and model edit check the list. Turns do not. `off` never calls
+  `/models` and uses `APIPI_MODELS`.
+
+### Fixed
+
+- A missing `agent.model` fails the session instead of hanging.
+  If the host later rejects the selected model, the turn fails with
+  `model_host_error`. Worker turn tasks log that failure, including
+  4xx, instead of leaving an unretrieved exception.
+
 ## [0.5.3] - 2026-09-26
 
 ### Added

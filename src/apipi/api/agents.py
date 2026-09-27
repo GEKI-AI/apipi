@@ -3,6 +3,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
+from apipi.api.deps import model_key
 from apipi.gateway.auth import require_tenant
 from apipi.services.agents import AgentWrite
 from apipi.store.models import Tenant
@@ -20,7 +21,7 @@ async def create_saved_agent(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _agents(request).create(tenant.id, body)
+    return await _agents(request).create(tenant.id, body, api_key=model_key(request))
 
 
 @router.get("/v1/agents")
@@ -47,7 +48,9 @@ async def update_saved_agent(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _agents(request).update(tenant.id, agent_id, body)
+    return await _agents(request).update(
+        tenant.id, agent_id, body, api_key=model_key(request)
+    )
 
 
 @router.delete("/v1/agents/{agent_id}")

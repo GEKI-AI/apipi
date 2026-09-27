@@ -1,14 +1,21 @@
+import logging
 import uuid
 from unittest.mock import MagicMock
 
+import pytest
 from tests.support.prom import metric_line
 
 from apipi.config import Settings
+from apipi.gateway.errors import ApiError
 from apipi.gateway.metrics import Metrics
+from apipi.services.runtime import EventHub
+from apipi.store.engine import Store
+from apipi.store.repo import create_session, create_tenant, list_events
 from apipi.worker.hub import (
     WorkerConnection,
     WorkerHub,
     WorkerImage,
+    dispatch_command,
     images_from_message,
 )
 
@@ -114,3 +121,89 @@ def test_observe_labels_workers_by_run_mode() -> None:
     assert metric_line(body, "apipi_workers", run_mode="chat").endswith(" 1.0")
     assert metric_line(body, "apipi_workers", run_mode="microvm").endswith(" 1.0")
     assert metric_line(body, "apipi_worker_leases", run_mode="chat").endswith(" 0.0")
+
+
+async def test_dispatch_reports_escaped_turn(
+    store: Store, caplog: pytest.LogCaptureFixture
+) -> None:
+    async with store.session() as db:
+        tenant = await create_tenant(db, name="t")
+        session = await create_session(db, tenant.id, model="m1")
+        tenant_id = tenant.id
+        session_id = session.id
+    hub = EventHub()
+
+    class Boom:
+        def __init__(self) -> None:
+            self.store = store
+            self.hub = hub
+
+        async def run_turn(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("boom")
+
+    caplog.set_level(logging.ERROR, logger="apipi.worker")
+    await dispatch_command(
+        Boom(),
+        {
+            "op": "turn.start",
+            "session_id": str(session_id),
+            "payload": {"tenant_id": str(tenant_id), "request_id": "req-1"},
+        },
+    )
+    async with store.session() as db:
+        events = await list_events(db, tenant_id, session_id)
+    assert any(event.type == "agent.session.failed" for event in events)
+    assert any(
+        event.type == "agent.session.error"
+        and isinstance(event.data, dict)
+        and event.data.get("code") == "internal"
+        for event in events
+    )
+    assert any(
+        getattr(record, "request_id", None) == "req-1" for record in caplog.records
+    )
+    assert any(
+        getattr(record, "session_id", None) == str(session_id)
+        for record in caplog.records
+    )
+    assert any(
+        getattr(record, "tenant_id", None) == str(tenant_id)
+        for record in caplog.records
+    )
+
+
+async def test_dispatch_logs_4xx_and_does_not_raise(
+    store: Store, caplog: pytest.LogCaptureFixture
+) -> None:
+    async with store.session() as db:
+        tenant = await create_tenant(db, name="t")
+        session = await create_session(db, tenant.id, model="m1")
+        tenant_id = tenant.id
+        session_id = session.id
+
+    class Denied:
+        def __init__(self) -> None:
+            self.store = store
+            self.hub = EventHub()
+
+        async def run_turn(self, *_args: object, **_kwargs: object) -> None:
+            raise ApiError(
+                "invalid_request",
+                "Model host /models is unreachable",
+                code="model_host_unreachable",
+                status_code=400,
+            )
+
+    caplog.set_level(logging.ERROR, logger="apipi.worker")
+    await dispatch_command(
+        Denied(),
+        {
+            "op": "turn.start",
+            "session_id": str(session_id),
+            "payload": {"tenant_id": str(tenant_id), "request_id": "req-2"},
+        },
+    )
+    assert any(
+        getattr(record, "error_code", None) == "model_host_unreachable"
+        for record in caplog.records
+    )

@@ -70,6 +70,7 @@ from apipi.worker.pi.idle import (
     normalize_idle_ttl,
     validate_idle_metadata,
 )
+from apipi.worker.pi.model_host import require_model
 from apipi.worker.pi.sandbox import (
     mem_mib_for_size,
     merge_playwright,
@@ -599,6 +600,7 @@ class SessionService:
             self.execution.put_stdio(session_id, stdio)
             text = input_text(input)
             if text:
+                require_model(model)
                 self._require_capacity(
                     session_id,
                     tenant_id,
@@ -651,6 +653,9 @@ class SessionService:
                             else:
                                 message = "Turn failed"
                             async with self.store.session() as db:
+                                row = await get_session(db, tenant_id, session_id)
+                                if row is not None and row.status == "failed":
+                                    return
                                 await fail_session(
                                     db,
                                     self.event_hub,

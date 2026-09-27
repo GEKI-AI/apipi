@@ -56,8 +56,10 @@ You can:
 - Authenticate with `Authorization: Bearer` on every route except
   `/health` and `/metrics`.
 
-`agent.model` must exist on the model host. Missing model is
-`model_required`. Unknown id is `model_not_found`.
+`agent.model` is checked against the model list when an agent is
+created or its model is edited. Missing model is `model_required`.
+Unknown id is `model_not_found`. A later turn does not repeat that
+check.
 
 ## Same shape, different backend
 
@@ -144,7 +146,9 @@ yours.
 | Known OpenAI field we skip | `not_implemented` | The field name (`multi_agent`, `files`, …) |
 | Missing or bad bearer | `invalid_request` | `unauthorized` (`401`) |
 | Id on another tenant | `invalid_request` | `not_found` (`404`) |
-| Unknown `agent.model` | `invalid_request` | `model_not_found` |
+| Unknown `agent.model` on agent write | `invalid_request` | `model_not_found` (`400`) |
+| Model list unreachable on agent write | `invalid_request` | `model_host_unreachable` (`400`) or `model_host_unauthorized` (`401`) |
+| Host rejects the model during a turn | `api_error` | `model_host_error` (`502` on non-stream create; session stays `idle`) |
 | Known image, no worker has it | `api_error` | `image_unavailable` (`503`) |
 | Nested `events` length not 1, or mixed flat+nested body | `invalid_request` | `validation_error` |
 | Non-text input parts (for example `input_image`) | `not_implemented` | The part type |

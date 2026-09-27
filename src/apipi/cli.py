@@ -104,6 +104,7 @@ def prepare_worker(
     if vault_master_key_unset(resolved.vault_master_key):
         log.warning(VAULT_MASTER_KEY_UNSET)
     require_run_mode(resolved.run_mode, resolved)
+    probe_model_host(resolved)
     probe_run_mode(resolved)
     reject_prompt_body_logging()
     configure_logging(level=resolved.log_level, format=resolved.log_format)

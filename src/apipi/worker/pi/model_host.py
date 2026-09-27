@@ -11,6 +11,49 @@ from apipi.worker.pi.dirs import sessions_root
 from apipi.worker.pi.version import PINNED_PI
 
 PI_PROVIDER = "apipi"
+_listed: list[str] | None = None
+
+
+def clear_model_cache() -> None:
+    global _listed
+    _listed = None
+
+
+def remember_models(ids: list[str]) -> None:
+    global _listed
+    _listed = list(ids)
+
+
+def _headers(api_key: str | None) -> dict[str, str]:
+    if not api_key:
+        return {}
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+def _unreachable() -> ApiError:
+    return ApiError(
+        "invalid_request",
+        "Model host /models is unreachable",
+        code="model_host_unreachable",
+        status_code=400,
+    )
+
+
+def _unauthorized() -> ApiError:
+    return ApiError(
+        "invalid_request",
+        "Model host rejected the API key",
+        code="model_host_unauthorized",
+        status_code=401,
+    )
+
+
+def _status_error(status: int) -> ApiError | None:
+    if status in {401, 403}:
+        return _unauthorized()
+    if status >= 400:
+        return _unreachable()
+    return None
 
 
 def models_url(base_url: str) -> str:
@@ -39,11 +82,10 @@ def parse_model_ids(payload: object) -> list[str]:
 
 
 def fetch_model_ids(base_url: str, api_key: str | None = None) -> list[str]:
-    headers: dict[str, str] = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
     try:
-        response = httpx.get(models_url(base_url), headers=headers, timeout=10.0)
+        response = httpx.get(
+            models_url(base_url), headers=_headers(api_key), timeout=10.0
+        )
     except httpx.HTTPError as exc:
         raise ConfigError("OPENAI_BASE_URL /models is unreachable") from exc
     if response.status_code in {401, 403}:
@@ -57,46 +99,46 @@ def fetch_model_ids(base_url: str, api_key: str | None = None) -> list[str]:
     return parse_model_ids(payload)
 
 
-def fetch_models_json(base_url: str, api_key: str | None = None) -> object:
-    headers: dict[str, str] = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+async def fetch_models_json(base_url: str, api_key: str | None = None) -> object:
     try:
-        response = httpx.get(models_url(base_url), headers=headers, timeout=10.0)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(models_url(base_url), headers=_headers(api_key))
     except httpx.HTTPError as exc:
-        raise ApiError(
-            "invalid_request",
-            "Model host /models is unreachable",
-            code="model_host_unreachable",
-            status_code=400,
-        ) from exc
-    if response.status_code in {401, 403}:
-        raise ApiError(
-            "invalid_request",
-            "Model host rejected the API key",
-            code="model_host_unauthorized",
-            status_code=401,
-        )
-    if response.status_code >= 400:
-        raise ApiError(
-            "invalid_request",
-            "Model host /models is unreachable",
-            code="model_host_unreachable",
-            status_code=400,
-        )
+        raise _unreachable() from exc
+    error = _status_error(response.status_code)
+    if error is not None:
+        raise error
     try:
         return response.json()
     except ValueError as exc:
-        raise ApiError(
-            "invalid_request",
-            "Model host /models is unreachable",
-            code="model_host_unreachable",
-            status_code=400,
-        ) from exc
+        raise _unreachable() from exc
 
 
-def listed_models(base_url: str, api_key: str | None = None) -> list[str]:
-    return parse_model_ids(fetch_models_json(base_url, api_key))
+async def listed_models(base_url: str, api_key: str | None = None) -> list[str]:
+    return parse_model_ids(await fetch_models_json(base_url, api_key))
+
+
+async def require_saved_model(
+    settings: Settings, model: str | None, api_key: str | None = None
+) -> None:
+    if not isinstance(model, str) or not model.strip():
+        return
+    name = model.strip()
+    if settings.model_list == "off":
+        if settings.models:
+            require_listed_model(name, list(settings.models))
+        return
+    if settings.model_list == "probe" and _listed is not None:
+        require_listed_model(name, _listed)
+        return
+    if not settings.model_base_url:
+        return
+    ids = await listed_models(
+        settings.model_base_url, api_key or settings.model_api_key_overwrite
+    )
+    if settings.model_list == "probe":
+        remember_models(ids)
+    require_listed_model(name, ids)
 
 
 def require_model(model: str | None) -> str:
@@ -132,6 +174,12 @@ def _model_row(model_id: str, settings: Settings) -> dict[str, object]:
     if settings.pi_thinking != "off":
         row["reasoning"] = True
     return row
+
+
+def note_pi_model(settings: Settings, model: str) -> None:
+    path = pi_agent_dir(settings) / "models.json"
+    if not path.is_file():
+        write_pi_models_json(settings, [model])
 
 
 def write_pi_models_json(settings: Settings, model_ids: list[str]) -> Path:
@@ -224,5 +272,11 @@ def probe_model_host(settings: Settings) -> None:
     if not settings.model_base_url:
         raise ConfigError("OPENAI_BASE_URL is required")
     require_pinned_pi(settings)
+    if settings.model_list == "turn":
+        return
+    if settings.model_list == "off":
+        write_pi_models_json(settings, list(settings.models))
+        return
     ids = fetch_model_ids(settings.model_base_url, settings.model_api_key_overwrite)
+    remember_models(ids)
     write_pi_models_json(settings, ids)

@@ -123,7 +123,7 @@ are never logged.
 | `turn.failed` | error | A turn failed. `error_code` is the public turn code. |
 | `api.error` | error | HTTP 5xx or an unexpected exception. |
 | `sandbox.boot.failed` | error | MicroVM jailer or vsock attach failed. |
-| `worker.command.failed` | error | A worker command raised after assign. |
+| `worker.command.failed` | error | A worker command raised. Logged for 4xx and 5xx, with `session_id`, `tenant_id`, and `request_id`. Turn commands also emit a session failure event unless the session is already `failed`. |
 | `worker.assign.failed` | warning | No worker capacity (`capacity` or `capacity_tenant`). |
 | `worker.lease.expired` | warning | A worker lease TTL elapsed. |
 | `usage.export.dropped` | warning | Usage HTTPS export or sink dropped the event. |

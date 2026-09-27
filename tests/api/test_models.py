@@ -1,12 +1,12 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from apipi.config import Settings
 from apipi.gateway import create_app
+from apipi.gateway.errors import ApiError
 from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
@@ -50,14 +50,12 @@ async def test_models_requires_bearer(model_client: AsyncClient) -> None:
 async def test_models_proxies_host(
     model_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_get(url: str, **kwargs: object) -> httpx.Response:
-        assert url == "http://model.test/v1/models"
-        headers = kwargs.get("headers")
-        assert isinstance(headers, dict)
-        assert headers["Authorization"] == "Bearer t"
-        return httpx.Response(200, json=_PAYLOAD)
+    async def fake_fetch(base_url: str, api_key: str | None = None) -> object:
+        assert base_url == "http://model.test/v1"
+        assert api_key == "t"
+        return _PAYLOAD
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
+    monkeypatch.setattr("apipi.services.models.fetch_models_json", fake_fetch)
     response = await model_client.get("/v1/models", headers=_auth("t"))
     assert response.status_code == 200
     assert response.json() == _PAYLOAD
@@ -74,13 +72,12 @@ async def test_models_uses_overwrite_key(
         model_api_key_overwrite="operator-key",
     )
 
-    def fake_get(url: str, **kwargs: object) -> httpx.Response:
-        headers = kwargs.get("headers")
-        assert isinstance(headers, dict)
-        assert headers["Authorization"] == "Bearer operator-key"
-        return httpx.Response(200, json=_PAYLOAD)
+    async def fake_fetch(base_url: str, api_key: str | None = None) -> object:
+        del base_url
+        assert api_key == "operator-key"
+        return _PAYLOAD
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
+    monkeypatch.setattr("apipi.services.models.fetch_models_json", fake_fetch)
     app = create_app(settings, store=store, harness=FakeHarness())
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -93,10 +90,16 @@ async def test_models_uses_overwrite_key(
 async def test_models_host_unauthorized(
     model_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        "apipi.worker.pi.model_host.httpx.get",
-        lambda *_args, **_kwargs: httpx.Response(401, json={"error": "no"}),
-    )
+    async def fake_fetch(base_url: str, api_key: str | None = None) -> object:
+        del base_url, api_key
+        raise ApiError(
+            "invalid_request",
+            "Model host rejected the API key",
+            code="model_host_unauthorized",
+            status_code=401,
+        )
+
+    monkeypatch.setattr("apipi.services.models.fetch_models_json", fake_fetch)
     response = await model_client.get("/v1/models", headers=_auth("t"))
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "model_host_unauthorized"
@@ -105,10 +108,16 @@ async def test_models_host_unauthorized(
 async def test_models_host_unreachable(
     model_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def boom(*_args: object, **_kwargs: object) -> httpx.Response:
-        raise httpx.ConnectError("down")
+    async def boom(base_url: str, api_key: str | None = None) -> object:
+        del base_url, api_key
+        raise ApiError(
+            "invalid_request",
+            "Model host /models is unreachable",
+            code="model_host_unreachable",
+            status_code=400,
+        )
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", boom)
+    monkeypatch.setattr("apipi.services.models.fetch_models_json", boom)
     response = await model_client.get("/v1/models", headers=_auth("t"))
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "model_host_unreachable"

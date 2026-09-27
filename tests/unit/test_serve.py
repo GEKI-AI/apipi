@@ -177,6 +177,22 @@ def test_worker_microvm_exits_without_kvm(monkeypatch: pytest.MonkeyPatch) -> No
     assert main(["worker"]) == 1
 
 
+def test_prepare_worker_probes_model_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[Settings] = []
+    monkeypatch.setattr("apipi.cli.probe_model_host", lambda item: seen.append(item))
+    monkeypatch.setattr("apipi.cli.probe_run_mode", lambda _item: None)
+    prepare_worker(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="none",
+            worker_token="secret",
+            model_base_url="http://model.test/v1",
+        )
+    )
+    assert seen
+    assert seen[0].model_base_url == "http://model.test/v1"
+
+
 def test_prepare_worker_probes_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
     probed: list[str] = []
 
