@@ -398,6 +398,7 @@ def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
         )
         assert any(name.endswith("guest.py") for name in names)
         assert ".pi/agent/extensions/apipi-mcp.ts" in names
+        assert ".pi/agent/extensions/mcp_client.mjs" in names
         env = tar.extractfile(".apipi/env")
         assert env is not None
         text = env.read().decode()

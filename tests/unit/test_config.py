@@ -415,11 +415,11 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.node_memory_mb() == 16384
     assert settings.sandbox_default_size == "S"
     assert settings.sandbox_auto_playwright is True
-    assert settings.sandbox_playwright_mcp == "@playwright/mcp@latest"
     assert settings.microvm_mem_mib == 512
     assert settings.sandbox_m_mem_mib == 1024
     assert settings.sandbox_l_mem_mib == 2048
     assert settings.microvm_vcpus == 1
+    assert settings.sandbox_l_vcpus == 2
     assert settings.microvm_egress_allowlist is False
     assert settings.microvm_egress_hosts == ""
     assert settings.microvm_egress_mbit == 50
@@ -664,6 +664,7 @@ def test_nested_toml_sandbox_and_pi(
         "m_mem_mib = 1536\n"
         "l_mem_mib = 3072\n"
         "vcpus = 2\n"
+        "l_vcpus = 4\n"
         "[sandbox.network]\n"
         "egress_allowlist = false\n"
         'egress_hosts = "mcp.example.com"\n'
@@ -673,7 +674,6 @@ def test_nested_toml_sandbox_and_pi(
         'self_hosted = "0"\n'
         "[sandbox.browser]\n"
         "auto_playwright = false\n"
-        'playwright_mcp = "@playwright/mcp@1.2.3"\n'
     )
     settings = load_settings()
     assert settings.max_sessions == 8
@@ -692,13 +692,13 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.sandbox_m_mem_mib == 1536
     assert settings.sandbox_l_mem_mib == 3072
     assert settings.microvm_vcpus == 2
+    assert settings.sandbox_l_vcpus == 4
     assert settings.microvm_egress_allowlist is False
     assert settings.microvm_egress_hosts == "mcp.example.com"
     assert settings.microvm_egress_mbit == 25
     assert settings.workspace_ttl == timedelta(minutes=45)
     assert settings.sandbox_ttl_self_hosted is None
     assert settings.sandbox_auto_playwright is False
-    assert settings.sandbox_playwright_mcp == "@playwright/mcp@1.2.3"
 
 
 def test_nested_toml_platform_prompt(
@@ -909,6 +909,21 @@ def test_removed_toml_keys_are_ignored(
         "sidekick_api_key",
     ):
         assert f"{key} was removed in 0.7.0 and is ignored" in text
+
+
+def test_removed_playwright_mcp_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "[sandbox.browser]\n"
+        'playwright_mcp = "@playwright/mcp@1.2.3"\n'
+    )
+    caplog.set_level("WARNING", logger="apipi")
+    loaded = load_settings()
+    assert not hasattr(loaded, "sandbox_playwright_mcp")
+    assert "playwright_mcp was removed and is ignored" in caplog.text
 
 
 def test_pi_thinking_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

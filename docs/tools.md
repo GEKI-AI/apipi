@@ -47,7 +47,7 @@ HTTP and stdio MCP use OpenAI's nested `transport` shape:
   "transport": {
     "type": "stdio",
     "command": "npx",
-    "args": ["-y", "@playwright/mcp@latest", "--headless"]
+    "args": ["-y", "@playwright/mcp@0.0.82", "--headless"]
   }
 }
 ```
@@ -62,13 +62,19 @@ with `${ENV}` still expand on the host. Stdio servers start next to
 Pi: on the host in `none` mode, and inside the same guest in
 `microvm` mode. Pi does not speak MCP by itself. ApiPi loads a Pi
 extension that starts each stdio server, lists its tools, and
-registers them on Pi as `mcp_<server_label>_<tool>`. If a listed
-stdio server cannot start, Pi exits instead of running without those
-tools. Optional `transport.cwd` is the process working
-directory. Stdio credentials stay in environment variables, not in
-git. Bash that tries to install Playwright or browser binaries is
-blocked. A bash call with no `timeout` is capped at 120 seconds so a
-stuck install cannot hold the turn until `APIPI_TURN_TIMEOUT`.
+registers them on Pi as `mcp_<server_label>_<tool>`. Optional
+`transport.cwd` is the process working directory. Stdio credentials
+stay in environment variables, not in git. The extension writes
+newline-delimited JSON, which is the MCP stdio transport. A server
+that only accepts `Content-Length` frames will not attach. If a
+listed stdio server cannot start, the turn continues without that
+server's tools and the worker logs `pi.extension_error` with the
+server label, the phase (`spawn`, `initialize`, or `tools/list`),
+and the error. Bash that tries to
+install Playwright or browser binaries is blocked only after
+Playwright MCP tools have registered. A bash call with no `timeout`
+is capped at 120 seconds so a stuck install cannot hold the turn
+until `APIPI_TURN_TIMEOUT`.
 
 Search goes through MCP.
 
@@ -91,9 +97,12 @@ rootfs with `apipi install --microvm --image browser`. You do not
 need to list the server on the agent. A caller-supplied Playwright
 MCP tool is not duplicated. Turn auto-inject off with
 `APIPI_SANDBOX_AUTO_PLAYWRIGHT=false` if you want that image and its
-RAM but manual MCP only. The platform prompt names the sandbox size.
-It does not name Playwright MCP tools. Those names are registered
-only after the guest attach succeeds. Save screenshots under
+RAM but manual MCP only. Pin a caller-supplied server (the example
+above uses `@playwright/mcp@0.0.82`, the same pin as the browser
+image). On the `browser` image you do not need that tool: auto-inject
+attaches the vendored server. Playwright guidance is added only after
+those tools register. The platform prompt never claims Chromium or
+Playwright from sandbox size alone. Save screenshots under
 `outputs/`.
 
 The browser follows Pi (`none` or `microvm`). Inside a `microvm`,

@@ -33,7 +33,9 @@ from apipi.mcp.stdio import McpStdioServer
 from apipi.worker.pi.dirs import PI_SESSION_REL, pi_session_file
 from apipi.worker.pi.extension import (
     GUEST_MCP_EXTENSION,
+    MCP_CLIENT_REL,
     MCP_EXTENSION_REL,
+    mcp_client_source,
     mcp_extension_source,
 )
 from apipi.worker.pi.model_host import pi_agent_dir
@@ -445,6 +447,13 @@ async def probe_microvm(settings: Settings) -> None:
         await proc.terminate()
 
 
+def guest_vcpus(settings: Settings, mem_mib: int | None) -> int:
+    from apipi.worker.pi.sandbox import size_for_mem
+
+    guest_mem = mem_mib if mem_mib is not None else settings.microvm_mem_mib
+    return settings.sandbox_vcpus(size_for_mem(settings, guest_mem))
+
+
 def guest_cid(vm_id: str) -> int:
     return uuid.UUID(vm_id).int % (2**32 - 3) + 3
 
@@ -766,6 +775,7 @@ def write_workspace_image(
             _add_bytes(tar, ".pi/agent/settings.json", settings_json, mode=0o644)
         if system_md is not None:
             _add_bytes(tar, ".pi/agent/SYSTEM.md", system_md, mode=0o644)
+        _add_bytes(tar, MCP_CLIENT_REL, mcp_client_source(), mode=0o644)
         _add_bytes(tar, MCP_EXTENSION_REL, mcp_extension_source(), mode=0o644)
         _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
         if shell:
@@ -1491,7 +1501,7 @@ async def start_microvm(
             cid=guest_cid(vm_id),
             net=net,
             mem_mib=guest_mem,
-            vcpus=settings.microvm_vcpus,
+            vcpus=guest_vcpus(settings, guest_mem),
         )
         (chroot_dir / "config.json").write_text(json.dumps(config))
         argv = jailer_argv(

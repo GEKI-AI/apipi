@@ -61,3 +61,23 @@ store. See [install](../docs/install.md).
 
 Do not edit `build.sh` for one image. Shared install steps belong there.
 Package lists belong in the recipe.
+
+## Check the browser image
+
+This is a manual developer check. It is not part of `./scripts/check`,
+GitHub CI, or `images.yml`. Build the image first.
+
+```
+apipi images check browser
+apipi images check browser --boot
+```
+
+The first command loop-mounts `rootfs-browser.ext4` (or `--rootfs`)
+and runs `chromium-browser --headless --no-sandbox --dump-dom about:blank`
+plus the vendored Playwright MCP `cli.js --help`. It needs root or
+sudo for the mount.
+
+`--boot` also needs KVM, Firecracker, and sudo for the TAP device. It
+boots the browser image at size `L` with auto-inject, checks that
+`mcp_playwright_*` tools registered, opens a `data:` URL, and writes
+a screenshot under `outputs/`. It fails if Pi logs `pi.extension_error`.

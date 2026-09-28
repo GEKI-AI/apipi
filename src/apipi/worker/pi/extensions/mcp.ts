@@ -1,20 +1,29 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { McpClient } from "./mcp_client.mjs";
 
 const DEFAULT_BASH_TIMEOUT_SEC = 120;
-const MCP_TIMEOUT_MS = 120_000;
 const ATTACH_TIMEOUT_MS = 15_000;
 const INSTALL_RE =
   /\b(?:npm|pnpm|yarn|bun)\s+(?:install|i|add)\b[\s\S]*\bplaywright\b|\b(?:npx\s+)?playwright\s+install\b|\bnpm\s+exec\s+playwright\s+install\b/i;
+const CHECK_URL = "data:text/html,<title>apipi</title><p>ok</p>";
 
-type JsonRpc = {
-  jsonrpc?: string;
-  id?: number;
-  method?: string;
-  params?: unknown;
-  result?: unknown;
-  error?: { message?: string };
+let playwrightTools = false;
+
+type StdioServer = {
+  label: string;
+  command: string;
+  args: string[];
+  cwd?: string;
+};
+
+type ListedTool = {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
 };
 
 function sanitize(raw: string): string {
@@ -22,115 +31,11 @@ function sanitize(raw: string): string {
   return cleaned || "tool";
 }
 
-function encode(msg: object): Buffer {
-  const json = JSON.stringify(msg);
-  return Buffer.from(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`);
-}
-
-class McpClient {
-  private buf = Buffer.alloc(0);
-  private nextId = 1;
-  private readonly pending = new Map<
-    number,
-    { resolve: (value: unknown) => void; reject: (err: Error) => void }
-  >();
-
-  constructor(private readonly proc: ChildProcessWithoutNullStreams) {
-    proc.stdout.on("data", (chunk: Buffer) => {
-      this.buf = Buffer.concat([this.buf, chunk]);
-      this.drain();
-    });
-    proc.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString("utf8").trim();
-      if (text) {
-        console.error(`mcp: ${text.slice(0, 500)}`);
-      }
-    });
-    proc.on("exit", () => {
-      for (const [, waiter] of this.pending) {
-        waiter.reject(new Error("mcp process exited"));
-      }
-      this.pending.clear();
-    });
-  }
-
-  private drain(): void {
-    while (true) {
-      const msg = this.readOne();
-      if (msg === null) {
-        return;
-      }
-      if (msg.id == null) {
-        continue;
-      }
-      const waiter = this.pending.get(msg.id);
-      if (waiter === undefined) {
-        continue;
-      }
-      this.pending.delete(msg.id);
-      if (msg.error) {
-        waiter.reject(new Error(msg.error.message || "mcp error"));
-      } else {
-        waiter.resolve(msg.result);
-      }
-    }
-  }
-
-  private readOne(): JsonRpc | null {
-    const headerEnd = this.buf.indexOf("\r\n\r\n");
-    if (headerEnd >= 0) {
-      const header = this.buf.subarray(0, headerEnd).toString("utf8");
-      const match = /Content-Length:\s*(\d+)/i.exec(header);
-      if (match) {
-        const len = Number(match[1]);
-        const start = headerEnd + 4;
-        if (this.buf.length < start + len) {
-          return null;
-        }
-        const json = this.buf.subarray(start, start + len).toString("utf8");
-        this.buf = this.buf.subarray(start + len);
-        return JSON.parse(json) as JsonRpc;
-      }
-    }
-    const nl = this.buf.indexOf(0x0a);
-    if (nl < 0) {
-      return null;
-    }
-    const line = this.buf.subarray(0, nl).toString("utf8").trim();
-    this.buf = this.buf.subarray(nl + 1);
-    if (!line.startsWith("{")) {
-      return this.readOne();
-    }
-    return JSON.parse(line) as JsonRpc;
-  }
-
-  request(method: string, params?: unknown, timeoutMs = MCP_TIMEOUT_MS): Promise<unknown> {
-    const id = this.nextId++;
-    const msg = { jsonrpc: "2.0", id, method, params };
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (this.pending.has(id)) {
-          this.pending.delete(id);
-          reject(new Error(`mcp timeout ${method}`));
-        }
-      }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-      });
-      this.proc.stdin.write(encode(msg));
-    });
-  }
-
-  notify(method: string, params?: unknown): void {
-    this.proc.stdin.write(encode({ jsonrpc: "2.0", method, params }));
-  }
+function attachError(label: string, phase: string, err: unknown): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  return new Error(
+    `mcp attach failed server=${label} phase=${phase} error=${message}`,
+  );
 }
 
 function schemaOf(inputSchema: unknown) {
@@ -140,7 +45,10 @@ function schemaOf(inputSchema: unknown) {
   return Type.Object({}, { additionalProperties: true });
 }
 
-function contentOf(result: unknown): { content: { type: "text"; text: string }[]; isError?: boolean } {
+function contentOf(result: unknown): {
+  content: { type: "text"; text: string }[];
+  isError?: boolean;
+} {
   if (!result || typeof result !== "object") {
     return { content: [{ type: "text", text: JSON.stringify(result ?? "") }] };
   }
@@ -169,7 +77,7 @@ function contentOf(result: unknown): { content: { type: "text"; text: string }[]
   return { content: parts, isError: raw.isError };
 }
 
-function stdioServers(): Array<{ label: string; command: string; args: string[]; cwd?: string }> {
+function stdioServers(): StdioServer[] {
   const labels = process.env.APIPI_MCP_STDIO;
   if (!labels) {
     return [];
@@ -189,56 +97,7 @@ function stdioServers(): Array<{ label: string; command: string; args: string[];
   return servers;
 }
 
-function waitForSpawn(
-  proc: ChildProcessWithoutNullStreams,
-  timeoutMs = ATTACH_TIMEOUT_MS,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let last = Date.now();
-    let saw = false;
-    let done = false;
-    const finish = (err?: Error) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      clearInterval(timer);
-      proc.stderr.off("data", onErr);
-      proc.stdout.off("data", onErr);
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve();
-    };
-    const onErr = (chunk: Buffer) => {
-      if (chunk.length) {
-        saw = true;
-        last = Date.now();
-      }
-    };
-    proc.stderr.on("data", onErr);
-    proc.stdout.on("data", onErr);
-    const timer = setInterval(() => {
-      if (proc.exitCode !== null) {
-        finish(new Error("mcp process exited"));
-        return;
-      }
-      const idle = Date.now() - last;
-      if ((saw && idle >= 2000) || idle >= Math.min(5000, timeoutMs)) {
-        finish();
-      }
-    }, 200);
-    setTimeout(() => finish(), timeoutMs);
-  });
-}
-
-function startServer(server: {
-  label: string;
-  command: string;
-  args: string[];
-  cwd?: string;
-}): Promise<ChildProcessWithoutNullStreams> {
+function startServer(server: StdioServer): Promise<ChildProcessWithoutNullStreams> {
   return new Promise((resolve, reject) => {
     const proc = spawn(server.command, server.args, {
       cwd: server.cwd,
@@ -280,7 +139,7 @@ function startServer(server: {
   });
 }
 
-function warmupPackage(pkg: string, timeoutMs = ATTACH_TIMEOUT_MS): Promise<void> {
+function warmupPackage(pkg: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn("npx", ["-y", `--package=${pkg}`, "node", "-e", "process.exit(0)"], {
       env: {
@@ -315,7 +174,7 @@ function warmupPackage(pkg: string, timeoutMs = ATTACH_TIMEOUT_MS): Promise<void
   });
 }
 
-function isPlaywright(server: { label: string; command: string; args: string[] }): boolean {
+function isPlaywright(server: StdioServer): boolean {
   if (server.label.toLowerCase() === "playwright") {
     return true;
   }
@@ -323,21 +182,112 @@ function isPlaywright(server: { label: string; command: string; args: string[] }
   return blob.includes("playwright/mcp") || blob.includes("playwright-mcp");
 }
 
-async function attachStdio(pi: ExtensionAPI): Promise<void> {
+function chromiumPath(server: StdioServer): string | null {
+  const blob = [server.command, ...server.args].join(" ");
+  if (blob.includes("/usr/bin/chromium-browser")) {
+    return "/usr/bin/chromium-browser";
+  }
+  return null;
+}
+
+function guidelines(server: StdioServer, name: string, toolName: string, first: boolean): string[] {
+  const lines = [
+    `Use ${name} for ${server.label} MCP (${toolName}). Do not reimplement it with bash.`,
+  ];
+  if (!first || !isPlaywright(server)) {
+    return lines;
+  }
+  const path = chromiumPath(server);
+  const where = path ? `Chromium is at ${path}. ` : "";
+  lines.push(
+    `${where}Drive the browser only through these MCP tools. Save screenshots under outputs/. Do not npm install playwright or download browsers.`,
+  );
+  return lines;
+}
+
+function workspaceRoot(): string {
+  return process.env.HOME || "/workspace";
+}
+
+function writeCheckReport(report: {
+  tools: string[];
+  screenshot: string | null;
+  error: string | null;
+}): void {
+  const dir = join(workspaceRoot(), "outputs");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "mcp-check.json"), `${JSON.stringify(report)}\n`);
+}
+
+async function runPlaywrightCheck(
+  client: McpClient,
+  server: StdioServer,
+  tools: ListedTool[],
+): Promise<void> {
+  const names = tools.map(
+    (tool) => `mcp_${sanitize(server.label)}_${sanitize(tool.name)}`,
+  );
+  const report = {
+    tools: names,
+    screenshot: null as string | null,
+    error: null as string | null,
+  };
+  try {
+    const nav = tools.find((tool) => tool.name === "browser_navigate");
+    const shot = tools.find((tool) => tool.name === "browser_take_screenshot");
+    if (!nav || !shot) {
+      throw new Error("missing browser_navigate or browser_take_screenshot");
+    }
+    await client.request("tools/call", {
+      name: nav.name,
+      arguments: { url: CHECK_URL },
+    });
+    await client.request("tools/call", {
+      name: shot.name,
+      arguments: { filename: "check.png" },
+    });
+    report.screenshot = "outputs/check.png";
+  } catch (err) {
+    report.error = err instanceof Error ? err.message : String(err);
+  }
+  writeCheckReport(report);
+  if (report.error) {
+    throw new Error(report.error);
+  }
+}
+
+async function attachStdio(
+  pi: ExtensionAPI,
+): Promise<Array<{ server: StdioServer; client: McpClient; tools: ListedTool[] }>> {
   const deadline = Date.now() + ATTACH_TIMEOUT_MS;
   const remaining = (): number => Math.max(1, deadline - Date.now());
+  const playwright: Array<{ server: StdioServer; client: McpClient; tools: ListedTool[] }> =
+    [];
   for (const server of stdioServers()) {
     if (Date.now() >= deadline) {
-      throw new Error("mcp attach timeout");
+      throw attachError(server.label, "spawn", new Error("mcp attach timeout"));
     }
     const pkg = server.args.find((item) => item.includes("mcp") || item.startsWith("@"));
     if (server.command === "npx" && pkg) {
-      await warmupPackage(pkg, remaining());
+      try {
+        await warmupPackage(pkg, remaining());
+      } catch (err) {
+        throw attachError(server.label, "spawn", err);
+      }
     }
-    const proc = await startServer(server);
-    await waitForSpawn(proc, remaining());
+    let proc: ChildProcessWithoutNullStreams;
+    try {
+      proc = await startServer(server);
+    } catch (err) {
+      throw attachError(server.label, "spawn", err);
+    }
     const client = new McpClient(proc);
-    let last = new Error(`mcp ${server.label} initialize failed`);
+    let last: Error = attachError(
+      server.label,
+      "initialize",
+      new Error(`mcp ${server.label} initialize failed`),
+    );
+    let ready = false;
     while (Date.now() < deadline) {
       try {
         await client.request(
@@ -349,35 +299,36 @@ async function attachStdio(pi: ExtensionAPI): Promise<void> {
           },
           Math.min(8000, remaining()),
         );
-        last = new Error("");
+        ready = true;
         break;
       } catch (err) {
-        last = err instanceof Error ? err : new Error(String(err));
+        last = attachError(server.label, "initialize", err);
       }
     }
-    if (last.message) {
+    if (!ready) {
       proc.kill();
       throw last;
     }
     client.notify("notifications/initialized");
-    const listed = (await client.request("tools/list", {}, remaining())) as {
-      tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
-    };
-    for (const tool of listed.tools ?? []) {
+    let listed: { tools?: ListedTool[] };
+    try {
+      listed = (await client.request("tools/list", {}, remaining())) as {
+        tools?: ListedTool[];
+      };
+    } catch (err) {
+      proc.kill();
+      throw attachError(server.label, "tools/list", err);
+    }
+    const tools = listed.tools ?? [];
+    let first = true;
+    for (const tool of tools) {
       const name = `mcp_${sanitize(server.label)}_${sanitize(tool.name)}`;
       pi.registerTool({
         name,
         label: `${server.label} ${tool.name}`,
         description: tool.description || `${server.label} MCP tool ${tool.name}`,
         promptSnippet: tool.description || `${server.label} ${tool.name}`,
-        promptGuidelines: isPlaywright(server)
-          ? [
-              `Use ${name} for ${server.label} MCP (${tool.name}). Do not reimplement it with bash.`,
-              "Chromium is at /usr/bin/chromium-browser. Drive it only through these MCP tools. Save screenshots under outputs/. Do not npm install playwright or download browsers.",
-            ]
-          : [
-              `Use ${name} for ${server.label} MCP (${tool.name}). Do not reimplement it with bash.`,
-            ],
+        promptGuidelines: guidelines(server, name, tool.name, first),
         parameters: schemaOf(tool.inputSchema),
         async execute(_toolCallId, params, signal) {
           if (signal?.aborted) {
@@ -390,8 +341,14 @@ async function attachStdio(pi: ExtensionAPI): Promise<void> {
           return contentOf(result);
         },
       });
+      first = false;
+    }
+    if (isPlaywright(server) && tools.length > 0) {
+      playwrightTools = true;
+      playwright.push({ server, client, tools });
     }
   }
+  return playwright;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -401,11 +358,11 @@ export default function (pi: ExtensionAPI) {
     }
     const input = event.input as { command?: string; timeout?: number };
     const command = input.command ?? "";
-    if (INSTALL_RE.test(command)) {
+    if (playwrightTools && INSTALL_RE.test(command)) {
       return {
         block: true,
         reason:
-          "Do not install Playwright or browser binaries. Use the Playwright MCP tools and system Chromium.",
+          "Do not install Playwright or browser binaries. Use the Playwright MCP tools.",
       };
     }
     if (input.timeout === undefined) {
@@ -416,11 +373,24 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let playwright: Array<{
+      server: StdioServer;
+      client: McpClient;
+      tools: ListedTool[];
+    }> = [];
     try {
-      await Promise.race([
+      playwright = await Promise.race([
         attachStdio(pi),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("mcp attach timeout")), ATTACH_TIMEOUT_MS);
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "mcp attach failed server=mcp phase=attach error=mcp attach timeout",
+                ),
+              ),
+            ATTACH_TIMEOUT_MS,
+          );
         }),
       ]);
     } catch (err) {
@@ -431,6 +401,23 @@ export default function (pi: ExtensionAPI) {
       if (timer !== undefined) {
         clearTimeout(timer);
       }
+    }
+    if (process.env.APIPI_MCP_CHECK !== "1") {
+      return;
+    }
+    const found = playwright[0];
+    if (!found) {
+      const message =
+        "mcp attach failed server=playwright phase=tools/list error=no playwright tools";
+      console.error(message);
+      throw new Error(message);
+    }
+    try {
+      await runPlaywrightCheck(found.client, found.server, found.tools);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(message);
+      throw new Error(message);
     }
   });
 }

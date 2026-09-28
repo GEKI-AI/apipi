@@ -3,6 +3,9 @@ export PATH="/usr/local/bin:/usr/bin:/bin"
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mkdir -p /dev/shm /dev/pts
+mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm
+mount -t devpts devpts /dev/pts
 mount -t tmpfs tmpfs /tmp
 WS=/workspace
 if [ -d "$WS" ]; then

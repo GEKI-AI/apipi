@@ -65,10 +65,12 @@ session for follow-up turns. Saved agents keep reading the agent row.
 Pi always receives a gateway platform prompt after its harness default,
 unless an operator or caller replaces that default. Composition order
 is: Pi's default, or a replacement system prompt when one is set; then
-the main platform prompt (a short built-in text, or an operator
-override); then optional additional platform text; then
-`agent.instructions`. Empty or omitted agent instructions skip only
-that last block. The platform prompt is operator config, not a
+the main platform prompt (a short built-in text for the actual
+computer, or an operator override); then optional additional platform
+text; then, for a hosted microvm only, a size line and an optional
+network line; then `agent.instructions`. Chat and `none` do not get
+sandbox or `/workspace` text. Empty or omitted agent instructions
+skip only that last block. The platform prompt is operator config, not a
 transcript item. A replacement system prompt is
 `metadata["apipi.system_prompt"]` on the session, then the agent, then
 `[pi].system_prompt`. See [config](config.md#pi).

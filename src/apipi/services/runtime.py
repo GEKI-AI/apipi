@@ -19,6 +19,7 @@ from apipi.gateway.metrics import Metrics, observe_turn
 from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.mcp.http import McpConnectError
 from apipi.mcp.stdio import start_mcp_stdio_tools
+from apipi.services.chat_tools import is_chat_profile
 from apipi.services.failures import (
     Failure,
     cancel_data,
@@ -587,6 +588,18 @@ async def _consume_generate(
                 db, hub, tenant_id, session_id, type=etype, data=payload
             )
     return reply, pending, usage
+
+
+def _network_access(environment: dict[str, Any] | None) -> str | None:
+    if not isinstance(environment, dict):
+        return None
+    raw = environment.get("network")
+    if not isinstance(raw, dict):
+        return None
+    access = raw.get("access")
+    if access in {"enabled", "restricted"}:
+        return access
+    return None
 
 
 def _tally(names: list[str]) -> tuple[list[str], dict[str, int]]:
@@ -1411,6 +1424,8 @@ async def run_turn(
             )
             skill_dirs = _skill_dirs(row.environment)
             env_type = row.environment.get("type")
+            chat = is_chat_profile(session_metadata)
+            network = _network_access(row.environment)
             sandbox_size = sandbox_size_of(row.environment)
             sandbox_mem = (
                 mem_mib_for_size(settings, sandbox_size)
@@ -1491,7 +1506,11 @@ async def run_turn(
         composed = compose_instructions(
             settings,
             instructions,
+            env_type=env_type if isinstance(env_type, str) else None,
+            chat=chat,
             sandbox_size=sandbox_size,
+            mem_mib=sandbox_mem,
+            network=network,
         )
         log.info(
             "turn start",
@@ -1857,6 +1876,8 @@ async def continue_turn(
             return
         skill_dirs = _skill_dirs(row.environment)
         env_type = row.environment.get("type")
+        chat = is_chat_profile(session_metadata)
+        network = _network_access(row.environment)
         sandbox_size = sandbox_size_of(row.environment)
         sandbox_mem = (
             mem_mib_for_size(settings, sandbox_size) if settings is not None else None
@@ -1887,7 +1908,11 @@ async def continue_turn(
         composed = compose_instructions(
             settings,
             instructions,
+            env_type=env_type if isinstance(env_type, str) else None,
+            chat=chat,
             sandbox_size=sandbox_size,
+            mem_mib=sandbox_mem,
+            network=network,
         )
         with start_span(
             tracing,
