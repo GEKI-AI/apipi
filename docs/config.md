@@ -375,6 +375,13 @@ Firecracker.
 | `APIPI_PI_SYSTEM_PROMPT` | `[pi].system_prompt` | unset | Replaces Pi's harness default system prompt. Unset or empty keeps Pi's default. This does not replace the platform prompt or agent instructions. |
 | `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | built-in text | Main platform prompt appended after Pi's harness default (or after `system_prompt` when that is set). Unset keeps the built-in. Set to `""` to disable the main block. A non-empty value replaces the built-in entirely. |
 | `APIPI_PLATFORM_PROMPT_ADDITIONAL` | `[pi].platform_prompt_additional` | empty | Optional extra platform text appended after the main block. Does not replace the main prompt. |
+| `APIPI_MODEL_RETRY_ENABLED` | `[pi].model_retry_enabled` | on | Pi `retry.enabled`. When on, Pi retries a failed model call. ApiPi does not retry the turn. |
+| `APIPI_MODEL_MAX_RETRIES` | `[pi].model_max_retries` | `3` | Pi `retry.maxRetries`. Retries after the first attempt. |
+| `APIPI_MODEL_BACKOFF_BASE_MS` | `[pi].model_backoff_base_ms` | `2000` | Pi `retry.baseDelayMs`. Delay is `base × 2^(attempt-1)`. |
+| `APIPI_MODEL_BACKOFF_MAX_MS` | `[pi].model_backoff_max_ms` | `30000` | No Pi key. ApiPi lowers `retry.maxRetries` so the last delay stays at or under this cap, and logs that. |
+| `APIPI_MODEL_TIMEOUT_MS` | `[pi].model_timeout_ms` | `120000` | Pi `httpIdleTimeoutMs` and `retry.provider.timeoutMs`. Idle timeout for a hung call. Must be at least 1. `0` is not allowed. |
+| `APIPI_MODEL_PROVIDER_RETRIES` | `[pi].model_provider_retries` | `0` | Pi `retry.provider.maxRetries`. Silent HTTP retries. Default `0` so they do not multiply session retries. |
+| `APIPI_MODEL_RETRY_AFTER_MAX_MS` | `[pi].model_retry_after_max_ms` | `30000` | Pi `retry.provider.maxRetryDelayMs`. A `Retry-After` above this fails that provider retry. Session retry may still run. |
 
 Thinking stays off until the resolved level is not `off`. ApiPi then
 passes `--thinking` to Pi, writes `defaultThinkingLevel` in
@@ -401,6 +408,31 @@ and `SYSTEM.md` from there. Project `.pi/settings.json` and
 `.pi/SYSTEM.md` are not used, because RPC does not trust the workspace.
 `compaction.enabled` follows `[pi].auto_compact`. Thresholds are written
 only when set. Those compaction settings stay process-wide.
+
+Model retry settings are always written, so Pi does not use its own
+defaults. `retry.enabled`, `retry.maxRetries`, `retry.baseDelayMs`,
+`retry.provider.maxRetries`, `retry.provider.maxRetryDelayMs`,
+`retry.provider.timeoutMs`, and `httpIdleTimeoutMs` come from the
+`APIPI_MODEL_*` settings. They are process-wide. There is no per-agent
+override in this version.
+
+Pi 0.85.1 has no session-level backoff cap, so
+`APIPI_MODEL_BACKOFF_MAX_MS` limits the effective `retry.maxRetries`
+instead. It also has no status-based selection at that layer: retry
+matching is text. A `400` whose body mentions `timeout` or `502` can
+match and be retried. `Retry-After` is honoured only by the provider
+layer, and a delay above the cap fails that layer instead of waiting
+the cap. Provider retries emit no events, so they are not in
+`upstream_attempts`. The timeout is an idle timeout for the process,
+not a wall-clock limit on one request. `APIPI_TURN_TIMEOUT` remains
+the hard limit.
+
+At startup ApiPi warns when
+`timeout × (max retries + 1) + backoff` exceeds `APIPI_TURN_TIMEOUT`.
+The defaults are about 8.2 minutes, under the 10 minute turn timeout.
+With provider retries above `0`, total HTTP tries can be up to
+`(provider retries + 1) × (max retries + 1)`. That product is not in
+the startup budget.
 
 The gateway always composes the appended blocks before
 `agent.instructions`. Order: Pi's harness default, or

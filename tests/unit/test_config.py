@@ -861,6 +861,28 @@ def test_pi_compaction_and_system_prompt_from_toml(
     assert loaded.pi_system_prompt == "custom harness"
 
 
+def test_model_retry_from_toml_and_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "[pi]\n"
+        "model_retry_enabled = false\n"
+        "model_max_retries = 1\n"
+        "model_timeout_ms = 5000\n"
+    )
+    loaded = load_settings()
+    assert loaded.model_retry_enabled is False
+    assert loaded.model_max_retries == 1
+    assert loaded.model_timeout_ms == 5000
+    monkeypatch.setenv("APIPI_MODEL_TIMEOUT_MS", "2500")
+    assert load_settings().model_timeout_ms == 2500
+    monkeypatch.setenv("APIPI_MODEL_TIMEOUT_MS", "0")
+    with pytest.raises(ConfigError, match="APIPI_MODEL_TIMEOUT_MS"):
+        load_settings()
+
+
 def test_thinking_summary_requires_model(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

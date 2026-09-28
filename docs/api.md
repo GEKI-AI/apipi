@@ -441,6 +441,8 @@ log line.
 | `agent.session.turn.thinking.summary.failed` | Summary was not produced. Stored. `item_id`, `summary_status=failed`. No summary text. |
 | `agent.session.turn.compaction.started` | Pi started compaction. Stored. `reason` when Pi sent one (`manual`, `threshold`, or `overflow`). |
 | `agent.session.turn.compaction.completed` | Pi finished compaction. Stored. `reason`, `aborted`, `will_retry`, `tokens_before`, `tokens_after`, and a short `error` when present. The summary text is not stored. |
+| `agent.session.turn.retrying` | Pi will retry the model call. Stored. `attempt`, `max_attempts`, `delay_ms`, `code`, `failure_source`, `upstream_status`. The raw error text is not stored. |
+| `agent.session.turn.retry.completed` | That retry wait finished. Stored. `success`, `attempts`. A success does not end the turn. |
 | `agent.session.title.updated` | `metadata["apipi.title"]` was set or the title job failed. Stored. |
 | `agent.session.environment.pending` | Waiting for a computer |
 | `agent.session.environment.connected` | Computer ready |
@@ -467,6 +469,14 @@ with `metadata["apipi.thinking"]`. See [Pi](config.md#pi).
 Compaction events are optional. A Pi build that does not emit
 `compaction_start` or `compaction_end` does not fail the turn. The
 summary text is not a public event.
+
+Retry events are optional in the same way. `agent.session.turn.retrying`
+is one wait before the next model attempt. `attempt` is Pi's retry
+number, starting at 1. `max_attempts` is `retry.maxRetries`, not the
+total number of calls. `agent.session.turn.retry.completed` follows
+when that wait ends. `success` false during a user cancel does not
+fail the turn. The turn is classified only after the last attempt.
+See [failure codes](errors.md).
 
 A thinking summary is optional and arrives later on
 `agent.session.turn.thinking.summary.completed`. It does not replace
@@ -630,7 +640,7 @@ That is a turn failure (`agent.session.turn.failed`), not
 returns `502`. In this release the body `code` stays
 `model_host_error` for an upstream failure, and `detail_code` is the
 specific code. The body also has `failure_source`, `upstream_status`,
-and `retryable`. A terminal session failure emits
+`retryable`, and `upstream_attempts` when a count is known. A terminal session failure emits
 `agent.session.error` and then `agent.session.failed`, and status
 becomes `failed`. Codes, sources, and log levels are in
 [failure codes](errors.md). Model-list outcomes are in

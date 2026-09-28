@@ -126,6 +126,7 @@ _CLASS_KEYS = (
     "upstream_status",
     "retryable",
     "legacy_code",
+    "upstream_attempts",
 )
 
 
@@ -137,6 +138,7 @@ class Failure:
     retryable: bool
     upstream_status: int | None = None
     legacy_code: str | None = None
+    upstream_attempts: int | None = None
 
     def public_code(self, mode: str) -> str:
         if mode == "specific" or not self.legacy_code:
@@ -243,6 +245,7 @@ def failure_from_payload(data: dict[str, Any]) -> Failure:
     if isinstance(code, str) and code and isinstance(source, str) and source:
         status = data.get("upstream_status")
         legacy = data.get("legacy_code")
+        attempts = data.get("upstream_attempts")
         return Failure(
             message=text,
             code=code,
@@ -250,6 +253,9 @@ def failure_from_payload(data: dict[str, Any]) -> Failure:
             retryable=bool(data.get("retryable")),
             upstream_status=status if isinstance(status, int) else None,
             legacy_code=legacy if isinstance(legacy, str) and legacy else None,
+            upstream_attempts=(
+                attempts if isinstance(attempts, int) and attempts >= 0 else None
+            ),
         )
     return classify_host_message(text)
 
@@ -265,6 +271,8 @@ def turn_failed_data(turn_id: str, failure: Failure) -> dict[str, Any]:
     }
     if failure.legacy_code:
         data["legacy_code"] = failure.legacy_code
+    if failure.upstream_attempts is not None:
+        data["upstream_attempts"] = failure.upstream_attempts
     return data
 
 
@@ -279,6 +287,8 @@ def session_error_data(failure: Failure, *, mode: str) -> dict[str, Any]:
     }
     if failure.legacy_code:
         data["legacy_code"] = failure.legacy_code
+    if failure.upstream_attempts is not None:
+        data["upstream_attempts"] = failure.upstream_attempts
     return data
 
 
@@ -302,6 +312,8 @@ def log_extra(failure: Failure) -> dict[str, Any]:
     }
     if failure.legacy_code:
         fields["legacy_code"] = failure.legacy_code
+    if failure.upstream_attempts is not None:
+        fields["upstream_attempts"] = failure.upstream_attempts
     return fields
 
 
@@ -312,12 +324,14 @@ def usage_fields(failure: Failure | None) -> dict[str, Any]:
             "upstream_status": None,
             "retryable": None,
             "legacy_code": None,
+            "upstream_attempts": None,
         }
     return {
         "failure_source": failure.failure_source,
         "upstream_status": failure.upstream_status,
         "retryable": failure.retryable,
         "legacy_code": failure.legacy_code,
+        "upstream_attempts": failure.upstream_attempts,
     }
 
 
@@ -361,7 +375,9 @@ def _timeout_504(text: str, status: int | None) -> bool:
     if status != 504:
         return False
     body = _body_after(text, 504)
-    return not body or _NO_BODY.search(body) is not None
+    if not body or _NO_BODY.search(body) is not None:
+        return True
+    return _TIMEOUT.search(text) is not None
 
 
 def _body_after(text: str, status: int) -> str:

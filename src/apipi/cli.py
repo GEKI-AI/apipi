@@ -96,6 +96,7 @@ def prepare_serve(
     log.info(LIFECYCLE_EXPORT_ON if lifecycle_on else LIFECYCLE_EXPORT_OFF)
     log.info(METRICS_ON if resolved.metrics else METRICS_OFF)
     log.info(OTEL_SET if resolved.otel_endpoint else OTEL_UNSET)
+    _warn_model_retry(resolved)
     return resolved
 
 
@@ -123,7 +124,15 @@ def prepare_worker(
         else:
             log.warning(f"APIPI_RUN_MODE={backend.name} is not suited for production")
     log.info("worker sandbox", extra={"run_mode": backend.name})
+    _warn_model_retry(resolved)
     return resolved
+
+
+def _warn_model_retry(settings: Settings) -> None:
+    from apipi.worker.pi.settings_json import model_retry_warnings
+
+    for note in model_retry_warnings(settings):
+        log.warning(note)
 
 
 def microvm_shell(

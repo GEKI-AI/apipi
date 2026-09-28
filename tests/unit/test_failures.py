@@ -51,6 +51,7 @@ def test_fixtures_match_pinned_pi() -> None:
         ("Request timed out.", "upstream_timeout", None, True),
         ("408 Request Timeout", "upstream_timeout", 408, True),
         ("504 status code (no body)", "upstream_timeout", 504, True),
+        ('504: {"error":{"message":"timeout"}}', "upstream_timeout", 504, True),
         ("Connection error.", "upstream_connection", None, True),
         (
             "Provider finish_reason: network_error",
@@ -193,6 +194,7 @@ async def test_upstream_turn_keeps_legacy_public_code(
     assert turns[0].data["upstream_status"] == 429
     assert turns[0].data["retryable"] is True
     assert turns[0].data["legacy_code"] == "model_host_error"
+    assert turns[0].data["upstream_attempts"] == 1
     assert isinstance(error.data, dict)
     assert error.data["code"] == "model_host_error"
     assert error.data["detail_code"] == "upstream_rate_limited"
@@ -290,6 +292,7 @@ async def test_timeout_is_not_a_cancel(store: Store, settings: Settings) -> None
     assert failed.data["code"] == "turn_timeout"
     assert failed.data["failure_source"] == "internal"
     assert failed.data["retryable"] is True
+    assert failed.data["upstream_attempts"] == 1
 
 
 class _Dead:

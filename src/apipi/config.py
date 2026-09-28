@@ -79,6 +79,13 @@ _PI_TOML = {
     "mem_mib": "pi_mem_mib",
     "platform_prompt": "platform_prompt",
     "platform_prompt_additional": "platform_prompt_additional",
+    "model_retry_enabled": "model_retry_enabled",
+    "model_max_retries": "model_max_retries",
+    "model_backoff_base_ms": "model_backoff_base_ms",
+    "model_backoff_max_ms": "model_backoff_max_ms",
+    "model_timeout_ms": "model_timeout_ms",
+    "model_provider_retries": "model_provider_retries",
+    "model_retry_after_max_ms": "model_retry_after_max_ms",
 }
 _SANDBOX_TOML = {
     "backend": "run_mode",
@@ -531,6 +538,50 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices(
             "APIPI_PLATFORM_PROMPT_ADDITIONAL", "platform_prompt_additional"
+        ),
+    )
+    model_retry_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "APIPI_MODEL_RETRY_ENABLED", "model_retry_enabled"
+        ),
+    )
+    model_max_retries: int = Field(
+        default=3,
+        ge=0,
+        validation_alias=AliasChoices("APIPI_MODEL_MAX_RETRIES", "model_max_retries"),
+    )
+    model_backoff_base_ms: int = Field(
+        default=2000,
+        ge=0,
+        validation_alias=AliasChoices(
+            "APIPI_MODEL_BACKOFF_BASE_MS", "model_backoff_base_ms"
+        ),
+    )
+    model_backoff_max_ms: int = Field(
+        default=30000,
+        ge=0,
+        validation_alias=AliasChoices(
+            "APIPI_MODEL_BACKOFF_MAX_MS", "model_backoff_max_ms"
+        ),
+    )
+    model_timeout_ms: int = Field(
+        default=120_000,
+        ge=1,
+        validation_alias=AliasChoices("APIPI_MODEL_TIMEOUT_MS", "model_timeout_ms"),
+    )
+    model_provider_retries: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices(
+            "APIPI_MODEL_PROVIDER_RETRIES", "model_provider_retries"
+        ),
+    )
+    model_retry_after_max_ms: int = Field(
+        default=30000,
+        ge=0,
+        validation_alias=AliasChoices(
+            "APIPI_MODEL_RETRY_AFTER_MAX_MS", "model_retry_after_max_ms"
         ),
     )
     sessions_dir: str | None = Field(
@@ -1209,6 +1260,20 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS must be 0 or more"
         if "pi_mem_mib" in loc or "APIPI_PI_MEM_MIB" in loc:
             return "APIPI_PI_MEM_MIB must be at least 1"
+        if "model_retry_enabled" in loc or "APIPI_MODEL_RETRY_ENABLED" in loc:
+            return "APIPI_MODEL_RETRY_ENABLED must be on or off"
+        if "model_max_retries" in loc or "APIPI_MODEL_MAX_RETRIES" in loc:
+            return "APIPI_MODEL_MAX_RETRIES must be 0 or more"
+        if "model_backoff_base_ms" in loc or "APIPI_MODEL_BACKOFF_BASE_MS" in loc:
+            return "APIPI_MODEL_BACKOFF_BASE_MS must be 0 or more"
+        if "model_backoff_max_ms" in loc or "APIPI_MODEL_BACKOFF_MAX_MS" in loc:
+            return "APIPI_MODEL_BACKOFF_MAX_MS must be 0 or more"
+        if "model_timeout_ms" in loc or "APIPI_MODEL_TIMEOUT_MS" in loc:
+            return "APIPI_MODEL_TIMEOUT_MS must be at least 1"
+        if "model_provider_retries" in loc or "APIPI_MODEL_PROVIDER_RETRIES" in loc:
+            return "APIPI_MODEL_PROVIDER_RETRIES must be 0 or more"
+        if "model_retry_after_max_ms" in loc or "APIPI_MODEL_RETRY_AFTER_MAX_MS" in loc:
+            return "APIPI_MODEL_RETRY_AFTER_MAX_MS must be 0 or more"
         if "port" in loc:
             return "APIPI_PORT must be 1-65535"
         if "instance_id" in loc or "APIPI_INSTANCE_ID" in loc:

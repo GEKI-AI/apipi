@@ -277,6 +277,7 @@ class TurnLog(Base):
     upstream_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     legacy_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    upstream_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     tool_names: Mapped[list[Any]] = mapped_column(
         JSONType, default=list, nullable=False

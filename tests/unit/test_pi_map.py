@@ -293,3 +293,81 @@ def test_compaction_events_are_public_without_summary() -> None:
     assert ended[0][1]["tokens_after"] == 32000
     assert "SECRET-SUMMARY" not in json.dumps(ended)
     assert map_pi_event({"type": "not_a_compaction"}) == []
+
+
+def _error_end(message: str, *, will_retry: bool) -> dict[str, object]:
+    return {
+        "type": "agent_end",
+        "willRetry": will_retry,
+        "messages": [
+            {
+                "role": "assistant",
+                "stopReason": "error",
+                "errorMessage": message,
+            }
+        ],
+    }
+
+
+def test_will_retry_does_not_fail_the_turn() -> None:
+    mapped = map_pi_event(_error_end("504 status code (no body)", will_retry=True))
+    kinds = [item[0] for item in mapped]
+    assert "pi_error" not in kinds
+    assert "agent.session.turn.retrying" not in kinds
+
+
+@pytest.mark.parametrize(
+    ("text", "code", "status"),
+    [
+        ('504: {"error":{"message":"timeout"}}', "upstream_timeout", 504),
+        ("504 status code (no body)", "upstream_timeout", 504),
+        ("Connection error.", "upstream_connection", None),
+        ("fetch failed", "upstream_connection", None),
+        ("502: connection error", "upstream_5xx", 502),
+        ("502 Bad Gateway", "upstream_5xx", 502),
+        ("503 Service Unavailable", "upstream_5xx", 503),
+        ("429 Rate limit reached for requests", "upstream_rate_limited", 429),
+        ("Request timed out.", "upstream_timeout", None),
+        ("400 Invalid parameter", "upstream_4xx", 400),
+    ],
+)
+def test_pi_0851_retry_texts(text: str, code: str, status: int | None) -> None:
+    mapped = map_pi_event(
+        {
+            "type": "auto_retry_start",
+            "attempt": 1,
+            "maxAttempts": 3,
+            "delayMs": 2000,
+            "errorMessage": text + " sk-secret",
+        }
+    )
+    assert mapped[0][0] == "agent.session.turn.retrying"
+    assert mapped[0][0] in PUBLIC_EVENT_TYPES
+    data = mapped[0][1]
+    assert data["attempt"] == 1
+    assert data["max_attempts"] == 3
+    assert data["delay_ms"] == 2000
+    assert data["code"] == code
+    assert data["failure_source"] == "upstream"
+    assert data["upstream_status"] == status
+    assert "sk-secret" not in json.dumps(data)
+    assert "errorMessage" not in data
+
+
+def test_retry_completed_is_public() -> None:
+    mapped = map_pi_event(
+        {
+            "type": "auto_retry_end",
+            "success": False,
+            "attempt": 2,
+            "finalError": "Retry cancelled",
+        }
+    )
+    assert mapped == [
+        (
+            "agent.session.turn.retry.completed",
+            {"success": False, "attempts": 2},
+        )
+    ]
+    assert mapped[0][0] in PUBLIC_EVENT_TYPES
+    assert "Retry cancelled" not in json.dumps(mapped)
