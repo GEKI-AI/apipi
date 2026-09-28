@@ -39,8 +39,6 @@ class AuthIdentity:
     tenant_id: UUID
     user_id: str | None = None
     org_id: str | None = None
-    thinking_summary: bool = False
-    auto_title: bool = False
     cache_key: str | None = None
 
 
@@ -245,8 +243,6 @@ def auth_from_result(result: object) -> AuthIdentity | AuthReject:
                 tenant_id=parsed,
                 user_id=user_id,
                 org_id=org_id,
-                thinking_summary=result.get("thinking_summary") is True,
-                auto_title=result.get("auto_title") is True,
                 cache_key=_text_cache_key(result.get("cache_key")),
             )
         if "status_code" in result or "code" in result:
@@ -321,8 +317,6 @@ async def require_tenant(
     request.state.key_id = identity.key_id
     request.state.user_id = identity.user_id
     request.state.org_id = identity.org_id
-    request.state.thinking_summary = identity.thinking_summary
-    request.state.auto_title = identity.auto_title
     request.state.bearer = token
     gateway = getattr(request.app.state, "gateway", None)
     if gateway is not None:

@@ -883,19 +883,32 @@ def test_model_retry_from_toml_and_env(
         load_settings()
 
 
-def test_thinking_summary_requires_model(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_removed_toml_keys_are_ignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "none")
-    monkeypatch.setenv("APIPI_THINKING_SUMMARY", "on")
-    with pytest.raises(ConfigError, match="APIPI_SIDEKICK_MODEL is required"):
-        load_settings()
-    monkeypatch.setenv("APIPI_SIDEKICK_MODEL", "sidekick")
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "thinking_summary = true\n"
+        "auto_title = true\n"
+        'sidekick_model = "old"\n'
+        'sidekick_base_url = "https://sidekick.example"\n'
+        'sidekick_api_key = "secret"\n'
+    )
+    caplog.set_level("WARNING", logger="apipi")
     loaded = load_settings()
-    assert loaded.thinking_summary is True
-    assert loaded.sidekick_model == "sidekick"
+    assert not hasattr(loaded, "thinking_summary")
+    assert not hasattr(loaded, "auto_title")
+    assert not hasattr(loaded, "sidekick_model")
+    text = caplog.text
+    for key in (
+        "thinking_summary",
+        "auto_title",
+        "sidekick_model",
+        "sidekick_base_url",
+        "sidekick_api_key",
+    ):
+        assert f"{key} was removed in 0.7.0 and is ignored" in text
 
 
 def test_pi_thinking_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

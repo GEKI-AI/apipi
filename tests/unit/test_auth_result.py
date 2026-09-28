@@ -47,36 +47,18 @@ def test_identity_from_dict() -> None:
     assert parsed.user_id is None
 
 
-def test_thinking_summary_defaults_off() -> None:
+def test_removed_callback_flags_are_ignored() -> None:
     parsed = auth_from_result(
-        {"key_id": "k", "tenant_id": "12345678-1234-5678-1234-567812345678"}
+        {
+            "key_id": "k",
+            "tenant_id": "12345678-1234-5678-1234-567812345678",
+            "thinking_summary": True,
+            "auto_title": True,
+        }
     )
     assert isinstance(parsed, AuthIdentity)
-    assert parsed.thinking_summary is False
-
-
-def test_thinking_summary_accepts_only_true() -> None:
-    tenant = "12345678-1234-5678-1234-567812345678"
-    on = auth_from_result(
-        {"key_id": "k", "tenant_id": tenant, "thinking_summary": True}
-    )
-    off = auth_from_result(
-        {"key_id": "k", "tenant_id": tenant, "thinking_summary": "true"}
-    )
-    assert isinstance(on, AuthIdentity)
-    assert on.thinking_summary is True
-    assert isinstance(off, AuthIdentity)
-    assert off.thinking_summary is False
-
-
-def test_auto_title_accepts_only_true() -> None:
-    tenant = "12345678-1234-5678-1234-567812345678"
-    on = auth_from_result({"key_id": "k", "tenant_id": tenant, "auto_title": True})
-    off = auth_from_result({"key_id": "k", "tenant_id": tenant, "auto_title": 1})
-    assert isinstance(on, AuthIdentity)
-    assert on.auto_title is True
-    assert isinstance(off, AuthIdentity)
-    assert off.auto_title is False
+    assert not hasattr(parsed, "thinking_summary")
+    assert not hasattr(parsed, "auto_title")
 
 
 def test_identity_from_dict_with_user_id() -> None:

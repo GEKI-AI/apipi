@@ -26,8 +26,6 @@ _PORTABLE = frozenset(
 )
 _DROP = frozenset(
     {
-        "apipi.title",
-        "apipi.title_status",
         "apipi.actor_type",
         "apipi.schedule_id",
         "apipi.source",
@@ -117,8 +115,8 @@ def build_bundle(
     files: dict[str, bytes],
     credentials: dict[str, dict[str, Any]],
     vaults: dict[str, dict[str, Any]],
-) -> tuple[bytes, dict[str, Any]]:
-    redacted, requires, _warnings = redact_agent(
+) -> tuple[bytes, dict[str, Any], list[str]]:
+    redacted, requires, warnings = redact_agent(
         agent, credentials=credentials, vaults=vaults, skills=skills, files=files
     )
     image = _image_block(redacted)
@@ -144,7 +142,7 @@ def build_bundle(
         for path, blob in sorted(files.items()):
             archive.writestr(path, blob)
     data = buf.getvalue()
-    return data, manifest
+    return data, manifest, warnings
 
 
 def redact_agent(

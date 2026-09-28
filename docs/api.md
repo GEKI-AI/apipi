@@ -364,8 +364,7 @@ wins over the agent field. Stock clients can set
 `metadata` is a JSON object. Keys that start with `apipi.` are
 reserved. The gateway interprets `apipi.sandbox_size`,
 `apipi.sandbox_image`, `apipi.session_kind`, `apipi.thinking`,
-`apipi.system_prompt`, `apipi.idle_ttl`, `apipi.title`, and
-`apipi.title_status`. It
+`apipi.system_prompt`, and `apipi.idle_ttl`. It
 stores `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`
 and does not branch on them. There is no top-level `actor_type`
 field. See [reserved metadata](extending.md#reserved-metadata).
@@ -437,13 +436,10 @@ log line.
 | `agent.session.turn.item.done` | Item finished |
 | `agent.session.turn.thinking.started` | Thinking block started. Stored. `item_id`, `content_index`. |
 | `agent.session.turn.thinking.completed` | Thinking block finished. Stored. Preview only, not the full text. |
-| `agent.session.turn.thinking.summary.completed` | Short summary of that block. Stored. `item_id`, `summary`, `summary_status=done`. |
-| `agent.session.turn.thinking.summary.failed` | Summary was not produced. Stored. `item_id`, `summary_status=failed`. No summary text. |
 | `agent.session.turn.compaction.started` | Pi started compaction. Stored. `reason` when Pi sent one (`manual`, `threshold`, or `overflow`). |
 | `agent.session.turn.compaction.completed` | Pi finished compaction. Stored. `reason`, `aborted`, `will_retry`, `tokens_before`, `tokens_after`, and a short `error` when present. The summary text is not stored. |
 | `agent.session.turn.retrying` | Pi will retry the model call. Stored. `attempt`, `max_attempts`, `delay_ms`, `code`, `failure_source`, `upstream_status`. The raw error text is not stored. |
 | `agent.session.turn.retry.completed` | That retry wait finished. Stored. `success`, `attempts`. A success does not end the turn. |
-| `agent.session.title.updated` | `metadata["apipi.title"]` was set or the title job failed. Stored. |
 | `agent.session.environment.pending` | Waiting for a computer |
 | `agent.session.environment.connected` | Computer ready |
 | `agent.session.environment.disconnected` | Computer gone |
@@ -477,18 +473,6 @@ total number of calls. `agent.session.turn.retry.completed` follows
 when that wait ends. `success` false during a user cancel does not
 fail the turn. The turn is classified only after the last attempt.
 See [failure codes](errors.md).
-
-A thinking summary is optional and arrives later on
-`agent.session.turn.thinking.summary.completed`. It does not replace
-the preview. Clients can show `summary` when that event has arrived,
-and the preview otherwise. A failed summary does not fail the turn.
-The platform flag and the auth callback must both allow it. See
-[configuration](config.md) and [auth](auth.md).
-
-`metadata["apipi.title"]` is the automatic session title when that
-feature is on. `metadata["apipi.title_status"]` is `pending`, `done`,
-or `failed`. A metadata update that omits those keys keeps the stored
-values. The gateway does not replace an existing title.
 
 ## Turns, items, artifacts
 

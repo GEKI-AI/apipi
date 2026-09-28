@@ -33,7 +33,6 @@ from apipi.services.runtime import (
     persist_event,
 )
 from apipi.services.session_defaults import merge_session_create, require_default_refs
-from apipi.services.sidekick import TITLE_KEY, TITLE_STATUS_KEY
 from apipi.services.skill_store import SkillService
 from apipi.services.skills import copy_capability_directories
 from apipi.services.usage import usage_from
@@ -172,16 +171,6 @@ def chat_session_body(row: SessionRow | dict[str, Any]) -> dict[str, Any]:
     body = session_body(row) if not isinstance(row, dict) else dict(row)
     body.pop("environment", None)
     return body
-
-
-def _keep_title(current: object, incoming: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(incoming)
-    if not isinstance(current, dict):
-        return merged
-    for key in (TITLE_KEY, TITLE_STATUS_KEY):
-        if key not in merged and key in current:
-            merged[key] = current[key]
-    return merged
 
 
 def chat_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
@@ -406,8 +395,6 @@ class SessionService:
         key_id: str = "",
         user_id: str | None = None,
         org_id: str | None = None,
-        thinking_summary: bool = False,
-        auto_title: bool = False,
         request_id: str | None = None,
         api_key: str | None = None,
         wait_turn: bool = True,
@@ -666,8 +653,6 @@ class SessionService:
                         key_id=key_id or None,
                         user_id=user_id,
                         org_id=org_id,
-                        thinking_summary=thinking_summary,
-                        auto_title=auto_title,
                     )
                     await self._raise_if_first_turn_failed(tenant_id, session_id)
                 else:
@@ -685,8 +670,6 @@ class SessionService:
                                 key_id=key_id or None,
                                 user_id=user_id,
                                 org_id=org_id,
-                                thinking_summary=thinking_summary,
-                                auto_title=auto_title,
                             )
                         except Exception as exc:
                             log.exception(
@@ -790,7 +773,7 @@ class SessionService:
                 current = await get_session(db, tenant_id, session_id, user_id=user_id)
                 if current is None:
                     not_found()
-                merged = _keep_title(current.metadata_json, metadata)
+                merged = metadata
                 validate_pi_metadata(merged)
                 validate_idle_metadata(merged)
                 changes["metadata"] = merged
@@ -847,8 +830,6 @@ class SessionService:
         key_id: str | None = None,
         user_id: str | None = None,
         org_id: str | None = None,
-        thinking_summary: bool = False,
-        auto_title: bool = False,
         request_id: str | None = None,
         api_key: str | None = None,
     ) -> dict[str, Any]:
@@ -914,8 +895,6 @@ class SessionService:
                     key_id=key_id,
                     user_id=user_id,
                     org_id=org_id,
-                    thinking_summary=thinking_summary,
-                    auto_title=auto_title,
                 )
         else:
             if stale:
@@ -942,8 +921,6 @@ class SessionService:
                     key_id=key_id,
                     user_id=user_id,
                     org_id=org_id,
-                    thinking_summary=thinking_summary,
-                    auto_title=auto_title,
                 )
         async with self.store.session() as db:
             row = await get_session(db, tenant_id, session_id)

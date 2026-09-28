@@ -100,6 +100,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
         json={"agent_id": agent_id, "name": "Research agent"},
     )
     assert stored.status_code == 200, stored.text
+    assert "dropped metadata apipi.title" in stored.json()["warnings"]
     template_id = stored.json()["id"]
     assert stored.json()["created_by"] is None
     assert stored.json()["visibility"] == "tenant"
