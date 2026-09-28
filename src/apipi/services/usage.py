@@ -92,6 +92,7 @@ def usage_event(
     upstream_status: int | None = None,
     retryable: bool | None = None,
     legacy_code: str | None = None,
+    upstream_attempts: int | None = None,
 ) -> dict[str, Any]:
     stored = usage_from(usage)
     return {
@@ -123,5 +124,6 @@ def usage_event(
         "upstream_status": upstream_status,
         "retryable": retryable,
         "legacy_code": legacy_code,
+        "upstream_attempts": upstream_attempts,
         "created_at": created_at.isoformat(),
     }

@@ -91,6 +91,7 @@ on, POSTs the full object.
 | `upstream_status` | Model-host HTTP status when the text contained one |
 | `retryable` | Whether an identical retry may succeed |
 | `legacy_code` | `model_host_error` for upstream failures during the migration |
+| `upstream_attempts` | Model attempts observed for this turn, when known. `1` when Pi did not retry. Silent provider retries are not included. |
 | `created_at` | When the usage row was written |
 
 Reads are tenant-scoped. The object must not contain message text.
@@ -124,7 +125,7 @@ are never logged.
 
 | `event` | Level | When |
 | --- | --- | --- |
-| `turn.failed` | warning or error | A turn failed. `error_code` is the specific code. `failure_source`, `upstream_status`, `retryable`, and `legacy_code` are set when known. Caller and `429` failures are warning. Upstream `5xx`, timeouts, connection errors, and internal failures are error. See [failure codes](errors.md). |
+| `turn.failed` | warning or error | A turn failed. `error_code` is the specific code. `failure_source`, `upstream_status`, `retryable`, `legacy_code`, and `upstream_attempts` are set when known. Caller and `429` failures are warning. Upstream `5xx`, timeouts, connection errors, and internal failures are error. See [failure codes](errors.md). |
 | `api.error` | error | HTTP 5xx or an unexpected exception. |
 | `sandbox.boot.failed` | error | MicroVM jailer or vsock attach failed. `error_code` is `sandbox_boot_failed`. |
 | `worker.command.failed` | warning or error | A worker command raised. Caller errors are warning. Internal faults are error. Fields include `session_id`, `tenant_id`, and `request_id`. Turn commands also emit a session failure event unless the session is already `failed`. |

@@ -92,15 +92,84 @@ def process_system_prompt(settings: Settings) -> str | None:
     return text or None
 
 
+def _delay_ms(base: int, attempt: int) -> int:
+    delay = base
+    for _ in range(max(attempt - 1, 0)):
+        if delay > (1 << 62) // 2:
+            return 1 << 62
+        delay *= 2
+    return delay
+
+
+def capped_max_retries(settings: Settings) -> int:
+    configured = settings.model_max_retries
+    if not settings.model_retry_enabled or configured <= 0:
+        return 0 if not settings.model_retry_enabled else configured
+    base = settings.model_backoff_base_ms
+    cap = settings.model_backoff_max_ms
+    if base <= 0:
+        return configured
+    effective = configured
+    while effective > 0 and _delay_ms(base, effective) > cap:
+        effective -= 1
+    return effective
+
+
+def retry_budget_ms(settings: Settings) -> int:
+    timeout = settings.model_timeout_ms
+    if not settings.model_retry_enabled:
+        return timeout
+    retries = capped_max_retries(settings)
+    backoff = sum(
+        _delay_ms(settings.model_backoff_base_ms, attempt)
+        for attempt in range(1, retries + 1)
+    )
+    return timeout * (retries + 1) + backoff
+
+
+def model_retry_warnings(settings: Settings) -> list[str]:
+    notes: list[str] = []
+    if settings.model_retry_enabled:
+        effective = capped_max_retries(settings)
+        if effective < settings.model_max_retries:
+            notes.append(
+                "APIPI_MODEL_BACKOFF_MAX_MS capped retry.maxRetries "
+                f"from {settings.model_max_retries} to {effective}"
+            )
+    budget = retry_budget_ms(settings)
+    limit = int(settings.turn_timeout.total_seconds() * 1000)
+    if budget > limit:
+        notes.append(
+            f"model retry budget {budget}ms exceeds APIPI_TURN_TIMEOUT {limit}ms"
+        )
+    return notes
+
+
 def settings_payload(settings: Settings, *, thinking: str) -> dict[str, Any]:
     compaction: dict[str, Any] = {"enabled": settings.pi_auto_compact}
     if settings.pi_compaction_reserve_tokens is not None:
         compaction["reserveTokens"] = settings.pi_compaction_reserve_tokens
     if settings.pi_compaction_keep_recent_tokens is not None:
         compaction["keepRecentTokens"] = settings.pi_compaction_keep_recent_tokens
+    max_retries = (
+        capped_max_retries(settings)
+        if settings.model_retry_enabled
+        else settings.model_max_retries
+    )
     return {
         "compaction": compaction,
         "defaultThinkingLevel": thinking,
+        "httpIdleTimeoutMs": settings.model_timeout_ms,
+        "retry": {
+            "enabled": settings.model_retry_enabled,
+            "maxRetries": max_retries,
+            "baseDelayMs": settings.model_backoff_base_ms,
+            "provider": {
+                "maxRetries": settings.model_provider_retries,
+                "maxRetryDelayMs": settings.model_retry_after_max_ms,
+                "timeoutMs": settings.model_timeout_ms,
+            },
+        },
     }
 
 

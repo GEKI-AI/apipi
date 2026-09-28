@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Model-call retry and timeout settings (`APIPI_MODEL_RETRY_ENABLED`,
+  `APIPI_MODEL_MAX_RETRIES`, `APIPI_MODEL_BACKOFF_BASE_MS`,
+  `APIPI_MODEL_BACKOFF_MAX_MS`, `APIPI_MODEL_TIMEOUT_MS`,
+  `APIPI_MODEL_PROVIDER_RETRIES`, `APIPI_MODEL_RETRY_AFTER_MAX_MS`).
+  ApiPi writes them into Pi `settings.json`. Only Pi retries. See
+  [Pi](docs/config.md#pi).
+- `agent.session.turn.retrying` and
+  `agent.session.turn.retry.completed` while Pi waits to retry a
+  model call.
+- `upstream_attempts` on a failed turn, the session error, the
+  `turn.failed` log, the turn log, and the usage row.
 - Turn failures carry `failure_source`, a specific `code`,
   `upstream_status`, and `retryable`. `agent.session.turn.failed`,
   the turn log, and the usage event use the specific code.
@@ -22,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A turn no longer fails on the first model error when Pi will retry.
+  The failure is classified after the last attempt.
+- A `504` whose body mentions a timeout is `upstream_timeout`.
 - A turn that exceeds `turn_timeout` fails with `turn_timeout` instead
   of looking like a user cancel. A Pi process that dies mid-turn is
   `pi_exited`. A host Pi killed for `APIPI_PI_MEM_MIB` is `pi_memory`.

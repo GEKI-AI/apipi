@@ -37,6 +37,7 @@ _ERROR_EXTRA = (
     "upstream_status",
     "retryable",
     "legacy_code",
+    "upstream_attempts",
 )
 
 

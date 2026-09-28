@@ -74,6 +74,17 @@ emits `agent.session.failed`. See
 [failure codes](errors.md) and
 [failure modes](config.md#failure-modes).
 
+Only Pi retries a model call. The model host and this gateway do not
+retry the turn. The gateway in front of the model host should fail
+fast: a timeout, `504` with timeout text, `502` on a connection
+error, `429` passed through (with `Retry-After` when it has one), and
+`502` or `503` when the upstream is down. Pi times out a hung call,
+retries those transient responses with bounded backoff, and does not
+retry other `4xx`. ApiPi shows `agent.session.turn.retrying` while
+that wait runs, and classifies the failure only after the last
+attempt. Settings and the budget against `APIPI_TURN_TIMEOUT` are in
+[Pi](config.md#pi).
+
 ## Guest image store
 
 Build images once with `apipi images build`, push them with

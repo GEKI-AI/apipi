@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -118,6 +119,8 @@ PUBLIC_EVENT_TYPES = frozenset(
         "agent.session.turn.thinking.completed",
         "agent.session.turn.compaction.started",
         "agent.session.turn.compaction.completed",
+        "agent.session.turn.retrying",
+        "agent.session.turn.retry.completed",
         SUMMARY_COMPLETED,
         SUMMARY_FAILED,
         TITLE_UPDATED,
@@ -506,6 +509,29 @@ async def _emit_item(
     )
 
 
+def _new_retry_state() -> dict[str, Any]:
+    return {"started": 0, "backoff": False}
+
+
+def _attempts_so_far(state: dict[str, Any]) -> int:
+    started = state.get("started")
+    count = started if isinstance(started, int) and started >= 0 else 0
+    if state.get("backoff"):
+        return max(count, 1)
+    return count + 1
+
+
+def _note_retry(state: dict[str, Any], etype: str, data: dict[str, Any]) -> None:
+    if etype == "agent.session.turn.retrying":
+        attempt = data.get("attempt")
+        if isinstance(attempt, int) and attempt > int(state["started"]):
+            state["started"] = attempt
+        state["backoff"] = True
+        return
+    if etype == "agent.session.turn.retry.completed":
+        state["backoff"] = False
+
+
 async def _consume_generate(
     store: Store,
     hub: EventHub,
@@ -513,15 +539,18 @@ async def _consume_generate(
     session_id: uuid.UUID,
     turn_id: uuid.UUID,
     events: AsyncIterator[tuple[str, dict[str, Any]]],
+    retry_state: dict[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, Any]], dict[str, int], list[dict[str, str]]]:
     reply = ""
     pending: list[dict[str, Any]] = []
     usage = empty_usage()
     thinking: list[dict[str, str]] = []
+    state = retry_state if retry_state is not None else _new_retry_state()
     async for etype, data in events:
         if etype == "usage":
             usage = add_usage(usage, usage_from(data))
             continue
+        _note_retry(state, etype, data)
         if etype == "thinking_body":
             item_id = data.get("item_id")
             text = data.get("text")
@@ -529,7 +558,10 @@ async def _consume_generate(
                 thinking.append({"item_id": item_id, "text": text})
             continue
         if etype == "pi_error":
-            failure = failure_from_payload(data)
+            failure = replace(
+                failure_from_payload(data),
+                upstream_attempts=int(state["started"]) + 1,
+            )
             raise TurnFailed(failure.message, failure=failure)
         payload = dict(data)
         payload.setdefault("turn_id", str(turn_id))
@@ -735,6 +767,9 @@ async def _write_turn_log(
             upstream_status=failure.upstream_status if failure is not None else None,
             retryable=failure.retryable if failure is not None else None,
             legacy_code=failure.legacy_code if failure is not None else None,
+            upstream_attempts=(
+                failure.upstream_attempts if failure is not None else None
+            ),
             request_id=request_id,
             tool_names=tool_names,
             tool_counts=tool_counts,
@@ -1532,15 +1567,28 @@ async def run_turn(
                         agent_idle=agent_idle,
                     ),
                 )
+                retry_state = _new_retry_state()
                 try:
                     if turn_timeout is None:
                         reply, pending, usage, thinking = await _consume_generate(
-                            store, hub, tenant_id, session_id, turn_id, generate
+                            store,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            generate,
+                            retry_state,
                         )
                     else:
                         async with asyncio.timeout(turn_timeout.total_seconds()):
                             reply, pending, usage, thinking = await _consume_generate(
-                                store, hub, tenant_id, session_id, turn_id, generate
+                                store,
+                                hub,
+                                tenant_id,
+                                session_id,
+                                turn_id,
+                                generate,
+                                retry_state,
                             )
                 except CapacityError as exc:
                     async with store.session() as db:
@@ -1577,6 +1625,10 @@ async def run_turn(
                 except TimeoutError:
                     abort.set()
                     await harness.abort(session_id)
+                    timed_out = replace(
+                        failure_for("turn_timeout", "Turn timed out"),
+                        upstream_attempts=_attempts_so_far(retry_state),
+                    )
                     async with store.session() as db:
                         await _fail_turn(
                             db,
@@ -1584,13 +1636,14 @@ async def run_turn(
                             tenant_id,
                             session_id,
                             turn_id,
-                            "Turn timed out",
+                            timed_out.message,
                             request_id=request_id,
                             metrics=metrics,
                             tracing=tracing,
                             settings=settings,
                             code="turn_timeout",
                             user_id=user_id,
+                            failure=timed_out,
                         )
                     return
                 except OSError as exc:
@@ -1924,15 +1977,28 @@ async def continue_turn(
                         agent_idle=agent_idle,
                     ),
                 )
+                retry_state = _new_retry_state()
                 try:
                     if turn_timeout is None:
                         reply, pending, usage, thinking = await _consume_generate(
-                            store, hub, tenant_id, session_id, turn_id, generate
+                            store,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            generate,
+                            retry_state,
                         )
                     else:
                         async with asyncio.timeout(turn_timeout.total_seconds()):
                             reply, pending, usage, thinking = await _consume_generate(
-                                store, hub, tenant_id, session_id, turn_id, generate
+                                store,
+                                hub,
+                                tenant_id,
+                                session_id,
+                                turn_id,
+                                generate,
+                                retry_state,
                             )
                 except TurnFailed as exc:
                     async with store.session() as db:
@@ -1954,6 +2020,10 @@ async def continue_turn(
                     return
                 except TimeoutError:
                     await harness.abort(session_id)
+                    timed_out = replace(
+                        failure_for("turn_timeout", "Turn timed out"),
+                        upstream_attempts=_attempts_so_far(retry_state),
+                    )
                     async with store.session() as db:
                         await _fail_turn(
                             db,
@@ -1961,13 +2031,14 @@ async def continue_turn(
                             tenant_id,
                             session_id,
                             turn_id,
-                            "Turn timed out",
+                            timed_out.message,
                             request_id=request_id,
                             metrics=metrics,
                             tracing=tracing,
                             settings=settings,
                             code="turn_timeout",
                             user_id=user_id,
+                            failure=timed_out,
                         )
                     return
                 except OSError as exc:

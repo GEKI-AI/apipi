@@ -11,6 +11,8 @@ THINKING_STARTED = "agent.session.turn.thinking.started"
 THINKING_COMPLETED = "agent.session.turn.thinking.completed"
 COMPACTION_STARTED = "agent.session.turn.compaction.started"
 COMPACTION_COMPLETED = "agent.session.turn.compaction.completed"
+RETRYING = "agent.session.turn.retrying"
+RETRY_COMPLETED = "agent.session.turn.retry.completed"
 
 
 def _tool_item_type(name: object) -> str:
@@ -31,11 +33,19 @@ def map_pi_event(event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         usage = usage_from_messages(messages)
         if usage is not None:
             mapped.append(("usage", usage))
-        if isinstance(messages, list) and messages:
+        if (
+            isinstance(messages, list)
+            and messages
+            and event.get("willRetry") is not True
+        ):
             last = messages[-1]
             if isinstance(last, dict) and last.get("stopReason") == "error":
                 mapped.extend(_host_error(last.get("errorMessage")))
         return mapped
+    if kind == "auto_retry_start":
+        return [(RETRYING, _retry_start(event))]
+    if kind == "auto_retry_end":
+        return [(RETRY_COMPLETED, _retry_end(event))]
     if kind == "message_update":
         delta = event.get("assistantMessageEvent")
         if not isinstance(delta, dict):
@@ -98,6 +108,29 @@ def _optional_int(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value
+
+
+def _retry_start(event: dict[str, Any]) -> dict[str, Any]:
+    failure = classify_host_message(event.get("errorMessage"))
+    attempt = _optional_int(event.get("attempt"))
+    max_attempts = _optional_int(event.get("maxAttempts"))
+    delay_ms = _optional_int(event.get("delayMs"))
+    return {
+        "attempt": attempt if attempt is not None else 0,
+        "max_attempts": max_attempts if max_attempts is not None else 0,
+        "delay_ms": delay_ms if delay_ms is not None else 0,
+        "code": failure.code,
+        "failure_source": failure.failure_source,
+        "upstream_status": failure.upstream_status,
+    }
+
+
+def _retry_end(event: dict[str, Any]) -> dict[str, Any]:
+    attempt = _optional_int(event.get("attempt"))
+    return {
+        "success": event.get("success") is True,
+        "attempts": attempt if attempt is not None else 0,
+    }
 
 
 def _compaction_start(event: dict[str, Any]) -> dict[str, Any]:

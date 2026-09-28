@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -7,8 +8,12 @@ from apipi.config import Settings
 from apipi.gateway.errors import ApiError
 from apipi.worker.pi.settings_json import (
     apply_pi_agent_files,
+    capped_max_retries,
+    model_retry_warnings,
     resolve_system_prompt,
     resolve_thinking,
+    retry_budget_ms,
+    settings_payload,
     validate_pi_metadata,
 )
 
@@ -34,7 +39,15 @@ def test_merge_keeps_unknown_keys_and_disables_compaction(tmp_path: Path) -> Non
     )
     assert payload["compaction"] == {"enabled": False, "reserveTokens": 8192}
     assert payload["defaultThinkingLevel"] == "high"
-    assert payload["retry"] == {"enabled": False}
+    assert payload["httpIdleTimeoutMs"] == 120000
+    assert payload["retry"]["enabled"] is True
+    assert payload["retry"]["maxRetries"] == 3
+    assert payload["retry"]["baseDelayMs"] == 2000
+    assert payload["retry"]["provider"] == {
+        "maxRetries": 0,
+        "maxRetryDelayMs": 30000,
+        "timeoutMs": 120000,
+    }
     assert payload["theme"] == "dark"
     written = json.loads(path.read_text())
     assert written["compaction"]["enabled"] is False
@@ -91,3 +104,56 @@ def test_invalid_thinking_rejected() -> None:
     assert exc.value.status_code == 400
     with pytest.raises(ApiError):
         validate_pi_metadata({"apipi.system_prompt": 1})
+
+
+def test_settings_payload_writes_retry_and_timeout() -> None:
+    payload = settings_payload(
+        _settings(
+            model_retry_enabled=True,
+            model_max_retries=2,
+            model_backoff_base_ms=1000,
+            model_backoff_max_ms=30000,
+            model_timeout_ms=1500,
+            model_provider_retries=1,
+            model_retry_after_max_ms=5000,
+        ),
+        thinking="off",
+    )
+    assert payload["httpIdleTimeoutMs"] == 1500
+    assert payload["retry"] == {
+        "enabled": True,
+        "maxRetries": 2,
+        "baseDelayMs": 1000,
+        "provider": {
+            "maxRetries": 1,
+            "maxRetryDelayMs": 5000,
+            "timeoutMs": 1500,
+        },
+    }
+
+
+def test_backoff_max_caps_effective_retries() -> None:
+    settings = _settings(
+        model_retry_enabled=True,
+        model_max_retries=5,
+        model_backoff_base_ms=2000,
+        model_backoff_max_ms=30000,
+    )
+    assert capped_max_retries(settings) == 4
+    payload = settings_payload(settings, thinking="off")
+    assert payload["retry"]["maxRetries"] == 4
+    notes = model_retry_warnings(settings)
+    assert any("capped retry.maxRetries from 5 to 4" in note for note in notes)
+
+
+def test_retry_budget_warns_when_over_turn_timeout() -> None:
+    settings = _settings(
+        model_timeout_ms=120000,
+        model_max_retries=3,
+        model_backoff_base_ms=2000,
+        turn_timeout=timedelta(minutes=10),
+    )
+    assert retry_budget_ms(settings) < 10 * 60 * 1000
+    assert model_retry_warnings(settings) == []
+    over = settings.model_copy(update={"model_timeout_ms": 200000})
+    assert model_retry_warnings(over)
