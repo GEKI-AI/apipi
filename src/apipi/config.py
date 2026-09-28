@@ -66,6 +66,15 @@ OPENAI_API_KEY_IGNORED = (
     "OPENAI_API_KEY is ignored; the request bearer is sent to the model host"
 )
 FLAT_TOML_WARNING = "TOML key {key} is deprecated; use {path}"
+_REMOVED_TOML = frozenset(
+    {
+        "thinking_summary",
+        "auto_title",
+        "sidekick_model",
+        "sidekick_base_url",
+        "sidekick_api_key",
+    }
+)
 
 _log = logging.getLogger("apipi")
 
@@ -927,26 +936,6 @@ class Settings(BaseSettings):
             "APIPI_LIFECYCLE_RUN_MODES", "lifecycle_run_modes"
         ),
     )
-    thinking_summary: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("APIPI_THINKING_SUMMARY", "thinking_summary"),
-    )
-    auto_title: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("APIPI_AUTO_TITLE", "auto_title"),
-    )
-    sidekick_model: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("APIPI_SIDEKICK_MODEL", "sidekick_model"),
-    )
-    sidekick_base_url: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("APIPI_SIDEKICK_BASE_URL", "sidekick_base_url"),
-    )
-    sidekick_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("APIPI_SIDEKICK_API_KEY", "sidekick_api_key"),
-    )
 
     @model_validator(mode="after")
     def run_mode_known(self) -> Self:
@@ -971,12 +960,6 @@ class Settings(BaseSettings):
             from apipi.services.vault_crypto import parse_vault_master_key
 
             parse_vault_master_key(self.vault_master_key)
-        if (self.thinking_summary or self.auto_title) and not (
-            isinstance(self.sidekick_model, str) and self.sidekick_model.strip()
-        ):
-            raise ValueError(
-                "APIPI_SIDEKICK_MODEL is required when a sidekick feature is on"
-            )
         if self.lifecycle_user_id == "hash" and not (
             isinstance(self.lifecycle_user_id_key, str)
             and self.lifecycle_user_id_key.strip()
@@ -1122,6 +1105,10 @@ def _toml_values(path: Path) -> dict[str, Any]:
     for key, value in raw.items():
         if key in nested:
             raise ConfigError(f"cannot set {key} and its [pi] or [sandbox] path")
+        if key in _REMOVED_TOML:
+            # TODO: drop this shim in the release after 0.7.0
+            _log.warning(f"{key} was removed in 0.7.0 and is ignored")
+            continue
         if key not in known or isinstance(value, dict):
             raise ConfigError(f"unknown setting: {key}")
         if key in _LEGACY_FLAT_TOML:
@@ -1230,12 +1217,6 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_AUTH_CACHE_TTL must be like 15m"
         if "metrics" in loc:
             return "APIPI_METRICS must be on or off"
-        if "thinking_summary" in loc or "APIPI_THINKING_SUMMARY" in loc:
-            return "APIPI_THINKING_SUMMARY must be on or off"
-        if "auto_title" in loc or "APIPI_AUTO_TITLE" in loc:
-            return "APIPI_AUTO_TITLE must be on or off"
-        if "APIPI_SIDEKICK_MODEL is required" in msg:
-            return "APIPI_SIDEKICK_MODEL is required when a sidekick feature is on"
         if "worker_metrics_port" in loc or "APIPI_WORKER_METRICS_PORT" in loc:
             return "APIPI_WORKER_METRICS_PORT must be 1-65535"
         if "guest_sample_interval" in loc or "APIPI_GUEST_SAMPLE_INTERVAL" in loc:

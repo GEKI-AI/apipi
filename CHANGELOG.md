@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-28
+
+### Breaking
+
+- Thinking summaries and automatic session titles are removed. ApiPi
+  no longer emits `agent.session.turn.thinking.summary.completed`,
+  `agent.session.turn.thinking.summary.failed`, or
+  `agent.session.title.updated`. Titles are a client concern.
+- Settings removed: `APIPI_THINKING_SUMMARY` / `thinking_summary`,
+  `APIPI_AUTO_TITLE` / `auto_title`, `APIPI_SIDEKICK_MODEL` /
+  `sidekick_model`, `APIPI_SIDEKICK_BASE_URL` / `sidekick_base_url`,
+  and `APIPI_SIDEKICK_API_KEY` / `sidekick_api_key`. Those environment
+  variables are ignored. The same TOML keys log
+  `was removed in 0.7.0 and is ignored` in this release and become an
+  `unknown setting` error in the next release.
+- `AuthIdentity` no longer has `thinking_summary` or `auto_title`.
+  A callback dict that still includes those keys is accepted; the
+  keys are ignored.
+- `SessionService.create` and `post_event` no longer take
+  `thinking_summary` or `auto_title`.
+- `apipi.title` and `apipi.title_status` are no longer written or
+  interpreted. A metadata update is a plain replace, so leaving those
+  keys out removes them.
+
 ## [0.6.2] - 2026-09-28
 
 ### Added

@@ -233,9 +233,8 @@ class ThinkingTracker:
             truncated=truncated,
             reasoning_tokens=None,
         )
-        body = self._body(text)
         self._reset()
-        return [(THINKING_COMPLETED, payload), body]
+        return [(THINKING_COMPLETED, payload)]
 
     def _complete(
         self, event: dict[str, Any], delta: dict[str, Any]
@@ -252,9 +251,8 @@ class ThinkingTracker:
             truncated=truncated,
             reasoning_tokens=_reasoning_tokens(event),
         )
-        body = self._body(text)
         self._reset()
-        return [(THINKING_COMPLETED, payload), body]
+        return [(THINKING_COMPLETED, payload)]
 
     def _completed_payload(
         self,
@@ -274,9 +272,6 @@ class ThinkingTracker:
             "preview": preview,
             "preview_truncated": truncated,
         }
-
-    def _body(self, text: str) -> tuple[str, dict[str, Any]]:
-        return ("thinking_body", {"item_id": self._item_id, "text": text})
 
     def _reset(self) -> None:
         self._item_id = None

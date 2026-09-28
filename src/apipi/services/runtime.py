@@ -33,13 +33,6 @@ from apipi.services.failures import (
 )
 from apipi.services.files import FileService
 from apipi.services.payload_export import export_payload
-from apipi.services.sidekick import (
-    SUMMARY_COMPLETED,
-    SUMMARY_FAILED,
-    TITLE_UPDATED,
-    schedule_auto_title,
-    schedule_thinking_summaries,
-)
 from apipi.services.skill_store import SkillService
 from apipi.services.skills import discover_skill_dirs
 from apipi.services.usage import add_usage, empty_usage, usage_event, usage_from
@@ -121,9 +114,6 @@ PUBLIC_EVENT_TYPES = frozenset(
         "agent.session.turn.compaction.completed",
         "agent.session.turn.retrying",
         "agent.session.turn.retry.completed",
-        SUMMARY_COMPLETED,
-        SUMMARY_FAILED,
-        TITLE_UPDATED,
         "agent.session.environment.pending",
         "agent.session.environment.connected",
         "agent.session.environment.disconnected",
@@ -540,23 +530,16 @@ async def _consume_generate(
     turn_id: uuid.UUID,
     events: AsyncIterator[tuple[str, dict[str, Any]]],
     retry_state: dict[str, Any] | None = None,
-) -> tuple[str, list[dict[str, Any]], dict[str, int], list[dict[str, str]]]:
+) -> tuple[str, list[dict[str, Any]], dict[str, int]]:
     reply = ""
     pending: list[dict[str, Any]] = []
     usage = empty_usage()
-    thinking: list[dict[str, str]] = []
     state = retry_state if retry_state is not None else _new_retry_state()
     async for etype, data in events:
         if etype == "usage":
             usage = add_usage(usage, usage_from(data))
             continue
         _note_retry(state, etype, data)
-        if etype == "thinking_body":
-            item_id = data.get("item_id")
-            text = data.get("text")
-            if isinstance(item_id, str) and isinstance(text, str) and text.strip():
-                thinking.append({"item_id": item_id, "text": text})
-            continue
         if etype == "pi_error":
             failure = replace(
                 failure_from_payload(data),
@@ -603,7 +586,7 @@ async def _consume_generate(
             await persist_event(
                 db, hub, tenant_id, session_id, type=etype, data=payload
             )
-    return reply, pending, usage, thinking
+    return reply, pending, usage
 
 
 def _tally(names: list[str]) -> tuple[list[str], dict[str, int]]:
@@ -1320,8 +1303,6 @@ async def run_turn(
     key_id: str | None = None,
     user_id: str | None = None,
     org_id: str | None = None,
-    thinking_summary: bool = False,
-    auto_title: bool = False,
     objects: ObjectStore | None = None,
     blobs: ArtifactBlobs | None = None,
 ) -> None:
@@ -1570,7 +1551,7 @@ async def run_turn(
                 retry_state = _new_retry_state()
                 try:
                     if turn_timeout is None:
-                        reply, pending, usage, thinking = await _consume_generate(
+                        reply, pending, usage = await _consume_generate(
                             store,
                             hub,
                             tenant_id,
@@ -1581,7 +1562,7 @@ async def run_turn(
                         )
                     else:
                         async with asyncio.timeout(turn_timeout.total_seconds()):
-                            reply, pending, usage, thinking = await _consume_generate(
+                            reply, pending, usage = await _consume_generate(
                                 store,
                                 hub,
                                 tenant_id,
@@ -1729,27 +1710,6 @@ async def run_turn(
                     user_id=user_id,
                     blobs=blobs,
                 )
-            schedule_thinking_summaries(
-                store,
-                hub,
-                tenant_id,
-                session_id,
-                turn_id,
-                thinking,
-                settings=settings,
-                api_key=api_key,
-                enabled=thinking_summary,
-            )
-            schedule_auto_title(
-                store,
-                hub,
-                tenant_id,
-                session_id,
-                settings=settings,
-                api_key=api_key,
-                enabled=auto_title,
-                text=text,
-            )
     finally:
         if pool is not None:
             pool.release(session_id)
@@ -1781,8 +1741,6 @@ async def continue_turn(
     key_id: str | None = None,
     user_id: str | None = None,
     org_id: str | None = None,
-    thinking_summary: bool = False,
-    auto_title: bool = False,
     blobs: ArtifactBlobs | None = None,
 ) -> None:
     cwd_path: str | None
@@ -1980,7 +1938,7 @@ async def continue_turn(
                 retry_state = _new_retry_state()
                 try:
                     if turn_timeout is None:
-                        reply, pending, usage, thinking = await _consume_generate(
+                        reply, pending, usage = await _consume_generate(
                             store,
                             hub,
                             tenant_id,
@@ -1991,7 +1949,7 @@ async def continue_turn(
                         )
                     else:
                         async with asyncio.timeout(turn_timeout.total_seconds()):
-                            reply, pending, usage, thinking = await _consume_generate(
+                            reply, pending, usage = await _consume_generate(
                                 store,
                                 hub,
                                 tenant_id,
@@ -2117,27 +2075,6 @@ async def continue_turn(
                     user_id=user_id,
                     blobs=blobs,
                 )
-            schedule_thinking_summaries(
-                store,
-                hub,
-                tenant_id,
-                session_id,
-                turn_id,
-                thinking,
-                settings=settings,
-                api_key=api_key,
-                enabled=thinking_summary,
-            )
-            schedule_auto_title(
-                store,
-                hub,
-                tenant_id,
-                session_id,
-                settings=settings,
-                api_key=api_key,
-                enabled=auto_title,
-                text=None,
-            )
     finally:
         if pool is not None:
             pool.release(session_id)

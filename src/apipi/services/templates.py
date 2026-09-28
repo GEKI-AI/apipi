@@ -107,7 +107,7 @@ class TemplateService:
         created_by: str | None,
     ) -> dict[str, Any]:
         agent = await self.agents.get(tenant_id, body.agent_id)
-        data, manifest = await self._bundle_from_agent(
+        data, manifest, warnings = await self._bundle_from_agent(
             tenant_id,
             agent,
             name=body.name,
@@ -120,7 +120,7 @@ class TemplateService:
             name=body.name or _template_name(manifest),
             description=body.description or _template_description(manifest),
             created_by=created_by,
-            warnings=[],
+            warnings=warnings,
         )
 
     async def import_bundle(
@@ -192,7 +192,7 @@ class TemplateService:
         self, tenant_id: uuid.UUID, agent_id: uuid.UUID
     ) -> tuple[str, bytes]:
         agent = await self.agents.get(tenant_id, agent_id)
-        data, _manifest = await self._bundle_from_agent(
+        data, _manifest, _warnings = await self._bundle_from_agent(
             tenant_id, agent, name=agent.get("name"), description=None
         )
         name = agent.get("name") if isinstance(agent.get("name"), str) else agent_id.hex
@@ -253,9 +253,9 @@ class TemplateService:
         *,
         name: str | None,
         description: str | None,
-    ) -> tuple[bytes, dict[str, Any]]:
+    ) -> tuple[bytes, dict[str, Any], list[str]]:
         skills, files, credentials, vaults = await self._gather(tenant_id, agent)
-        data, manifest = build_bundle(
+        data, manifest, warnings = build_bundle(
             agent=agent,
             template_name=name,
             template_description=description,
@@ -267,7 +267,7 @@ class TemplateService:
             vaults=vaults,
         )
         read_bundle(data, max_bytes=int(self.settings.max_file_bytes))
-        return data, manifest
+        return data, manifest, warnings
 
     async def _gather(
         self, tenant_id: uuid.UUID, agent: dict[str, Any]
