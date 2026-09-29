@@ -58,6 +58,80 @@ def copy_inline_pi_metadata(
     return out
 
 
+_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
+
+
+def effort_to_thinking(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in _EFFORTS:
+        raise ApiError(
+            "invalid_request",
+            "reasoning.effort must be none, minimal, low, medium, high, xhigh, or max",
+            code="invalid_request",
+        )
+    return "off" if value == "none" else value
+
+
+def thinking_to_effort(level: str | None) -> str | None:
+    if level is None:
+        return None
+    return "none" if level == "off" else level
+
+
+def reasoning_body(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    return {"effort": thinking_to_effort(thinking_from_metadata(metadata))}
+
+
+def apply_reasoning_effort(
+    metadata: dict[str, Any] | None,
+    effort: object,
+    *,
+    reset: bool = False,
+) -> dict[str, Any]:
+    out = dict(metadata or {})
+    if effort is None and reset:
+        out.pop(THINKING_KEY, None)
+        return out
+    level = effort_to_thinking(effort)
+    if level is None:
+        return out
+    current = thinking_from_metadata(out)
+    if current is not None and current != level:
+        raise ApiError(
+            "invalid_request",
+            "reasoning.effort and apipi.thinking disagree",
+            code="invalid_request",
+        )
+    out[THINKING_KEY] = level
+    return out
+
+
+def require_thinking_supported(
+    settings: Settings, model: str | None, level: str | None
+) -> None:
+    if level is None or level == "off" or not isinstance(model, str) or not model:
+        return
+    from apipi.worker.pi.model_caps import registry_of
+
+    caps = registry_of(settings.model_registry).get(model)
+    if caps is None:
+        return
+    if caps.reasoning is False:
+        raise ApiError(
+            "invalid_request",
+            f"model {model} does not support reasoning",
+            code="invalid_request",
+        )
+    if caps.thinking_levels is not None and level not in caps.thinking_levels:
+        raise ApiError(
+            "invalid_request",
+            "model "
+            f"{model} does not support reasoning effort {thinking_to_effort(level)}",
+            code="invalid_request",
+        )
+
+
 def resolve_thinking(
     settings: Settings,
     session_metadata: dict[str, Any] | None,

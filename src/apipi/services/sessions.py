@@ -88,7 +88,11 @@ from apipi.worker.pi.sandbox import (
     sandbox_size_of,
 )
 from apipi.worker.pi.settings_json import (
+    apply_reasoning_effort,
     copy_inline_pi_metadata,
+    reasoning_body,
+    require_thinking_supported,
+    thinking_from_metadata,
     validate_pi_metadata,
 )
 from apipi.worker.placement import CHAT, SESSION_KIND_KEY
@@ -147,6 +151,7 @@ def session_body(row: SessionRow) -> dict[str, Any]:
         "environment": overlay_environment(row),
         "idle_ttl": row.idle_ttl,
         "metadata": row.metadata_json,
+        "reasoning": reasoning_body(row.metadata_json),
         "required_actions": row.required_actions,
         "user_id": row.user_id,
         "org_id": row.org_id,
@@ -414,7 +419,7 @@ class SessionService:
         api_key: str | None = None,
         wait_turn: bool = True,
     ) -> dict[str, Any]:
-        if (agent is None) == (agent_id is None):
+        if agent is None and agent_id is None:
             raise ApiError(
                 "invalid_request",
                 "Provide agent or agent_id",
@@ -464,20 +469,37 @@ class SessionService:
                 raw_tools = saved.tools
                 model = saved.model
                 agent_metadata = saved.metadata_json
-            elif agent is not None:
-                model = agent.model
-                instructions = agent.instructions
-                agent_metadata = agent.metadata
+            if agent is not None:
+                if agent.model is not None:
+                    model = agent.model
+                if agent.instructions is not None:
+                    instructions = agent.instructions
                 if agent.tools is not None:
                     raw_tools = [
                         tool.model_dump(exclude_none=True) for tool in agent.tools
                     ]
+                if agent.reasoning is not None or agent.metadata:
+                    metadata = apply_reasoning_effort(
+                        agent.metadata if agent.metadata is not None else metadata,
+                        None if agent.reasoning is None else agent.reasoning.effort,
+                        reset=agent.reasoning is not None
+                        and "effort" in agent.reasoning.model_fields_set
+                        and agent.reasoning.effort is None,
+                    )
+                    if agent_id is None:
+                        agent_metadata = metadata
             if chat:
                 reject_disallowed_chat_tools(raw_tools)
             if agent_id is None:
                 metadata = copy_inline_pi_metadata(metadata, agent_metadata)
             validate_pi_metadata(metadata)
             validate_pi_metadata(agent_metadata)
+            require_thinking_supported(
+                self.settings,
+                model,
+                thinking_from_metadata(metadata)
+                or thinking_from_metadata(agent_metadata),
+            )
             validate_idle_metadata(metadata)
             validate_idle_metadata(agent_metadata)
             idle_ttl = normalize_idle_ttl(idle_ttl)
@@ -824,17 +846,41 @@ class SessionService:
         session_id: uuid.UUID,
         *,
         metadata: dict[str, Any] | None = None,
+        agent: AgentWrite | None = None,
         user_id: str | None = None,
     ) -> dict[str, Any]:
         changes: dict[str, Any] = {}
         async with self.store.session() as db:
+            current = await get_session(db, tenant_id, session_id, user_id=user_id)
+            if current is None:
+                not_found()
+            merged = dict(current.metadata_json or {})
             if metadata is not None:
-                current = await get_session(db, tenant_id, session_id, user_id=user_id)
-                if current is None:
-                    not_found()
                 merged = metadata
+            if agent is not None and agent.model is not None:
+                changes["model"] = agent.model
+            if agent is not None and agent.reasoning is not None:
+                merged = apply_reasoning_effort(
+                    merged,
+                    agent.reasoning.effort,
+                    reset="effort" in agent.reasoning.model_fields_set
+                    and agent.reasoning.effort is None,
+                )
+            if metadata is not None or (
+                agent is not None and agent.reasoning is not None
+            ):
                 validate_pi_metadata(merged)
                 validate_idle_metadata(merged)
+                model = changes.get("model", current.model)
+                if not isinstance(model, str) and current.agent_id is not None:
+                    saved = await get_agent(db, tenant_id, current.agent_id)
+                    if saved is not None:
+                        model = saved.model
+                require_thinking_supported(
+                    self.settings,
+                    model if isinstance(model, str) else None,
+                    thinking_from_metadata(merged),
+                )
                 changes["metadata"] = merged
             row = await update_session(
                 db, tenant_id, session_id, changes=changes, user_id=user_id

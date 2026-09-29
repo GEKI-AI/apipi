@@ -58,6 +58,7 @@ class SessionCreate(StrictModel):
 
 class SessionUpdate(StrictModel):
     metadata: dict[str, Any] | None = None
+    agent: AgentWrite | None = None
 
 
 class SessionInput(StrictModel):
@@ -274,7 +275,11 @@ async def update_agent_session(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     return await _sessions(request).update(
-        tenant.id, session_id, metadata=body.metadata, user_id=_user_id(request)
+        tenant.id,
+        session_id,
+        metadata=body.metadata,
+        agent=body.agent,
+        user_id=_user_id(request),
     )
 
 

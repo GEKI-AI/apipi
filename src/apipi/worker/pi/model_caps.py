@@ -57,5 +57,8 @@ def apply_capability(
         row["contextWindow"] = caps.context_window
     if caps.max_tokens is not None:
         row["maxTokens"] = caps.max_tokens
-    if caps.compat:
-        row["compat"] = dict(caps.compat)
+    compat = dict(caps.compat or {})
+    if caps.reasoning is True or (caps.reasoning is None and reasoning):
+        compat["supportsReasoningEffort"] = True
+    if compat:
+        row["compat"] = compat

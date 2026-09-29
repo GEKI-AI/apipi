@@ -98,6 +98,7 @@ def test_body_functions_are_the_public_shapes() -> None:
         "created_at",
         "updated_at",
         "vault_ids",
+        "reasoning",
     }
     assert body["environment"]["container_size"] == "small"
     event = Event(
