@@ -320,6 +320,7 @@ class Gateway:
             asyncio.create_task(self.execution.reap_workspace_loop()),
             asyncio.create_task(self.execution.observe_loop()),
             asyncio.create_task(self.execution.lifecycle_loop()),
+            asyncio.create_task(self.execution.sandbox_seen_loop()),
             asyncio.create_task(_purge_usage_loop(self.settings, self.store)),
             asyncio.create_task(self._expire_worker_leases()),
         ]

@@ -27,7 +27,12 @@ _EVENT_REASON = {
 }
 
 OnKill = Callable[[uuid.UUID, PiProc | None], Awaitable[None]]
+OnTransition = Callable[[uuid.UUID, str, dict[str, Any]], Awaitable[None]]
 log = logging.getLogger("apipi.worker.pi")
+
+
+def _hosted(env_type: str | None) -> bool:
+    return env_type in {"openai_hosted", "hosted"}
 
 
 class PiPool:
@@ -61,6 +66,8 @@ class PiPool:
         self._live: dict[uuid.UUID, dict[str, Any]] = {}
         self._held: set[uuid.UUID] = set()
         self.lifecycle: LifecycleEmitter | None = None
+        self.on_transition: OnTransition | None = None
+        self._booting: set[uuid.UUID] = set()
         self._lock = asyncio.Lock()
 
     async def get(
@@ -99,7 +106,9 @@ class PiPool:
         )
         session_mem = mem_mib if mem_mib is not None else self.settings.microvm_mem_mib
         cause = "spawn"
+        wait_started = time.monotonic()
         async with self._lock:
+            lock_wait_ms = int((time.monotonic() - wait_started) * 1000)
             proc = self._procs.get(session_id)
             if proc is not None and not proc.alive:
                 await self.kill(session_id, reason="crash")
@@ -149,6 +158,20 @@ class PiPool:
                     )
                     size = size_for_mem(self.settings, session_mem)
                     started = time.monotonic()
+                    if _hosted(env_type):
+                        self._booting.add(session_id)
+                        await self._notify(
+                            session_id,
+                            "starting",
+                            {
+                                "tenant_id": tenant_id,
+                                "cold": True,
+                                "cause": cause,
+                                "image": image,
+                                "size": size,
+                                "lock_wait_ms": lock_wait_ms,
+                            },
+                        )
                     try:
                         proc = await spawn_pi(
                             self.settings,
@@ -168,9 +191,12 @@ class PiPool:
                             system_prompt_set=True,
                         )
                     except Exception:
+                        self._booting.discard(session_id)
                         self._observe_boot(size, "error", time.monotonic() - started)
                         self._observe_pi_spawn("error")
                         raise
+                    self._booting.discard(session_id)
+                    boot_ms = int((time.monotonic() - started) * 1000)
                     self._observe_boot(size, "ok", time.monotonic() - started)
                     self._observe_pi_spawn("ok", proc)
                     log.info("pi ready", extra={"session_id": str(session_id)})
@@ -201,6 +227,27 @@ class PiPool:
                         env_type=env_type,
                         size=size,
                     )
+                    if _hosted(env_type):
+                        image_id, image_version, _digest = self._image_fields(
+                            proc, env_type
+                        )
+                        setup_ms = getattr(proc, "setup_ms", None)
+                        await self._notify(
+                            session_id,
+                            "ready",
+                            {
+                                "tenant_id": tenant_id,
+                                "image": image_id or image,
+                                "image_version": image_version,
+                                "size": size,
+                                "run_mode": self.settings.run_mode,
+                                "boot_ms": boot_ms,
+                                "lock_wait_ms": lock_wait_ms,
+                                "setup_ms": setup_ms
+                                if isinstance(setup_ms, int)
+                                else 0,
+                            },
+                        )
                 elif env_type is not None:
                     self._env_types[session_id] = env_type
                 if idle_ttl_set:
@@ -280,8 +327,28 @@ class PiPool:
     def put_stdio(self, session_id: uuid.UUID, servers: list[McpStdioServer]) -> None:
         self._stdio[session_id] = servers
 
+    def sandbox_seen_ids(self) -> list[uuid.UUID]:
+        live = [sid for sid, proc in self._procs.items() if proc.alive]
+        return list({*live, *self._booting})
+
+    async def _notify(
+        self, session_id: uuid.UUID, phase: str, fields: dict[str, Any]
+    ) -> None:
+        callback = self.on_transition
+        if callback is None:
+            return
+        try:
+            await callback(session_id, phase, fields)
+        except Exception:
+            log.exception(
+                "sandbox transition failed", extra={"session_id": str(session_id)}
+            )
+
     async def kill(self, session_id: uuid.UUID, *, reason: str = "session") -> None:
         live = self._live.pop(session_id, None)
+        env_type = self._env_types.get(session_id)
+        tenant_id = self._tenants.get(session_id)
+        born_for_ms = self._born.get(session_id)
         proc = self._procs.pop(session_id, None)
         self._last.pop(session_id, None)
         self._spawn_tools.pop(session_id, None)
@@ -297,8 +364,24 @@ class PiPool:
         size = self._sizes.pop(session_id, "S")
         born = self._born.pop(session_id, None)
         stdio = self._stdio.pop(session_id, None)
+        self._booting.discard(session_id)
         if live is not None:
             self._emit_stop(live, reason=reason, born=born)
+        if _hosted(env_type):
+            started = born_for_ms if born_for_ms is not None else born
+            if isinstance(started, (int, float)):
+                live_ms = int(max(0.0, time.monotonic() - started) * 1000)
+            else:
+                live_ms = 0
+            await self._notify(
+                session_id,
+                "stopped",
+                {
+                    "tenant_id": tenant_id,
+                    "reason": _EVENT_REASON.get(reason, reason),
+                    "live_ms": live_ms,
+                },
+            )
         if proc is not None and self.metrics is not None:
             hold = time.monotonic() - born if born is not None else 0.0
             self.metrics.observe_sandbox_destroy(size=size, hold_seconds=hold)

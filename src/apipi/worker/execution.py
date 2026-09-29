@@ -71,6 +71,17 @@ class Execution(Protocol):
 
     async def lifecycle_loop(self) -> None: ...
 
+    async def sandbox_seen_loop(self) -> None: ...
+
+    async def boot_hosted(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        mcp_http: list[Any] | None = None,
+        mcp_stdio: list[Any] | None = None,
+    ) -> None: ...
+
     async def continue_turn(
         self,
         tenant_id: uuid.UUID,
@@ -140,6 +151,8 @@ class LocalExecution:
         self.tracing = tracing
         if pool.on_kill is None:
             pool.on_kill = self._harvest_killed
+        if pool.on_transition is None:
+            pool.on_transition = self._sandbox_transition
 
     @property
     def stdio_on_host(self) -> bool:
@@ -395,6 +408,95 @@ class LocalExecution:
         if emitter is None or emitter.heartbeat_s is None:
             return
         await heartbeat_loop(self.pool, emitter)
+
+    async def sandbox_seen_loop(self) -> None:
+        from apipi.services.sandbox_status import SEEN_INTERVAL, touch_seen
+
+        while True:
+            await asyncio.sleep(SEEN_INTERVAL.total_seconds())
+            store = self.store
+            if store is None:
+                continue
+            await touch_seen(store, self.pool.sandbox_seen_ids())
+
+    async def _sandbox_transition(
+        self, session_id: uuid.UUID, phase: str, fields: dict[str, Any]
+    ) -> None:
+        store = self.store
+        if store is None:
+            return
+        from apipi.services.sandbox_status import record_transition
+
+        await record_transition(store, self.hub, session_id, phase, fields)
+
+    async def boot_hosted(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        mcp_http: list[Any] | None = None,
+        mcp_stdio: list[Any] | None = None,
+    ) -> None:
+        store = self.store
+        if store is None:
+            return
+        from apipi.config import CapacityError
+        from apipi.env.setup import SetupError
+        from apipi.services.runtime import fail_environment, load_boot_kwargs
+        from apipi.store.blobs import ObjectStoreError
+
+        try:
+            kwargs = await load_boot_kwargs(
+                store,
+                self.settings,
+                self.env_hub,
+                tenant_id,
+                session_id,
+                mcp_http=mcp_http,
+                mcp_stdio=mcp_stdio,
+            )
+        except (SetupError, ApiError) as exc:
+            code = exc.code if isinstance(exc, ApiError) and exc.code else None
+            message = exc.message
+            async with store.session() as db:
+                await fail_environment(
+                    db, self.hub, tenant_id, session_id, message, code=code
+                )
+            return
+        except ObjectStoreError:
+            async with store.session() as db:
+                await fail_environment(
+                    db,
+                    self.hub,
+                    tenant_id,
+                    session_id,
+                    "Cannot read artifacts",
+                    code="artifact_store",
+                )
+            return
+        if kwargs is None:
+            return
+        stdio = kwargs.get("mcp_stdio")
+        if isinstance(stdio, list) and stdio:
+            self.put_stdio(session_id, stdio)
+        try:
+            await self.pool.get(session_id, **kwargs)
+        except CapacityError as exc:
+            async with store.session() as db:
+                await fail_environment(
+                    db, self.hub, tenant_id, session_id, str(exc), code=exc.code
+                )
+        except Exception:
+            log.exception("sandbox boot failed", extra={"session_id": str(session_id)})
+            async with store.session() as db:
+                await fail_environment(
+                    db,
+                    self.hub,
+                    tenant_id,
+                    session_id,
+                    "Computer failed to start",
+                    code="internal",
+                )
 
     async def close(self) -> None:
         await self.pool.close()
@@ -752,6 +854,50 @@ class RemoteExecution:
 
     async def lifecycle_loop(self) -> None:
         return None
+
+    async def sandbox_seen_loop(self) -> None:
+        while True:
+            await asyncio.sleep(3600)
+
+    async def boot_hosted(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        mcp_http: list[Any] | None = None,
+        mcp_stdio: list[Any] | None = None,
+    ) -> None:
+        del mcp_http, mcp_stdio
+        store = self.store
+        if store is None:
+            return
+        from apipi.services.runtime import fail_environment
+
+        sent = await self.workers.command(
+            store,
+            tenant_id,
+            session_id,
+            op="sandbox.boot",
+            payload={"tenant_id": str(tenant_id)},
+        )
+        if sent is None:
+            sent = await self.workers.acquire(
+                store,
+                tenant_id,
+                session_id,
+                op="sandbox.boot",
+                payload={"tenant_id": str(tenant_id)},
+            )
+        if sent is None:
+            async with store.session() as db:
+                await fail_environment(
+                    db,
+                    self.hub,
+                    tenant_id,
+                    session_id,
+                    "No worker available",
+                    code="capacity",
+                )
 
     async def close(self) -> None:
         return None

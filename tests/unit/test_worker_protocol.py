@@ -11,6 +11,7 @@ def test_worker_protocol_is_not_self_hosted() -> None:
         "turn.cancel",
         "turn.continue",
         "session.stop",
+        "sandbox.boot",
     } == COMMAND_OPS
     assert "register" in WORKER_IN
     assert "heartbeat" in WORKER_IN

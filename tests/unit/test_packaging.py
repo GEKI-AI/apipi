@@ -37,4 +37,5 @@ def test_alembic_revisions_chain() -> None:
         "0015_session_org.py",
         "0016_turn_failure.py",
         "0017_upstream_attempts.py",
+        "0018_sandbox_status.py",
     ]

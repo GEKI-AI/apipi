@@ -146,6 +146,22 @@ class SessionRow(Base):
     pi_session_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pi_session_uri: Mapped[str | None] = mapped_column(String, nullable=True)
     vault_ids: Mapped[list[Any]] = mapped_column(JSONType, default=list, nullable=False)
+    sandbox_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    sandbox_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sandbox_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    sandbox_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    sandbox_worker_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
+    sandbox_image: Mapped[str | None] = mapped_column(String, nullable=True)
+    sandbox_image_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    sandbox_size: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    sandbox_cold_boots: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sandbox_last_boot_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

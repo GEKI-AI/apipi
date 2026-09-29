@@ -122,6 +122,8 @@ yours.
 | `packages`, `setup_commands` | Same API on `openai_hosted` only; `400` on `none` or `self_hosted` |
 | `sandbox_size` | ApiPi extension (`S` \| `M` \| `L`). Stock SDKs can set `metadata["apipi.sandbox_size"]`. Top-level session `sandbox_size` is `unknown_field`. |
 | `sandbox_image` | ApiPi extension. Stock SDKs can set `metadata["apipi.sandbox_image"]`. Top-level session `sandbox_image` is `unknown_field`. |
+| `environment.sandbox` | ApiPi extension on hosted sessions: `state`, `reason`, `since`, `image`, `image_version`, `size`, `cold_boots`, `last_boot_ms`. Null for `none` and `self_hosted`. |
+| `metadata["apipi.sandbox_eager_boot"]` | ApiPi extension. Overrides `APIPI_SANDBOX_EAGER_BOOT` for that agent or session. |
 | `env` | Same API on `openai_hosted` only; reserved names `400`; `400` on `none` or `self_hosted` |
 | `files` with `type: "inline"` or `type: "file_id"` | Same API on `openai_hosted` only. `file_id` mounts a Files API object. Other file types are `not_implemented`. |
 | `network` | Same API on `openai_hosted` only. Session policy cannot widen `[sandbox.network]`. Isolation `none` cannot enforce `disabled` / `restricted`. |
@@ -134,7 +136,9 @@ yours.
 | Piece | OpenAI | ApiPi |
 | --- | --- | --- |
 | Session / transcript | Durable on their side | Durable in SQLite or Postgres until you delete the session. Export is enough to leave. |
-| Computer / files | Cloud sandbox, about an hour idle | Hosted directory until sandbox TTL (default 1 hour), then a fresh `/workspace`. `none` has no files. `self_hosted` files stay on the runner. |
+| Computer / files | Cloud sandbox, about an hour idle. Create starts provisioning. | Hosted directory until sandbox TTL (default 1 hour), then a fresh `/workspace`. Boot is lazy at the first turn unless `APIPI_SANDBOX_EAGER_BOOT` or `metadata["apipi.sandbox_eager_boot"]` is on. There is no pause: a stop deletes files. `none` has no files. `self_hosted` files stay on the runner. |
+| `environment.status` | `provisioning`, `connected`, `failed` (and possibly `disconnected`; not verified against the full schema) | Hosted sessions return `provisioning`, `connected`, `disconnected`, or `failed`. `disconnected` covers not started and stopped. |
+| `GET /v1/agents/environments/{id}` | OpenAI route. Exact fields beyond `status` were not verified against the API reference. | Returns `id`, `type`, `status`, and ApiPi `sandbox`. |
 | Idle Pi | Their sandbox runtime | `none` and `self_hosted`: `APIPI_IDLE_TTL` (default 15 minutes) stops Pi. Hosted computers use sandbox TTL. The session row stays. The next turn starts a new Pi and reloads the cached session file. |
 | Artifacts | `/workspace/outputs` published on turn complete | `/workspace/outputs` copied to the host store on turn complete. Immutable. Downloadable after the workspace expires. |
 | Follow-up affinity | OpenAI's fleet | API-only plus workers: any API replica. Combined `apipi serve`: sticky to the node that holds Pi. See [multiple nodes](scale.md). |
