@@ -565,6 +565,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("APIPI_PLATFORM_PROMPT", "platform_prompt"),
     )
+    platform_name: str = Field(
+        default="ApiPi",
+        validation_alias=AliasChoices("APIPI_PLATFORM_NAME", "platform_name"),
+    )
     platform_prompt_additional: str = Field(
         default="",
         validation_alias=AliasChoices(

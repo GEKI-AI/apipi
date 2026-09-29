@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -425,7 +425,42 @@ async function attachHttp(pi: ExtensionAPI): Promise<void> {
   }
 }
 
+const PI_INTRO = "You are an expert coding assistant operating inside pi";
+
+function replaceIntro(prompt: string, identity: string): string | null {
+  const at = prompt.indexOf(PI_INTRO);
+  if (at < 0) {
+    return null;
+  }
+  const end = prompt.indexOf("\n", at);
+  const rest = end < 0 ? "" : prompt.slice(end);
+  return identity + rest;
+}
+
 export default function (pi: ExtensionAPI) {
+  pi.on("before_agent_start", (event) => {
+    const dir = process.env.PI_CODING_AGENT_DIR;
+    if (!dir) {
+      return;
+    }
+    let identity = "";
+    try {
+      identity = readFileSync(`${dir}/identity.txt`, "utf8").trim();
+    } catch {
+      return;
+    }
+    if (!identity) {
+      return;
+    }
+    const current = event.systemPrompt ?? "";
+    const next = replaceIntro(current, identity);
+    if (next === null) {
+      console.error("apipi identity intro was not found; keeping Pi's prompt");
+      return;
+    }
+    return { systemPrompt: next };
+  });
+
   pi.on("tool_call", (event) => {
     if (event.toolName !== "bash") {
       return;

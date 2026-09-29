@@ -80,6 +80,9 @@ def prepare_serve(
     if not resolved.api_only:
         probe_run_mode(resolved)
     reject_prompt_body_logging()
+    from apipi.worker.pi.fragments import validate_fragments
+
+    validate_fragments(resolved)
     configure_logging(level=resolved.log_level, format=resolved.log_format)
     backend = load_isolation(resolved.run_mode)
     if os.environ.get("OPENAI_API_KEY"):
@@ -119,6 +122,9 @@ def prepare_worker(
     probe_model_host(resolved)
     probe_run_mode(resolved)
     reject_prompt_body_logging()
+    from apipi.worker.pi.fragments import validate_fragments
+
+    validate_fragments(resolved)
     configure_logging(level=resolved.log_level, format=resolved.log_format)
     backend = load_isolation(resolved.run_mode)
     if backend.name == "chat":
