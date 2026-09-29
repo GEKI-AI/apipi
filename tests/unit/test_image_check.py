@@ -3,7 +3,7 @@ import json
 import tarfile
 
 from apipi.config import Settings
-from apipi.worker.pi.image_check import parse_check_tar
+from apipi.worker.pi.image_check import _ROOTFS_SCRIPT, parse_check_tar
 from apipi.worker.pi.microvm import guest_vcpus
 
 
@@ -15,6 +15,17 @@ def _tar(files: dict[str, bytes]) -> bytes:
             info.size = len(payload)
             tar.addfile(info, io.BytesIO(payload))
     return buf.getvalue()
+
+
+def test_rootfs_check_mounts_dev_before_mkdir() -> None:
+    script = _ROOTFS_SCRIPT
+    dev_mount = script.index("mount -t devtmpfs devtmpfs")
+    mkdir = script.index('mkdir -p "$mnt/dev/shm" "$mnt/dev/pts"')
+    shm_mount = script.index(
+        'mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$mnt/dev/shm"'
+    )
+    assert dev_mount < mkdir < shm_mount
+    assert 'mkdir -p "$mnt/dev" "$mnt/dev/shm"' not in script
 
 
 def test_parse_check_tar_reads_report_and_png() -> None:

@@ -96,9 +96,10 @@ apipi images check browser --boot
 ```
 
 The first command loop-mounts `rootfs-browser.ext4` (or `--rootfs`)
-and runs `chromium-browser --headless --no-sandbox --dump-dom about:blank`
-plus the vendored Playwright MCP `cli.js --help`. It needs root or
-sudo for the mount.
+read-only and runs `chromium-browser --headless --no-sandbox --dump-dom about:blank`
+plus the vendored Playwright MCP `cli.js --help`. It mounts `/dev`
+before it creates `shm` and `pts`, so those directories are not written
+into the read-only image. It needs root or sudo for the mount.
 
 `--boot` also needs KVM, Firecracker, and sudo for the TAP device. It
 boots the browser image at size `L` with auto-inject, checks that

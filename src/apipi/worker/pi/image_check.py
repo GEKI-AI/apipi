@@ -37,10 +37,10 @@ trap cleanup EXIT
 mount -o loop,ro "$rootfs" "$mnt"
 mount -t proc proc "$mnt/proc"
 mount -t tmpfs tmpfs "$mnt/tmp"
-mkdir -p "$mnt/dev" "$mnt/dev/shm" "$mnt/dev/pts"
 if ! mount -t devtmpfs devtmpfs "$mnt/dev"; then
   mount --bind /dev "$mnt/dev"
 fi
+mkdir -p "$mnt/dev/shm" "$mnt/dev/pts"
 mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$mnt/dev/shm"
 mount -t devpts devpts "$mnt/dev/pts"
 chroot "$mnt" /usr/bin/env HOME=/tmp \
