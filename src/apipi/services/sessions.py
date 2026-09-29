@@ -88,11 +88,15 @@ from apipi.worker.pi.sandbox import (
     sandbox_size_of,
 )
 from apipi.worker.pi.settings_json import (
+    THINKING_KEY,
     apply_reasoning_effort,
     copy_inline_pi_metadata,
     reasoning_body,
+    reject_reasoning_conflict,
     require_thinking_supported,
+    resolve_thinking,
     thinking_from_metadata,
+    thinking_to_effort,
     validate_pi_metadata,
 )
 from apipi.worker.placement import CHAT, SESSION_KIND_KEY
@@ -479,13 +483,16 @@ class SessionService:
                         tool.model_dump(exclude_none=True) for tool in agent.tools
                     ]
                 if agent.reasoning is not None or agent.metadata:
-                    metadata = apply_reasoning_effort(
-                        agent.metadata if agent.metadata is not None else metadata,
-                        None if agent.reasoning is None else agent.reasoning.effort,
-                        reset=agent.reasoning is not None
+                    base = agent.metadata if agent.metadata is not None else metadata
+                    effort = None if agent.reasoning is None else agent.reasoning.effort
+                    reset = (
+                        agent.reasoning is not None
                         and "effort" in agent.reasoning.model_fields_set
-                        and agent.reasoning.effort is None,
+                        and agent.reasoning.effort is None
                     )
+                    if agent.reasoning is not None:
+                        reject_reasoning_conflict(base, effort)
+                    metadata = apply_reasoning_effort(base, effort, reset=reset)
                     if agent_id is None:
                         agent_metadata = metadata
             if chat:
@@ -856,16 +863,24 @@ class SessionService:
                 not_found()
             merged = dict(current.metadata_json or {})
             if metadata is not None:
-                merged = metadata
+                merged = dict(metadata)
+                if (
+                    THINKING_KEY not in metadata
+                    and isinstance(current.metadata_json, dict)
+                    and THINKING_KEY in current.metadata_json
+                ):
+                    merged[THINKING_KEY] = current.metadata_json[THINKING_KEY]
             if agent is not None and agent.model is not None:
                 changes["model"] = agent.model
             if agent is not None and agent.reasoning is not None:
-                merged = apply_reasoning_effort(
-                    merged,
-                    agent.reasoning.effort,
-                    reset="effort" in agent.reasoning.model_fields_set
-                    and agent.reasoning.effort is None,
+                effort = agent.reasoning.effort
+                reset = (
+                    "effort" in agent.reasoning.model_fields_set
+                    and agent.reasoning.effort is None
                 )
+                if metadata is not None:
+                    reject_reasoning_conflict(metadata, effort)
+                merged = apply_reasoning_effort(merged, effort, reset=reset)
             if metadata is not None or (
                 agent is not None and agent.reasoning is not None
             ):
@@ -894,7 +909,26 @@ class SessionService:
             )
             if row is None:
                 not_found()
-            return session_body(row)
+            return await self._present(db, tenant_id, row)
+
+    async def _present(
+        self, db: Any, tenant_id: uuid.UUID, row: SessionRow
+    ) -> dict[str, Any]:
+        body = session_body(row)
+        if thinking_from_metadata(row.metadata_json) is not None:
+            return body
+        agent_meta = None
+        if row.agent_id is not None:
+            from apipi.services.agent_versions import definition_for_session
+
+            definition = await definition_for_session(db, tenant_id, row)
+            if isinstance(definition, dict) and isinstance(
+                definition.get("metadata"), dict
+            ):
+                agent_meta = definition["metadata"]
+        level = resolve_thinking(self.settings, None, agent_meta)
+        body["reasoning"] = {"effort": thinking_to_effort(level)}
+        return body
 
     async def delete(
         self,

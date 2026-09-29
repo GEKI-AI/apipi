@@ -31,6 +31,7 @@ from apipi.worker.pi.sandbox import validate_sandbox_metadata
 from apipi.worker.pi.settings_json import (
     apply_reasoning_effort,
     reasoning_body,
+    reject_reasoning_conflict,
     require_thinking_supported,
     thinking_from_metadata,
     validate_pi_metadata,
@@ -147,19 +148,44 @@ def agent_body(agent: Agent) -> dict[str, Any]:
     }
 
 
+def reasoning_write(body: AgentWrite) -> tuple[object, bool] | None:
+    if "reasoning" not in body.model_fields_set or body.reasoning is None:
+        return None
+    if "effort" not in body.reasoning.model_fields_set:
+        return None
+    reset = body.reasoning.effort is None
+    return body.reasoning.effort, reset
+
+
+def fold_reasoning(
+    payload: dict[str, Any],
+    body: AgentWrite,
+    existing_metadata: dict[str, Any] | None,
+) -> None:
+    change = reasoning_write(body)
+    if change is None:
+        payload.pop("reasoning", None)
+        return
+    effort, reset = change
+    if "metadata" in payload:
+        reject_reasoning_conflict(
+            payload.get("metadata")
+            if isinstance(payload.get("metadata"), dict)
+            else None,
+            effort,
+        )
+        base = payload.get("metadata")
+    else:
+        base = existing_metadata
+    payload["metadata"] = apply_reasoning_effort(
+        base if isinstance(base, dict) else None, effort, reset=reset
+    )
+    payload.pop("reasoning", None)
+
+
 def write_payload(body: AgentWrite) -> dict[str, Any]:
     payload = body.model_dump(exclude_unset=True)
-    if "reasoning" in payload:
-        effort = None if body.reasoning is None else body.reasoning.effort
-        reset = (
-            body.reasoning is not None
-            and "effort" in body.reasoning.model_fields_set
-            and body.reasoning.effort is None
-        )
-        payload["metadata"] = apply_reasoning_effort(
-            payload.get("metadata"), effort, reset=reset
-        )
-        payload.pop("reasoning", None)
+    payload.pop("reasoning", None)
     if "tools" in payload and body.tools is not None:
         payload["tools"] = [tool.model_dump(exclude_none=True) for tool in body.tools]
     if "session_defaults" in payload and body.session_defaults is not None:
@@ -183,6 +209,7 @@ class AgentService:
         check_model: bool = True,
     ) -> dict[str, Any]:
         payload = write_payload(body)
+        fold_reasoning(payload, body, None)
         if "idle_ttl" in payload:
             payload["idle_ttl"] = normalize_idle_ttl(payload.get("idle_ttl"))
         self._normalize_defaults(
@@ -243,6 +270,13 @@ class AgentService:
             existing = await get_agent(db, tenant_id, agent_id)
             if existing is None:
                 not_found()
+            fold_reasoning(
+                payload,
+                body,
+                existing.metadata_json
+                if isinstance(existing.metadata_json, dict)
+                else None,
+            )
             if "idle_ttl" in payload:
                 payload["idle_ttl"] = normalize_idle_ttl(payload.get("idle_ttl"))
             if (

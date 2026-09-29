@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `APIPI_AGENT_VERSIONS_KEEP` defaults to 10.
 
+### Fixed
+
+- An agent update that sends only `reasoning` keeps the other metadata
+  keys. A session update can change `reasoning.effort`, including back
+  to the agent or model default. A 400 for a disagreeing level happens
+  only when the same request sets both `reasoning.effort` and
+  `metadata["apipi.thinking"]`.
+
 ## [0.10.1] - 2026-09-29
 
 ### Fixed
