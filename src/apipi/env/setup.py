@@ -23,6 +23,12 @@ SETUP_DONE = ".apipi/setup.done"
 EGRESS_HOSTS_FILE = ".apipi/egress-hosts"
 USER_ENV_FILE = ".apipi/user.env"
 NETWORK_FILE = ".apipi/network"
+VENV_DIR = ".venv"
+NPM_PREFIX = ".npm"
+SYSTEM_PACKAGES_MICROVM = (
+    "packages.system cannot install on a read-only microvm root. "
+    "Bake those packages into a guest image."
+)
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _RESERVED_ENV = frozenset(
@@ -416,6 +422,40 @@ def resolve_setup_cwd(workspace: Path, cwd: str | None) -> Path:
     return resolve_workspace_path(workspace, cwd, kind="setup cwd")
 
 
+def reject_microvm_system_packages(
+    environment: dict[str, Any], *, run_mode: str
+) -> None:
+    if run_mode != "microvm":
+        return
+    if environment.get("type") != "openai_hosted":
+        return
+    if packages_from(environment).system:
+        raise SetupError(SYSTEM_PACKAGES_MICROVM)
+
+
+def workspace_bin_dirs(workspace: Path) -> list[Path]:
+    bins: list[Path] = []
+    for rel in (f"{VENV_DIR}/bin", f"{NPM_PREFIX}/bin"):
+        path = workspace / rel
+        if path.is_dir():
+            bins.append(path)
+    return bins
+
+
+def prepend_workspace_path(env: dict[str, str], workspace: Path | None) -> None:
+    if workspace is None:
+        return
+    prefixes = [str(path) for path in workspace_bin_dirs(workspace)]
+    if not prefixes:
+        return
+    current = env.get("PATH", "")
+    env["PATH"] = (
+        os.pathsep.join(prefixes)
+        if not current
+        else os.pathsep.join([*prefixes, current])
+    )
+
+
 def render_setup_script(
     workspace: Path, packages: Packages, commands: tuple[SetupCommand, ...]
 ) -> str:
@@ -433,17 +473,21 @@ def render_setup_script(
         quoted = " ".join(shlex.quote(name) for name in packages.python)
         lines.extend(
             [
+                f'VENV="$ROOT/{VENV_DIR}"',
                 "if command -v uv >/dev/null 2>&1; then",
-                f"  uv pip install --python python3 {quoted}",
+                '  uv venv --system-site-packages "$VENV"',
+                f'  uv pip install --python "$VENV/bin/python" {quoted}',
                 "elif python3 -m pip --version >/dev/null 2>&1; then",
-                f"  python3 -m pip install {quoted}",
-                "elif command -v apk >/dev/null 2>&1; then",
-                "  apk add --no-cache py3-pip",
-                f"  python3 -m pip install {quoted}",
+                '  if ! python3 -m venv --system-site-packages "$VENV"; then',
+                '    rm -rf "$VENV"',
+                '    python3 -m venv --system-site-packages --without-pip "$VENV"',
+                "  fi",
+                f'  "$VENV/bin/python" -m pip install --break-system-packages {quoted}',
                 "else",
                 '  echo "python package install needs uv or pip" >&2',
                 "  exit 1",
                 "fi",
+                'export PATH="$VENV/bin:$PATH"',
             ]
         )
     if packages.system:
@@ -468,7 +512,10 @@ def render_setup_script(
                 '  echo "npm package install needs npm" >&2',
                 "  exit 1",
                 "fi",
-                f"npm install -g {quoted}",
+                f'NPM_PREFIX="$ROOT/{NPM_PREFIX}"',
+                'mkdir -p "$NPM_PREFIX"',
+                f'npm install -g --prefix "$NPM_PREFIX" {quoted}',
+                'export PATH="$NPM_PREFIX/bin:$PATH"',
             ]
         )
     for item in commands:
@@ -633,6 +680,7 @@ def provision_hosted(
     if not isinstance(directory, str) or directory == "":
         return
     workspace = Path(directory)
+    reject_microvm_system_packages(environment, run_mode=run_mode)
     prepare_workspace(
         workspace, environment, max_bytes=max_bytes, extra_files=extra_files
     )

@@ -196,6 +196,56 @@ async def test_spawn_pi_none_without_cwd_writes_broker_models(
     await proc.terminate()
 
 
+async def test_spawn_session_thinking_overrides_process_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    created: dict[str, object] = {}
+
+    async def fake_exec(*args: object, **kwargs: object) -> Any:
+        created["args"] = args
+        created["env"] = kwargs.get("env")
+
+        class Process:
+            returncode = None
+            pid = None
+            stdin = None
+            stdout = None
+            stderr = None
+
+            def terminate(self) -> None:
+                self.returncode = 0
+
+            def kill(self) -> None:
+                self.returncode = 0
+
+            async def wait(self) -> int:
+                return 0
+
+        return Process()
+
+    monkeypatch.setattr(
+        "apipi.worker.pi.isolation.none.asyncio.create_subprocess_exec", fake_exec
+    )
+    settings = _settings().model_copy(
+        update={"pi_thinking": "off", "sessions_dir": str(tmp_path / "sessions")}
+    )
+    cwd = tmp_path / "session"
+    (cwd / ".venv" / "bin").mkdir(parents=True)
+    proc = await spawn_pi(settings, cwd=str(cwd), tools=False, thinking="high")
+    args = created["args"]
+    assert isinstance(args, tuple)
+    assert args[args.index("--thinking") + 1] == "high"
+    env = created["env"]
+    assert isinstance(env, dict)
+    agent_dir = env["PI_CODING_AGENT_DIR"]
+    assert isinstance(agent_dir, str)
+    models = json.loads((Path(agent_dir) / "models.json").read_text())
+    provider = models["providers"]["apipi"]
+    assert provider["compat"]["supportsReasoningEffort"] is True
+    assert env["PATH"].startswith(str(cwd / ".venv" / "bin"))
+    await proc.terminate()
+
+
 async def test_stdio_on_host_follows_isolation() -> None:
     none = load_isolation("none")
     microvm = load_isolation("microvm")

@@ -225,7 +225,11 @@ MCP, and local file tools boot inside it.
 The session directory is packed into a workspace drive at boot,
 unpacked onto a guest tmpfs at `/workspace`, and is the guest cwd.
 Scratch files do not survive sandbox stop. Skill paths from that
-workspace are rewritten to `/workspace`.
+workspace are rewritten to `/workspace`. The root filesystem is
+attached read-only. `packages.python` and `packages.npm` install onto
+that tmpfs, so they use guest RAM and count against the sandbox size.
+`packages.system` cannot install there. Bake system packages into a
+guest image. See [environments](environments.md).
 
 The guest kernel needs entropy before Pi can open TLS to the model.
 Firecracker attaches a virtio-rng device, and the workspace includes

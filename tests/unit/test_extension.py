@@ -55,6 +55,8 @@ def test_browser_recipe_vendors_playwright_mcp() -> None:
     assert "npm_config_cache=/tmp/npm-cache" in guest
     assert "cp -a /var/cache/npm/." in guest
     assert "mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm" in guest
+    assert 'PATH="$WS/.venv/bin:$PATH"' in guest
+    assert 'PATH="$WS/.npm/bin:$PATH"' in guest
     assert "mount -t devpts devpts /dev/pts" in guest
     image = (root / "images" / "browser" / "image.env").read_text()
     assert "font-noto-cjk" in image

@@ -186,7 +186,20 @@ agent turn that needs the computer:
    `OPENAI_BASE_URL`, `DATABASE_URL`, `PI_CODING_AGENT_DIR`, and any
    name starting with `APIPI_`, `CODEX_`, or `PI_`.
 3. Install `packages.python`, then `packages.system`, then
-   `packages.npm`.
+   `packages.npm`. Python packages go into a virtualenv at `.venv`
+   in the session workspace, not into the system Python. The install
+   uses `uv` when it is on `PATH`, otherwise `python3 -m pip` inside
+   that virtualenv. If neither `uv` nor `pip` is available, prep fails
+   with a clear message. It does not try to install `pip` with `apk`.
+   npm packages install under `.npm` in the same workspace
+   (`npm install -g --prefix`). On isolation `none` and `chat`, Pi's
+   `PATH` puts `.venv/bin` and `.npm/bin` first when those directories
+   exist. On `microvm`, guest init does the same after prep, before Pi
+   starts. `packages.system` still uses `apk` or `apt-get`. Isolation
+   `microvm` has a read-only root filesystem, so `packages.system` is
+   rejected with `400` at session create. A turn that still reaches
+   prep fails the environment with the same message. Bake those
+   packages into a guest image instead.
 4. Run `setup_commands` in order. Each item is an object with
    `command` and optional `cwd`. `cwd` defaults to the session
    directory. Absolute OpenAI paths `/workspace` and `/tmp/workspace`
@@ -208,14 +221,18 @@ re-applies the stored files (inline and Files API ids), env, packages,
 setup commands, and network policy.
 
 Isolation `none` runs that script in the session directory on the host
-(`uv pip` or `python3 -m pip`, `apk` or `apt-get` if present, `npm`).
-Missing tools fail the session. Isolation `none` cannot enforce TAP
-policy: `disabled` and `restricted` fail the environment with a clear
-error; `enabled` is a no-op. Isolation `microvm` packs the same
-script into the guest and runs it after unpack, before Pi, in the same
-guest, and applies `network` on that guest TAP. When the optional TAP
-allowlist is on, install hosts (PyPI, npm, Alpine) are added for that
-session if the matching package list is set.
+(`uv` or `python3 -m pip` into `.venv`, `apk` or `apt-get` if present,
+`npm` into `.npm`). Missing tools fail the session. Isolation `none`
+cannot enforce TAP policy: `disabled` and `restricted` fail the
+environment with a clear error; `enabled` is a no-op. Isolation
+`microvm` packs the same script into the guest and runs it after
+unpack, before Pi, in the same guest, and applies `network` on that
+guest TAP. The guest root filesystem is read-only. Python and npm
+installs land on the `/workspace` tmpfs, so they use guest RAM and
+count against the sandbox size. They are installed again after a
+sandbox stop. `packages.system` cannot write that root and is rejected.
+When the optional TAP allowlist is on, install hosts (PyPI, npm,
+Alpine) are added for that session if the matching package list is set.
 
 A nonzero exit emits `agent.session.environment.failed` and
 `agent.session.failed`. Pi does not start. Successful prep is visible

@@ -89,11 +89,14 @@ def test_render_setup_script_installs_and_commands(tmp_path: Path) -> None:
         Packages(python=("pandas==2.2.3",), npm=("typescript",)),
         (SetupCommand(command="mkdir -p reports"),),
     )
-    assert "uv pip install" in script
+    assert "uv venv --system-site-packages" in script
+    assert 'uv pip install --python "$VENV/bin/python"' in script
     assert "pandas==2.2.3" in script
-    assert "npm install -g" in script
+    assert "apk add --no-cache py3-pip" not in script
+    assert 'npm install -g --prefix "$NPM_PREFIX"' in script
     assert "typescript" in script
     assert "mkdir -p reports" in script
+    assert 'export PATH="$VENV/bin:$PATH"' in script
 
 
 def test_prepare_and_run_host_setup(tmp_path: Path) -> None:
@@ -293,6 +296,34 @@ def test_prepare_writes_network_policy(tmp_path: Path) -> None:
     assert policy is not None
     assert policy.access == "restricted"
     assert policy.allowed_domains == ("api.example.com",)
+
+
+def test_microvm_rejects_system_packages(tmp_path: Path) -> None:
+    workspace = tmp_path / "session"
+    workspace.mkdir()
+    environment = {
+        "type": "openai_hosted",
+        "directory": str(workspace),
+        "packages": {"system": ["git"]},
+    }
+    with pytest.raises(SetupError, match="read-only microvm root"):
+        provision_hosted(environment, run_mode="microvm")
+    assert not (workspace / ".apipi" / "setup.sh").exists()
+    script = render_setup_script(workspace, Packages(system=("git",)), ())
+    assert "apk add --no-cache" in script
+
+
+def test_prepend_workspace_path(tmp_path: Path) -> None:
+    from apipi.env.setup import prepend_workspace_path
+
+    workspace = tmp_path / "session"
+    (workspace / ".venv" / "bin").mkdir(parents=True)
+    (workspace / ".npm" / "bin").mkdir(parents=True)
+    env = {"PATH": "/usr/bin"}
+    prepend_workspace_path(env, workspace)
+    assert env["PATH"].startswith(str(workspace / ".venv" / "bin"))
+    assert str(workspace / ".npm" / "bin") in env["PATH"]
+    assert env["PATH"].endswith("/usr/bin")
 
 
 def test_provision_network_disabled_on_none(tmp_path: Path) -> None:
