@@ -144,7 +144,10 @@ size's RAM against worker `memory_mb` and still counts as one session.
 On `microvm`, image `browser` starts the Playwright MCP server that
 the browser rootfs already contains. The command is `node` and
 `/opt/apipi/playwright-mcp/node_modules/@playwright/mcp/cli.js`, with
-the same headless Chromium flags. It does not run `npx`. Size `L`
+headless Chromium, `--no-sandbox`, and a config that turns off
+Chromium's first-run network. Navigation times out after 30 seconds
+so a hung page is Playwright's error, not a 120 second client timeout.
+It does not run `npx`. Size `L`
 still selects `browser` when the image is omitted. Install that
 rootfs with `apipi install --microvm --image browser`. An older
 browser rootfs without that file cannot attach. Attach waits at most

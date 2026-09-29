@@ -9,6 +9,7 @@ from apipi.worker.pi.sandbox import (
     image_for_size,
     merge_playwright,
     playwright_attached,
+    playwright_config,
     require_image_size,
     resolve_sandbox_image,
     resolve_sandbox_size,
@@ -244,6 +245,12 @@ def test_merge_playwright_on_l_microvm() -> None:
     assert "npx" not in tools[0]["transport"]["args"]
     assert (
         "--executable-path=/usr/bin/chromium-browser" in tools[0]["transport"]["args"]
+    )
+    assert "--config=/workspace/.apipi/playwright.json" in tools[0]["transport"]["args"]
+    assert "--timeout-navigation=30000" in tools[0]["transport"]["args"]
+    assert (
+        "--disable-background-networking"
+        in playwright_config()["browser"]["launchOptions"]["args"]
     )
     assert "--no-sandbox" in tools[0]["transport"]["args"]
     assert "--output-dir=/workspace/outputs" in tools[0]["transport"]["args"]

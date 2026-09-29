@@ -106,6 +106,15 @@ def test_cli_install_dry_run(
     assert "npm install" in capsys.readouterr().out
 
 
+def test_kernel_url_pins_firecracker_ci() -> None:
+    version, build = pi_install.pinned_kernel()
+    url = pi_install.kernel_url("x86_64")
+    assert version == "6.1.186"
+    assert build in url
+    assert url.endswith(f"x86_64/vmlinux-{version}")
+    assert "quickstart_guide" not in url
+
+
 def test_firecracker_release_url_pins_arch() -> None:
     url = firecracker_release_url("x86_64")
     assert PINNED_FIRECRACKER in url
@@ -179,6 +188,8 @@ def test_install_microvm_skips_when_present(
     cache.mkdir(parents=True)
     (cache / "vmlinux").write_bytes(b"k")
     (cache / "rootfs.ext4").write_bytes(b"r")
+    version, _build = pi_install.pinned_kernel()
+    (cache / "vmlinux.version").write_text(version + "\n")
     monkeypatch.setattr(
         "apipi.worker.pi.install._firecracker_version", lambda _path: PINNED_FIRECRACKER
     )
@@ -247,6 +258,55 @@ def test_firecracker_version_reads_jailer(tmp_path: Path) -> None:
     assert _firecracker_version(binary) == PINNED_FIRECRACKER
 
 
+def test_install_replaces_stale_guest_kernel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr("apipi.worker.pi.install.kvm_available", lambda: True)
+    monkeypatch.setattr(
+        "apipi.worker.pi.install.microvm_net_binaries", lambda: ("ip", "iptables", "tc")
+    )
+    dest = tmp_path / "apipi" / "firecracker"
+    dest.mkdir(parents=True)
+    (dest / "firecracker").write_text("")
+    (dest / "jailer").write_text("")
+    cache = tmp_path / "cache" / "apipi" / "microvm"
+    cache.mkdir(parents=True)
+    kernel = cache / "vmlinux"
+    kernel.write_bytes(b"old")
+    (cache / "rootfs.ext4").write_bytes(b"r")
+    (cache / "vmlinux.version").write_text("4.14\n")
+    monkeypatch.setattr(
+        "apipi.worker.pi.install._firecracker_version", lambda _path: PINNED_FIRECRACKER
+    )
+
+    class _Resp:
+        def __init__(self) -> None:
+            self._left = b"new-kernel"
+
+        def __enter__(self) -> object:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _n: int = -1) -> bytes:
+            data = self._left
+            self._left = b""
+            return data
+
+    monkeypatch.setattr(
+        "apipi.worker.pi.install.urllib.request.urlopen", lambda *_a, **_k: _Resp()
+    )
+    out = StringIO()
+    assert install_microvm(out=out) == 0
+    assert kernel.read_bytes() == b"new-kernel"
+    version, _build = pi_install.pinned_kernel()
+    assert (cache / "vmlinux.version").read_text().strip() == version
+    assert "Downloading guest kernel" in out.getvalue()
+
+
 def test_install_microvm_repairs_bad_jailer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -264,6 +324,8 @@ def test_install_microvm_repairs_bad_jailer(
     cache.mkdir(parents=True)
     (cache / "vmlinux").write_bytes(b"k")
     (cache / "rootfs.ext4").write_bytes(b"r")
+    version, _build = pi_install.pinned_kernel()
+    (cache / "vmlinux.version").write_text(version + "\n")
     state: dict[str, str | None] = {"jailer": None}
 
     def version(path: Path) -> str | None:

@@ -67,6 +67,51 @@ def images_root() -> Path:
     raise ConfigError("apipi install --microvm cannot find image recipes")
 
 
+def pinned_kernel() -> tuple[str, str]:
+    values = read_image_env(images_root() / "kernel.env")
+    version = values.get("KERNEL_VERSION", "")
+    build = values.get("KERNEL_BUILD", "")
+    if not version or not build:
+        raise ConfigError("images/kernel.env must set KERNEL_VERSION and KERNEL_BUILD")
+    return version, build
+
+
+def kernel_url(arch: str) -> str:
+    version, build = pinned_kernel()
+    return (
+        "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/"
+        f"{build}/{arch}/vmlinux-{version}"
+    )
+
+
+def kernel_is_current(kernel: Path) -> bool:
+    stamp = kernel.with_name("vmlinux.version")
+    if not kernel.is_file() or not stamp.is_file():
+        return False
+    version, _build = pinned_kernel()
+    return stamp.read_text().strip() == version
+
+
+def ensure_guest_kernel(kernel: Path, *, stream: TextIO) -> None:
+    if kernel_is_current(kernel):
+        return
+    version, _build = pinned_kernel()
+    arch = os.uname().machine
+    url = kernel_url(arch)
+    print(f"Downloading guest kernel {version}", file=stream)
+    kernel.parent.mkdir(parents=True, exist_ok=True)
+    part = kernel.with_suffix(".part")
+    req = urllib.request.Request(url, headers={"User-Agent": "apipi"})
+    try:
+        with urllib.request.urlopen(req) as resp, part.open("wb") as out:
+            shutil.copyfileobj(resp, out)
+    except OSError as exc:
+        part.unlink(missing_ok=True)
+        raise ConfigError(f"could not download guest kernel {version}") from exc
+    part.replace(kernel)
+    kernel.with_name("vmlinux.version").write_text(version + "\n")
+
+
 def read_image_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in path.read_text().splitlines():
@@ -319,6 +364,7 @@ def install_microvm(
                 f"Firecracker {PINNED_FIRECRACKER}"
             )
     if kernel.is_file() and rootfs.is_file() and not force:
+        ensure_guest_kernel(kernel, stream=stream)
         print(f"MicroVM {image} image is already installed", file=stream)
     elif build:
         env = os.environ.copy()

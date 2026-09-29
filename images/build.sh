@@ -152,7 +152,9 @@ ALPINE_TAR="${WORKDIR}/alpine.tar.gz"
 MNT="${WORKDIR}/mnt"
 IMG="${WORKDIR}/rootfs.ext4"
 ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/releases/${ALPINE_ARCH}/alpine-minirootfs-${ALPINE_VER}-${ALPINE_ARCH}.tar.gz"
-KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/${ARCH}/kernels/vmlinux.bin"
+# shellcheck disable=SC1091
+source "$(dirname "$0")/kernel.env"
+KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/${KERNEL_BUILD}/${ARCH}/vmlinux-${KERNEL_VERSION}"
 
 curl -fsSL "$ALPINE_URL" -o "$ALPINE_TAR"
 truncate -s "${SIZE_MIB}M" "$IMG"
@@ -224,6 +226,7 @@ cp "$IMG" "$ROOTFS"
 
 if curl -fsSL "$KERNEL_URL" -o "${KERNEL}.part"; then
   mv "${KERNEL}.part" "$KERNEL"
+  printf '%s\n' "$KERNEL_VERSION" > "${KERNEL}.version"
 else
   rm -f "${KERNEL}.part"
   echo "kernel download failed; set APIPI_MICROVM_KERNEL to a vmlinux file" >&2

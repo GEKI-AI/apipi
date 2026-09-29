@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Guest kernel is Linux 6.1.186 from the Firecracker 1.17 CI set,
+  with virtio-rng. The old quickstart 4.14 kernel is no longer
+  downloaded.
+- Browser sessions pass Chromium launch flags that skip first-run
+  network, and a 30 second navigation timeout. Guest `mcp:` lines are
+  logged at info, including a timed-out tool name and duration.
 - Pi prompt text ships as files under `src/apipi/worker/pi/prompts/`
   and is read at startup. The identity line names Pi as the harness.
   `APIPI_PLATFORM_NAME` is that name. The hosted prompt no longer states

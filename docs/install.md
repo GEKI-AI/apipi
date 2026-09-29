@@ -78,6 +78,12 @@ It needs sandbox size `M` or larger. See [run modes](run-modes.md).
 `--build` keeps the local recipe build for an air-gapped host.
 `--dry-run` prints which of those it would run.
 
+The guest kernel is Linux 6.1.186, pinned in `images/kernel.env`.
+An existing cache `vmlinux` whose `vmlinux.version` does not match is
+replaced on the next `apipi install --microvm`. A pulled image set
+uses the kernel published with that set. Rebuild or pull after this
+change so guests are not still on the old 4.14 kernel.
+
 `--microvm` checks `/dev/kvm`, `ip`, `iptables`, and `tc` (it names
 the packages; it does not run apt). It downloads pinned Firecracker
 1.17.0 and jailer into `$XDG_DATA_HOME/apipi/firecracker` (or
