@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A model capability registry tells Pi which models accept images.
 - Agents and sessions accept OpenAI `reasoning.effort`. It maps to Pi
   thinking and is mirrored as `apipi.thinking`.
+- Operator prompt fragments can be overridden per environment type, or
+  from a file. `${platform_name}` replaces the built-in name. Extend
+  mode replaces only Pi's intro.
 
 ### Documentation
 

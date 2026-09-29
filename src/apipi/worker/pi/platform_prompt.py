@@ -68,20 +68,39 @@ def compose_instructions(
     mem_mib: int | None = None,
     network: str | None = None,
 ) -> str | None:
-    if settings is None or settings.platform_prompt is None:
+    from apipi.worker.pi.fragments import cap_prompt, fragment_text
+
+    kind = _computer(env_type, chat) or "none"
+    if settings is None:
         main = _main_prompt(env_type, chat)
+        extra = ""
+        size = ""
+        net = ""
     else:
-        main = settings.platform_prompt
-    extra = "" if settings is None else settings.platform_prompt_additional
-    size = ""
-    net = ""
-    if (
-        _computer(env_type, chat) == "hosted"
-        and settings is not None
-        and settings.run_mode == "microvm"
-    ):
-        size = sandbox_size_hint(sandbox_size, mem_mib)
-        net = network_hint(network)
+        values = {
+            "platform_name": settings.platform_name or "ApiPi",
+            "env_type": kind,
+            "workspace": "/workspace" if kind == "hosted" else "",
+            "size": sandbox_size or "",
+            "mem_mib": "" if mem_mib is None else str(mem_mib),
+            "vcpus": "",
+            "image": "",
+            "network": network or "",
+            "idle_ttl": "",
+            "date": "",
+            "has_browser": "",
+        }
+        main = fragment_text(settings, f"main.{kind}", values, strict=False)
+        extra = fragment_text(settings, f"additional.{kind}", values, strict=False)
+        size = ""
+        net = ""
+        if kind == "hosted" and settings.run_mode == "microvm":
+            size = fragment_text(settings, "size", values, strict=False)
+            if not size and sandbox_size and mem_mib is not None:
+                size = sandbox_size_hint(sandbox_size, mem_mib)
+            access = network_hint(network)
+            net = fragment_text(settings, "network", values, strict=False) or access
     agent = agent_instructions or ""
     parts = [part for part in (main, extra, size, net, agent) if part]
-    return "\n\n".join(parts) or None
+    text = "\n\n".join(parts)
+    return cap_prompt(text) if text else None

@@ -302,4 +302,13 @@ def apply_pi_agent_files(
     payload = merged_settings(settings, thinking=thinking, current=_load_object(path))
     path.write_text(settings_json_text(payload))
     write_system_prompt(directory, system_prompt)
+    from apipi.worker.pi.fragments import fragment_text
+
+    identity = fragment_text(
+        settings,
+        "identity",
+        {"platform_name": settings.platform_name or "ApiPi"},
+        strict=False,
+    )
+    (directory / "identity.txt").write_text(identity)
     return payload
