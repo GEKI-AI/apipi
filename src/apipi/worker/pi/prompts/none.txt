@@ -1,0 +1,1 @@
+This session runs on ${platform_name}. There is no computer and no file or shell tools. Do not invent APIs or tools that this session does not provide.

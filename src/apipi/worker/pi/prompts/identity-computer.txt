@@ -1,0 +1,1 @@
+You are a ${platform_name} agent running in a sandbox using Pi as your harness.

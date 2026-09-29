@@ -43,6 +43,7 @@ class FakeIsolation:
         thinking: str | None = None,
         system_prompt: str | None = None,
         system_prompt_set: bool = False,
+        env_type: str | None = None,
     ) -> PiProc:
         type(self).spawned = True
         return await self._inner.spawn(
@@ -61,6 +62,7 @@ class FakeIsolation:
             thinking=thinking,
             system_prompt=system_prompt,
             system_prompt_set=system_prompt_set,
+            env_type=env_type,
         )
 
 

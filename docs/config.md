@@ -347,8 +347,8 @@ Firecracker.
 | `APIPI_PI_THINKING` | `[pi].thinking` | `off` | Process default thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. A session or agent may override it. |
 | `APIPI_PI_MEM_MIB` | `[pi].mem_mib` | unset | Soft ceiling for one host Pi (`none` / `chat`) in MiB. Unset is off. Sets Node `NODE_OPTIONS=--max-old-space-size` and kills the process group when RSS goes over the limit (`apipi_pi_kill_total` reason `memory`). A turn in progress fails with `pi_memory`. Not a microVM hard cap. |
 | `APIPI_PI_SYSTEM_PROMPT` | `[pi].system_prompt` | unset | Replaces Pi's harness default system prompt. Unset or empty keeps Pi's default. This does not replace the platform prompt, agent instructions, context files, or skills. It does drop Pi's tool list and all tool guidelines, including MCP and Playwright guidance. The tools stay callable. |
-| `APIPI_PLATFORM_NAME` | `[pi].platform_name` | `ApiPi` | `${platform_name}` in operator fragments. |
-| `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | built-in text | Main platform prompt for every environment type that has no per-type override. Unset keeps the built-in. Set to `""` to disable the main block. A non-empty value replaces the built-in entirely. Per-type settings such as `APIPI_PLATFORM_PROMPT_HOSTED` win for that type. Each fragment also has a `*_FILE` variant. Set the text or the file, not both. |
+| `APIPI_PLATFORM_NAME` | `[pi].platform_name` | `ApiPi` | Name in the identity line and in `${platform_name}`. Does not replace Pi. |
+| `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | file in `src/apipi/worker/pi/prompts/` | Main platform prompt for every environment type that has no per-type override. Unset keeps the shipped file. Set to `""` to disable the main block. A non-empty value replaces the file entirely. Per-type settings such as `APIPI_PLATFORM_PROMPT_HOSTED` win for that type. Each fragment also has a `*_FILE` variant. Set the text or the file, not both. |
 | `APIPI_PLATFORM_PROMPT_ADDITIONAL` | `[pi].platform_prompt_additional` | empty | Optional extra platform text appended after the main block. Does not replace the main prompt. |
 | `APIPI_MODEL_RETRY_ENABLED` | `[pi].model_retry_enabled` | on | Pi `retry.enabled`. When on, Pi retries a failed model call. ApiPi does not retry the turn. |
 | `APIPI_MODEL_MAX_RETRIES` | `[pi].model_max_retries` | `3` | Pi `retry.maxRetries`. Retries after the first attempt. |
@@ -433,24 +433,51 @@ harness default. Platform prompt and compaction settings live on the
 process that runs Pi (combined `apipi serve` or `apipi worker`).
 Thinking level and system prompt may also be set per session.
 
+Shipped prompt text lives in `src/apipi/worker/pi/prompts/`. `apipi
+serve` and `apipi worker` read those files at startup and keep them in
+memory. A missing file or an unknown `${...}` is a config error. There
+is no copy of that text in code. Edit a file and restart to change a
+default. An env var or `*_FILE` override still replaces one fragment.
+Set the text or the file, not both. `APIPI_PLATFORM_IDENTITY` replaces
+both identity files when the per-type identity env is unset.
+
+The extension replaces only Pi's intro line, `You are an expert coding
+assistant operating inside pi`. The rest of Pi's prompt stays. If that
+line is missing, Pi's prompt is kept and a log line is written.
+Computer sessions (`openai_hosted`, `hosted`, and `self_hosted`) use
+`identity-computer.txt`: `You are a ${platform_name} agent running in a
+sandbox using Pi as your harness.` Chat and `environment.type` `none`
+use `identity-none.txt`, the same line without `running in a sandbox`.
+`${platform_name}` is `APIPI_PLATFORM_NAME`, default `ApiPi`.
+
 The built-in main prompt matches the session. A hosted computer is
-told that the working directory is `/workspace` and that durable
-files go under `outputs/`. A self-hosted computer is told that the
-working directory is the runner's files. Chat and `environment.type`
-`none` are told there is no computer and no file or shell tools.
-They are not told about `/workspace`, sandbox size, or a browser.
+told that the working directory is `/workspace` and that the sandbox
+stops after some idle time. The prompt does not state that duration.
+`APIPI_SANDBOX_TTL_OPENAI_HOSTED` and `APIPI_IDLE_TTL` are unchanged.
+User-provided files under `inputs/` are restored after a restart.
+Every other workspace file is non-persistent, including `outputs/`.
+A missing file is probably a sandbox restart. `outputs/` is for
+artifacts. Those files are collected after each turn and shared with
+the user. The copy in the sandbox is removed on restart. The agent
+should put a file there only when the user asked for it, or when it
+explicitly wants to share it. A self-hosted computer is told that the
+working directory is the runner's files, and the same `outputs/`
+rules. It is not told that a restart deletes those files. Chat and
+`environment.type` `none` are told there is no computer and no file or
+shell tools. They are not told about `/workspace`, sandbox size, or a
+browser.
 
 | Fragment | When it is appended |
 | --- | --- |
 | No-computer main prompt | Chat, or `environment.type` is `none` or omitted. No `/workspace`, size, or browser text. |
-| Hosted main prompt | `openai_hosted` (and the `hosted` alias) and not chat. Names `/workspace` and `outputs/`. |
-| Self-hosted main prompt | `self_hosted` and not chat. Names the runner's files and `outputs/`. Does not mention `/workspace`. |
+| Hosted main prompt | `openai_hosted` (and the `hosted` alias) and not chat. Names `/workspace`, an idle stop with no duration, `inputs/`, and `outputs/`. |
+| Self-hosted main prompt | `self_hosted` and not chat. Names the runner's files and `outputs/`. Does not mention `/workspace` or a sandbox wipe. |
 | Operator main prompt | `APIPI_PLATFORM_PROMPT` is set. Replaces the built-in main block. `""` drops it. |
 | Additional platform text | `APIPI_PLATFORM_PROMPT_ADDITIONAL` is non-empty. Always, after the main block. |
 | Size | Hosted microvm only. `Sandbox size is L (2048 MiB).` RAM comes from the size setting, not a hardcoded "2 GiB". No image name and no Chromium claim. |
 | Network | Hosted microvm only, and only when `network.access` is `enabled` or `restricted`. Omitted when unset or `disabled`. |
-| Playwright tool guidelines | Only after that server's tools register in the guest. One long guideline per server, not once per tool. The Chromium path is included only when that server's args name `/usr/bin/chromium-browser`. Not present when a replacement system prompt is set. |
-| Bash install block | Blocks `npm install playwright` and `playwright install` only after Playwright tools have registered. Otherwise the command is allowed. This is a tool-call hook, not prompt text, so a replacement system prompt does not remove it. |
+| Playwright tool guidelines | Only after that server's tools register in the guest. The text is `playwright.txt`, written into the Pi agent directory at spawn. One long guideline per server, not once per tool. A screenshot goes under `outputs/` only when it is being shared. The Chromium sentence is `chromium.txt`, included only when that server's args name `/usr/bin/chromium-browser`. Not present when a replacement system prompt is set. |
+| Bash install block | Blocks `npm install playwright` and `playwright install` only after Playwright tools have registered. Otherwise the command is allowed. The reason is `bash-install.txt`. This is a tool-call hook, not prompt text, so a replacement system prompt does not remove it. |
 | `system_prompt` / skills | Operator or caller owned. A replacement system prompt keeps the platform blocks, instructions, context files, and skills. It removes Pi's tool list and all tool guidelines, including the MCP and Playwright rows above. |
 
 ```toml

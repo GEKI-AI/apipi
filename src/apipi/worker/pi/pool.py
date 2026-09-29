@@ -204,6 +204,7 @@ class PiPool:
                     thinking=level,
                     system_prompt=prompt,
                     system_prompt_set=True,
+                    env_type=env_type,
                 )
         except Exception as exc:
             self._observe_boot(size, "error", time.monotonic() - started)

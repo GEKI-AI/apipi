@@ -1,0 +1,1 @@
+Use ${tool_name} for ${server_label} MCP (${tool}). Do not reimplement it with bash.

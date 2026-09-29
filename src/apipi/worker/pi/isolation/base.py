@@ -34,4 +34,5 @@ class Isolation(Protocol):
         thinking: str | None = None,
         system_prompt: str | None = None,
         system_prompt_set: bool = False,
+        env_type: str | None = None,
     ) -> PiProc: ...
