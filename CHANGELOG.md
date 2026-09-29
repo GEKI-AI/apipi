@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Pi prompt text ships as files under `src/apipi/worker/pi/prompts/`
+  and is read at startup. The identity line names Pi as the harness.
+  `APIPI_PLATFORM_NAME` is that name. The hosted prompt no longer states
+  a sandbox timeout. User-provided files under `inputs/` are restored.
+  Other workspace files, including `outputs/`, are not.
+
 ## [0.9.0] - 2026-09-29
 
 ### Added

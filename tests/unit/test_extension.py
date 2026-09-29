@@ -17,7 +17,10 @@ def test_mcp_extension_source_is_pi_module() -> None:
     assert "mcp_client.mjs" in text
     assert "mcp_http.mjs" in text
     assert "APIPI_MCP_SERVERS" in text
-    assert "Do not install Playwright" in text
+    assert "bash-install.txt" in text
+    assert "Do not install Playwright" not in text
+    assert "Save screenshots" not in text
+    assert "Today is" not in text
     assert "playwrightTools" in text
     assert "waitForSpawn" not in text
     assert "Content-Length" not in text

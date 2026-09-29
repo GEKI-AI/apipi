@@ -296,19 +296,32 @@ def apply_pi_agent_files(
     *,
     thinking: str,
     system_prompt: str | None,
+    env_type: str | None = None,
 ) -> dict[str, Any]:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "settings.json"
     payload = merged_settings(settings, thinking=thinking, current=_load_object(path))
     path.write_text(settings_json_text(payload))
     write_system_prompt(directory, system_prompt)
-    from apipi.worker.pi.fragments import fragment_text
+    from apipi.worker.pi.fragments import (
+        GUIDELINE_FILES,
+        computer_identity,
+        fragment_body,
+        fragment_text,
+    )
 
+    kind = "identity.computer" if computer_identity(env_type) else "identity.none"
     identity = fragment_text(
         settings,
-        "identity",
+        kind,
         {"platform_name": settings.platform_name or "ApiPi"},
         strict=False,
     )
-    (directory / "identity.txt").write_text(identity)
+    (directory / "identity.txt").write_text(
+        identity if identity.endswith("\n") else identity + "\n"
+    )
+    for name, filename in GUIDELINE_FILES.items():
+        body = fragment_body(settings, name)
+        text = body if body.endswith("\n") else body + "\n"
+        (directory / filename).write_text(text)
     return payload

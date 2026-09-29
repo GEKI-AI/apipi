@@ -56,6 +56,7 @@ class NoneIsolation:
         thinking: str | None = None,
         system_prompt: str | None = None,
         system_prompt_set: bool = False,
+        env_type: str | None = None,
     ) -> PiProc:
         del mem_mib, image
         session_file = None
@@ -121,6 +122,7 @@ class NoneIsolation:
                 settings,
                 thinking=level,
                 system_prompt=prompt,
+                env_type=env_type,
             )
             env["PI_CODING_AGENT_DIR"] = str(agent_dir)
             process = await asyncio.create_subprocess_exec(

@@ -1358,6 +1358,7 @@ async def start_microvm(
     thinking: str | None = None,
     system_prompt: str | None = None,
     system_prompt_set: bool = False,
+    env_type: str | None = None,
 ) -> StartedMicrovm:
     require_microvm(settings)
     firecracker, jailer = microvm_binaries()
@@ -1460,6 +1461,7 @@ async def start_microvm(
                 settings,
                 thinking=level,
                 system_prompt=prompt,
+                env_type=env_type,
             )
         else:
             pi_settings = merged_settings(settings, thinking=level)
@@ -1572,6 +1574,7 @@ async def spawn_microvm_pi(
     thinking: str | None = None,
     system_prompt: str | None = None,
     system_prompt_set: bool = False,
+    env_type: str | None = None,
 ) -> PiProc:
     started = await start_microvm(
         settings,
@@ -1589,6 +1592,7 @@ async def spawn_microvm_pi(
         thinking=thinking,
         system_prompt=system_prompt,
         system_prompt_set=system_prompt_set,
+        env_type=env_type,
     )
     process = started.process
     try:

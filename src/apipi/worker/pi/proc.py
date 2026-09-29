@@ -336,6 +336,7 @@ async def spawn_pi(
     thinking: str | None = None,
     system_prompt: str | None = None,
     system_prompt_set: bool = False,
+    env_type: str | None = None,
 ) -> PiProc:
     from apipi.worker.pi.isolation import load_isolation
 
@@ -355,4 +356,5 @@ async def spawn_pi(
         thinking=thinking,
         system_prompt=system_prompt,
         system_prompt_set=system_prompt_set,
+        env_type=env_type,
     )

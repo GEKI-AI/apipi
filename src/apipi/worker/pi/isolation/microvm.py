@@ -35,6 +35,7 @@ class MicrovmIsolation:
         thinking: str | None = None,
         system_prompt: str | None = None,
         system_prompt_set: bool = False,
+        env_type: str | None = None,
     ) -> PiProc:
         return await spawn_microvm_pi(
             settings,
@@ -52,4 +53,5 @@ class MicrovmIsolation:
             thinking=thinking,
             system_prompt=system_prompt,
             system_prompt_set=system_prompt_set,
+            env_type=env_type,
         )

@@ -2,13 +2,18 @@ import json
 from pathlib import Path
 
 from apipi.config import Settings
-from apipi.worker.pi.platform_prompt import (
-    HOSTED_PROMPT,
-    NO_COMPUTER_PROMPT,
-    SELF_HOSTED_PROMPT,
-    compose_instructions,
-    sandbox_size_hint,
-)
+from apipi.worker.pi.fragments import render_shipped
+from apipi.worker.pi.platform_prompt import compose_instructions, sandbox_size_hint
+
+
+def _main(kind: str) -> str:
+    return render_shipped(
+        f"main.{kind}",
+        {
+            "platform_name": "ApiPi",
+            "workspace": "/workspace" if kind == "hosted" else "",
+        },
+    )
 
 
 def _settings(
@@ -27,13 +32,13 @@ def _settings(
 
 def test_default_main_then_agent() -> None:
     assert compose_instructions(_settings(), "be brief") == (
-        f"{NO_COMPUTER_PROMPT}\n\nbe brief"
+        f"{_main('none')}\n\nbe brief"
     )
 
 
 def test_omitted_agent_keeps_default_main() -> None:
-    assert compose_instructions(_settings(), None) == NO_COMPUTER_PROMPT
-    assert compose_instructions(_settings(), "") == NO_COMPUTER_PROMPT
+    assert compose_instructions(_settings(), None) == _main("none")
+    assert compose_instructions(_settings(), "") == _main("none")
 
 
 def test_empty_main_keeps_additional_and_agent() -> None:
@@ -62,9 +67,7 @@ def test_override_main_then_additional_then_agent() -> None:
 
 def test_additional_without_touching_main() -> None:
     settings = _settings(platform_prompt_additional="Be terse.")
-    assert compose_instructions(settings, None) == (
-        f"{NO_COMPUTER_PROMPT}\n\nBe terse."
-    )
+    assert compose_instructions(settings, None) == (f"{_main('none')}\n\nBe terse.")
 
 
 def test_none_and_chat_omit_workspace_and_size() -> None:
@@ -78,7 +81,7 @@ def test_none_and_chat_omit_workspace_and_size() -> None:
             sandbox_size="L",
             mem_mib=2048,
         )
-        assert text == NO_COMPUTER_PROMPT
+        assert text == _main("none")
         assert text is not None
         assert "/workspace" not in text
         assert "Sandbox size" not in text
@@ -93,7 +96,12 @@ def test_hosted_prompt_names_workspace_not_size_on_none() -> None:
         sandbox_size="L",
         mem_mib=2048,
     )
-    assert text == HOSTED_PROMPT
+    assert text == _main("hosted")
+    assert "15m" not in text
+    assert "idle time" in text
+    assert "inputs/" in text
+    assert "non-persistent" in text
+    assert "outputs/" in text
     assert text is not None
     assert "/workspace" in text
     assert "Sandbox size" not in text
@@ -103,10 +111,12 @@ def test_hosted_prompt_names_workspace_not_size_on_none() -> None:
 
 def test_self_hosted_prompt_names_runner_files() -> None:
     text = compose_instructions(_settings(), None, env_type="self_hosted")
-    assert text == SELF_HOSTED_PROMPT
+    assert text == _main("self_hosted")
     assert text is not None
     assert "runner's files" in text
     assert "/workspace" not in text
+    assert "idle time" not in text
+    assert "15m" not in text
 
 
 def test_microvm_size_hint_is_ram_only() -> None:
@@ -143,7 +153,8 @@ def test_restricted_network_hint() -> None:
     assert text is not None
     assert "restricted network access" not in text
     assert "Sandbox size is M (1024 MiB)." not in text
-    assert "idle or TTL stop" in text
+    assert "idle time" in text
+    assert "15m" not in text
 
 
 def test_capability_file_has_no_date(tmp_path: Path) -> None:
@@ -163,6 +174,7 @@ def test_capability_file_has_no_date(tmp_path: Path) -> None:
     assert "Do not assume a browser is available" not in text
     payload = json.loads((tmp_path / ".pi" / "agent" / "capability.json").read_text())
     assert "Do not assume a browser is available" in payload["block"]
+    assert "Today is ${date}." in payload["block"]
     assert "Chromium is" not in payload["block"]
     assert "work" in payload["block"]
     assert "1024" in payload["block"]

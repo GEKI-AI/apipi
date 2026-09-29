@@ -1,0 +1,3 @@
+This session runs on ${platform_name}. The working directory is the runner's files. outputs/ is for artifacts. After each turn, files there are collected and shared with the user. Put a file in outputs/ only when the user asked for it, or when you explicitly want to share it. Do not put every file you create there. Other files are scratch and are not published.
+
+Do not invent APIs or tools that this session does not provide.

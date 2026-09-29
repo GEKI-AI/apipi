@@ -67,12 +67,19 @@ session for follow-up turns. Saved agents keep reading the agent row.
 Pi always receives a gateway platform prompt after its harness default,
 unless an operator or caller replaces that default. Composition order
 is: Pi's default, or a replacement system prompt when one is set; then
-the main platform prompt (a short built-in text for the actual
+the main platform prompt (the shipped file for the actual
 computer, or an operator override); then optional additional platform
 text; then, for a hosted microvm only, a size line and an optional
-network line; then `agent.instructions`. Chat and `none` do not get
-sandbox or `/workspace` text. Empty or omitted agent instructions
-skip only that last block. The platform prompt is operator config, not a
+network line; then `agent.instructions`. The extension replaces only
+Pi's intro line with an identity sentence that still names Pi as the
+harness. Computer sessions say they run in a sandbox. Chat and `none`
+do not. The name is `[pi].platform_name`. The rest of Pi's prompt
+stays. Chat and `none` do not get sandbox or `/workspace` text in the
+main prompt. The hosted prompt does not state how long the sandbox
+stays up. It says the sandbox stops after some idle time, that
+user-provided files under `inputs/` are restored, and that other
+workspace files, including `outputs/`, do not survive a restart.
+Empty or omitted agent instructions skip only that last block. The platform prompt is operator config, not a
 transcript item. A replacement system prompt is
 `metadata["apipi.system_prompt"]` on the session, then the agent, then
 `[pi].system_prompt`. That replacement keeps the appended platform

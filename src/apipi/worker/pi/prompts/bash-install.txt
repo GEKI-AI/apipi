@@ -1,0 +1,1 @@
+Do not install Playwright or browser binaries. Use the Playwright MCP tools.

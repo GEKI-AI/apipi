@@ -11,63 +11,34 @@ MAX_FRAGMENT_BYTES = 32 * 1024
 MAX_PROMPT_BYTES = 120 * 1024
 _VAR = re.compile(r"\$(\$\{|[A-Za-z_][A-Za-z0-9_]*|\{([A-Za-z_][A-Za-z0-9_]*)\})")
 _CACHE: dict[str, tuple[int, str]] = {}
+_SHIPPED: dict[str, str] = {}
+_PROMPTS = Path(__file__).resolve().parent / "prompts"
 
-IDENTITY = (
-    "You are an expert coding assistant operating inside ${platform_name}, "
-    "a coding agent harness."
-)
-MAIN_NONE = (
-    "This session runs on ${platform_name}. There is no computer and no file or "
-    "shell tools. Do not invent APIs or tools that this session does not "
-    "provide."
-)
-MAIN_HOSTED = (
-    "This session runs on ${platform_name}. The working directory is ${workspace}. "
-    "An idle or TTL stop (${idle_ttl}) deletes the workspace, possibly "
-    "mid-conversation. The next message starts a fresh sandbox. The "
-    "conversation history persists, but files outside outputs/ do not. "
-    "Files provided by the user are under inputs/. Write files the user "
-    "should receive under outputs/. Those files are published when a turn "
-    "completes and stay downloadable after the sandbox is gone. Do not "
-    "invent APIs or tools that this session does not provide."
-)
-MAIN_SELF = (
-    "This session runs on ${platform_name}. The working directory is the runner's "
-    "files. Write files the user should receive under outputs/. Those files "
-    "are published when a turn completes and stay downloadable. Other files "
-    "are scratch and are not published. Do not invent APIs or tools that "
-    "this session does not provide."
-)
-SIZE = "Sandbox size is ${size} (${mem_mib} MiB)."
-NETWORK_ENABLED = "This sandbox has network access."
-NETWORK_RESTRICTED = "This sandbox has restricted network access."
-MCP_TOOL = (
-    "Use ${tool_name} for ${server_label} MCP (${tool}). "
-    "Do not reimplement it with bash."
-)
-PLAYWRIGHT = (
-    "${chromium}Drive the browser only through these MCP tools. "
-    "Save screenshots under outputs/. "
-    "Do not npm install playwright or download browsers."
-)
-BASH_INSTALL = (
-    "Do not install Playwright or browser binaries. Use the Playwright MCP tools."
-)
+FILES: dict[str, str] = {
+    "identity.none": "identity-none.txt",
+    "identity.computer": "identity-computer.txt",
+    "main.none": "none.txt",
+    "main.hosted": "hosted.txt",
+    "main.self_hosted": "self-hosted.txt",
+    "additional.none": "additional-none.txt",
+    "additional.hosted": "additional-hosted.txt",
+    "additional.self_hosted": "additional-self-hosted.txt",
+    "size": "size.txt",
+    "network": "network.txt",
+    "network.enabled": "network-enabled.txt",
+    "network.restricted": "network-restricted.txt",
+    "capability": "capability.txt",
+    "mcp_tool": "mcp-tool.txt",
+    "playwright": "playwright.txt",
+    "chromium": "chromium.txt",
+    "bash_install_block": "bash-install.txt",
+}
 
-DEFAULTS: dict[str, str] = {
-    "identity": IDENTITY,
-    "main.none": MAIN_NONE,
-    "main.hosted": MAIN_HOSTED,
-    "main.self_hosted": MAIN_SELF,
-    "additional.none": "",
-    "additional.hosted": "",
-    "additional.self_hosted": "",
-    "size": SIZE,
-    "network": "",
-    "capability": "",
-    "mcp_tool": MCP_TOOL,
-    "playwright": PLAYWRIGHT,
-    "bash_install_block": BASH_INSTALL,
+GUIDELINE_FILES: dict[str, str] = {
+    "mcp_tool": "mcp-tool.txt",
+    "playwright": "playwright.txt",
+    "chromium": "chromium.txt",
+    "bash_install_block": "bash-install.txt",
 }
 
 VARIABLES = frozenset(
@@ -91,7 +62,14 @@ VARIABLES = frozenset(
 )
 
 _ENV = {
-    "identity": ("APIPI_PLATFORM_IDENTITY", "APIPI_PLATFORM_IDENTITY_FILE"),
+    "identity.none": (
+        "APIPI_PLATFORM_IDENTITY_NONE",
+        "APIPI_PLATFORM_IDENTITY_NONE_FILE",
+    ),
+    "identity.computer": (
+        "APIPI_PLATFORM_IDENTITY_COMPUTER",
+        "APIPI_PLATFORM_IDENTITY_COMPUTER_FILE",
+    ),
     "main.none": ("APIPI_PLATFORM_PROMPT_NONE", "APIPI_PLATFORM_PROMPT_NONE_FILE"),
     "main.hosted": (
         "APIPI_PLATFORM_PROMPT_HOSTED",
@@ -115,14 +93,25 @@ _ENV = {
     ),
     "size": ("APIPI_PLATFORM_SIZE", "APIPI_PLATFORM_SIZE_FILE"),
     "network": ("APIPI_PLATFORM_NETWORK", "APIPI_PLATFORM_NETWORK_FILE"),
+    "network.enabled": (
+        "APIPI_PLATFORM_NETWORK_ENABLED",
+        "APIPI_PLATFORM_NETWORK_ENABLED_FILE",
+    ),
+    "network.restricted": (
+        "APIPI_PLATFORM_NETWORK_RESTRICTED",
+        "APIPI_PLATFORM_NETWORK_RESTRICTED_FILE",
+    ),
     "capability": ("APIPI_PLATFORM_CAPABILITY", "APIPI_PLATFORM_CAPABILITY_FILE"),
     "mcp_tool": ("APIPI_PLATFORM_MCP_TOOL", "APIPI_PLATFORM_MCP_TOOL_FILE"),
     "playwright": ("APIPI_PLATFORM_PLAYWRIGHT", "APIPI_PLATFORM_PLAYWRIGHT_FILE"),
+    "chromium": ("APIPI_PLATFORM_CHROMIUM", "APIPI_PLATFORM_CHROMIUM_FILE"),
     "bash_install_block": (
         "APIPI_PLATFORM_BASH_INSTALL",
         "APIPI_PLATFORM_BASH_INSTALL_FILE",
     ),
 }
+
+_IDENTITY_ENV = ("APIPI_PLATFORM_IDENTITY", "APIPI_PLATFORM_IDENTITY_FILE")
 
 
 def render_template(
@@ -151,6 +140,40 @@ def render_template(
         return values.get(name, "")
 
     return _VAR.sub(repl, text)
+
+
+def load_shipped() -> None:
+    if _SHIPPED:
+        return
+    loaded: dict[str, str] = {}
+    for name, filename in FILES.items():
+        path = _PROMPTS / filename
+        try:
+            text = path.read_text()
+        except OSError:
+            raise ConfigError(f"prompt template missing: {filename}") from None
+        if len(text.encode()) > MAX_FRAGMENT_BYTES:
+            raise ConfigError(f"prompt template {filename} is too large")
+        loaded[name] = text.strip("\n")
+    _SHIPPED.update(loaded)
+
+
+def shipped_text(name: str) -> str:
+    load_shipped()
+    try:
+        return _SHIPPED[name]
+    except KeyError:
+        raise ConfigError(f"prompt template missing: {name}") from None
+
+
+def render_shipped(name: str, values: dict[str, str]) -> str:
+    return render_template(
+        shipped_text(name),
+        values,
+        fragment=name,
+        source="built-in",
+        strict=False,
+    )
 
 
 def _read_file(path: str, *, fragment: str, strict: bool) -> str | None:
@@ -185,30 +208,51 @@ def _read_file(path: str, *, fragment: str, strict: bool) -> str | None:
     return text
 
 
-def fragment_source(settings: Settings, name: str) -> tuple[str | None, str | None]:
-    text_env, file_env = _ENV[name]
+def _pair(
+    text_env: str, file_env: str, *, fragment: str
+) -> tuple[str | None, str | None]:
     text = os.environ.get(text_env)
     file = os.environ.get(file_env)
     if text is not None and file:
         raise ConfigError(
-            f"set {text_env} or {file_env}, not both, for fragment {name}"
+            f"set {text_env} or {file_env}, not both, for fragment {fragment}"
         )
-    if (
-        name.startswith("main.")
-        and settings.platform_prompt is not None
-        and text is None
-        and not file
-    ):
-        return settings.platform_prompt, "APIPI_PLATFORM_PROMPT"
-    if name.startswith("additional.") and not text and not file:
-        extra = settings.platform_prompt_additional
-        if extra:
-            return extra, "APIPI_PLATFORM_PROMPT_ADDITIONAL"
     if text is not None:
         return text, text_env
     if file:
         return file, file_env
     return None, None
+
+
+def fragment_source(settings: Settings, name: str) -> tuple[str | None, str | None]:
+    text_env, file_env = _ENV[name]
+    text, source = _pair(text_env, file_env, fragment=name)
+    if text is not None or source:
+        return text, source
+    if name.startswith("main.") and settings.platform_prompt is not None:
+        return settings.platform_prompt, "APIPI_PLATFORM_PROMPT"
+    if name.startswith("additional."):
+        extra = settings.platform_prompt_additional
+        if extra:
+            return extra, "APIPI_PLATFORM_PROMPT_ADDITIONAL"
+    if name.startswith("identity."):
+        shared, shared_source = _pair(*_IDENTITY_ENV, fragment=name)
+        if shared is not None or shared_source:
+            return shared, shared_source
+    return None, None
+
+
+def fragment_body(settings: Settings, name: str) -> str:
+    override, source = fragment_source(settings, name)
+    if source and source.endswith("_FILE") and override:
+        loaded = _read_file(override, fragment=name, strict=False)
+        if loaded is None:
+            cached = _CACHE.get(override)
+            return cached[1].strip("\n") if cached else shipped_text(name)
+        return loaded.strip("\n")
+    if override is not None and source and not source.endswith("_FILE"):
+        return override
+    return shipped_text(name)
 
 
 def fragment_text(
@@ -223,7 +267,7 @@ def fragment_text(
         loaded = _read_file(override, fragment=name, strict=strict)
         if loaded is None:
             cached = _CACHE.get(override)
-            body = cached[1] if cached else DEFAULTS[name]
+            body = cached[1] if cached else shipped_text(name)
         else:
             body = loaded
         source_name = source
@@ -231,33 +275,35 @@ def fragment_text(
         body = override
         source_name = source
     else:
-        body = DEFAULTS[name]
+        body = shipped_text(name)
         source_name = "built-in"
     rendered = render_template(
         body, values, fragment=name, source=source_name, strict=strict
     )
     if len(rendered.encode()) > MAX_FRAGMENT_BYTES:
         raise ConfigError(f"fragment {name} is too large")
-    return rendered
+    return rendered.strip("\n")
 
 
 def validate_fragments(settings: Settings) -> None:
+    load_shipped()
     values = {name: "" for name in VARIABLES}
     values["platform_name"] = settings.platform_name
-    for name in DEFAULTS:
+    for name in FILES:
         fragment_text(settings, name, values, strict=True)
 
 
-def capability_block(values: dict[str, str]) -> str:
-    network = values.get("network") or "disabled"
-    return (
-        f"Image is {values.get('image') or 'default'}. "
-        f"Size is {values.get('size') or 'S'} "
-        f"({values.get('mem_mib') or '0'} MiB, {values.get('vcpus') or '1'} vCPUs). "
-        f"Network access is {network}. "
-        "Do not assume a browser is available. "
-        "Use Playwright MCP tools only if they are registered."
-    )
+def capability_block(settings: Settings, values: dict[str, str]) -> str:
+    filled = {
+        **values,
+        "image": values.get("image") or "default",
+        "size": values.get("size") or "S",
+        "mem_mib": values.get("mem_mib") or "0",
+        "vcpus": values.get("vcpus") or "1",
+        "network": values.get("network") or "disabled",
+        "date": "${date}",
+    }
+    return fragment_text(settings, "capability", filled, strict=False)
 
 
 def cap_prompt(text: str) -> str:
@@ -265,3 +311,7 @@ def cap_prompt(text: str) -> str:
     if len(raw) <= MAX_PROMPT_BYTES:
         return text
     raise ConfigError("composed platform prompt is too large")
+
+
+def computer_identity(env_type: str | None) -> bool:
+    return env_type in {"openai_hosted", "hosted", "self_hosted"}

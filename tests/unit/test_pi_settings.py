@@ -54,6 +54,31 @@ def test_merge_keeps_unknown_keys_and_disables_compaction(tmp_path: Path) -> Non
     assert (tmp_path / "SYSTEM.md").read_text() == "Be a custom harness.\n"
 
 
+def test_identity_follows_environment(tmp_path: Path) -> None:
+    apply_pi_agent_files(
+        tmp_path / "none",
+        _settings(platform_name="GEKI"),
+        thinking="off",
+        system_prompt=None,
+        env_type="none",
+    )
+    apply_pi_agent_files(
+        tmp_path / "hosted",
+        _settings(platform_name="GEKI"),
+        thinking="off",
+        system_prompt=None,
+        env_type="openai_hosted",
+    )
+    none = (tmp_path / "none" / "identity.txt").read_text()
+    hosted = (tmp_path / "hosted" / "identity.txt").read_text()
+    assert none == "You are a GEKI agent using Pi as your harness.\n"
+    assert "sandbox" not in none
+    assert hosted == (
+        "You are a GEKI agent running in a sandbox using Pi as your harness.\n"
+    )
+    assert "Use ${tool_name}" in (tmp_path / "none" / "mcp-tool.txt").read_text()
+
+
 def test_unset_system_prompt_removes_stale_file(tmp_path: Path) -> None:
     (tmp_path / "SYSTEM.md").write_text("old\n")
     apply_pi_agent_files(

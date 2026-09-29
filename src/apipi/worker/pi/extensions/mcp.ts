@@ -213,6 +213,28 @@ function chromiumPath(server: StdioServer): string | null {
   return null;
 }
 
+function agentFile(name: string): string {
+  const dir = process.env.PI_CODING_AGENT_DIR;
+  if (!dir) {
+    return "";
+  }
+  try {
+    return readFileSync(`${dir}/${name}`, "utf8").trim();
+  } catch {
+    console.error(`apipi prompt file missing: ${name}`);
+    return "";
+  }
+}
+
+function fill(template: string, values: Record<string, string>): string {
+  return template.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string) => {
+    if (Object.prototype.hasOwnProperty.call(values, name)) {
+      return values[name];
+    }
+    return match;
+  });
+}
+
 function registerTools(
   pi: ExtensionAPI,
   label: string,
@@ -224,13 +246,21 @@ function registerTools(
   for (const tool of tools) {
     const name = `mcp_${sanitize(label)}_${sanitize(tool.name)}`;
     const lines = [
-      `Use ${name} for ${label} MCP (${tool.name}). Do not reimplement it with bash.`,
-    ];
+      fill(agentFile("mcp-tool.txt"), {
+        tool_name: name,
+        server_label: label,
+        tool: tool.name,
+      }),
+    ].filter((line) => line);
     if (first && opts.playwright) {
-      const where = opts.chromium ? `Chromium is at ${opts.chromium}. ` : "";
-      lines.push(
-        `${where}Drive the browser only through these MCP tools. Save screenshots under outputs/. Do not npm install playwright or download browsers.`,
-      );
+      const browser = agentFile("playwright.txt");
+      const where = opts.chromium
+        ? fill(agentFile("chromium.txt"), { chromium: opts.chromium })
+        : "";
+      const joined = [where, browser].filter((line) => line).join(" ");
+      if (joined) {
+        lines.push(joined);
+      }
     }
     pi.registerTool({
       name,
@@ -477,7 +507,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
     const date = new Date().toISOString().slice(0, 10);
-    const block = `${parsed.block ?? ""}\nToday is ${date}.`.trim();
+    const block = (parsed.block ?? "").replace(/\$\{date\}/g, date).trim();
     const extra = [block, ...overrides].filter((item) => item).join("\n\n");
     if (!extra) {
       return current === event.systemPrompt ? undefined : { systemPrompt: current };
@@ -494,8 +524,7 @@ export default function (pi: ExtensionAPI) {
     if (playwrightTools && INSTALL_RE.test(command)) {
       return {
         block: true,
-        reason:
-          "Do not install Playwright or browser binaries. Use the Playwright MCP tools.",
+        reason: agentFile("bash-install.txt") || "blocked",
       };
     }
     if (input.timeout === undefined) {

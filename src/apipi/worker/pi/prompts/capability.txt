@@ -1,0 +1,2 @@
+Image is ${image}. Size is ${size} (${mem_mib} MiB, ${vcpus} vCPUs). Network access is ${network}. Do not assume a browser is available. Use Playwright MCP tools only if they are registered.
+Today is ${date}.

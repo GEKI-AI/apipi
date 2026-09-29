@@ -1,30 +1,5 @@
 from apipi.config import Settings
 
-NO_COMPUTER_PROMPT = (
-    "This session runs on ApiPi. There is no computer and no file or "
-    "shell tools. Do not invent APIs or tools that this session does not "
-    "provide."
-)
-
-HOSTED_PROMPT = (
-    "This session runs on ApiPi. The working directory is /workspace. "
-    "An idle or TTL stop (15m) deletes the workspace, possibly "
-    "mid-conversation. The next message starts a fresh sandbox. The "
-    "conversation history persists, but files outside outputs/ do not. "
-    "Files provided by the user are under inputs/. Write files the user "
-    "should receive under outputs/. Those files are published when a turn "
-    "completes and stay downloadable after the sandbox is gone. Do not "
-    "invent APIs or tools that this session does not provide."
-)
-
-SELF_HOSTED_PROMPT = (
-    "This session runs on ApiPi. The working directory is the runner's "
-    "files. Write files the user should receive under outputs/. Those files "
-    "are published when a turn completes and stay downloadable. Other files "
-    "are scratch and are not published. Do not invent APIs or tools that "
-    "this session does not provide."
-)
-
 _HOSTED = frozenset({"openai_hosted", "hosted"})
 
 
@@ -39,18 +14,24 @@ def _computer(env_type: str | None, chat: bool) -> str | None:
 
 
 def _main_prompt(env_type: str | None, chat: bool) -> str:
-    kind = _computer(env_type, chat)
-    if kind == "hosted":
-        return HOSTED_PROMPT
-    if kind == "self_hosted":
-        return SELF_HOSTED_PROMPT
-    return NO_COMPUTER_PROMPT
+    from apipi.worker.pi.fragments import render_shipped
+
+    kind = _computer(env_type, chat) or "none"
+    return render_shipped(
+        f"main.{kind}",
+        {
+            "platform_name": "ApiPi",
+            "workspace": "/workspace" if kind == "hosted" else "",
+        },
+    )
 
 
 def sandbox_size_hint(size: str | None, mem_mib: int | None) -> str:
     if not size or mem_mib is None:
         return ""
-    return f"Sandbox size is {size} ({mem_mib} MiB)."
+    from apipi.worker.pi.fragments import render_shipped
+
+    return render_shipped("size", {"size": size, "mem_mib": str(mem_mib)})
 
 
 def _idle_label(settings: Settings) -> str:
@@ -90,10 +71,12 @@ def _write_capability(
 
 
 def network_hint(access: str | None) -> str:
+    from apipi.worker.pi.fragments import render_shipped
+
     if access == "enabled":
-        return "This sandbox has network access."
+        return render_shipped("network.enabled", {})
     if access == "restricted":
-        return "This sandbox has restricted network access."
+        return render_shipped("network.restricted", {})
     return ""
 
 
@@ -141,7 +124,7 @@ def compose_instructions(
         if kind == "hosted" and settings.run_mode == "microvm":
             from apipi.worker.pi.fragments import capability_block, fragment_source
 
-            _write_capability(cwd, capability_block(values), settings, values)
+            _write_capability(cwd, capability_block(settings, values), settings, values)
             if fragment_source(settings, "size")[0] is not None:
                 size = fragment_text(settings, "size", values, strict=False)
             if fragment_source(settings, "network")[0] is not None:
