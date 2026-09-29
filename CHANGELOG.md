@@ -7,45 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [0.8.0] - 2026-09-29
 
-- Stdio MCP servers attach again. The Pi extension now writes
-  newline-delimited JSON. It wrote `Content-Length` frames, which MCP
-  servers ignore. Startup no longer waits about 5 seconds per server.
-- Guests mount `/dev/shm` and `/dev/pts`.
-- HTTP MCP tools reach Pi. The extension lists them from the host
-  credential broker URL and registers `mcp_<server_label>_<tool>`.
-  The guest still does not receive the bearer. A later list failure
-  is logged and the turn continues.
-
-### Changed
-
-- Browser and image hints are based on the resolved computer and on
-  tools that actually registered, not on sandbox size. Sessions
-  without a sandbox no longer get size text.
-- The browser image adds Noto CJK and emoji fonts. Size `L` defaults
-  to 2 vCPUs (`APIPI_SANDBOX_L_VCPUS`).
-
-### Removed
-
-- Unused `sandbox_playwright_mcp` / `APIPI_SANDBOX_PLAYWRIGHT_MCP`.
-  The TOML key `playwright_mcp` is ignored. The dead browser hint in
-  the platform prompt is gone. Playwright guidance is added only after
-  those tools register.
-
-### Changed
+### Breaking
 
 - Public session responses no longer include `environment.directory`.
   The host path stays in the store for the worker.
-
-### Fixed
-
-- A warm sandbox attach is not blocked by another session's cold boot.
-- `GET` during a remote turn no longer marks the turn interrupted while
-  the worker lease is live.
-- Host setup runs off the event loop.
-- A pool stop sends `lease.release` so idle sessions do not keep worker
-  capacity. The worker handles `lease.revoke`.
+- TOML keys removed in 0.7.0 are now unknown settings:
+  `thinking_summary`, `auto_title`, `sidekick_model`,
+  `sidekick_base_url`, and `sidekick_api_key`. They were ignored in
+  0.7.0.
 
 ### Added
 
@@ -62,6 +33,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `metadata["apipi.sandbox_eager_boot"]` is set.
 - `apipi images check browser` is a local developer check for the
   browser image. It is not part of CI.
+
+### Changed
+
+- Browser and image hints are based on the resolved computer and on
+  tools that actually registered, not on sandbox size. Sessions
+  without a sandbox no longer get size text.
+- The browser image adds Noto CJK and emoji fonts. Size `L` defaults
+  to 2 vCPUs (`APIPI_SANDBOX_L_VCPUS`).
+
+### Removed
+
+- Unused `sandbox_playwright_mcp` / `APIPI_SANDBOX_PLAYWRIGHT_MCP`.
+  The TOML key `playwright_mcp` is ignored. The dead browser hint in
+  the platform prompt is gone. Playwright guidance is added only after
+  those tools register.
+
+### Fixed
+
+- Stdio MCP servers attach again. The Pi extension now writes
+  newline-delimited JSON. It wrote `Content-Length` frames, which MCP
+  servers ignore. Startup no longer waits about 5 seconds per server.
+- Guests mount `/dev/shm` and `/dev/pts`.
+- HTTP MCP tools reach Pi. The extension lists them from the host
+  credential broker URL and registers `mcp_<server_label>_<tool>`.
+  The guest still does not receive the bearer. A later list failure
+  is logged and the turn continues.
+- A warm sandbox attach is not blocked by another session's cold boot.
+- `GET` during a remote turn no longer marks the turn interrupted while
+  the worker lease is live.
+- Host setup runs off the event loop.
+- A pool stop sends `lease.release` so idle sessions do not keep worker
+  capacity. The worker handles `lease.revoke`.
 
 ## [0.7.0] - 2026-09-28
 

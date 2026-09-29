@@ -66,15 +66,6 @@ OPENAI_API_KEY_IGNORED = (
     "OPENAI_API_KEY is ignored; the request bearer is sent to the model host"
 )
 FLAT_TOML_WARNING = "TOML key {key} is deprecated; use {path}"
-_REMOVED_TOML = frozenset(
-    {
-        "thinking_summary",
-        "auto_title",
-        "sidekick_model",
-        "sidekick_base_url",
-        "sidekick_api_key",
-    }
-)
 
 _log = logging.getLogger("apipi")
 
@@ -1119,10 +1110,6 @@ def _toml_values(path: Path) -> dict[str, Any]:
     for key, value in raw.items():
         if key in nested:
             raise ConfigError(f"cannot set {key} and its [pi] or [sandbox] path")
-        if key in _REMOVED_TOML:
-            # TODO: drop this shim in the release after 0.7.0
-            _log.warning(f"{key} was removed in 0.7.0 and is ignored")
-            continue
         if key not in known or isinstance(value, dict):
             raise ConfigError(f"unknown setting: {key}")
         if key in _LEGACY_FLAT_TOML:
