@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from apipi.config import Settings
 from apipi.worker.pi.platform_prompt import (
     HOSTED_PROMPT,
@@ -120,8 +123,10 @@ def test_microvm_size_hint_is_ram_only() -> None:
         network="enabled",
     )
     assert composed is not None
-    assert "Sandbox size is L (2048 MiB)." in composed
-    assert "This sandbox has network access." in composed
+    assert "Sandbox size is L (2048 MiB)." not in composed
+    assert "This sandbox has network access." not in composed
+    assert "inputs/" in composed
+    assert "Today is" not in composed
     assert "Chromium" not in composed
     assert "Playwright" not in composed
 
@@ -136,8 +141,31 @@ def test_restricted_network_hint() -> None:
         network="restricted",
     )
     assert text is not None
-    assert "restricted network access" in text
-    assert "Sandbox size is M (1024 MiB)." in text
+    assert "restricted network access" not in text
+    assert "Sandbox size is M (1024 MiB)." not in text
+    assert "idle or TTL stop" in text
+
+
+def test_capability_file_has_no_date(tmp_path: Path) -> None:
+    text = compose_instructions(
+        _settings(run_mode="microvm"),
+        None,
+        env_type="openai_hosted",
+        sandbox_size="M",
+        mem_mib=1024,
+        network="enabled",
+        image="work",
+        vcpus=2,
+        cwd=str(tmp_path),
+    )
+    assert text is not None
+    assert "Today is" not in text
+    assert "Do not assume a browser is available" not in text
+    payload = json.loads((tmp_path / ".pi" / "agent" / "capability.json").read_text())
+    assert "Do not assume a browser is available" in payload["block"]
+    assert "Chromium is" not in payload["block"]
+    assert "work" in payload["block"]
+    assert "1024" in payload["block"]
 
 
 def test_disabled_or_unset_network_is_omitted() -> None:

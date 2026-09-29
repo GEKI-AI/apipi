@@ -99,6 +99,12 @@ def test_render_setup_script_installs_and_commands(tmp_path: Path) -> None:
     assert 'export PATH="$VENV/bin:$PATH"' in script
 
 
+def test_hosted_workspace_has_inputs(tmp_path: Path) -> None:
+    workspace = tmp_path / "session"
+    prepare_workspace(workspace, {"type": "openai_hosted"})
+    assert (workspace / "inputs").is_dir()
+
+
 def test_prepare_and_run_host_setup(tmp_path: Path) -> None:
     workspace = tmp_path / "session"
     workspace.mkdir()
