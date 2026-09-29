@@ -73,6 +73,8 @@ packages = ["src/apipi"]
 "images/default/image.env" = "apipi/worker/pi/images/default/image.env"
 "images/browser/image.env" = "apipi/worker/pi/images/browser/image.env"
 "images/browser/setup.sh" = "apipi/worker/pi/images/browser/setup.sh"
+"images/work/image.env" = "apipi/worker/pi/images/work/image.env"
+"images/work/setup.sh" = "apipi/worker/pi/images/work/setup.sh"
 
 [project.scripts]
 apipi = "apipi.cli:main"

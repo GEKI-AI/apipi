@@ -397,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     shell_parser.add_argument("--config", default=None, help="TOML config file")
     shell_parser.add_argument(
         "--image",
-        choices=("default", "browser"),
+        choices=("default", "browser", "work"),
         default=None,
         help="Rootfs flavor (default: APIPI_MICROVM_IMAGE)",
     )

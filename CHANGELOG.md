@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Every guest image includes `pip` and a pinned static `uv`. `pip`
   installs into the workspace user site. `uv` cache stays on `/tmp`.
+- Guest image `work` adds Excel, Word, PowerPoint, PDF, CSV, and chart
+  libraries. It needs sandbox size `M` or larger. It does not include
+  LibreOffice or pandoc.
 
 ### Documentation
 

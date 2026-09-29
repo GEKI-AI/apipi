@@ -86,7 +86,7 @@ a guest image when `APIPI_IMAGE_SOURCE` is set. `--build` builds from
 the recipe instead. The runtime looks for a kernel and rootfs in this
 order: an explicit path, then `<id>/current` in the images dir, then
 the legacy cache. Missing files should be fixed with `apipi images pull`. Build a rootfs on the operator machine yourself if
-you want another output directory. Two flavors:
+you want another output directory. Three flavors:
 
 Recipes live in `images/<id>/`. `images/build.sh` is the build
 script. `./scripts/microvm-rootfs` maps `--flavor` to that script so
@@ -96,8 +96,9 @@ older commands still work.
 | --- | --- | --- |
 | `default` | `./images/build.sh default` | `rootfs.ext4` |
 | `browser` | `./images/build.sh browser` | `rootfs-browser.ext4` |
+| `work` | `./images/build.sh work` | `rootfs-work.ext4` |
 
-Both write a Firecracker `vmlinux` (when the download works) under
+Each build writes a Firecracker `vmlinux` (when the download works) under
 `$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). Pass a
 directory argument to choose another location. The files do not
 overwrite each other. The script needs `curl`, `tar`, `mkfs.ext4`,
@@ -111,6 +112,15 @@ a pinned `uv`, `ip`, `socat`, `curl`, and `git`, and copies
 That uses guest RAM. `uv run --with <pkg> script.py` and
 `uv venv --system-site-packages /tmp/venv` also work. `uv pip install
 --system` does not, because the root filesystem is read-only.
+`work` is that image plus libraries for Excel, Word, PowerPoint, PDF,
+CSV, and charts. Compiled pieces come from Alpine (`pandas`,
+`matplotlib`, `pillow`, `lxml`, and others). `python-docx`,
+`python-pptx`, and `fpdf2` are installed at build time because Alpine
+3.21 does not package them. The image is 3 GiB. Use sandbox size `M`
+or larger. It does not include LibreOffice or pandoc. Do not point
+`APIPI_MICROVM_ROOTFS` at `rootfs-work.ext4`. That replaces the default
+image. Use `sandbox_image=work` after `apipi images pull` or
+`apipi install --microvm --image work`.
 `browser` is that image plus Alpine Chromium, Noto fonts (including
 CJK and emoji), font/NSS packages, and a pinned `@playwright/mcp`
 installed at `/opt/apipi/playwright-mcp`. Auto-inject starts that

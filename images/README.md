@@ -68,6 +68,13 @@ publish` is the same command. Workers then run `apipi images pull`.
 `apipi images list --remote` shows whether the local copy matches the
 store. See [install](../docs/install.md).
 
+`work` is the business-document image. `MIN_SIZE` is `M` and
+`SIZE_MIB` is `3072`. Alpine packages cover the compiled libraries.
+`setup.sh` pins `python-docx`, `python-pptx`, and `fpdf2` into the
+system site at build time, then writes one xlsx, docx, pptx, and pdf
+and runs `pdftotext`. The image does not include LibreOffice or
+pandoc. Select it with `sandbox_image=work`.
+
 ## Add an image
 
 1. Create `images/<id>/image.env` with `IMAGE_ID` equal to `<id>`.

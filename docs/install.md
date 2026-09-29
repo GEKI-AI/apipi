@@ -53,7 +53,8 @@ installs MicroVM.
 
 ## Pi and MicroVM
 
-Flags skip the prompt: `--pi`, `--microvm`, and `--image default|browser`.
+Flags skip the prompt: `--pi`, `--microvm`, and
+`--image default|browser|work`.
 `--dry-run` prints the commands and exits. `--image` without `--pi`
 installs only the microVM.
 
@@ -61,6 +62,7 @@ installs only the microVM.
 apipi install --pi
 apipi install --microvm
 apipi install --microvm --image browser
+apipi install --microvm --image work
 apipi install --pi --microvm
 ```
 
@@ -69,7 +71,8 @@ That image contains Alpine Chromium, Noto fonts, and a pinned
 Playwright MCP server. Auto-inject starts the vendored server. It does not run
 `npx` inside the guest. After upgrading ApiPi, run
 `apipi install --microvm --image browser` again so workers pick up
-that rootfs. See [run modes](run-modes.md).
+that rootfs. `--image work` installs the business-document image.
+It needs sandbox size `M` or larger. See [run modes](run-modes.md).
 
 `--microvm` pulls a prebuilt image when `APIPI_IMAGE_SOURCE` is set.
 `--build` keeps the local recipe build for an air-gapped host.

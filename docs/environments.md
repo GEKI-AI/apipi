@@ -118,8 +118,13 @@ checked when a session is created.
 The resolved id is stored on the session `environment` as
 `sandbox_image`. A later metadata update does not reimage a live guest.
 An id must match `^[a-z0-9][a-z0-9-]{0,31}$`. An unknown id is `400`.
-Each image has a minimum size. `browser` needs `M` or larger. A smaller
-size is `400`. Isolation `none` stores the field and does not apply it.
+Each image has a minimum size. `browser` and `work` need `M` or
+larger. A smaller size is `400`. Isolation `none` stores the field
+and does not apply it. `work` is the business-document image. It
+includes libraries for Excel, Word, PowerPoint, PDF, CSV, and charts.
+It does not include LibreOffice or pandoc. Select it with
+`sandbox_image` `work` and size `M` or `L`. Install it with
+`apipi install --microvm --image work` or `apipi images pull`.
 
 Playwright MCP is injected when the resolved image is `browser` and
 auto-inject is on, not because the size is `L`. The shipped default

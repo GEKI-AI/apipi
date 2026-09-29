@@ -38,6 +38,8 @@ jobs:
         run: uv run apipi images build default --out image-out --arch ${{ matrix.arch }}
       - name: Build browser
         run: uv run apipi images build browser --out image-out --arch ${{ matrix.arch }}
+      - name: Build work
+        run: uv run apipi images build work --out image-out --arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
           name: images-${{ matrix.arch }}

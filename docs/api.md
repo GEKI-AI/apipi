@@ -618,7 +618,9 @@ selects `browser` and other sizes use the default image. Image
 `browser` injects the vendored Playwright MCP server unless the agent
 already has it or auto-inject is off. Attach does not block the first
 turn for minutes. Install that rootfs with
-`apipi install --microvm --image browser`. A known image that no
+`apipi install --microvm --image browser`. Image `work` is the
+business-document guest. It needs size `M` or larger. Install it with
+`apipi install --microvm --image work`. A known image that no
 worker has is `503` with code `image_unavailable`. See
 [environments](environments.md).
 
