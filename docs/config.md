@@ -408,10 +408,11 @@ The gateway always composes the appended blocks before
 `agent.instructions`. Order: Pi's harness default, or
 `system_prompt` when that is set (session metadata, then agent
 metadata, then `[pi].system_prompt`); then the main platform prompt;
-then additional platform text; then the sandbox size hint. The
-gateway does not add a Playwright MCP hint from the injected tool
-list. Tool names are registered only after the guest attach
-succeeds. Then `agent.instructions`. Skills, capability
+then additional platform text; then, only for a hosted microvm
+computer, a size line and an optional network line. Then
+`agent.instructions`. The gateway does not add Playwright text from
+the injected tool list. Those names appear only after the guest
+attach succeeds, inside the Pi extension. Skills, capability
 directories, packages, and setup commands are unchanged. Empty main
 (`platform_prompt = ""`) drops only the main block; additional and
 agent instructions still apply. An empty `system_prompt` keeps Pi's
@@ -419,13 +420,25 @@ harness default. Platform prompt and compaction settings live on the
 process that runs Pi (combined `apipi serve` or `apipi worker`).
 Thinking level and system prompt may also be set per session.
 
-The built-in main prompt tells the model that hosted cwd is
-`/workspace`, durable files go under `outputs/` only, `none` has no
-computer, scratch is deleted with the sandbox, and it must not invent
-unavailable APIs. The gateway also appends the resolved sandbox size
-(`S` / `M` / `L`). It does not name Playwright MCP tools just
-because auto-inject added a stdio server. Those names appear only
-after the guest attach succeeds.
+The built-in main prompt matches the session. A hosted computer is
+told that the working directory is `/workspace` and that durable
+files go under `outputs/`. A self-hosted computer is told that the
+working directory is the runner's files. Chat and `environment.type`
+`none` are told there is no computer and no file or shell tools.
+They are not told about `/workspace`, sandbox size, or a browser.
+
+| Fragment | When it is appended |
+| --- | --- |
+| No-computer main prompt | Chat, or `environment.type` is `none` or omitted. No `/workspace`, size, or browser text. |
+| Hosted main prompt | `openai_hosted` (and the `hosted` alias) and not chat. Names `/workspace` and `outputs/`. |
+| Self-hosted main prompt | `self_hosted` and not chat. Names the runner's files and `outputs/`. Does not mention `/workspace`. |
+| Operator main prompt | `APIPI_PLATFORM_PROMPT` is set. Replaces the built-in main block. `""` drops it. |
+| Additional platform text | `APIPI_PLATFORM_PROMPT_ADDITIONAL` is non-empty. Always, after the main block. |
+| Size | Hosted microvm only. `Sandbox size is L (2048 MiB).` RAM comes from the size setting, not a hardcoded "2 GiB". No image name and no Chromium claim. |
+| Network | Hosted microvm only, and only when `network.access` is `enabled` or `restricted`. Omitted when unset or `disabled`. |
+| Playwright tool guidelines | Only after that server's tools register in the guest. One long guideline per server, not once per tool. The Chromium path is included only when that server's args name `/usr/bin/chromium-browser`. |
+| Bash install block | Blocks `npm install playwright` and `playwright install` only after Playwright tools have registered. Otherwise the command is allowed. |
+| `system_prompt` / skills | Operator or caller owned. A replacement system prompt does not remove the blocks above. |
 
 ```toml
 [pi]
@@ -475,7 +488,6 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | `APIPI_SANDBOX_DEFAULT_IMAGE` | `[sandbox].default_image` | `default` | Guest image when the session does not set `environment.sandbox_image` or `metadata["apipi.sandbox_image"]`, and the size is not `L`. `L` still selects `browser`. This is not `APIPI_MICROVM_IMAGE`, which only selects the image for `apipi install` and `apipi microvm shell`. |
 | `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. Playwright MCP is injected when the image is `browser` unless you turn that off. Size `L` still selects that image when none is set. Install that rootfs with `apipi install --microvm --image browser`. |
 | `APIPI_SANDBOX_AUTO_PLAYWRIGHT` | `[sandbox.browser].auto_playwright` | on | When on, image `browser` on `microvm` injects the vendored Playwright MCP server (system Chromium). Off keeps that image and its RAM but does not attach browser tools. |
-| `APIPI_SANDBOX_PLAYWRIGHT_MCP` | `[sandbox.browser].playwright_mcp` | `@playwright/mcp@latest` | Kept so existing config still loads. Auto-inject does not pass this to `npx`. The browser image vendors the server. Rebuild with `apipi install --microvm --image browser`. |
 
 ```toml
 [sandbox]
@@ -508,7 +520,8 @@ A worked example is in [production](production.md#sizing).
 | `APIPI_MICROVM_MEM_MIB` | `[sandbox.resources].mem_mib` | `512` | Guest RAM in MiB for size `S`. |
 | `APIPI_SANDBOX_M_MEM_MIB` | `[sandbox.resources].m_mem_mib` | `1024` | Guest RAM in MiB for size `M`. |
 | `APIPI_SANDBOX_L_MEM_MIB` | `[sandbox.resources].l_mem_mib` | `2048` | Guest RAM in MiB for size `L`. |
-| `APIPI_MICROVM_VCPUS` | `[sandbox.resources].vcpus` | `1` | Guest vCPUs. |
+| `APIPI_MICROVM_VCPUS` | `[sandbox.resources].vcpus` | `1` | Guest vCPUs for sizes `S` and `M`. |
+| `APIPI_SANDBOX_L_VCPUS` | `[sandbox.resources].l_vcpus` | `2` | Guest vCPUs for size `L`. |
 
 ```toml
 [sandbox.resources]
@@ -516,6 +529,7 @@ mem_mib = 512
 m_mem_mib = 1024
 l_mem_mib = 2048
 vcpus = 1
+l_vcpus = 2
 ```
 
 ### Networking

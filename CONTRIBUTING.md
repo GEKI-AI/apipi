@@ -127,7 +127,10 @@ format, lint, types, docs, unit tests, and fast e2e
 
 The full suite is local: `./scripts/check` including
 `@pytest.mark.slow`. Optional Postgres: `APIPI_TEST_DATABASE_URL`.
-Do not add slow jobs to GitHub.
+Do not add slow jobs to GitHub. The browser image check
+(`apipi images check browser`) is a manual developer command. It is
+not part of `./scripts/check` or GitHub CI. How to run it is in
+`images/README.md`.
 
 ## Before you commit
 

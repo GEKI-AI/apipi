@@ -127,7 +127,7 @@ still maps `L` to `browser`, so existing `L` sessions keep the tools.
 | --- | --- | --- | --- |
 | `S` | `[sandbox.resources].mem_mib` (512) | `default` | Pi and light tools |
 | `M` | `APIPI_SANDBOX_M_MEM_MIB` (1024) | `default` | Heavier non-browser work |
-| `L` | `APIPI_SANDBOX_L_MEM_MIB` (2048) | `browser` | Chromium in the guest plus Playwright MCP tools (unless you already attached them). Install the browser rootfs. |
+| `L` | `APIPI_SANDBOX_L_MEM_MIB` (2048) | `browser` | Chromium in the guest, 2 vCPUs by default (`APIPI_SANDBOX_L_VCPUS`). Playwright MCP tools are injected when auto-inject is on, and named in the prompt only after they register. Install the browser rootfs. |
 
 Isolation `none` accepts the field and does not apply RAM or rootfs.
 Isolation `microvm` applies both, including when `environment.type` is
@@ -141,14 +141,19 @@ the same headless Chromium flags. It does not run `npx`. Size `L`
 still selects `browser` when the image is omitted. Install that
 rootfs with `apipi install --microvm --image browser`. An older
 browser rootfs without that file cannot attach. Attach waits at most
-15 seconds, then the turn continues without those tools. The platform
-prompt does not name Playwright MCP tools. Those names are registered
-only after attach succeeds. If the agent already has a Playwright MCP
-tool, that tool is kept and nothing is duplicated. Set
-`[sandbox.browser].auto_playwright = false` to keep the browser image
-and its RAM but attach MCP yourself. A failed attach does not fail
-the turn. The platform prompt always names the sandbox size. It tells
-the model not to install Playwright or browsers.
+15 seconds, then the turn continues without those tools. The worker
+logs `pi.extension_error` with the server label, the phase, and the
+error. Playwright names are registered only after attach succeeds, and
+that is the only time the prompt tells the model to use them. If the
+agent already has a Playwright MCP tool, that tool is kept and nothing
+is duplicated. Set `[sandbox.browser].auto_playwright = false` to keep
+the browser image and its RAM but attach MCP yourself. A failed attach
+does not fail the turn, and the prompt then makes no browser or
+Playwright claim. A hosted microvm session gets a size line that
+states RAM only (`Sandbox size is L (2048 MiB).`). It does not claim
+Chromium because the size is `L`. Chat sessions and `environment.type`
+`none` get no sandbox, size, or `/workspace` text. The full fragment
+table is in [config](config.md#pi).
 
 ### Packages, files, env, network, and setup commands
 

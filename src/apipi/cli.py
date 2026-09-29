@@ -39,6 +39,11 @@ from apipi.gateway.logutil import configure_logging, uvicorn_log_config
 from apipi.gateway.ready import check_ready
 from apipi.services.vault_crypto import vault_master_key_unset
 from apipi.store.migrate import migrate
+from apipi.worker.pi.image_check import (
+    image_check_needs_sudo,
+    reexec_image_check,
+    run_browser_check,
+)
 from apipi.worker.pi.image_ops import build_image, publish_images
 from apipi.worker.pi.image_pull import list_images, pull_images
 from apipi.worker.pi.image_store import open_image_store
@@ -188,7 +193,28 @@ def _images_command(args: argparse.Namespace) -> int:
         return 0
     if args.images_command in {"push", "publish"}:
         return _images_push(args)
+    if args.images_command == "check":
+        return _images_check(args)
     return 1
+
+
+def _images_check(args: argparse.Namespace) -> int:
+    if args.id != "browser":
+        raise ConfigError("apipi images check supports the browser image only")
+    extra: list[str] = [args.id]
+    if args.config is not None:
+        extra.extend(["--config", args.config])
+    if args.rootfs is not None:
+        extra.extend(["--rootfs", args.rootfs])
+    if args.boot:
+        extra.append("--boot")
+    if args.boot and image_check_needs_sudo():
+        reexec_image_check(extra)
+        return 0
+    settings = load_settings(config_path=args.config)
+    configure_logging(level=settings.log_level, format=settings.log_format)
+    run_browser_check(settings, rootfs=args.rootfs, boot=args.boot)
+    return 0
 
 
 def _images_push(args: argparse.Namespace) -> int:
@@ -403,6 +429,19 @@ def main(argv: list[str] | None = None) -> int:
     list_parser.add_argument("--config", default=None, help="TOML config file")
     list_parser.add_argument(
         "--remote", action="store_true", help="Compare with the image source"
+    )
+    check_parser = images_sub.add_parser(
+        "check", help="Check a built guest image on this machine"
+    )
+    check_parser.add_argument("id", help="Recipe id (browser)")
+    check_parser.add_argument("--config", default=None, help="TOML config file")
+    check_parser.add_argument(
+        "--rootfs", default=None, help="rootfs-browser.ext4 to check"
+    )
+    check_parser.add_argument(
+        "--boot",
+        action="store_true",
+        help="Also boot the image (needs KVM). Not for CI.",
     )
     args = parser.parse_args(argv)
     try:

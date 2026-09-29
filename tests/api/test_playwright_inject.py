@@ -6,7 +6,6 @@ from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
-from apipi.worker.pi.platform_prompt import BROWSER_HINT
 from apipi.worker.pi.sandbox import PLAYWRIGHT_LABEL, PLAYWRIGHT_MCP_CLI
 
 
@@ -68,7 +67,9 @@ async def test_l_injects_playwright(
     assert harness.mcp_stdio[0].command == "node"
     assert PLAYWRIGHT_MCP_CLI in harness.mcp_stdio[0].args
     assert harness.instructions is not None
-    assert BROWSER_HINT not in harness.instructions
+    assert "Chromium" not in harness.instructions
+    assert "Playwright" not in harness.instructions
+    assert "Sandbox size" not in harness.instructions
 
 
 async def test_l_skips_inject_when_auto_off(
@@ -101,7 +102,9 @@ async def test_l_skips_inject_when_auto_off(
         assert created.status_code == 200
     assert harness.mcp_stdio == []
     assert harness.instructions is not None
-    assert BROWSER_HINT not in harness.instructions
+    assert "Chromium" not in harness.instructions
+    assert "Playwright" not in harness.instructions
+    assert "Sandbox size" not in harness.instructions
 
 
 async def test_l_does_not_duplicate_caller_playwright(
@@ -148,7 +151,9 @@ async def test_l_does_not_duplicate_caller_playwright(
     assert [server.server_label for server in harness.mcp_stdio] == ["playwright"]
     assert harness.mcp_stdio[0].args == ["-y", "@playwright/mcp@1.0.0"]
     assert harness.instructions is not None
-    assert BROWSER_HINT not in harness.instructions
+    assert "Chromium" not in harness.instructions
+    assert "Playwright" not in harness.instructions
+    assert "Sandbox size" not in harness.instructions
 
 
 async def test_chat_does_not_inject_playwright(
@@ -179,4 +184,6 @@ async def test_chat_does_not_inject_playwright(
         assert created.status_code == 200
     assert harness.mcp_stdio == []
     assert harness.instructions is not None
-    assert BROWSER_HINT not in harness.instructions
+    assert "Chromium" not in harness.instructions
+    assert "Playwright" not in harness.instructions
+    assert "Sandbox size" not in harness.instructions

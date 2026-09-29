@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Stdio MCP servers attach again. The Pi extension now writes
+  newline-delimited JSON. It wrote `Content-Length` frames, which MCP
+  servers ignore. Startup no longer waits about 5 seconds per server.
+- Guests mount `/dev/shm` and `/dev/pts`.
+
+### Changed
+
+- Browser and image hints are based on the resolved computer and on
+  tools that actually registered, not on sandbox size. Sessions
+  without a sandbox no longer get size text.
+- The browser image adds Noto CJK and emoji fonts. Size `L` defaults
+  to 2 vCPUs (`APIPI_SANDBOX_L_VCPUS`).
+
+### Removed
+
+- Unused `sandbox_playwright_mcp` / `APIPI_SANDBOX_PLAYWRIGHT_MCP`.
+  The TOML key `playwright_mcp` is ignored. The dead browser hint in
+  the platform prompt is gone. Playwright guidance is added only after
+  those tools register.
+
+### Added
+
+- `apipi images check browser` is a local developer check for the
+  browser image. It is not part of CI.
+
 ## [0.7.0] - 2026-09-28
 
 ### Breaking

@@ -12,6 +12,6 @@ tools:
       command: npx
       args:
         - -y
-        - "@playwright/mcp@latest"
+        - "@playwright/mcp@0.0.82"
         - --headless
         - --isolated

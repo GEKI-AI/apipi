@@ -156,8 +156,8 @@ container.
 | Default 32 live | 32 × 512 MiB ≈ **16 GiB** guests plus ~0.2 GiB VMM. Fits easily. |
 | Starting cap | **`max_sessions=48`** (24 GiB guests) or keep **32**. Raise after you watch host RSS and `429` `capacity`. The RAM cap still applies. |
 | Ceiling | 57344 / 512 ≈ **112** live at 512 MiB. That is the wall, not a starting point. |
-| Playwright / Chromium | Use sandbox size **`L`** so the guest gets the **browser** rootfs, about **2 GiB** RAM, and Playwright MCP against system Chromium. Then about **24–28** live `L` guests in a 56 GiB budget. `S` (512 MiB) is for Pi and light tools. |
-| CPU | 48 × 1 vCPU on 12 cores is normal while turns wait on the model URL. Keep `APIPI_MICROVM_VCPUS=1` unless the computer is CPU-heavy. |
+| Playwright / Chromium | Use sandbox size **`L`** so the guest gets the **browser** rootfs, about **2 GiB** RAM, **2 vCPUs**, and Playwright MCP against system Chromium when auto-inject is on. Then about **24–28** live `L` guests in a 56 GiB budget. `S` (512 MiB, 1 vCPU) is for Pi and light tools. |
+| CPU | 48 × 1 vCPU on 12 cores is normal for `S` and `M` while turns wait on the model URL. Size `L` defaults to 2 vCPUs (`APIPI_SANDBOX_L_VCPUS`). Keep `APIPI_MICROVM_VCPUS=1` for `S` and `M` unless that computer is CPU-heavy. |
 | Disk | Hosted workspaces last until sandbox TTL (default 1 hour), capped at 1 GiB each. Local artifacts 512 MiB per session unless S3. Worst case is cap × live-and-idle directories, not typical use. |
 | NIC | Each guest TAP is 50 Mbit. 48 guests all saturated ≈ 2.4 Gbit. That is the ceiling, not the plan. |
 
@@ -173,7 +173,7 @@ elsewhere and is not capped here.
 | Resource | Overprovision? | Why |
 | --- | --- | --- |
 | Guest RAM | **No.** Set `worker_memory_mb` so the sum of guest `mem_mib` plus the host reserve fits. Size `max_sessions` as a second hard cap. | Each live session is a Firecracker guest with that RAM. There is no balloon device. The guest kernel usually touches the memory. The scheduler will not oversubscribe RAM or session count. |
-| CPU | **Yes.** Default 1 vCPU per guest. | Turns mostly wait on the model URL. Watch host load, not the vCPU count. Raise `microvm_vcpus` only if the computer is CPU-heavy (builds, Playwright). |
+| CPU | **Yes.** Default 1 vCPU for `S` and `M`, 2 for `L`. | Turns mostly wait on the model URL. Watch host load, not the vCPU count. Size `L` already uses 2 vCPUs for browser work. Raise `microvm_vcpus` or `l_vcpus` only if the computer is still CPU-heavy. |
 | Disk | Caps are maxima, not reservations. | `max_workspace_bytes` and `max_artifact_bytes` are per session. Summing them is worst case. Hosted workspaces last until sandbox TTL. Provision for typical use and alert before the disk fills; a burst can still hit the caps. S3 moves artifact bytes off the node. |
 | NIC | Same as disk. | Each TAP is capped at 50 Mbit. All guests saturating at once is unlikely. |
 | Stored sessions | **Yes, by design.** | Postgres rows are not live Pi. Idle TTL frees RAM; the thread stays. Many stored sessions on one 64 GiB box is fine. Only live guests count. |
@@ -212,7 +212,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_RUN_MODE` | Set `microvm` for Firecracker production isolation. Nested TOML is `[sandbox].backend`. See [configuration](config.md#sandbox). |
 | `APIPI_MAX_SESSIONS` | Live Pi on this node. Hard cap (`429` `capacity`). |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | Live Pi for one tenant (`429` `capacity_tenant`). |
-| `APIPI_MICROVM_MEM_MIB` / `APIPI_MICROVM_VCPUS` | Guest RAM and vCPUs. Raise RAM for Playwright. Keep 1 vCPU unless the computer is CPU-heavy. |
+| `APIPI_MICROVM_MEM_MIB` / `APIPI_MICROVM_VCPUS` / `APIPI_SANDBOX_L_VCPUS` | Guest RAM and vCPUs. Raise RAM for Playwright. `S` and `M` stay at 1 vCPU. `L` defaults to 2. |
 | `APIPI_IDLE_TTL` | Kill idle Pi for `none` and `self_hosted` (default 15 minutes) and free a live slot. Hosted computers use sandbox TTL. |
 | `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | Stop hosted Pi and delete the workspace (default 1 hour). |
 | `APIPI_TURN_TIMEOUT` | Cancel a stuck turn (default 10 minutes). |

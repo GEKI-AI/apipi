@@ -106,15 +106,23 @@ overwrite each other. The script needs `curl`, `tar`, `mkfs.ext4`,
 `default` installs Alpine, Node, the pinned Pi CLI, Python 3, `ip`,
 `socat`, `curl`, and `git`, and copies `src/apipi/worker/pi/guest.sh` to
 `/sbin/apipi-guest`.
-`browser` is that image plus Alpine Chromium, font/NSS packages, and
-a pinned `@playwright/mcp` installed at
-`/opt/apipi/playwright-mcp`. Auto-inject starts that file with
-`node`. It does not download the server with `npx` on a cold guest.
-Playwright's own glibc browser builds do not run on this musl guest.
-The image is 4 GiB unless you set `SIZE_MIB`. Use sandbox size `L`
-(2 GiB guest RAM by default) for browser guests. Rebuild after this
-change with `apipi install --microvm --image browser`. See
-[install](install.md) and [production sizing](production.md#sizing).
+`browser` is that image plus Alpine Chromium, Noto fonts (including
+CJK and emoji), font/NSS packages, and a pinned `@playwright/mcp`
+installed at `/opt/apipi/playwright-mcp`. Auto-inject starts that
+file with `node`. It does not download the server with `npx` on a
+cold guest. Playwright's own glibc browser builds do not run on this
+musl guest. The image is 4 GiB unless you set `SIZE_MIB`. Use sandbox
+size `L` (2 GiB guest RAM and 2 vCPUs by default) for browser guests.
+Rebuild after this change with `apipi install --microvm --image browser`.
+See [install](install.md) and [production sizing](production.md#sizing).
+
+Guest init (`/sbin/apipi-guest`, from `guest.sh`) mounts `/proc`,
+`/sys`, devtmpfs on `/dev`, tmpfs on `/dev/shm` (mode 1777), devpts
+on `/dev/pts`, and tmpfs on `/tmp`. There is no fstab.
+
+`apipi images check browser` is a manual check of a built browser
+rootfs. It is not part of CI. `--boot` also boots the image and needs
+KVM. How to run it is in `images/README.md` in the git checkout.
 
 ```
 apipi install --microvm

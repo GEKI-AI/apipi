@@ -116,6 +116,7 @@ _SANDBOX_RESOURCES_TOML = {
     "vcpus": "microvm_vcpus",
     "m_mem_mib": "sandbox_m_mem_mib",
     "l_mem_mib": "sandbox_l_mem_mib",
+    "l_vcpus": "sandbox_l_vcpus",
 }
 _SANDBOX_NETWORK_TOML = {
     "egress_allowlist": "microvm_egress_allowlist",
@@ -128,7 +129,6 @@ _SANDBOX_TTL_TOML = {
 }
 _SANDBOX_BROWSER_TOML = {
     "auto_playwright": "sandbox_auto_playwright",
-    "playwright_mcp": "sandbox_playwright_mcp",
 }
 _PLACEMENT_TOML = {
     "env_none": "env_none_placement",
@@ -724,12 +724,10 @@ class Settings(BaseSettings):
             "APIPI_SANDBOX_AUTO_PLAYWRIGHT", "sandbox_auto_playwright"
         ),
     )
-    sandbox_playwright_mcp: str = Field(
-        default="@playwright/mcp@latest",
-        min_length=1,
-        validation_alias=AliasChoices(
-            "APIPI_SANDBOX_PLAYWRIGHT_MCP", "sandbox_playwright_mcp"
-        ),
+    sandbox_l_vcpus: int = Field(
+        default=2,
+        ge=1,
+        validation_alias=AliasChoices("APIPI_SANDBOX_L_VCPUS", "sandbox_l_vcpus"),
     )
     microvm_vcpus: int = Field(
         default=1,
@@ -977,6 +975,11 @@ class Settings(BaseSettings):
             return self.sandbox_l_mem_mib
         return self.microvm_mem_mib
 
+    def sandbox_vcpus(self, size: str) -> int:
+        if size == "L":
+            return self.sandbox_l_vcpus
+        return self.microvm_vcpus
+
     def node_memory_mb(self) -> int:
         memory = self.worker_memory_mb
         if memory is None:
@@ -1064,13 +1067,11 @@ def _flatten_sandbox(table: dict[str, Any]) -> dict[str, Any]:
                 )
             )
         elif key == "browser":
-            out.update(
-                _map_table(
-                    _require_table(value, "[sandbox.browser]"),
-                    _SANDBOX_BROWSER_TOML,
-                    "sandbox.browser",
-                )
-            )
+            browser = dict(_require_table(value, "[sandbox.browser]"))
+            if "playwright_mcp" in browser:
+                _log.warning("playwright_mcp was removed and is ignored")
+                browser.pop("playwright_mcp")
+            out.update(_map_table(browser, _SANDBOX_BROWSER_TOML, "sandbox.browser"))
         elif key in _SANDBOX_TOML:
             if isinstance(value, dict):
                 raise ConfigError(f"unknown setting: sandbox.{key}")
@@ -1291,8 +1292,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_SANDBOX_L_MEM_MIB must be at least 1"
         if "sandbox_auto_playwright" in loc or "APIPI_SANDBOX_AUTO_PLAYWRIGHT" in loc:
             return "APIPI_SANDBOX_AUTO_PLAYWRIGHT must be on or off"
-        if "sandbox_playwright_mcp" in loc or "APIPI_SANDBOX_PLAYWRIGHT_MCP" in loc:
-            return "APIPI_SANDBOX_PLAYWRIGHT_MCP must be a package name"
+        if "sandbox_l_vcpus" in loc or "APIPI_SANDBOX_L_VCPUS" in loc:
+            return "APIPI_SANDBOX_L_VCPUS must be at least 1"
         if "microvm_vcpus" in loc:
             return "APIPI_MICROVM_VCPUS must be at least 1"
         if "microvm_egress_allowlist" in loc or "APIPI_MICROVM_EGRESS_ALLOWLIST" in loc:

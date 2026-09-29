@@ -1,42 +1,60 @@
 from apipi.config import Settings
 
-DEFAULT_PLATFORM_PROMPT = (
-    "This session runs on ApiPi.\n"
-    "\n"
-    "When a computer is present, the working directory is /workspace on a "
-    "hosted sandbox, or the runner's files for self_hosted. Write durable "
-    "deliverables under outputs/ only. Those files are published when a "
-    "turn completes and stay downloadable after the sandbox expires. Other "
-    "files are scratch and are deleted with the workspace.\n"
-    "\n"
-    "When environment type is none, there is no computer and no file or "
-    "shell tools.\n"
-    "\n"
-    "Do not invent APIs or tools that this session does not provide."
+NO_COMPUTER_PROMPT = (
+    "This session runs on ApiPi. There is no computer and no file or "
+    "shell tools. Do not invent APIs or tools that this session does not "
+    "provide."
 )
 
-BROWSER_HINT = (
-    "Chromium is already installed at /usr/bin/chromium-browser. "
-    "Drive it only through the Playwright MCP tools (names start with "
-    "mcp_playwright_). Save screenshots under outputs/. Do not npm install "
-    "playwright, do not download browsers, and do not call chromium from bash."
+HOSTED_PROMPT = (
+    "This session runs on ApiPi. The working directory is /workspace. "
+    "Write durable deliverables under outputs/ only. Those files are "
+    "published when a turn completes and stay downloadable after the "
+    "sandbox expires. Other files are scratch and are deleted with the "
+    "workspace. Do not invent APIs or tools that this session does not "
+    "provide."
 )
 
+SELF_HOSTED_PROMPT = (
+    "This session runs on ApiPi. The working directory is the runner's "
+    "files. Write durable deliverables under outputs/ only. Those files "
+    "are published when a turn completes. Other files are scratch. Do not "
+    "invent APIs or tools that this session does not provide."
+)
 
-def sandbox_size_hint(size: str | None) -> str:
-    if size == "L":
-        return (
-            "Sandbox size is L (about 2 GiB, browser rootfs). "
-            "System Chromium is already present. Do not install Playwright, "
-            "Chromium, or browser packages with bash or npm."
-        )
-    if size in {"S", "M"}:
-        return (
-            f"Sandbox size is {size}. There is no browser in this sandbox. "
-            "Do not install Playwright or Chromium."
-        )
-    if size:
-        return f"Sandbox size is {size}."
+_HOSTED = frozenset({"openai_hosted", "hosted"})
+
+
+def _computer(env_type: str | None, chat: bool) -> str | None:
+    if chat or not env_type or env_type == "none":
+        return None
+    if env_type == "self_hosted":
+        return "self_hosted"
+    if env_type in _HOSTED:
+        return "hosted"
+    return None
+
+
+def _main_prompt(env_type: str | None, chat: bool) -> str:
+    kind = _computer(env_type, chat)
+    if kind == "hosted":
+        return HOSTED_PROMPT
+    if kind == "self_hosted":
+        return SELF_HOSTED_PROMPT
+    return NO_COMPUTER_PROMPT
+
+
+def sandbox_size_hint(size: str | None, mem_mib: int | None) -> str:
+    if not size or mem_mib is None:
+        return ""
+    return f"Sandbox size is {size} ({mem_mib} MiB)."
+
+
+def network_hint(access: str | None) -> str:
+    if access == "enabled":
+        return "This sandbox has network access."
+    if access == "restricted":
+        return "This sandbox has restricted network access."
     return ""
 
 
@@ -44,16 +62,26 @@ def compose_instructions(
     settings: Settings | None,
     agent_instructions: str | None,
     *,
-    browser: bool = False,
+    env_type: str | None = None,
+    chat: bool = False,
     sandbox_size: str | None = None,
+    mem_mib: int | None = None,
+    network: str | None = None,
 ) -> str | None:
     if settings is None or settings.platform_prompt is None:
-        main = DEFAULT_PLATFORM_PROMPT
+        main = _main_prompt(env_type, chat)
     else:
         main = settings.platform_prompt
     extra = "" if settings is None else settings.platform_prompt_additional
-    size = sandbox_size_hint(sandbox_size)
-    hint = BROWSER_HINT if browser else ""
+    size = ""
+    net = ""
+    if (
+        _computer(env_type, chat) == "hosted"
+        and settings is not None
+        and settings.run_mode == "microvm"
+    ):
+        size = sandbox_size_hint(sandbox_size, mem_mib)
+        net = network_hint(network)
     agent = agent_instructions or ""
-    parts = [part for part in (main, extra, size, hint, agent) if part]
+    parts = [part for part in (main, extra, size, net, agent) if part]
     return "\n\n".join(parts) or None
