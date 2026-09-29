@@ -25,3 +25,4 @@ These files are not on the MkDocs site.
 | 0011 | Host credential broker |
 | 0012 | Guest image store |
 | 0013 | Agent templates |
+| 0014 | OpenAI Agents API compatibility |

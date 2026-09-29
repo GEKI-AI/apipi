@@ -67,6 +67,7 @@ class EnvironmentSpec(StrictModel):
     packages: PackagesSpec | None = None
     setup_commands: list[SetupCommandSpec] | None = None
     sandbox_size: Literal["S", "M", "L"] | None = None
+    container_size: Literal["small", "medium", "large"] | None = None
     sandbox_image: str | None = None
     env: dict[str, str] | None = None
     files: list[InlineFileSpec | FileIdFileSpec] | None = None
@@ -105,6 +106,25 @@ class EnvironmentSpec(StrictModel):
                             "{field} is not implemented",
                             {"field": "skills"},
                         )
+        if isinstance(data, dict) and data.get("container_size") is not None:
+            mapped = {"small": "S", "medium": "M", "large": "L"}.get(
+                data.get("container_size")
+            )
+            if mapped is None:
+                raise PydanticCustomError(
+                    "invalid_request",
+                    "container_size must be small, medium, or large",
+                    {},
+                )
+            size = data.get("sandbox_size")
+            if size is not None and size != mapped:
+                raise PydanticCustomError(
+                    "invalid_request",
+                    "container_size and sandbox_size disagree",
+                    {},
+                )
+            data = dict(data)
+            data["sandbox_size"] = mapped
         return data
 
 
