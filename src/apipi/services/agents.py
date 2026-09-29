@@ -28,7 +28,13 @@ from apipi.store.repo import (
 from apipi.worker.pi.idle import normalize_idle_ttl, validate_idle_metadata
 from apipi.worker.pi.model_host import require_saved_model
 from apipi.worker.pi.sandbox import validate_sandbox_metadata
-from apipi.worker.pi.settings_json import validate_pi_metadata
+from apipi.worker.pi.settings_json import (
+    apply_reasoning_effort,
+    reasoning_body,
+    require_thinking_supported,
+    thinking_from_metadata,
+    validate_pi_metadata,
+)
 
 _UNIMPLEMENTED = ("multi_agent", "tool_search", "programmatic_tool_calling")
 
@@ -82,6 +88,21 @@ class SessionDefaults(StrictModel):
     vault_ids: list[uuid.UUID] | None = None
 
 
+class Reasoning(StrictModel):
+    effort: str | None = None
+    summary: str | None = None
+
+    @model_validator(mode="after")
+    def summary_not_implemented(self) -> Self:
+        if self.summary is not None:
+            raise PydanticCustomError(
+                "not_implemented",
+                "{field} is not implemented",
+                {"field": "summary"},
+            )
+        return self
+
+
 class AgentWrite(StrictModel):
     name: str | None = None
     model: str | None = None
@@ -90,12 +111,15 @@ class AgentWrite(StrictModel):
     metadata: dict[str, Any] | None = None
     tools: list[AgentTool] | None = None
     session_defaults: SessionDefaults | None = None
+    reasoning: Reasoning | None = None
+    service_tier: str | None = None
+    text: dict[str, Any] | None = None
 
     @model_validator(mode="before")
     @classmethod
     def reject_unimplemented(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            for field in _UNIMPLEMENTED:
+            for field in (*_UNIMPLEMENTED, "service_tier", "text"):
                 if field in data:
                     raise PydanticCustomError(
                         "not_implemented",
@@ -117,6 +141,7 @@ def agent_body(agent: Agent) -> dict[str, Any]:
         "metadata": mirror_sandbox_metadata(agent.metadata_json, defaults),
         "tools": agent.tools,
         "session_defaults": defaults,
+        "reasoning": reasoning_body(agent.metadata_json),
         "created_at": agent.created_at.isoformat(),
         "updated_at": agent.updated_at.isoformat(),
     }
@@ -124,6 +149,17 @@ def agent_body(agent: Agent) -> dict[str, Any]:
 
 def write_payload(body: AgentWrite) -> dict[str, Any]:
     payload = body.model_dump(exclude_unset=True)
+    if "reasoning" in payload:
+        effort = None if body.reasoning is None else body.reasoning.effort
+        reset = (
+            body.reasoning is not None
+            and "effort" in body.reasoning.model_fields_set
+            and body.reasoning.effort is None
+        )
+        payload["metadata"] = apply_reasoning_effort(
+            payload.get("metadata"), effort, reset=reset
+        )
+        payload.pop("reasoning", None)
     if "tools" in payload and body.tools is not None:
         payload["tools"] = [tool.model_dump(exclude_none=True) for tool in body.tools]
     if "session_defaults" in payload and body.session_defaults is not None:
@@ -153,6 +189,11 @@ class AgentService:
             payload, existing_metadata=None, existing_defaults=None
         )
         validate_pi_metadata(payload.get("metadata"))
+        require_thinking_supported(
+            self.settings,
+            payload.get("model") if isinstance(payload.get("model"), str) else None,
+            thinking_from_metadata(payload.get("metadata")),
+        )
         validate_idle_metadata(payload.get("metadata"))
         validate_sandbox_metadata(self.settings, payload.get("metadata"))
         validate_defaults_shape(self.settings, payload.get("session_defaults"))
@@ -220,6 +261,12 @@ class AgentService:
             metadata = payload.get("metadata", existing.metadata_json)
             stored = metadata if isinstance(metadata, dict) else None
             validate_pi_metadata(stored)
+            model = payload.get("model", existing.model)
+            require_thinking_supported(
+                self.settings,
+                model if isinstance(model, str) else None,
+                thinking_from_metadata(stored),
+            )
             validate_idle_metadata(stored)
             validate_sandbox_metadata(self.settings, stored)
             if "session_defaults" in payload and isinstance(

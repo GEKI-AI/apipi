@@ -477,7 +477,8 @@ in items, and not in logs. There is no admin API that returns it.
 Pi's session cache may still hold the full text. That cache is not
 the public transcript. Thinking deltas are not sent to clients.
 Enable thinking with `APIPI_PI_THINKING`, or override it per session
-with `metadata["apipi.thinking"]`. See [Pi](config.md#pi).
+with `metadata["apipi.thinking"]` or `reasoning.effort`. `none` means
+off. See [Pi](config.md#pi).
 
 Compaction events are optional. A Pi build that does not emit
 `compaction_start` or `compaction_end` does not fail the turn. The

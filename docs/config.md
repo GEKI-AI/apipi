@@ -369,8 +369,13 @@ Pi thinking format, such as `chat-template` or `qwen`, are not
 configured here. `xhigh` and `max` are passed through. Pi drops a
 level the model does not support. `off` leaves `models.json` as it is
 today and does not pass `--thinking`. The process default is
-`[pi].thinking`. A session may set `metadata["apipi.thinking"]`. A
-saved agent may set the same key. Resolve order is session, then
+`[pi].thinking`. A session may set `metadata["apipi.thinking"]` or
+`reasoning.effort`. A saved agent may set the same key or
+`reasoning.effort`. `none` is stored as `off`. Session effort wins over
+the metadata alias. If both are set and disagree, the request is `400`.
+A level the model registry does not list is `400`. Models not in the
+registry still pass the level through. `summary`, `service_tier`, and
+`text` are `not_implemented`. Resolve order is session, then
 agent, then the process default. Inline agents copy that key onto the
 session when the session did not set it. The level is applied when Pi
 starts. A later change respawns Pi. Public events then carry a preview

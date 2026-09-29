@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   LibreOffice or pandoc.
 - Session input accepts `input_image` data URLs and a list of messages.
   A model capability registry tells Pi which models accept images.
+- Agents and sessions accept OpenAI `reasoning.effort`. It maps to Pi
+  thinking and is mirrored as `apipi.thinking`.
 
 ### Documentation
 

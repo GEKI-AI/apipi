@@ -16,6 +16,25 @@ async def test_invalid_thinking_metadata_is_400(client: AsyncClient) -> None:
     assert "thinking" in created.json()["error"]["message"]
 
 
+async def test_reasoning_effort_is_stored_as_thinking(client: AsyncClient) -> None:
+    token = "pi-reasoning"
+    created = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={"name": "bot", "model": "test", "reasoning": {"effort": "high"}},
+    )
+    assert created.status_code == 200
+    assert created.json()["metadata"]["apipi.thinking"] == "high"
+    assert created.json()["reasoning"]["effort"] == "high"
+    summary = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={"name": "bot", "model": "test", "reasoning": {"summary": "auto"}},
+    )
+    assert summary.status_code == 400
+    assert summary.json()["error"]["type"] == "not_implemented"
+
+
 async def test_session_thinking_overrides_agent(client: AsyncClient) -> None:
     token = "pi-thinking-ok"
     agent = await client.post(

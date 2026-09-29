@@ -68,6 +68,18 @@ def test_unset_system_prompt_removes_stale_file(tmp_path: Path) -> None:
     assert "reserveTokens" not in doc["compaction"]
 
 
+def test_reasoning_effort_mirrors_thinking() -> None:
+    from apipi.worker.pi.settings_json import apply_reasoning_effort, reasoning_body
+
+    stored = apply_reasoning_effort({}, "high")
+    assert stored["apipi.thinking"] == "high"
+    assert reasoning_body(stored) == {"effort": "high"}
+    reset = apply_reasoning_effort(stored, None, reset=True)
+    assert "apipi.thinking" not in reset
+    with pytest.raises(ApiError, match="disagree"):
+        apply_reasoning_effort({"apipi.thinking": "low"}, "high")
+
+
 def test_thinking_resolve_session_over_agent() -> None:
     settings = _settings(pi_thinking="off")
     assert (
