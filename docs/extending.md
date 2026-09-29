@@ -192,7 +192,6 @@ Unknown top-level fields are rejected.
 | `apipi.idle_ttl` | Client | Idle timer for that session when the session `idle_ttl` field is omitted. Same duration shape as the agent field. Session wins over agent, then the environment-type default. |
 | `apipi.system_prompt` | Client or agent | Replaces Pi's harness default. Session wins over agent, then `[pi].system_prompt`. Does not replace the platform prompt, instructions, context files, or skills. Drops Pi's tool list and all tool guidelines, including MCP and Playwright guidance. The tools stay callable. See [config](config.md#pi). |
 | `apipi.session_kind` | Gateway on chat create, or the client on a saved agent | `chat` places the session on chat workers. |
-| `apipi.agent_version` | Client | Version number or id for a session that uses a saved agent. Session create uses it as the pin. A later update, while the session is not `in_progress`, moves the session. See [agent versions](agent-versions.md). |
 | `apipi.actor_type` | Extender | Stored and returned. Not interpreted. |
 | `apipi.schedule_id` | Extender | Stored and returned. Not interpreted. |
 | `apipi.source` | Extender | Stored and returned. Not interpreted. |

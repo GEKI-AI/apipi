@@ -21,12 +21,7 @@ async def create_saved_agent(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _agents(request).create(
-        tenant.id,
-        body,
-        api_key=model_key(request),
-        created_by=getattr(request.state, "key_id", None),
-    )
+    return await _agents(request).create(tenant.id, body, api_key=model_key(request))
 
 
 @router.get("/v1/agents")
@@ -54,11 +49,7 @@ async def update_saved_agent(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     return await _agents(request).update(
-        tenant.id,
-        agent_id,
-        body,
-        api_key=model_key(request),
-        created_by=getattr(request.state, "key_id", None),
+        tenant.id, agent_id, body, api_key=model_key(request)
     )
 
 

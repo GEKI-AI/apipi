@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-29
+
+### Breaking
+
+- Agent versions are explicit snapshots. Create and update no longer
+  write a version. `active_version` is gone from agent responses.
+  `agent_version` is gone from session, turn, usage, and lifecycle
+  bodies. `metadata["apipi.agent_version"]` is ordinary metadata.
+  `POST /v1/apipi/agents/{id}/versions/{version}/activate` is removed.
+  Version create no longer accepts `definition` or `activate`, and
+  versions have no `status`. `note` is replaced by `name` and `comment`.
+  Sessions follow the live agent again, so an edit changes the next turn
+  of a conversation that already exists. See
+  [agent versions](docs/agent-versions.md).
+- A database that already applied the 0.10.x `0019_agent_versions`
+  migration must be recreated. That revision was rewritten in place.
+
+### Added
+
+- `POST /v1/apipi/agents/{id}/versions/{version}/restore` copies a
+  snapshot back onto the agent and first saves the live definition as a
+  `pre_restore` snapshot.
+
+### Changed
+
+- `APIPI_AGENT_VERSIONS_KEEP` defaults to 10.
+
 ## [0.10.1] - 2026-09-29
 
 ### Fixed
