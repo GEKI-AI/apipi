@@ -199,7 +199,8 @@ if [[ "$IMAGE_ID" == browser ]]; then
 elif [[ "$IMAGE_ID" == default ]]; then
   echo "export APIPI_MICROVM_ROOTFS=$ROOTFS"
 else
-  echo "export APIPI_MICROVM_ROOTFS=$ROOTFS"
+  echo "use \`apipi images build\` or \`apipi images pull\`, then set sandbox_image=$IMAGE_ID"
+  echo "do not export APIPI_MICROVM_ROOTFS to this file; that replaces the default image"
 fi
 if [[ -f "$KERNEL" ]]; then
   echo "export APIPI_MICROVM_KERNEL=$KERNEL"

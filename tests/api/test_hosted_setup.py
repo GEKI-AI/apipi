@@ -180,6 +180,31 @@ async def test_setup_failure_does_not_start_turn(
     assert failed["data"]["error"] == "pip failed"
 
 
+async def test_system_packages_rejected_on_microvm(
+    settings: Settings, store: Store
+) -> None:
+    microvm = settings.model_copy(update={"run_mode": "microvm", "api_only": True})
+    app = create_app(microvm, store=store, harness=FakeHarness())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = "setup-system-microvm"
+        agent_id = await _agent(client, token)
+        response = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent_id,
+                "environment": {
+                    "type": "openai_hosted",
+                    "packages": {"system": ["git"]},
+                },
+            },
+        )
+    assert response.status_code == 400
+    assert "read-only microvm root" in response.json()["error"]["message"]
+
+
 async def test_packages_rejected_on_none(client: AsyncClient) -> None:
     token = "setup-none"
     agent_id = await _agent(client, token)

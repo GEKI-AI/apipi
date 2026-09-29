@@ -564,7 +564,13 @@ On `openai_hosted` (and the `hosted` alias), create also accepts
 `packages`, `setup_commands`, `env`, `files`, `skills`, and `network`.
 `packages` is an object with optional `python`, `system`, and `npm`
 lists of package names (pin versions when you need to, such as
-`pandas==2.2.3`). `setup_commands` is an ordered list of
+`pandas==2.2.3`). Python packages install into `.venv` in the session
+workspace. npm packages install under `.npm` there. Both directories
+are put first on `PATH` for that session. On `microvm` those installs
+use guest RAM because `/workspace` is a tmpfs. `packages.system` uses
+`apk` or `apt-get` on isolation `none`. On `microvm` the guest root is
+read-only, so `packages.system` returns `400` and tells you to bake
+those packages into a guest image. `setup_commands` is an ordered list of
 `{ "command": "…", "cwd": "…" }` objects. `cwd` is optional and
 defaults to the session workspace. `env` is an object of string
 environment variables for that session. `files` entries are

@@ -96,6 +96,22 @@ def test_write_pi_models_json_marks_reasoning_when_thinking_on(tmp_path: Path) -
     assert fallback["compat"]["supportsReasoningEffort"] is True
 
 
+def test_models_json_uses_session_thinking_over_process_off(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    write_pi_models_json(settings, ["m1"])
+    raw = models_json_for_base_url(settings, "http://broker.test/v1", thinking="high")
+    provider = json.loads(raw)["providers"][PI_PROVIDER]
+    assert provider["baseUrl"] == "http://broker.test/v1"
+    assert provider["compat"]["supportsReasoningEffort"] is True
+    assert provider["models"] == [{"id": "m1", "reasoning": True}]
+    stored = json.loads(
+        (tmp_path / "sessions" / ".pi" / "agent" / "models.json").read_text()
+    )
+    assert (
+        stored["providers"][PI_PROVIDER]["compat"]["supportsReasoningEffort"] is False
+    )
+
+
 def test_pi_command_args_pass_thinking_level(tmp_path: Path) -> None:
     off = pi_command_args(_settings(tmp_path), tools=True)
     assert "--thinking" not in off

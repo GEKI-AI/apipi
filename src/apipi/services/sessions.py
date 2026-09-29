@@ -8,7 +8,11 @@ from typing import Any
 
 from apipi.config import Settings
 from apipi.env.hub import EnvironmentHub
-from apipi.env.setup import SetupError, prepare_workspace
+from apipi.env.setup import (
+    SetupError,
+    prepare_workspace,
+    reject_microvm_system_packages,
+)
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.gateway.auth import not_found
 from apipi.gateway.errors import ApiError, gone
@@ -508,6 +512,14 @@ class SessionService:
             require_image_size(image, size)
             env = {**env, "sandbox_size": size, "sandbox_image": image}
             require_image_rootfs(self.settings, image)
+            try:
+                reject_microvm_system_packages(env, run_mode=self.settings.run_mode)
+            except SetupError as exc:
+                raise ApiError(
+                    "invalid_request",
+                    exc.message,
+                    code="invalid_request",
+                ) from exc
             vault_id_strs = [str(item) for item in (vault_ids or [])]
             for vault_id in vault_ids or []:
                 if await get_vault(db, tenant_id, vault_id) is None:

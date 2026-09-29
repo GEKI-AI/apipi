@@ -364,6 +364,16 @@ def test_recipe_ids_list_shipped_images() -> None:
     assert rootfs_script_path().name == "build.sh"
 
 
+def test_build_script_custom_image_does_not_export_default_rootfs() -> None:
+    script = rootfs_script_path().read_text()
+    assert 'echo "export APIPI_MICROVM_ROOTFS=$ROOTFS"' in script
+    custom = script.split('elif [[ "$IMAGE_ID" == default ]]; then', 1)[1]
+    custom = custom.split("else", 1)[1].split("fi", 1)[0]
+    assert "APIPI_MICROVM_ROOTFS=$ROOTFS" not in custom
+    assert "apipi images build" in custom
+    assert "sandbox_image=$IMAGE_ID" in custom
+
+
 def test_build_script_base_packages_include_curl_and_git() -> None:
     script = rootfs_script_path().read_text()
     apk = next(line for line in script.splitlines() if "apk add --no-cache" in line)

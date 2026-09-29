@@ -162,18 +162,44 @@ def require_listed_model(model: str, ids: list[str]) -> None:
         )
 
 
-def _provider_compat(settings: Settings) -> dict[str, bool]:
+def _thinking_level(settings: Settings, thinking: str | None) -> str:
+    return thinking if thinking is not None else settings.pi_thinking
+
+
+def _provider_compat(
+    settings: Settings, thinking: str | None = None
+) -> dict[str, bool]:
     return {
         "supportsDeveloperRole": False,
-        "supportsReasoningEffort": settings.pi_thinking != "off",
+        "supportsReasoningEffort": _thinking_level(settings, thinking) != "off",
     }
 
 
-def _model_row(model_id: str, settings: Settings) -> dict[str, object]:
+def _model_row(
+    model_id: str, settings: Settings, thinking: str | None = None
+) -> dict[str, object]:
     row: dict[str, object] = {"id": model_id}
-    if settings.pi_thinking != "off":
+    if _thinking_level(settings, thinking) != "off":
         row["reasoning"] = True
     return row
+
+
+def _apply_reasoning(provider: dict[str, object], *, enabled: bool) -> None:
+    compat = provider.get("compat")
+    if not isinstance(compat, dict):
+        compat = {}
+        provider["compat"] = compat
+    compat["supportsReasoningEffort"] = enabled
+    models = provider.get("models")
+    if not isinstance(models, list):
+        return
+    for row in models:
+        if not isinstance(row, dict):
+            continue
+        if enabled:
+            row["reasoning"] = True
+        else:
+            row.pop("reasoning", None)
 
 
 def note_pi_model(settings: Settings, model: str) -> None:
@@ -203,7 +229,10 @@ def write_pi_models_json(settings: Settings, model_ids: list[str]) -> Path:
     return path
 
 
-def models_json_for_base_url(settings: Settings, base_url: str) -> bytes:
+def models_json_for_base_url(
+    settings: Settings, base_url: str, *, thinking: str | None = None
+) -> bytes:
+    enabled = _thinking_level(settings, thinking) != "off"
     path = pi_agent_dir(settings) / "models.json"
     if path.is_file():
         payload = json.loads(path.read_text())
@@ -212,6 +241,7 @@ def models_json_for_base_url(settings: Settings, base_url: str) -> bytes:
             provider = providers.get(PI_PROVIDER)
             if isinstance(provider, dict):
                 provider["baseUrl"] = base_url
+                _apply_reasoning(provider, enabled=enabled)
         return (json.dumps(payload, indent=2) + "\n").encode()
     return (
         json.dumps(
@@ -221,7 +251,7 @@ def models_json_for_base_url(settings: Settings, base_url: str) -> bytes:
                         "baseUrl": base_url,
                         "api": "openai-completions",
                         "apiKey": "$OPENAI_API_KEY",
-                        "compat": _provider_compat(settings),
+                        "compat": _provider_compat(settings, thinking),
                         "models": [],
                     }
                 }

@@ -70,6 +70,7 @@ class NoneIsolation:
         else:
             scratch = tempfile.mkdtemp(prefix="apipi-pi-")
             agent_root = Path(scratch)
+        from apipi.env.setup import prepend_workspace_path
         from apipi.worker.pi.broker import start_broker
         from apipi.worker.pi.model_host import models_json_for_base_url
         from apipi.worker.pi.settings_json import (
@@ -110,8 +111,11 @@ class NoneIsolation:
             agent_dir = agent_root / ".pi" / "agent"
             agent_dir.mkdir(parents=True, exist_ok=True)
             (agent_dir / "models.json").write_bytes(
-                models_json_for_base_url(settings, broker.openai_base_url)
+                models_json_for_base_url(
+                    settings, broker.openai_base_url, thinking=level
+                )
             )
+            prepend_workspace_path(env, root if cwd else None)
             apply_pi_agent_files(
                 agent_dir,
                 settings,

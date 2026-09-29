@@ -57,6 +57,13 @@ if [ -f "$WS/.apipi/setup.sh" ] && [ ! -f "$WS/.apipi/setup.done" ]; then
   fi
   echo ok > "$WS/.apipi/setup.done"
 fi
+if [ -d "$WS/.venv/bin" ]; then
+  PATH="$WS/.venv/bin:$PATH"
+fi
+if [ -d "$WS/.npm/bin" ]; then
+  PATH="$WS/.npm/bin:$PATH"
+fi
+export PATH
 if [ -f "$WS/.apipi/guest.py" ] && command -v python3 >/dev/null 2>&1; then
   exec python3 "$WS/.apipi/guest.py"
 fi

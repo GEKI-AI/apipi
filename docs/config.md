@@ -355,8 +355,11 @@ Firecracker.
 
 Thinking stays off until the resolved level is not `off`. ApiPi then
 passes `--thinking` to Pi, writes `defaultThinkingLevel` in
-`settings.json`, and writes each model in `models.json` with
-`reasoning` true and `supportsReasoningEffort` true. That asks an
+`settings.json`, and writes each model in the session `models.json`
+with `reasoning` true and `supportsReasoningEffort` true. That session
+file uses the resolved level, not only the process default, so a
+session or agent level still marks reasoning when
+`APIPI_PI_THINKING=off`. That asks an
 OpenAI-compatible host for `reasoning_effort`. Hosts that need another
 Pi thinking format, such as `chat-template` or `qwen`, are not
 configured here. `xhigh` and `max` are passed through. Pi drops a

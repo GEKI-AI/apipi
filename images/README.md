@@ -39,7 +39,10 @@ From a git checkout:
 `--flavor browser` call the same script. Output names stay
 `rootfs.ext4`, `rootfs-browser.ext4`, and `vmlinux` in
 `$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). Any other
-id writes `rootfs-<id>.ext4`.
+id writes `rootfs-<id>.ext4`. The script does not print
+`APIPI_MICROVM_ROOTFS` for that id. Copying that export would replace
+the default image. Use `apipi images build` or `apipi images pull`,
+then set `sandbox_image` to the id.
 
 The script needs `curl`, `tar`, `mkfs.ext4`, `mount`, and root (or
 `sudo`) for the loop mount and chroot. `apipi install --microvm` runs
