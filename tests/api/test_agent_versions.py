@@ -1,4 +1,9 @@
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
+
+from apipi.config import Settings
+from apipi.gateway import create_app
+from apipi.services.runtime import FakeHarness
+from apipi.store.engine import Store
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -59,14 +64,51 @@ async def test_create_update_and_running_session_keeps_version(
         json={"type": "agent.session.input.message", "content": "again"},
     )
     assert follow.status_code == 200
-    harness = client._transport.app.state.gateway.harness
-    assert harness.instructions is not None
-    assert "be long" in harness.instructions
-    assert "be shorter" not in harness.instructions
     got = await client.get(
         f"/v1/agents/sessions/{session.json()['id']}", headers=_auth(token)
     )
     assert got.json()["agent_version"]["number"] == 2
+
+
+async def test_next_turn_keeps_old_instructions(
+    settings: Settings, store: Store
+) -> None:
+    harness = FakeHarness()
+    app = create_app(settings, store=store, harness=harness)
+    token = "old-instructions"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/agents",
+            headers=_auth(token),
+            json={"name": "bot", "model": "test", "instructions": "be long"},
+        )
+        agent_id = created.json()["id"]
+        session = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent_id,
+                "environment": {"type": "none"},
+                "input": "hello",
+            },
+        )
+        assert session.status_code == 200
+        await client.post(
+            f"/v1/agents/{agent_id}",
+            headers=_auth(token),
+            json={"instructions": "be shorter"},
+        )
+        follow = await client.post(
+            f"/v1/agents/sessions/{session.json()['id']}/events",
+            headers=_auth(token),
+            json={"type": "agent.session.input.message", "content": "again"},
+        )
+        assert follow.status_code == 200
+    assert harness.instructions is not None
+    assert "be long" in harness.instructions
+    assert "be shorter" not in harness.instructions
 
 
 async def test_version_stores_ids_not_vault_token(client: AsyncClient) -> None:
