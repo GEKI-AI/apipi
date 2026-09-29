@@ -1,5 +1,19 @@
 # OpenAI compatibility
 
+ApiPi stays compatible with the OpenAI Agents API. Where a shape
+exists upstream, this API uses it. Where that is impossible, the
+extra behavior is under `/v1/apipi/`. See
+[ADR 0014](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0014-openai-compat.md).
+The decision file is not on this site.
+
+Some OpenAI details are not verified against the full API reference:
+the exact `GET /v1/agents/environments/{id}` object beyond `status`,
+whether the session object itself carries `environment.status`, how
+official SDKs parse unknown event types, and the full list of
+top-level event fields. Unknown response fields are tolerated by the
+SDKs we have tried. Do not treat unmarked rows below as a promise of
+byte-for-byte schema parity.
+
 ApiPi speaks the [OpenAI Agents API](https://developers.openai.com/api/docs/guides/agents-api)
 shapes that official clients use. You bring the model host and the
 isolation. This page is the contract: what those clients can do today,
@@ -87,9 +101,12 @@ yours.
 | `GET /v1/models` | Same API when forwarding is on; `not_implemented` `forward_models` when off |
 | `POST/GET /v1/agents/sessions`, `GET/POST/DELETE /v1/agents/sessions/{id}` | Same API |
 | `POST/GET /v1/agents/sessions/{id}/events` | Same API (nested `events` and flat body) |
-| `GET /v1/agents/sessions/{id}/export` | Same API |
+| `GET /v1/apipi/sessions/{id}/export` | ApiPi route. `/v1/agents/sessions/{id}/export` is a deprecated alias. |
+| `POST /v1/apipi/sessions/{id}/artifacts/{artifact_id}/download` | ApiPi route. The `/v1/agents/.../download` path is a deprecated alias. |
+| `GET /v1/apipi/agents/{id}/export` | ApiPi route. `/v1/agents/{id}/export` is a deprecated alias. |
 | `GET …/turns`, `GET …/items`, `GET/DELETE …/artifacts` | Same API |
-| `GET /v1/usage` | ApiPi operator route (tokens and turn counts) |
+| `GET /v1/apipi/usage` | ApiPi route (tokens and turn counts). `/v1/usage` is a deprecated alias. |
+| `/v1/apipi/templates`, `/v1/apipi/uploads`, `/v1/apipi/chat/sessions` | ApiPi routes. The `/v1/templates`, `/v1/uploads`, and `/v1/chat/sessions` paths are deprecated aliases. |
 | `WS /v1/environments/{environment_id}` | Same shape, different backend (ApiPi runner protocol) |
 | `GET /health`, `GET /metrics` | ApiPi operator routes |
 | `POST/GET/DELETE /v1/files`, `GET /v1/files/{id}/content` | Same API (purpose `user_data` or `assistants`; max `APIPI_MAX_FILE_BYTES`) |
@@ -97,6 +114,33 @@ yours.
 | `/v1/chat/completions` | Error (no such route) |
 | ChatKit | Error (no such routes) |
 | Vaults | `/v1/agents/vaults` and credentials. `static_bearer` only. GET omits token values. Tokens encrypted at rest. `mcp_oauth` is `not_implemented`. |
+
+## Extension table
+
+New extension fields are grouped. Older flat fields stay flat.
+
+| Kind | Name | Notes |
+| --- | --- | --- |
+| Field | `idle_ttl` | Agent and session. Flat. |
+| Field | `user_id`, `org_id` | Session response. Flat. |
+| Field | `session_defaults` | Agent. |
+| Field | `environment.sandbox_size` | `S` / `M` / `L`. Alias of OpenAI `container_size`. |
+| Field | `environment.container_size` | OpenAI `small` / `medium` / `large`. Stored as `sandbox_size`. |
+| Field | `environment.sandbox_image` | Guest image id. |
+| Field | `environment.sandbox` | Hosted runtime status. Null for `none` and `self_hosted`. |
+| Field | `environment.directory` | Host path. Internal. Prefer not to rely on it. |
+| Metadata | `apipi.sandbox_size`, `apipi.sandbox_image` | Stock SDK inputs. |
+| Metadata | `apipi.sandbox_eager_boot` | Overrides eager boot. |
+| Metadata | `apipi.thinking`, `apipi.system_prompt`, `apipi.idle_ttl` | Pi and idle overrides. |
+| Metadata | `apipi.session_kind` | `chat` for chat sessions. |
+| Event data | `data.sandbox` | Hosted `environment.*` events. |
+| Route | `/v1/apipi/agents/{id}/export` | Agent zip. |
+| Route | `/v1/apipi/sessions/{id}/export` | Session export. |
+| Route | `/v1/apipi/sessions/{id}/artifacts/{artifact_id}/download` | Artifact download. |
+| Route | `/v1/apipi/templates` | Agent templates. |
+| Route | `/v1/apipi/uploads` | Presigned uploads. |
+| Route | `/v1/apipi/usage` | Usage totals. |
+| Route | `/v1/apipi/chat/sessions` | Chat facade. Environment is forced to `none`. |
 
 ## Agent fields and tools
 

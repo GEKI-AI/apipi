@@ -156,6 +156,7 @@ async def test_session_crud_environment_none(client: AsyncClient) -> None:
         "type": "none",
         "sandbox_size": "S",
         "sandbox_image": "default",
+        "container_size": "small",
         "sandbox": None,
     }
     assert body["agent_id"] == agent_id

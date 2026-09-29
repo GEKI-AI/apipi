@@ -364,6 +364,10 @@ Worker and environment WebSockets stay `gateway.workers` and
 | `EventHub` | In-process live events |
 | `Authenticate`, `AuthIdentity`, `AuthReject` | Auth callback types |
 
+ApiPi-only HTTP routes are also mounted at `/v1/apipi/` by
+`create_app`. An extender that copies `include_router` calls should
+call `include_ext` from `apipi.api.ext` so those paths exist.
+
 `gateway.routers` names: `sessions`, `agents`, `vaults`,
 `environments`, `usage`, `models`, `workers`, `health`.
 

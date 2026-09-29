@@ -11,6 +11,7 @@ from fastapi import APIRouter, FastAPI
 from apipi.api.agents import router as agents_router
 from apipi.api.chat import router as chat_router
 from apipi.api.environments import router as environments_router
+from apipi.api.ext import include_ext
 from apipi.api.files import router as files_router
 from apipi.api.health import router as health_router
 from apipi.api.models import router as models_router
@@ -393,6 +394,16 @@ def create_app(
     app.include_router(gateway.routers.models)
     app.include_router(gateway.routers.workers)
     app.include_router(gateway.routers.health)
+    include_ext(
+        app,
+        [
+            gateway.routers.sessions,
+            gateway.routers.chat,
+            gateway.routers.uploads,
+            gateway.routers.templates,
+            gateway.routers.usage,
+        ],
+    )
     if isinstance(gateway.metrics, Metrics):
         mount_metrics(app, gateway.metrics)
     return app

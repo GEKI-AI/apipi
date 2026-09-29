@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from apipi import tenant_from_key
+from apipi.api.ext import include_ext
 from apipi.config import extend_settings
 from apipi.env.spec import EnvironmentSpec
 from apipi.gateway import Gateway
@@ -154,6 +155,7 @@ def build_app(gateway: Gateway) -> FastAPI:
     app.include_router(gateway.routers.vaults)
     app.include_router(gateway.routers.files)
     app.include_router(gateway.routers.uploads)
+    app.include_router(gateway.routers.templates)
     app.include_router(gateway.routers.skills)
     app.include_router(gateway.routers.agents)
     app.include_router(gateway.routers.environments)
@@ -162,6 +164,16 @@ def build_app(gateway: Gateway) -> FastAPI:
     app.include_router(gateway.routers.workers)
     app.include_router(gateway.routers.health)
     app.include_router(webpage_check_router())
+    include_ext(
+        app,
+        [
+            gateway.routers.sessions,
+            gateway.routers.chat,
+            gateway.routers.uploads,
+            gateway.routers.templates,
+            gateway.routers.usage,
+        ],
+    )
     return app
 
 

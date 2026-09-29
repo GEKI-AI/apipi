@@ -128,8 +128,14 @@ def environment_status(row: SessionRow, *, now: datetime | None = None) -> str |
     return _OPENAI_STATUS.get(state, "disconnected")
 
 
+_CONTAINER = {"S": "small", "M": "medium", "L": "large"}
+
+
 def overlay_environment(row: SessionRow) -> dict[str, Any]:
     environment = dict(row.environment) if isinstance(row.environment, dict) else {}
+    size = environment.get("sandbox_size")
+    if isinstance(size, str) and size in _CONTAINER:
+        environment["container_size"] = _CONTAINER[size]
     if is_hosted(environment):
         environment["status"] = environment_status(row)
         environment["sandbox"] = sandbox_public(row)

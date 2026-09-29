@@ -86,6 +86,12 @@ are not included.
 
 ## Templates
 
+ApiPi-only routes are canonical under `/v1/apipi/`. The old paths
+still work and are deprecated: `/v1/templates`, `/v1/uploads`,
+`/v1/usage`, `/v1/chat/sessions`, `/v1/agents/{id}/export`,
+`/v1/agents/sessions/{id}/export`, and artifact `download`. A hit on
+an old path is logged once per process.
+
 A template is a stored zip of one agent's configuration. It is
 tenant-scoped. Creating an agent from a template always creates a new
 agent. It does not update an existing agent, and deleting the template

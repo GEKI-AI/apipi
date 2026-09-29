@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- ApiPi-only routes are canonical under `/v1/apipi/`. The old paths
+  remain as deprecated aliases and are logged once per process.
+  OpenAI `container_size` (`small` / `medium` / `large`) maps to
+  `sandbox_size`.
 - Hosted sessions expose sandbox runtime status. Cold boot emits
   `agent.session.environment.pending` and `environment.connected`.
   Every stop emits `environment.disconnected` with a reason. GET
