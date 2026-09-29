@@ -83,6 +83,19 @@ def reasoning_body(metadata: dict[str, Any] | None) -> dict[str, Any]:
     return {"effort": thinking_to_effort(thinking_from_metadata(metadata))}
 
 
+def reject_reasoning_conflict(metadata: dict[str, Any] | None, effort: object) -> None:
+    level = effort_to_thinking(effort)
+    if level is None:
+        return
+    current = thinking_from_metadata(metadata)
+    if current is not None and current != level:
+        raise ApiError(
+            "invalid_request",
+            "reasoning.effort and apipi.thinking disagree",
+            code="invalid_request",
+        )
+
+
 def apply_reasoning_effort(
     metadata: dict[str, Any] | None,
     effort: object,
@@ -96,13 +109,6 @@ def apply_reasoning_effort(
     level = effort_to_thinking(effort)
     if level is None:
         return out
-    current = thinking_from_metadata(out)
-    if current is not None and current != level:
-        raise ApiError(
-            "invalid_request",
-            "reasoning.effort and apipi.thinking disagree",
-            code="invalid_request",
-        )
     out[THINKING_KEY] = level
     return out
 

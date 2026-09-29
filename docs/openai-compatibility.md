@@ -131,7 +131,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | Field | `environment.directory` | Stored for the worker. Not returned on public session responses. |
 | Metadata | `apipi.sandbox_size`, `apipi.sandbox_image` | Stock SDK inputs. |
 | Metadata | `apipi.sandbox_eager_boot` | Overrides eager boot. |
-| Metadata | `apipi.thinking`, `apipi.system_prompt`, `apipi.idle_ttl` | Pi and idle overrides. `reasoning.effort` is the same thinking level. `none` is `off`. |
+| Metadata | `apipi.thinking`, `apipi.system_prompt`, `apipi.idle_ttl` | Pi and idle overrides. `reasoning.effort` is the same thinking level. `none` is `off`. On update, `reasoning.effort` replaces the stored level and `null` clears it. A 400 happens only when the same request also sets a different `apipi.thinking`. |
 | Route | `/v1/apipi/agents/{id}/versions` | Explicit snapshots. Create, list, get, restore, and delete. Sessions keep using the live agent. |
 | Metadata | `apipi.session_kind` | `chat` for chat sessions. |
 | Event data | `data.sandbox` | Hosted `environment.*` events. |
