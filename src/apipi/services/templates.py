@@ -189,11 +189,35 @@ class TemplateService:
         return {"id": template_id, "deleted": True}
 
     async def export_agent(
-        self, tenant_id: uuid.UUID, agent_id: uuid.UUID
+        self,
+        tenant_id: uuid.UUID,
+        agent_id: uuid.UUID,
+        *,
+        version: str | None = None,
     ) -> tuple[str, bytes]:
         agent = await self.agents.get(tenant_id, agent_id)
+        active = agent.get("active_version")
+        if isinstance(active, dict):
+            agent["source_version"] = active
+        if version is not None:
+            from apipi.services.agent_versions import AgentVersionService
+
+            loaded = await AgentVersionService(self.store, self.settings).get_version(
+                tenant_id, agent_id, version
+            )
+            definition = loaded.get("definition")
+            if isinstance(definition, dict):
+                agent = {**agent, **definition}
+                agent["source_version"] = {
+                    "id": loaded.get("id"),
+                    "number": loaded.get("number"),
+                }
+        raw_name = agent.get("name")
         data, _manifest, _warnings = await self._bundle_from_agent(
-            tenant_id, agent, name=agent.get("name"), description=None
+            tenant_id,
+            agent,
+            name=raw_name if isinstance(raw_name, str) else None,
+            description=None,
         )
         name = agent.get("name") if isinstance(agent.get("name"), str) else agent_id.hex
         return f"{name}.apipi-agent.zip", data
@@ -235,6 +259,7 @@ class TemplateService:
                 AgentWrite.model_validate(agent_body),
                 api_key=api_key,
                 check_model=False,
+                source="template",
             )
         except Exception:
             await self._rollback(tenant_id, created_skills, created_files)

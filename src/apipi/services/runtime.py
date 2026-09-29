@@ -49,7 +49,6 @@ from apipi.store.repo import (
     artifact_bytes_for_turn,
     create_item,
     create_turn,
-    get_agent,
     get_session,
     get_session_turn,
     list_items,
@@ -455,18 +454,25 @@ async def _agent_tools_and_model(
 ]:
     if row.agent_id is None:
         return [], row.model, row.instructions, [], {}, None
-    agent = await get_agent(db, tenant_id, row.agent_id)
-    if agent is None:
-        return [], row.model, row.instructions, [], {}, None
-    raw = agent.tools if isinstance(agent.tools, list) else []
-    meta = agent.metadata_json if isinstance(agent.metadata_json, dict) else {}
+    from apipi.services.agent_versions import load_pinned_version
+
+    version = await load_pinned_version(db, tenant_id, row)
+    definition = version.definition if isinstance(version.definition, dict) else {}
+    raw_tools = definition.get("tools")
+    raw: list[Any] = raw_tools if isinstance(raw_tools, list) else []
+    meta = definition.get("metadata")
+    if not isinstance(meta, dict):
+        meta = {}
+    model = definition.get("model")
+    instructions = definition.get("instructions")
+    idle = definition.get("idle_ttl")
     return (
         _function_tools(raw),
-        agent.model,
-        agent.instructions,
+        model if isinstance(model, str) else None,
+        instructions if isinstance(instructions, str) else None,
         raw,
         meta,
-        agent.idle_ttl,
+        idle if isinstance(idle, str) else None,
     )
 
 
@@ -701,11 +707,19 @@ async def _write_turn_log(
             environment_type = raw_type
     model: str | None = None
     labels: list[str] = []
-    if agent_id is not None:
-        agent = await get_agent(db, tenant_id, agent_id)
-        if agent is not None:
-            model = agent.model
-            labels = _mcp_labels(agent.tools)
+    version_id = row.agent_version_id if row is not None else None
+    version_number = row.agent_version_number if row is not None else None
+    if row is not None and row.agent_id is not None:
+        from apipi.services.agent_versions import load_pinned_version
+
+        pinned = await load_pinned_version(db, tenant_id, row)
+        definition = pinned.definition if isinstance(pinned.definition, dict) else {}
+        raw_model = definition.get("model")
+        model = raw_model if isinstance(raw_model, str) else None
+        raw_tools = definition.get("tools")
+        labels = _mcp_labels(raw_tools if isinstance(raw_tools, list) else [])
+        version_id = pinned.id
+        version_number = pinned.number
     stored = usage_from(usage)
     tool_names, tool_counts, mcp_names, mcp_counts = await _tool_mcp_for_turn(
         db, tenant_id, session_id, turn_id, labels
@@ -726,6 +740,8 @@ async def _write_turn_log(
         session_id=session_id,
         turn_id=turn_id,
         agent_id=agent_id,
+        agent_version_id=version_id,
+        agent_version_number=version_number,
         model=model,
         status=status,
         latency_ms=latency_ms,
@@ -1398,20 +1414,31 @@ def _model_span_attrs(
     }
 
 
-def _spawn_identity_empty(
-    user_id: str | None, org_id: str | None
-) -> dict[str, str | None]:
-    return {"agent_id": None, "user_id": user_id, "org_id": org_id}
+def _spawn_identity_empty(user_id: str | None, org_id: str | None) -> dict[str, Any]:
+    return {
+        "agent_id": None,
+        "agent_version": None,
+        "user_id": user_id,
+        "org_id": org_id,
+    }
 
 
 def _spawn_identity(
     row: Any, user_id: str | None, org_id: str | None
-) -> dict[str, str | None]:
+) -> dict[str, Any]:
     stored_org = getattr(row, "org_id", None)
     stored_user = getattr(row, "user_id", None)
     agent = getattr(row, "agent_id", None)
+    version_id = getattr(row, "agent_version_id", None)
+    version = None
+    if version_id is not None:
+        version = {
+            "id": str(version_id),
+            "number": getattr(row, "agent_version_number", None),
+        }
     return {
         "agent_id": str(agent) if agent is not None else None,
+        "agent_version": version,
         "user_id": user_id if user_id is not None else stored_user,
         "org_id": org_id if org_id is not None else stored_org,
     }
@@ -1605,7 +1632,14 @@ async def run_turn(
             await persist_event(
                 db, hub, tenant_id, session_id, type="agent.session.in_progress"
             )
-            turn = await create_turn(db, tenant_id, session_id, status="in_progress")
+            turn = await create_turn(
+                db,
+                tenant_id,
+                session_id,
+                status="in_progress",
+                agent_version_id=row.agent_version_id,
+                agent_version_number=row.agent_version_number,
+            )
             turn_id = turn.id
             await persist_event(
                 db,

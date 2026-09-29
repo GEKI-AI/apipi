@@ -110,8 +110,11 @@ async def export_agent(
     agent_id: uuid.UUID,
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
+    version: str | None = None,
 ) -> Response:
-    filename, data = await _templates(request).export_agent(tenant.id, agent_id)
+    filename, data = await _templates(request).export_agent(
+        tenant.id, agent_id, version=version
+    )
     return Response(
         content=data,
         media_type="application/zip",

@@ -129,7 +129,9 @@ class AgentWrite(StrictModel):
         return data
 
 
-def agent_body(agent: Agent) -> dict[str, Any]:
+def agent_body(
+    agent: Agent, *, active_version: dict[str, Any] | None = None
+) -> dict[str, Any]:
     raw = agent.session_defaults
     defaults = raw if isinstance(raw, dict) else None
     return {
@@ -144,6 +146,7 @@ def agent_body(agent: Agent) -> dict[str, Any]:
         "reasoning": reasoning_body(agent.metadata_json),
         "created_at": agent.created_at.isoformat(),
         "updated_at": agent.updated_at.isoformat(),
+        "active_version": active_version,
     }
 
 
@@ -181,6 +184,8 @@ class AgentService:
         *,
         api_key: str | None = None,
         check_model: bool = True,
+        source: str = "create",
+        created_by: str | None = None,
     ) -> dict[str, Any]:
         payload = write_payload(body)
         if "idle_ttl" in payload:
@@ -214,19 +219,44 @@ class AgentService:
                 tools=payload.get("tools"),
                 session_defaults=payload.get("session_defaults"),
             )
-            return agent_body(agent)
+            from apipi.services.agent_versions import (
+                AgentVersionService,
+                version_ref,
+            )
+
+            version = await AgentVersionService(self.store, self.settings).record(
+                db,
+                agent,
+                source=source,
+                created_by=created_by,
+                activate=True,
+            )
+            return agent_body(agent, active_version=version_ref(version))
 
     async def list(self, tenant_id: uuid.UUID) -> dict[str, Any]:
         async with self.store.session() as db:
             agents = await list_agents(db, tenant_id)
-            return {"data": [agent_body(agent) for agent in agents]}
+            return {
+                "data": [
+                    agent_body(agent, active_version=await self._active_ref(db, agent))
+                    for agent in agents
+                ]
+            }
 
     async def get(self, tenant_id: uuid.UUID, agent_id: uuid.UUID) -> dict[str, Any]:
         async with self.store.session() as db:
             agent = await get_agent(db, tenant_id, agent_id)
             if agent is None:
                 not_found()
-            return agent_body(agent)
+            return agent_body(agent, active_version=await self._active_ref(db, agent))
+
+    async def _active_ref(self, db: Any, agent: Agent) -> dict[str, Any] | None:
+        from apipi.services.agent_versions import AgentVersionService, version_ref
+
+        version = await AgentVersionService(self.store, self.settings).active_of(
+            db, agent
+        )
+        return version_ref(version)
 
     async def update(
         self,
@@ -235,6 +265,7 @@ class AgentService:
         body: AgentWrite,
         *,
         api_key: str | None = None,
+        created_by: str | None = None,
     ) -> dict[str, Any]:
         payload = write_payload(body)
         if "model" in payload:
@@ -277,10 +308,30 @@ class AgentService:
             tools = payload.get("tools", existing.tools)
             if is_chat_profile(metadata):
                 reject_disallowed_chat_tools(tools)
+            from apipi.services.agent_versions import (
+                AgentVersionService,
+                snapshot_equal,
+                snapshot_from_agent,
+                version_ref,
+            )
+
+            versions = AgentVersionService(self.store, self.settings)
+            before = snapshot_from_agent(existing)
             agent = await update_agent(db, tenant_id, agent_id, changes=payload)
             if agent is None:
                 not_found()
-            return agent_body(agent)
+            after = snapshot_from_agent(agent)
+            version = await versions.active_of(db, agent)
+            if not snapshot_equal(before, after):
+                version = await versions.record(
+                    db,
+                    agent,
+                    source="update",
+                    created_by=created_by,
+                    activate=True,
+                    definition=after,
+                )
+            return agent_body(agent, active_version=version_ref(version))
 
     def _normalize_defaults(
         self,

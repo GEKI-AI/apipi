@@ -828,6 +828,13 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("APIPI_MAX_FILE_BYTES", "max_file_bytes"),
     )
+    agent_versions_keep: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices(
+            "APIPI_AGENT_VERSIONS_KEEP", "agent_versions_keep"
+        ),
+    )
     artifact_store: ArtifactStore = Field(
         default="local",
         validation_alias=AliasChoices("APIPI_ARTIFACT_STORE", "artifact_store"),

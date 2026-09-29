@@ -88,6 +88,7 @@ def test_body_functions_are_the_public_shapes() -> None:
     assert set(body) == {
         "id",
         "agent_id",
+        "agent_version",
         "status",
         "environment",
         "idle_ttl",
