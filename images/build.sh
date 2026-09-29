@@ -79,11 +79,20 @@ if [[ ! -f "$GUEST_SH" ]]; then
   exit 1
 fi
 
+pin_string() {
+  sed -n "/^$1 = /,/^[^ ]/p" "$VERSION_PY" | sed -n 's/.*"\([0-9A-Za-z.]*\)".*/\1/p' | head -1
+}
+
 if [[ -z "$PIN" && -f "$VERSION_PY" ]]; then
-  PIN=$(sed -n 's/^PINNED_PI = "\(.*\)"/\1/p' "$VERSION_PY")
+  PIN=$(pin_string PINNED_PI)
 fi
 if [[ -z "$PIN" ]]; then
   echo "could not read PINNED_PI" >&2
+  exit 1
+fi
+UV_VER=$(pin_string PINNED_UV)
+if [[ -z "$UV_VER" ]]; then
+  echo "could not read PINNED_UV" >&2
   exit 1
 fi
 
@@ -106,6 +115,7 @@ need() {
 
 need curl
 need tar
+need sha256sum
 need mkfs.ext4
 need mount
 need umount
@@ -168,13 +178,43 @@ fi
 as_root chroot "$MNT" /bin/sh -c "
   set -e
   echo https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/community >> /etc/apk/repositories
-  apk add --no-cache nodejs npm python3 iproute2 socat curl git ${PACKAGES}
+  apk add --no-cache nodejs npm python3 py3-pip iproute2 socat curl git ${PACKAGES}
   npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PIN}
   if [ -n '${SETUP}' ]; then
     /bin/sh '${SETUP}'
     rm -f '${SETUP}'
   fi
 "
+case "$ARCH" in
+  x86_64) UV_SHA=$(pin_string PINNED_UV_SHA256_X86_64) ;;
+  aarch64) UV_SHA=$(pin_string PINNED_UV_SHA256_AARCH64) ;;
+esac
+if [[ -z "$UV_SHA" ]]; then
+  echo "could not read uv sha256 for $ARCH" >&2
+  exit 1
+fi
+UV_NAME="uv-${ARCH}-unknown-linux-musl"
+UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VER}/${UV_NAME}.tar.gz"
+curl -fsSL "$UV_URL" -o "${WORKDIR}/uv.tar.gz"
+echo "${UV_SHA}  ${WORKDIR}/uv.tar.gz" | sha256sum -c -
+tar -xzf "${WORKDIR}/uv.tar.gz" -C "$WORKDIR"
+as_root mkdir -p "$MNT/usr/local/bin"
+as_root cp "$WORKDIR/$UV_NAME/uv" "$WORKDIR/$UV_NAME/uvx" "$MNT/usr/local/bin/"
+as_root chmod 755 "$MNT/usr/local/bin/uv" "$MNT/usr/local/bin/uvx"
+as_root tee "$MNT/etc/pip.conf" >/dev/null <<'EOF'
+[global]
+user = true
+break-system-packages = true
+EOF
+as_root chroot "$MNT" /bin/sh -c '
+  set -e
+  pip --version
+  uv --version
+  uvx --version
+  HOME=/tmp/pip-user pip install --user six
+  HOME=/tmp/pip-user python3 -c "import six"
+  rm -rf /tmp/pip-user
+'
 as_root umount "$MNT/dev"
 as_root umount "$MNT/sys"
 as_root umount "$MNT/proc"

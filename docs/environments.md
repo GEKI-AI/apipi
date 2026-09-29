@@ -189,7 +189,8 @@ agent turn that needs the computer:
    `packages.npm`. Python packages go into a virtualenv at `.venv`
    in the session workspace, not into the system Python. The install
    uses `uv` when it is on `PATH`, otherwise `python3 -m pip` inside
-   that virtualenv. If neither `uv` nor `pip` is available, prep fails
+   that virtualenv. Guest images include both. If neither `uv` nor
+   `pip` is available, prep fails
    with a clear message. It does not try to install `pip` with `apk`.
    npm packages install under `.npm` in the same workspace
    (`npm install -g --prefix`). On isolation `none` and `chat`, Pi's
