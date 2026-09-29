@@ -7,21 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [0.10.0] - 2026-09-29
 
-- An agent edit no longer changes sessions that already exist. Each
-  session keeps the agent version it was created with. Move a session
-  by setting `metadata["apipi.agent_version"]` while it is idle.
-  See [agent versions](docs/agent-versions.md).
+### Added
 
-### Fixed
-
-- `apipi images check browser` mounts `/dev` before it creates `shm`
-  and `pts`, so the read-only rootfs check no longer fails with
-  "Read-only file system".
+- Agent versions. A session keeps the version it was created with.
+  Move a session by setting `metadata["apipi.agent_version"]` while it
+  is idle. See [agent versions](docs/agent-versions.md).
 
 ### Changed
 
+- An agent edit no longer changes sessions that already exist.
 - Guest kernel is Linux 6.1.186 from the Firecracker 1.17 CI set,
   with virtio-rng. The old quickstart 4.14 kernel is no longer
   downloaded.
@@ -33,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `APIPI_PLATFORM_NAME` is that name. The hosted prompt no longer states
   a sandbox timeout. User-provided files under `inputs/` are restored.
   Other workspace files, including `outputs/`, are not.
+
+### Fixed
+
+- `apipi images check browser` mounts `/dev` before it creates `shm`
+  and `pts`, so the read-only rootfs check no longer fails with
+  "Read-only file system".
 
 ## [0.9.0] - 2026-09-29
 
