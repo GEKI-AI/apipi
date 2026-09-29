@@ -55,8 +55,15 @@ HTTP and stdio MCP use OpenAI's nested `transport` shape:
 Top-level `server_url`, `command`, or `args` on the tool are unknown
 fields. Unknown `transport.type` values return `400`. The gateway
 connects HTTP servers when the session is created, then hands them to
-Pi through a host credential broker. The guest does not receive MCP
-bearers. Prefer a [vault](api.md#vaults) (`static_bearer` bound to
+Pi through a host credential broker. The Pi extension lists each
+server's tools from that broker URL and registers them as
+`mcp_<server_label>_<tool>`. The guest does not receive MCP bearers.
+A connect failure at session create fails the session. A later
+`initialize` or `tools/list` failure does not fail the turn. The
+worker logs `pi.extension_error` with the server label, the phase, and
+the error, and the turn continues without that server's tools.
+
+Prefer a [vault](api.md#vaults) (`static_bearer` bound to
 `mcp_server_url`, attach `vault_ids` on the session). Tool `headers`
 with `${ENV}` still expand on the host. Stdio servers start next to
 Pi: on the host in `none` mode, and inside the same guest in
