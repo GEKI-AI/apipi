@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0]
+
+### Documentation
+
+- A replacement system prompt keeps the platform blocks, instructions,
+  context files, and skills. It drops Pi's tool list and all tool
+  guidelines, including MCP and Playwright guidance. Context files
+  (`AGENTS.md` and the other names Pi loads) are documented as a
+  supported way to add prompt text.
+
 ## [0.8.0] - 2026-09-29
 
 ### Breaking
