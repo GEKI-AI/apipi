@@ -2,6 +2,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -178,9 +179,14 @@ def _provider_compat(
 def _model_row(
     model_id: str, settings: Settings, thinking: str | None = None
 ) -> dict[str, object]:
+    from apipi.worker.pi.model_caps import apply_capability, registry_of
+
     row: dict[str, object] = {"id": model_id}
-    if _thinking_level(settings, thinking) != "off":
-        row["reasoning"] = True
+    apply_capability(
+        row,
+        registry_of(settings.model_registry).get(model_id),
+        reasoning=_thinking_level(settings, thinking) != "off",
+    )
     return row
 
 
@@ -220,7 +226,11 @@ def write_pi_models_json(settings: Settings, model_ids: list[str]) -> Path:
                 "api": "openai-completions",
                 "apiKey": "$OPENAI_API_KEY",
                 "compat": _provider_compat(settings),
-                "models": [_model_row(model_id, settings) for model_id in model_ids],
+                "models": _merge_registry_models(
+                    settings,
+                    [_model_row(model_id, settings) for model_id in model_ids],
+                    thinking=None,
+                ),
             }
         }
     }
@@ -229,8 +239,31 @@ def write_pi_models_json(settings: Settings, model_ids: list[str]) -> Path:
     return path
 
 
+def _merge_registry_models(
+    settings: Settings, models: list[Any], *, thinking: str | None
+) -> list[Any]:
+    from apipi.worker.pi.model_caps import registry_of
+
+    seen: set[str] = set()
+    out: list[object] = []
+    for row in models:
+        if isinstance(row, dict) and isinstance(row.get("id"), str):
+            seen.add(row["id"])
+            out.append(_model_row(row["id"], settings, thinking))
+        else:
+            out.append(row)
+    for model_id in registry_of(settings.model_registry):
+        if model_id not in seen:
+            out.append(_model_row(model_id, settings, thinking))
+    return out
+
+
 def models_json_for_base_url(
-    settings: Settings, base_url: str, *, thinking: str | None = None
+    settings: Settings,
+    base_url: str,
+    *,
+    thinking: str | None = None,
+    model: str | None = None,
 ) -> bytes:
     enabled = _thinking_level(settings, thinking) != "off"
     path = pi_agent_dir(settings) / "models.json"
@@ -242,6 +275,19 @@ def models_json_for_base_url(
             if isinstance(provider, dict):
                 provider["baseUrl"] = base_url
                 _apply_reasoning(provider, enabled=enabled)
+                models = provider.get("models")
+                if not isinstance(models, list):
+                    models = []
+                if (
+                    isinstance(model, str)
+                    and model
+                    and model
+                    not in {row.get("id") for row in models if isinstance(row, dict)}
+                ):
+                    models.append({"id": model})
+                provider["models"] = _merge_registry_models(
+                    settings, models, thinking=thinking
+                )
         return (json.dumps(payload, indent=2) + "\n").encode()
     return (
         json.dumps(

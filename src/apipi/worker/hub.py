@@ -929,10 +929,16 @@ async def _run_command(
                 )
                 return
         text = payload.get("text")
+        raw_images = payload.get("images")
+        images = raw_images if isinstance(raw_images, list) else None
+        raw_parts = payload.get("parts")
+        parts = raw_parts if isinstance(raw_parts, list) else None
         await execution.run_turn(
             tenant_id,
             session_id,
             text if isinstance(text, str) else "",
+            images=images,
+            parts=parts,
             request_id=request_id,
             api_key=api_key,
             key_id=key_id,

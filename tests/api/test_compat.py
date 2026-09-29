@@ -734,4 +734,79 @@ async def test_compat_nested_events_rejects(client: AsyncClient) -> None:
         },
     )
     assert image.status_code == 400
-    assert _error(image)["type"] == "not_implemented"
+    assert _error(image)["type"] == "invalid_request"
+
+
+_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="  # noqa: E501
+
+
+async def test_image_requires_registry_capability(client: AsyncClient) -> None:
+    token = "compat-image-off"
+    agent_id = await _agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "input": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:image/png;base64,{_PNG}",
+                    }
+                ],
+            },
+        },
+    )
+    assert created.status_code == 400
+    assert _error(created)["code"] == "unsupported_input"
+
+
+async def test_image_is_stored_by_file_id(settings: Settings, store: Store) -> None:
+    vision = settings.model_copy(
+        update={
+            "model_registry": {"test": {"input": ["text", "image"], "reasoning": True}}
+        }
+    )
+    app = create_app(vision, store=store, harness=FakeHarness())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = "compat-image-on"
+        agent_id = await _agent(client, token)
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent_id,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "see"},
+                            {
+                                "type": "input_image",
+                                "image_url": f"data:image/png;base64,{_PNG}",
+                            },
+                            {"type": "input_text", "text": "this"},
+                        ],
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 200
+        session_id = created.json()["id"]
+        items = await client.get(
+            f"/v1/agents/sessions/{session_id}/items", headers=_auth(token)
+        )
+        listed = await client.get("/v1/apipi/models", headers=_auth(token))
+    assert items.status_code == 200
+    content = items.json()["data"][0]["data"]["content"]
+    assert content[0] == {"type": "input_text", "text": "see"}
+    assert content[1]["type"] == "input_image"
+    assert content[1]["file_id"].startswith("file-")
+    assert "base64" not in json.dumps(content)
+    assert content[2]["text"] == "this"
+    assert listed.json()["data"][0]["id"] == "test"
+    assert "image" in listed.json()["data"][0]["input"]

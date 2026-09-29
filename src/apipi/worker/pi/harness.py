@@ -91,7 +91,10 @@ class PiHarness:
         settled = False
         thinking = ThinkingTracker()
         abort = _kwargs.get("abort")
-        async for event in proc.prompt(text):
+        raw_images = _kwargs.get("images")
+        images = raw_images if isinstance(raw_images, list) and raw_images else None
+        stream = proc.prompt(text, images=images) if images else proc.prompt(text)
+        async for event in stream:
             if event.get("type") == "agent_settled":
                 settled = True
             for public in map_pi_event(event):

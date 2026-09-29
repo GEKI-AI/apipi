@@ -94,7 +94,11 @@ hosted files and skills).
 | `OPENAI_API_KEY_OVERWRITE` | `model_api_key_overwrite` | unset | Optional operator model key. When unset, Pi gets the request bearer. A process `OPENAI_API_KEY` is ignored. |
 | `APIPI_FORWARD_MODELS` | `forward_models` | on | Proxy `GET /v1/models` to `{OPENAI_BASE_URL}/models` when `APIPI_MODEL_LIST` is `probe` or `turn`. Off returns `400` with code `forward_models`. With `APIPI_MODEL_LIST=off`, the route returns the static `APIPI_MODELS` list instead of calling the host. |
 | `APIPI_MODEL_LIST` | `model_list` | `probe` | `probe` \| `turn` \| `off`. Checked when an agent is created or its model is edited, not on turns. `probe` lists `{OPENAI_BASE_URL}/models` at startup and reuses that list. `turn` lists on each agent write and does not list at startup. `off` never calls `/models`. |
-| `APIPI_MODELS` | `models` | empty | Comma-separated model ids, or a TOML list. Used when `APIPI_MODEL_LIST=off`. An empty list skips the check. |
+| `APIPI_MODELS` | `models` | empty | Comma-separated model ids, or a TOML list. Used when `APIPI_MODEL_LIST=off`. An empty list skips the check. Do not combine this list with a `[models."id"]` table in the same file. |
+| `APIPI_MODEL_REGISTRY` | `[models."id"]` | empty | JSON object, or a TOML table of model capabilities. Each entry may set `input`, `reasoning`, `thinking_levels`, `context_window`, `max_tokens`, and `compat`. Models not listed keep today's defaults. `GET /v1/apipi/models` returns this table. |
+| `APIPI_MAX_IMAGE_BYTES` | `max_image_bytes` | 5242880 | Maximum decoded bytes for one `input_image`. |
+| `APIPI_MAX_IMAGES` | `max_images` | 8 | Maximum images in one message. |
+| `APIPI_IMAGE_MIMES` | `image_mimes` | `image/png,image/jpeg,image/webp,image/gif` | Comma-separated MIME types allowed on `input_image`. |
 | `APIPI_USAGE_STORE` | `usage_store` | `turns` | How much agent usage hits Postgres: `off` \| `rollups` \| `turns`. See [usage](usage.md). |
 | `APIPI_USAGE_RETENTION` | `usage_retention` | `15d` | Delete turn log rows older than this. Empty means no purge. Rollups stay. |
 | `APIPI_USAGE_EXPORT_URL` | `usage_export_url` | unset | HTTPS POST of one non-text agent usage event per turn. Off when unset. |

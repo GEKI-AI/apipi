@@ -15,6 +15,7 @@ from apipi.env.setup import (
 )
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.gateway.auth import not_found
+from apipi.gateway.content import parse_user_content, require_image_model
 from apipi.gateway.errors import ApiError, gone
 from apipi.gateway.logutil import log_event
 from apipi.gateway.otel import Tracing, set_span, start_span
@@ -401,7 +402,7 @@ class SessionService:
         agent: AgentWrite | None = None,
         agent_id: uuid.UUID | None = None,
         environment: EnvironmentSpec | None = None,
-        input: str | dict[str, Any] | None = None,
+        input: str | dict[str, Any] | list[Any] | None = None,
         metadata: dict[str, Any] | None = None,
         idle_ttl: str | None = None,
         vault_ids: list[uuid.UUID] | None = None,
@@ -512,6 +513,8 @@ class SessionService:
             require_image_size(image, size)
             env = {**env, "sandbox_size": size, "sandbox_image": image}
             require_image_rootfs(self.settings, image)
+            turn_content = parse_user_content(input, settings=self.settings)
+            require_image_model(self.settings, model, turn_content)
             try:
                 reject_microvm_system_packages(env, run_mode=self.settings.run_mode)
             except SetupError as exc:
@@ -663,8 +666,8 @@ class SessionService:
             self.mcp_http[session_id] = connected
             self.mcp_stdio[session_id] = stdio
             self.execution.put_stdio(session_id, stdio)
-            text = input_text(input)
-            if text:
+            text = turn_content.text
+            if text or turn_content.images:
                 require_model(model)
                 self._require_capacity(
                     session_id,
@@ -677,6 +680,8 @@ class SessionService:
                         tenant_id,
                         session_id,
                         text,
+                        images=[image.rpc() for image in turn_content.images],
+                        parts=turn_content.wire_parts(),
                         mcp_http=connected,
                         mcp_stdio=stdio,
                         request_id=request_id,
@@ -694,6 +699,8 @@ class SessionService:
                                 tenant_id,
                                 session_id,
                                 text,
+                                images=[image.rpc() for image in turn_content.images],
+                                parts=turn_content.wire_parts(),
                                 mcp_http=connected,
                                 mcp_stdio=stdio,
                                 request_id=request_id,
@@ -874,6 +881,7 @@ class SessionService:
         type: str,
         content: str | None = None,
         text: str | None = None,
+        raw_input: object | None = None,
         turn_id: uuid.UUID | None = None,
         call_id: str | None = None,
         success: bool | None = None,
@@ -885,13 +893,18 @@ class SessionService:
         request_id: str | None = None,
         api_key: str | None = None,
     ) -> dict[str, Any]:
-        message = content if content is not None else text
-        if message is None:
-            message = ""
+        parsed = parse_user_content(
+            raw_input
+            if raw_input is not None
+            else (content if content is not None else text),
+            settings=self.settings,
+        )
+        message = parsed.text
         action = "message"
         stale = False
         cancel_status = ""
         follow_size = "S"
+        follow_model: str | None = None
         async with self.store.session() as db:
             row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
@@ -917,6 +930,13 @@ class SessionService:
                     )
                 action = "message"
                 stale = row.status == "in_progress"
+                follow_model = row.model
+                if not follow_model and row.agent_id is not None:
+                    saved = await get_agent(db, tenant_id, row.agent_id)
+                    if saved is not None:
+                        follow_model = saved.model
+        if action == "message":
+            require_image_model(self.settings, follow_model, parsed)
         if action == "cancel":
             await self.execution.cancel(session_id, status=cancel_status)
         elif action == "tool":
@@ -966,6 +986,8 @@ class SessionService:
                     tenant_id,
                     session_id,
                     message,
+                    images=[image.rpc() for image in parsed.images],
+                    parts=parsed.wire_parts(),
                     mcp_http=self.mcp_http.get(session_id),
                     mcp_stdio=self.mcp_stdio.get(session_id),
                     request_id=request_id,

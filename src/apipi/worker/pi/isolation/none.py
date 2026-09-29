@@ -112,7 +112,7 @@ class NoneIsolation:
             agent_dir.mkdir(parents=True, exist_ok=True)
             (agent_dir / "models.json").write_bytes(
                 models_json_for_base_url(
-                    settings, broker.openai_base_url, thinking=level
+                    settings, broker.openai_base_url, thinking=level, model=model
                 )
             )
             prepend_workspace_path(env, root if cwd else None)
