@@ -15,6 +15,8 @@ def test_mcp_extension_source_is_pi_module() -> None:
     assert "attachStdio" in text
     assert "APIPI_MCP_STDIO" in text
     assert "mcp_client.mjs" in text
+    assert "mcp_http.mjs" in text
+    assert "APIPI_MCP_SERVERS" in text
     assert "Do not install Playwright" in text
     assert "playwrightTools" in text
     assert "waitForSpawn" not in text
@@ -38,6 +40,7 @@ def test_host_mcp_extension_writes_file(tmp_path: Path) -> None:
     assert path.name == "apipi-mcp.ts"
     assert "session_start" in path.read_text()
     assert (path.parent / "mcp_client.mjs").is_file()
+    assert (path.parent / "mcp_http.mjs").is_file()
 
 
 def test_browser_recipe_vendors_playwright_mcp() -> None:

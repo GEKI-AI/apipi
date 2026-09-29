@@ -35,8 +35,10 @@ from apipi.worker.pi.extension import (
     GUEST_MCP_EXTENSION,
     MCP_CLIENT_REL,
     MCP_EXTENSION_REL,
+    MCP_HTTP_REL,
     mcp_client_source,
     mcp_extension_source,
+    mcp_http_source,
 )
 from apipi.worker.pi.model_host import pi_agent_dir
 from apipi.worker.pi.proc import PiProc, pi_command_args, pi_env
@@ -776,6 +778,7 @@ def write_workspace_image(
         if system_md is not None:
             _add_bytes(tar, ".pi/agent/SYSTEM.md", system_md, mode=0o644)
         _add_bytes(tar, MCP_CLIENT_REL, mcp_client_source(), mode=0o644)
+        _add_bytes(tar, MCP_HTTP_REL, mcp_http_source(), mode=0o644)
         _add_bytes(tar, MCP_EXTENSION_REL, mcp_extension_source(), mode=0o644)
         _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
         if shell:

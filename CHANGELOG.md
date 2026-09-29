@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   newline-delimited JSON. It wrote `Content-Length` frames, which MCP
   servers ignore. Startup no longer waits about 5 seconds per server.
 - Guests mount `/dev/shm` and `/dev/pts`.
+- HTTP MCP tools reach Pi. The extension lists them from the host
+  credential broker URL and registers `mcp_<server_label>_<tool>`.
+  The guest still does not receive the bearer. A later list failure
+  is logged and the turn continues.
 
 ### Changed
 

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { McpClient } from "./mcp_client.mjs";
+import { HttpMcpClient } from "./mcp_http.mjs";
 
 const DEFAULT_BASH_TIMEOUT_SEC = 120;
 const ATTACH_TIMEOUT_MS = 15_000;
@@ -24,6 +25,11 @@ type ListedTool = {
   name: string;
   description?: string;
   inputSchema?: unknown;
+};
+
+type RpcClient = {
+  request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown>;
+  notify(method: string, params?: unknown): void | Promise<void>;
 };
 
 function sanitize(raw: string): string {
@@ -75,6 +81,23 @@ function contentOf(result: unknown): {
     parts.push({ type: "text", text: JSON.stringify(result) });
   }
   return { content: parts, isError: raw.isError };
+}
+
+function httpServers(): Array<{ label: string; url: string }> {
+  const labels = process.env.APIPI_MCP_SERVERS;
+  if (!labels) {
+    return [];
+  }
+  const servers = [];
+  for (const [index, raw] of labels.split(",").entries()) {
+    const url = process.env[`APIPI_MCP_${index}_URL`];
+    if (!url) {
+      continue;
+    }
+    const named = process.env[`APIPI_MCP_${index}_LABEL`];
+    servers.push({ label: (named || raw).trim() || "mcp", url });
+  }
+  return servers;
 }
 
 function stdioServers(): StdioServer[] {
@@ -190,19 +213,48 @@ function chromiumPath(server: StdioServer): string | null {
   return null;
 }
 
-function guidelines(server: StdioServer, name: string, toolName: string, first: boolean): string[] {
-  const lines = [
-    `Use ${name} for ${server.label} MCP (${toolName}). Do not reimplement it with bash.`,
-  ];
-  if (!first || !isPlaywright(server)) {
-    return lines;
+function registerTools(
+  pi: ExtensionAPI,
+  label: string,
+  tools: ListedTool[],
+  client: RpcClient,
+  opts: { playwright: boolean; chromium: string | null },
+): void {
+  let first = true;
+  for (const tool of tools) {
+    const name = `mcp_${sanitize(label)}_${sanitize(tool.name)}`;
+    const lines = [
+      `Use ${name} for ${label} MCP (${tool.name}). Do not reimplement it with bash.`,
+    ];
+    if (first && opts.playwright) {
+      const where = opts.chromium ? `Chromium is at ${opts.chromium}. ` : "";
+      lines.push(
+        `${where}Drive the browser only through these MCP tools. Save screenshots under outputs/. Do not npm install playwright or download browsers.`,
+      );
+    }
+    pi.registerTool({
+      name,
+      label: `${label} ${tool.name}`,
+      description: tool.description || `${label} MCP tool ${tool.name}`,
+      promptSnippet: tool.description || `${label} ${tool.name}`,
+      promptGuidelines: lines,
+      parameters: schemaOf(tool.inputSchema),
+      async execute(_toolCallId, params, signal) {
+        if (signal?.aborted) {
+          return { content: [{ type: "text", text: "aborted" }], isError: true };
+        }
+        const result = await client.request("tools/call", {
+          name: tool.name,
+          arguments: params,
+        });
+        return contentOf(result);
+      },
+    });
+    first = false;
   }
-  const path = chromiumPath(server);
-  const where = path ? `Chromium is at ${path}. ` : "";
-  lines.push(
-    `${where}Drive the browser only through these MCP tools. Save screenshots under outputs/. Do not npm install playwright or download browsers.`,
-  );
-  return lines;
+  if (opts.playwright && tools.length > 0) {
+    playwrightTools = true;
+  }
 }
 
 function workspaceRoot(): string {
@@ -320,35 +372,57 @@ async function attachStdio(
       throw attachError(server.label, "tools/list", err);
     }
     const tools = listed.tools ?? [];
-    let first = true;
-    for (const tool of tools) {
-      const name = `mcp_${sanitize(server.label)}_${sanitize(tool.name)}`;
-      pi.registerTool({
-        name,
-        label: `${server.label} ${tool.name}`,
-        description: tool.description || `${server.label} MCP tool ${tool.name}`,
-        promptSnippet: tool.description || `${server.label} ${tool.name}`,
-        promptGuidelines: guidelines(server, name, tool.name, first),
-        parameters: schemaOf(tool.inputSchema),
-        async execute(_toolCallId, params, signal) {
-          if (signal?.aborted) {
-            return { content: [{ type: "text", text: "aborted" }], isError: true };
-          }
-          const result = await client.request("tools/call", {
-            name: tool.name,
-            arguments: params,
-          });
-          return contentOf(result);
-        },
-      });
-      first = false;
-    }
-    if (isPlaywright(server) && tools.length > 0) {
-      playwrightTools = true;
+    const playwrightServer = isPlaywright(server);
+    registerTools(pi, server.label, tools, client, {
+      playwright: playwrightServer,
+      chromium: chromiumPath(server),
+    });
+    if (playwrightServer && tools.length > 0) {
       playwright.push({ server, client, tools });
     }
   }
   return playwright;
+}
+
+async function attachHttp(pi: ExtensionAPI): Promise<void> {
+  const deadline = Date.now() + ATTACH_TIMEOUT_MS;
+  const remaining = (): number => Math.max(1, deadline - Date.now());
+  for (const server of httpServers()) {
+    if (Date.now() >= deadline) {
+      throw attachError(server.label, "initialize", new Error("mcp attach timeout"));
+    }
+    const client = new HttpMcpClient(server.url);
+    try {
+      await client.request(
+        "initialize",
+        {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "apipi", version: "0.2.0" },
+        },
+        Math.min(8000, remaining()),
+      );
+    } catch (err) {
+      throw attachError(server.label, "initialize", err);
+    }
+    try {
+      await client.notify("notifications/initialized");
+    } catch (err) {
+      void err;
+    }
+    let listed: { tools?: ListedTool[] };
+    try {
+      listed = (await client.request("tools/list", {}, remaining())) as {
+        tools?: ListedTool[];
+      };
+    } catch (err) {
+      throw attachError(server.label, "tools/list", err);
+    }
+    registerTools(pi, server.label, listed.tools ?? [], client, {
+      playwright: server.label.toLowerCase() === "playwright",
+      chromium: null,
+    });
+  }
 }
 
 export default function (pi: ExtensionAPI) {
@@ -380,7 +454,32 @@ export default function (pi: ExtensionAPI) {
     }> = [];
     try {
       playwright = await Promise.race([
-        attachStdio(pi),
+        (async () => {
+          let httpError: Error | undefined;
+          try {
+            await attachHttp(pi);
+          } catch (err) {
+            httpError = err instanceof Error ? err : new Error(String(err));
+          }
+          let found: Array<{
+            server: StdioServer;
+            client: McpClient;
+            tools: ListedTool[];
+          }> = [];
+          let stdioError: Error | undefined;
+          try {
+            found = await attachStdio(pi);
+          } catch (err) {
+            stdioError = err instanceof Error ? err : new Error(String(err));
+          }
+          if (httpError) {
+            throw httpError;
+          }
+          if (stdioError) {
+            throw stdioError;
+          }
+          return found;
+        })(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () =>

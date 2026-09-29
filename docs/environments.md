@@ -310,4 +310,6 @@ skill id. Those zips unpack under `.agents/skills/` in the session
 workspace. See [tools](tools.md).
 
 Stdio MCP (for example Playwright) follows Pi, not the remote runner.
-HTTP MCP is reached from the gateway and handed to Pi.
+HTTP MCP is reached from the gateway and handed to Pi through the host
+credential broker. Pi lists those tools from the broker URL. The guest
+does not receive the bearer.
