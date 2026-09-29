@@ -342,7 +342,7 @@ Firecracker.
 | `APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS` | `[pi].compaction_keep_recent_tokens` | unset (Pi default 20000) | `compaction.keepRecentTokens` in Pi `settings.json`. Recent tokens kept out of the summary. Unset leaves Pi's default. |
 | `APIPI_PI_THINKING` | `[pi].thinking` | `off` | Process default thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. A session or agent may override it. |
 | `APIPI_PI_MEM_MIB` | `[pi].mem_mib` | unset | Soft ceiling for one host Pi (`none` / `chat`) in MiB. Unset is off. Sets Node `NODE_OPTIONS=--max-old-space-size` and kills the process group when RSS goes over the limit (`apipi_pi_kill_total` reason `memory`). A turn in progress fails with `pi_memory`. Not a microVM hard cap. |
-| `APIPI_PI_SYSTEM_PROMPT` | `[pi].system_prompt` | unset | Replaces Pi's harness default system prompt. Unset or empty keeps Pi's default. This does not replace the platform prompt or agent instructions. |
+| `APIPI_PI_SYSTEM_PROMPT` | `[pi].system_prompt` | unset | Replaces Pi's harness default system prompt. Unset or empty keeps Pi's default. This does not replace the platform prompt, agent instructions, context files, or skills. It does drop Pi's tool list and all tool guidelines, including MCP and Playwright guidance. The tools stay callable. |
 | `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | built-in text | Main platform prompt appended after Pi's harness default (or after `system_prompt` when that is set). Unset keeps the built-in. Set to `""` to disable the main block. A non-empty value replaces the built-in entirely. |
 | `APIPI_PLATFORM_PROMPT_ADDITIONAL` | `[pi].platform_prompt_additional` | empty | Optional extra platform text appended after the main block. Does not replace the main prompt. |
 | `APIPI_MODEL_RETRY_ENABLED` | `[pi].model_retry_enabled` | on | Pi `retry.enabled`. When on, Pi retries a failed model call. ApiPi does not retry the turn. |
@@ -439,9 +439,9 @@ They are not told about `/workspace`, sandbox size, or a browser.
 | Additional platform text | `APIPI_PLATFORM_PROMPT_ADDITIONAL` is non-empty. Always, after the main block. |
 | Size | Hosted microvm only. `Sandbox size is L (2048 MiB).` RAM comes from the size setting, not a hardcoded "2 GiB". No image name and no Chromium claim. |
 | Network | Hosted microvm only, and only when `network.access` is `enabled` or `restricted`. Omitted when unset or `disabled`. |
-| Playwright tool guidelines | Only after that server's tools register in the guest. One long guideline per server, not once per tool. The Chromium path is included only when that server's args name `/usr/bin/chromium-browser`. |
-| Bash install block | Blocks `npm install playwright` and `playwright install` only after Playwright tools have registered. Otherwise the command is allowed. |
-| `system_prompt` / skills | Operator or caller owned. A replacement system prompt does not remove the blocks above. |
+| Playwright tool guidelines | Only after that server's tools register in the guest. One long guideline per server, not once per tool. The Chromium path is included only when that server's args name `/usr/bin/chromium-browser`. Not present when a replacement system prompt is set. |
+| Bash install block | Blocks `npm install playwright` and `playwright install` only after Playwright tools have registered. Otherwise the command is allowed. This is a tool-call hook, not prompt text, so a replacement system prompt does not remove it. |
+| `system_prompt` / skills | Operator or caller owned. A replacement system prompt keeps the platform blocks, instructions, context files, and skills. It removes Pi's tool list and all tool guidelines, including the MCP and Playwright rows above. |
 
 ```toml
 [pi]
@@ -458,6 +458,33 @@ Override the main prompt, or keep it and append a sentence:
 platform_prompt = ""
 platform_prompt_additional = "Always answer in German."
 ```
+
+### Context files
+
+Pi 0.85.1 also loads context files into the prompt. This is a supported
+way to add instructions for one session. ApiPi does not write these
+files. A template, the caller, or the agent does.
+
+Pi looks in the Pi agent directory first. That directory is
+`<workspace>/.pi/agent`. In a microvm it is
+`/workspace/.pi/agent`. It then looks in the working directory and
+every parent directory. In each directory the first file that exists
+wins, in this order: `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`,
+`CLAUDE.md`, `CLAUDE.MD`.
+
+Those files are appended after the platform text and
+`agent.instructions`, and before skills. Pi loads them when it starts.
+Files already in the workspace, including `environment.files`, are part
+of that start. A file written during a turn does not change the prompt
+that is already running. It does change the prompt of the next Pi start
+in that session. That is intended. On microvm the next boot packs the
+stored session directory. A file that exists only on the guest tmpfs
+is not in that directory after a sandbox stop, so it is not loaded then.
+
+A replacement system prompt does not drop context files. It still drops
+Pi's tool list and tool guidelines, as the fragment table says.
+[Issue 388](https://github.com/GEKI-AI/apipi/issues/388) revises the
+fragment names in that table.
 
 ## Sandbox
 
