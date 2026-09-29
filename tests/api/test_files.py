@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from httpx import AsyncClient
 
 
@@ -64,7 +62,16 @@ async def test_files_crud_and_session_attach(client: AsyncClient) -> None:
     assert created.status_code == 200
     env = created.json()["environment"]
     assert env["files"][0]["file_id"] == file_id
-    directory = Path(env["directory"])
+    from typing import Any, cast
+
+    from httpx import ASGITransport
+    from tests.support.workspace import hosted_dir
+
+    transport = client._transport
+    assert isinstance(transport, ASGITransport)
+    app = cast(Any, transport.app)
+    settings = app.state.gateway.settings
+    directory = hosted_dir(settings, token, created.json()["id"])
     assert (directory / "amounts.csv").read_bytes() == b"a,b\n1,2\n"
 
 

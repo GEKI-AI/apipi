@@ -2,11 +2,11 @@ import asyncio
 import json
 import logging
 import uuid
-from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from tests.support.workspace import hosted_dir
 
 from apipi.api.sessions import _event_stream
 from apipi.config import Settings
@@ -218,7 +218,9 @@ async def test_unknown_environment_type(client: AsyncClient) -> None:
     assert response.json()["error"]["code"] == "foo"
 
 
-async def test_hosted_alias_is_openai_hosted(client: AsyncClient) -> None:
+async def test_hosted_alias_is_openai_hosted(
+    client: AsyncClient, settings: Settings
+) -> None:
     token = _token()
     agent_id = await _create_agent(client, token)
     created = await client.post(
@@ -229,14 +231,16 @@ async def test_hosted_alias_is_openai_hosted(client: AsyncClient) -> None:
     assert created.status_code == 200
     env = created.json()["environment"]
     assert env["type"] == "openai_hosted"
-    assert Path(env["directory"]).is_dir()
+    assert hosted_dir(settings, token, created.json()["id"]).is_dir()
     got = await client.get(
         f"/v1/agents/sessions/{created.json()['id']}", headers=_auth(token)
     )
     assert got.json()["environment"]["type"] == "openai_hosted"
 
 
-async def test_default_environment_is_openai_hosted(client: AsyncClient) -> None:
+async def test_default_environment_is_openai_hosted(
+    client: AsyncClient, settings: Settings
+) -> None:
     token = _token()
     agent_id = await _create_agent(client, token)
     created = await client.post(
@@ -247,7 +251,7 @@ async def test_default_environment_is_openai_hosted(client: AsyncClient) -> None
     assert created.status_code == 200
     env = created.json()["environment"]
     assert env["type"] == "openai_hosted"
-    assert Path(env["directory"]).is_dir()
+    assert hosted_dir(settings, token, created.json()["id"]).is_dir()
 
 
 async def test_fake_harness_determined_events(client: AsyncClient) -> None:

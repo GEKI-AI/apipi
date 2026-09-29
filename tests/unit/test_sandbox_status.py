@@ -180,7 +180,41 @@ async def test_none_env_emits_no_sandbox_events(
     assert seen == []
 
 
-async def test_warm_attach_waits_for_one_spawn(
+async def test_pool_kill_notifies_lease_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apipi.env.hub import EnvironmentHub
+    from apipi.services.runtime import EventHub
+    from apipi.worker.execution import LocalExecution
+    from apipi.worker.pi.isolation import load_isolation
+
+    async def fake_spawn(*_args: object, **_kwargs: Any) -> _Proc:
+        return _Proc()
+
+    monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
+    settings = _settings()
+    pool = PiPool(settings)
+    seen: list[uuid.UUID] = []
+
+    async def note(session_id: uuid.UUID) -> None:
+        seen.append(session_id)
+
+    execution = LocalExecution(
+        settings,
+        pool=pool,
+        harness=object(),
+        isolation=load_isolation("none"),
+        hub=EventHub(),
+        env_hub=EnvironmentHub(),
+    )
+    execution.note_stopped = note
+    session_id = uuid.uuid4()
+    await pool.get(session_id, cwd=None, tools=False)
+    await pool.kill(session_id, reason="idle")
+    assert seen == [session_id]
+
+
+async def test_warm_attach_is_not_blocked_by_another_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     started = asyncio.Event()
@@ -196,22 +230,21 @@ async def test_warm_attach_waits_for_one_spawn(
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
     pool = PiPool(_settings())
-    session_id = uuid.uuid4()
-    other = uuid.uuid4()
-    first = asyncio.create_task(
-        pool.get(session_id, cwd=None, tools=True, env_type="openai_hosted")
-    )
+    cold = uuid.uuid4()
+    warm = uuid.uuid4()
+    first = asyncio.create_task(pool.get(warm, cwd=None, tools=True))
     await started.wait()
-    second = asyncio.create_task(
-        pool.get(other, cwd=None, tools=True, env_type="openai_hosted")
-    )
-    await asyncio.sleep(0.02)
-    assert calls == 1
-    assert not second.done()
     release.set()
     await first
-    await second
+    release.clear()
+    started.clear()
+    delayed = asyncio.create_task(pool.get(cold, cwd=None, tools=True))
+    await started.wait()
+    attached = asyncio.create_task(pool.get(warm, cwd=None, tools=True))
+    await asyncio.wait_for(attached, timeout=1)
     assert calls == 2
+    release.set()
+    await delayed
 
 
 async def test_stale_seen_at_is_worker_lost(store: Store) -> None:

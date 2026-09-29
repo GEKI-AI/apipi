@@ -6,6 +6,7 @@ from typing import Any
 
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import select
+from tests.support.workspace import hosted_dir
 
 from apipi.api.sessions import _event_stream
 from apipi.config import Settings
@@ -213,23 +214,27 @@ async def test_compat_sessions_stream_follow_up(
     assert stream_texts == ["hello", "again"]
 
 
-async def test_compat_environment_openai_hosted(client: AsyncClient) -> None:
+async def test_compat_environment_openai_hosted(
+    client: AsyncClient, settings: Settings
+) -> None:
     token = "compat-hosted"
     agent_id = await _agent(client, token)
     created = await _session(client, token, agent_id=agent_id)
     env = created["environment"]
     assert env["type"] == "openai_hosted"
-    assert Path(env["directory"]).is_dir()
+    assert hosted_dir(settings, token, created["id"]).is_dir()
 
 
-async def test_compat_environment_hosted_alias(client: AsyncClient) -> None:
+async def test_compat_environment_hosted_alias(
+    client: AsyncClient, settings: Settings
+) -> None:
     token = "compat-hosted-alias"
     agent_id = await _agent(client, token)
     created = await _session(
         client, token, agent_id=agent_id, environment={"type": "hosted"}
     )
     assert created["environment"]["type"] == "openai_hosted"
-    assert Path(created["environment"]["directory"]).is_dir()
+    assert hosted_dir(settings, token, created["id"]).is_dir()
 
 
 async def test_compat_environment_none(client: AsyncClient) -> None:
@@ -347,7 +352,12 @@ async def test_compat_skills(settings: Settings, store: Store, tmp_path: Path) -
         )
         env = created["environment"]
         assert env["capability_directories"] == [str(caps)]
-        copied = Path(env["directory"]) / "pack" / "cap-skill" / "SKILL.md"
+        copied = (
+            hosted_dir(settings, token, created["id"])
+            / "pack"
+            / "cap-skill"
+            / "SKILL.md"
+        )
         assert copied.is_file()
 
 
@@ -358,7 +368,7 @@ async def test_compat_artifacts(
     agent_id = await _agent(client, token)
     created = await _session(client, token, agent_id=agent_id)
     session_id = created["id"]
-    directory = Path(created["environment"]["directory"])
+    directory = hosted_dir(settings, token, session_id)
     (directory / "outputs").mkdir()
     (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     from apipi.worker.pi.artifacts import harvest_session

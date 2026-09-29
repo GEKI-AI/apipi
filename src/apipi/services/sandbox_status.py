@@ -133,6 +133,7 @@ _CONTAINER = {"S": "small", "M": "medium", "L": "large"}
 
 def overlay_environment(row: SessionRow) -> dict[str, Any]:
     environment = dict(row.environment) if isinstance(row.environment, dict) else {}
+    environment.pop("directory", None)
     size = environment.get("sandbox_size")
     if isinstance(size, str) and size in _CONTAINER:
         environment["container_size"] = _CONTAINER[size]

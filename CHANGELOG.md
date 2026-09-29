@@ -33,6 +33,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the platform prompt is gone. Playwright guidance is added only after
   those tools register.
 
+### Changed
+
+- Public session responses no longer include `environment.directory`.
+  The host path stays in the store for the worker.
+
+### Fixed
+
+- A warm sandbox attach is not blocked by another session's cold boot.
+- `GET` during a remote turn no longer marks the turn interrupted while
+  the worker lease is live.
+- Host setup runs off the event loop.
+- A pool stop sends `lease.release` so idle sessions do not keep worker
+  capacity. The worker handles `lease.revoke`.
+
 ### Added
 
 - ApiPi-only routes are canonical under `/v1/apipi/`. The old paths

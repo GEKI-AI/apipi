@@ -77,7 +77,9 @@ async def test_none_openai_hosted_streams_fake_pi_text(
     assert created.status_code == 200
     body = created.json()
     assert body["environment"]["type"] == "openai_hosted"
-    directory = Path(body["environment"]["directory"])
+    from tests.support.workspace import hosted_dir
+
+    directory = hosted_dir(none_settings, token, body["id"])
     assert directory.is_dir()
     root = Path(none_settings.sessions_dir or ".")
     assert directory.is_relative_to(root)
@@ -214,7 +216,9 @@ async def test_pi_session_restored_after_workspace_wipe(
     )
     assert created.status_code == 200
     session_id = uuid.UUID(created.json()["id"])
-    directory = Path(created.json()["environment"]["directory"])
+    from tests.support.workspace import hosted_dir
+
+    directory = hosted_dir(none_settings, token, created.json()["id"])
     (directory / "scratch.txt").write_text("gone", encoding="utf-8")
     pool = none_app.state.pi_pool
     await pool.kill(session_id)

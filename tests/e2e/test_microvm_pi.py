@@ -104,7 +104,9 @@ async def test_microvm_openai_hosted_streams_fake_pi_text(
     assert created.status_code == 200
     body = created.json()
     assert body["environment"]["type"] == "openai_hosted"
-    directory = Path(body["environment"]["directory"])
+    from tests.support.workspace import hosted_dir
+
+    directory = hosted_dir(microvm_settings, token, body["id"])
     assert directory.is_dir()
     root = Path(microvm_settings.sessions_dir or ".")
     assert directory.is_relative_to(root)
@@ -148,7 +150,9 @@ async def test_microvm_workspace_persists_after_guest_stop(
         json={"agent_id": created_agent.json()["id"]},
     )
     assert created.status_code == 200
-    directory = Path(created.json()["environment"]["directory"])
+    from tests.support.workspace import hosted_dir
+
+    directory = hosted_dir(microvm_settings, token, created.json()["id"])
     shutil.copy(_FAKE_PI, directory / "fake_pi.py")
     session_id = uuid.UUID(created.json()["id"])
     turned = await microvm_client.post(

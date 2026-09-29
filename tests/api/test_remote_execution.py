@@ -129,6 +129,106 @@ async def test_remote_turn_via_worker(settings: Settings, store: Store) -> None:
         await local.close()
 
 
+async def test_get_during_remote_turn_stays_in_progress(
+    settings: Settings, store: Store
+) -> None:
+    api_settings = _api_settings(settings)
+    app = create_app(api_settings, store=store, harness=FakeHarness())
+    gate = asyncio.Event()
+
+    class HoldHarness(FakeHarness):
+        async def generate(self, text: str, **kwargs: object):  # type: ignore[override]
+            del text, kwargs
+            await gate.wait()
+            yield ("agent.session.turn.output_text.done", {"text": "ok"})
+
+    held = HoldHarness()
+    local = local_execution(
+        api_settings,
+        store=store,
+        harness=held,
+        hub=app.state.event_hub,
+        env_hub=app.state.env_hub,
+    )
+    worker = FakeWorker(app, "worker-secret")
+    ready = asyncio.Event()
+
+    async def pump() -> None:
+        hello = await worker.connect(capacity=2)
+        assert hello.get("ok") is True
+        ready.set()
+        while True:
+            message = await worker.receive_json()
+            if message.get("type") != "command":
+                continue
+            await worker.send_json(
+                {
+                    "type": "lease.ack",
+                    "id": message.get("id"),
+                    "lease_id": message.get("lease_id"),
+                }
+            )
+            from apipi.worker.hub import dispatch_command
+
+            await dispatch_command(local, message)
+
+    task = asyncio.create_task(pump())
+    await ready.wait()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            agent = await client.post(
+                "/v1/agents",
+                headers=_auth("remote-get"),
+                json={"name": "bot", "model": "test"},
+            )
+            created = await client.post(
+                "/v1/agents/sessions",
+                headers=_auth("remote-get"),
+                json={
+                    "agent_id": agent.json()["id"],
+                    "environment": {"type": "none"},
+                },
+            )
+            assert created.status_code == 200
+            session_id = created.json()["id"]
+            turn = asyncio.create_task(
+                client.post(
+                    f"/v1/agents/sessions/{session_id}/events",
+                    headers=_auth("remote-get"),
+                    json={
+                        "type": "agent.session.input.message",
+                        "content": "hello",
+                    },
+                )
+            )
+            status = "idle"
+            for _ in range(40):
+                got = await client.get(
+                    f"/v1/agents/sessions/{session_id}",
+                    headers=_auth("remote-get"),
+                )
+                status = got.json()["status"]
+                if status == "in_progress":
+                    break
+                await asyncio.sleep(0.05)
+            assert status == "in_progress"
+            again = await client.get(
+                f"/v1/agents/sessions/{session_id}",
+                headers=_auth("remote-get"),
+            )
+            assert again.json()["status"] == "in_progress"
+            gate.set()
+            finished = await turn
+            assert finished.status_code == 200
+    finally:
+        gate.set()
+        task.cancel()
+        await worker.close()
+        await local.close()
+
+
 async def test_remote_turn_records_metrics_and_spans_on_worker(
     settings: Settings, store: Store
 ) -> None:
