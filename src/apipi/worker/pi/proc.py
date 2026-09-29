@@ -137,9 +137,14 @@ class PiProc:
         self._stdin.write((json.dumps(payload) + "\n").encode())
         await self._stdin.drain()
 
-    async def prompt(self, message: str) -> AsyncIterator[dict[str, Any]]:
+    async def prompt(
+        self, message: str, images: list[dict[str, str]] | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
         log.info("pi prompt")
-        await self.send({"type": "prompt", "message": message})
+        payload: dict[str, Any] = {"type": "prompt", "message": message}
+        if images:
+            payload["images"] = images
+        await self.send(payload)
         first = True
         async for event in self._events():
             kind = event.get("type")

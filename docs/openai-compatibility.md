@@ -200,7 +200,9 @@ New extension fields are grouped. Older flat fields stay flat.
 | Host rejects the model during a turn | `api_error` | `model_host_error` on the `502` body in this release (`detail_code` is the specific code; session stays `idle`) |
 | Known image, no worker has it | `api_error` | `image_unavailable` (`503`) |
 | Nested `events` length not 1, or mixed flat+nested body | `invalid_request` | `validation_error` |
-| Non-text input parts (for example `input_image`) | `not_implemented` | The part type |
+| `input_image` with an `http` or `https` URL | `invalid_request` | `invalid_request` |
+| Image sent to a model that does not list `image` in its registry `input` | `invalid_request` | `unsupported_input` |
+| Other non-text input parts | `not_implemented` | The part type |
 
 The envelope is `{ "error": { "type", "code", "message" } }`. When
 create already stored a session and the first turn failed, the error

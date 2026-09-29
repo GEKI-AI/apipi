@@ -48,7 +48,7 @@ class SessionCreate(StrictModel):
     agent: AgentWrite | None = None
     agent_id: uuid.UUID | None = None
     environment: EnvironmentSpec | None = None
-    input: str | dict[str, Any] | None = None
+    input: str | dict[str, Any] | list[Any] | None = None
     metadata: dict[str, Any] | None = None
     idle_ttl: str | None = None
     stream: bool = False
@@ -94,18 +94,23 @@ class SessionInput(StrictModel):
 class OpenAIInputText(StrictModel):
     type: str
     text: str | None = None
+    image_url: str | None = None
 
     @model_validator(mode="after")
-    def input_text_only(self) -> Self:
-        if self.type != "input_text":
-            raise PydanticCustomError(
-                "not_implemented",
-                "{field} is not implemented",
-                {"field": self.type},
-            )
-        if self.text is None:
-            raise ValueError("input_text needs text")
-        return self
+    def known_part(self) -> Self:
+        if self.type == "input_text":
+            if self.text is None:
+                raise ValueError("input_text needs text")
+            return self
+        if self.type == "input_image":
+            if not self.image_url:
+                raise ValueError("input_image needs image_url")
+            return self
+        raise PydanticCustomError(
+            "not_implemented",
+            "{field} is not implemented",
+            {"field": self.type},
+        )
 
 
 class OpenAIMessageInput(StrictModel):
@@ -133,10 +138,16 @@ class OpenAIEventsBody(StrictModel):
         self.to_session_input()
         return self
 
+    def raw_messages(self) -> list[dict[str, Any]] | None:
+        event = self.events[0]
+        if event.type != "agent.session.input.message" or not event.input:
+            return None
+        return [item.model_dump(exclude_none=True) for item in event.input]
+
     def to_session_input(self) -> SessionInput:
         event = self.events[0]
         if event.type == "agent.session.input.message":
-            return SessionInput(type=event.type, content=_first_input_text(event.input))
+            return SessionInput(type=event.type, content=_message_text(event.input))
         return SessionInput(
             type=event.type,
             turn_id=event.turn_id,
@@ -147,14 +158,20 @@ class OpenAIEventsBody(StrictModel):
         )
 
 
-def _first_input_text(messages: list[OpenAIMessageInput] | None) -> str:
+def _message_text(messages: list[OpenAIMessageInput] | None) -> str:
     if not messages:
         raise ValueError("message needs input")
+    texts: list[str] = []
+    saw_image = False
     for message in messages:
         for part in message.content:
-            if part.text is not None:
-                return part.text
-    raise ValueError("message needs input_text")
+            if part.type == "input_text" and part.text is not None:
+                texts.append(part.text)
+            elif part.type == "input_image":
+                saw_image = True
+    if not texts and not saw_image:
+        raise ValueError("message needs input_text")
+    return "\n".join(texts)
 
 
 SessionEventBody = OpenAIEventsBody | SessionInput
@@ -280,12 +297,14 @@ async def post_session_event(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     parsed = body.to_session_input() if isinstance(body, OpenAIEventsBody) else body
+    raw = body.raw_messages() if isinstance(body, OpenAIEventsBody) else parsed.content
     return await _sessions(request).post_event(
         tenant.id,
         session_id,
         type=parsed.type,
         content=parsed.content,
         text=parsed.text,
+        raw_input=raw,
         turn_id=parsed.turn_id,
         call_id=parsed.call_id,
         success=parsed.success,

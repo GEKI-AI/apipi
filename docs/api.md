@@ -395,7 +395,12 @@ one shape or the other, not both.
 
 A message event starts a turn. Nested form: `type`
 `agent.session.input.message` and `input` with a `user` message whose
-`content` has `input_text`. Flat form: `type`
+`content` has `input_text` and, for a vision model, `input_image`.
+`input_image.image_url` must be a `data:` URL (`png`, `jpeg`, `webp`,
+or `gif`). Remote `http` and `https` URLs are rejected. A model that
+is not in the registry, or whose `input` does not include `image`,
+returns `400` with code `unsupported_input`. Image bytes are stored as
+Files API objects. The item keeps `file_id`, not the base64. Flat form: `type`
 `agent.session.input.message` and `content` or `text`. Follow-up
 messages work the same way after the session is idle. A message while
 the session is `in_progress` cancels that turn (or fails it if the

@@ -1494,7 +1494,7 @@ async def start_microvm(
             extra_dirs=extra_dirs,
             shell=shell,
             models_json=models_json_for_base_url(
-                settings, broker.openai_base_url, thinking=level
+                settings, broker.openai_base_url, thinking=level, model=model
             ),
             settings_json=settings_json_text(pi_settings).encode(),
             system_md=system_md,

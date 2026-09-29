@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Guest image `work` adds Excel, Word, PowerPoint, PDF, CSV, and chart
   libraries. It needs sandbox size `M` or larger. It does not include
   LibreOffice or pandoc.
+- Session input accepts `input_image` data URLs and a list of messages.
+  A model capability registry tells Pi which models accept images.
 
 ### Documentation
 

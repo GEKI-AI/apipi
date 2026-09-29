@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -1424,6 +1425,8 @@ async def run_turn(
     session_id: uuid.UUID,
     text: str,
     *,
+    images: list[dict[str, str]] | None = None,
+    parts: list[dict[str, str]] | None = None,
     mcp_http: list[Any] | None = None,
     mcp_stdio: list[Any] | None = None,
     request_id: str | None = None,
@@ -1462,6 +1465,34 @@ async def run_turn(
         session_idle: str | None
         agent_idle: str | None
         spawn_ids = _spawn_identity_empty(user_id, org_id)
+        item_content: str | list[dict[str, Any]] = text
+        ordered = parts or []
+        has_image = any(part.get("type") == "image" for part in ordered)
+        if has_image and settings is not None and objects is not None:
+            files = FileService(store, objects, settings)
+            stored_parts: list[dict[str, Any]] = []
+            for part in ordered:
+                if part.get("type") == "input_text":
+                    stored_parts.append(
+                        {"type": "input_text", "text": str(part.get("text") or "")}
+                    )
+                    continue
+                if part.get("type") != "image":
+                    continue
+                mime = str(part.get("mimeType") or "application/octet-stream")
+                data = base64.b64decode(str(part.get("data") or ""))
+                created = await files.create(
+                    tenant_id,
+                    data=data,
+                    filename="image",
+                    purpose="user_data",
+                    content_type=mime,
+                )
+                stored_parts.append({"type": "input_image", "file_id": created["id"]})
+            if len(stored_parts) == 1 and stored_parts[0].get("type") == "input_text":
+                item_content = str(stored_parts[0].get("text") or text)
+            elif stored_parts:
+                item_content = stored_parts
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
@@ -1599,7 +1630,7 @@ async def run_turn(
                 session_id,
                 turn_id=turn_id,
                 type="message",
-                data={"role": "user", "content": text},
+                data={"role": "user", "content": item_content},
             )
             if cache_error is not None:
                 await _fail_turn(
@@ -1665,6 +1696,7 @@ async def run_turn(
             ) as model_span:
                 generate = harness.generate(
                     text,
+                    images=images,
                     session_id=session_id,
                     cwd=cwd_path,
                     tools=tools,

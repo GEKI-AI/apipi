@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import tomllib
@@ -334,6 +335,27 @@ def parse_image_list(value: object) -> object:
     return value
 
 
+def parse_model_registry(value: object) -> object:
+    if value is None or value == "":
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("APIPI_MODEL_REGISTRY must be JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError("model registry must be a table")
+    from apipi.worker.pi.model_caps import ModelCapability
+
+    out: dict[str, dict[str, Any]] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not isinstance(item, dict):
+            raise ValueError("model registry entries must be tables")
+        parsed = ModelCapability.model_validate(item)
+        out[key] = parsed.model_dump(exclude_none=True)
+    return out
+
+
 def parse_microvm_image(value: object) -> object:
     if value is None:
         return "default"
@@ -646,6 +668,24 @@ class Settings(BaseSettings):
     models: ModelNameList = Field(
         default_factory=list,
         validation_alias=AliasChoices("APIPI_MODELS", "models"),
+    )
+    model_registry: Annotated[dict[str, Any], BeforeValidator(parse_model_registry)] = (
+        Field(
+            default_factory=dict,
+            validation_alias=AliasChoices("APIPI_MODEL_REGISTRY", "model_registry"),
+        )
+    )
+    max_image_bytes: int = Field(
+        default=5 * 1024 * 1024,
+        validation_alias=AliasChoices("APIPI_MAX_IMAGE_BYTES", "max_image_bytes"),
+    )
+    max_images: int = Field(
+        default=8,
+        validation_alias=AliasChoices("APIPI_MAX_IMAGES", "max_images"),
+    )
+    image_mimes: str = Field(
+        default="image/png,image/jpeg,image/webp,image/gif",
+        validation_alias=AliasChoices("APIPI_IMAGE_MIMES", "image_mimes"),
     )
     microvm_kernel: str | None = Field(
         default=None,
@@ -1093,6 +1133,8 @@ def _toml_values(path: Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ConfigError(f"{path} must be a table")
     nested: dict[str, Any] = {}
+    if "models" in raw and isinstance(raw["models"], dict):
+        nested["model_registry"] = raw.pop("models")
     if "pi" in raw:
         nested.update(_map_table(_require_table(raw.pop("pi"), "[pi]"), _PI_TOML, "pi"))
     if "sandbox" in raw:
