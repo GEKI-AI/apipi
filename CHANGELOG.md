@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Operator prompt fragments can be overridden per environment type, or
   from a file. `${platform_name}` replaces the built-in name. Extend
   mode replaces only Pi's intro.
+- The built-in hosted prompt now says an idle or TTL stop deletes the
+  workspace, and names `inputs/` and `outputs/`. Hosted sessions get a
+  capability block for image, size, RAM, vCPUs, and network. It does
+  not claim a browser is available.
 
 ### Documentation
 

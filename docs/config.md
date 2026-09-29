@@ -482,8 +482,9 @@ every parent directory. In each directory the first file that exists
 wins, in this order: `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`,
 `CLAUDE.md`, `CLAUDE.MD`.
 
-Those files are appended after the platform text and
-`agent.instructions`, and before skills. Pi loads them when it starts.
+Those files are appended after the platform fragments (`main.hosted`,
+`capability`, and the other blocks) and `agent.instructions`, and
+before skills. Pi loads them when it starts.
 Files already in the workspace, including `environment.files`, are part
 of that start. A file written during a turn does not change the prompt
 that is already running. It does change the prompt of the next Pi start

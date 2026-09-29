@@ -443,22 +443,46 @@ export default function (pi: ExtensionAPI) {
     if (!dir) {
       return;
     }
-    let identity = "";
+    let current = event.systemPrompt ?? "";
     try {
-      identity = readFileSync(`${dir}/identity.txt`, "utf8").trim();
+      const identity = readFileSync(`${dir}/identity.txt`, "utf8").trim();
+      if (identity) {
+        const replaced = replaceIntro(current, identity);
+        if (replaced === null) {
+          console.error("apipi identity intro was not found; keeping Pi's prompt");
+        } else {
+          current = replaced;
+        }
+      }
     } catch {
-      return;
+      void 0;
     }
-    if (!identity) {
-      return;
+    let raw = "";
+    try {
+      raw = readFileSync(`${dir}/capability.json`, "utf8");
+    } catch {
+      return current === event.systemPrompt ? undefined : { systemPrompt: current };
     }
-    const current = event.systemPrompt ?? "";
-    const next = replaceIntro(current, identity);
-    if (next === null) {
-      console.error("apipi identity intro was not found; keeping Pi's prompt");
-      return;
+    let parsed: { block?: string; overrides?: string[] } = {};
+    try {
+      parsed = JSON.parse(raw) as { block?: string; overrides?: string[] };
+    } catch {
+      return current === event.systemPrompt ? undefined : { systemPrompt: current };
     }
-    return { systemPrompt: next };
+    const overrides = (parsed.overrides ?? []).filter((item) => item.trim());
+    for (const line of overrides) {
+      const suffix = `\n\n${line}`;
+      if (current.endsWith(suffix)) {
+        current = current.slice(0, -suffix.length);
+      }
+    }
+    const date = new Date().toISOString().slice(0, 10);
+    const block = `${parsed.block ?? ""}\nToday is ${date}.`.trim();
+    const extra = [block, ...overrides].filter((item) => item).join("\n\n");
+    if (!extra) {
+      return current === event.systemPrompt ? undefined : { systemPrompt: current };
+    }
+    return { systemPrompt: `${current}\n\n${extra}` };
   });
 
   pi.on("tool_call", (event) => {

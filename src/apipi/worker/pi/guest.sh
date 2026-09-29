@@ -19,7 +19,7 @@ if command -v ip >/dev/null 2>&1; then
 elif command -v ifconfig >/dev/null 2>&1; then
   ifconfig lo up 2>/dev/null || true
 fi
-mkdir -p "$WS"
+mkdir -p "$WS" "$WS/inputs"
 if [ -b /dev/vdb ]; then
   tar -xf /dev/vdb -C "$WS"
 fi

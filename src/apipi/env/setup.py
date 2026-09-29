@@ -573,6 +573,8 @@ def prepare_workspace(
 ) -> None:
     if environment.get("type") != "openai_hosted":
         return
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "inputs").mkdir(parents=True, exist_ok=True)
     values = session_env_from(environment)
     files = inline_files_from(environment)
     if extra_files:

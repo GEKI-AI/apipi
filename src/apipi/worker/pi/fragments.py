@@ -22,18 +22,21 @@ MAIN_NONE = (
     "provide."
 )
 MAIN_HOSTED = (
-    "This session runs on ${platform_name}. The working directory is /workspace. "
-    "Write durable deliverables under outputs/ only. Those files are "
-    "published when a turn completes and stay downloadable after the "
-    "sandbox expires. Other files are scratch and are deleted with the "
-    "workspace. Do not invent APIs or tools that this session does not "
-    "provide."
+    "This session runs on ${platform_name}. The working directory is ${workspace}. "
+    "An idle or TTL stop (${idle_ttl}) deletes the workspace, possibly "
+    "mid-conversation. The next message starts a fresh sandbox. The "
+    "conversation history persists, but files outside outputs/ do not. "
+    "Files provided by the user are under inputs/. Write files the user "
+    "should receive under outputs/. Those files are published when a turn "
+    "completes and stay downloadable after the sandbox is gone. Do not "
+    "invent APIs or tools that this session does not provide."
 )
 MAIN_SELF = (
     "This session runs on ${platform_name}. The working directory is the runner's "
-    "files. Write durable deliverables under outputs/ only. Those files "
-    "are published when a turn completes. Other files are scratch. Do not "
-    "invent APIs or tools that this session does not provide."
+    "files. Write files the user should receive under outputs/. Those files "
+    "are published when a turn completes and stay downloadable. Other files "
+    "are scratch and are not published. Do not invent APIs or tools that "
+    "this session does not provide."
 )
 SIZE = "Sandbox size is ${size} (${mem_mib} MiB)."
 NETWORK_ENABLED = "This sandbox has network access."
@@ -243,6 +246,18 @@ def validate_fragments(settings: Settings) -> None:
     values["platform_name"] = settings.platform_name
     for name in DEFAULTS:
         fragment_text(settings, name, values, strict=True)
+
+
+def capability_block(values: dict[str, str]) -> str:
+    network = values.get("network") or "disabled"
+    return (
+        f"Image is {values.get('image') or 'default'}. "
+        f"Size is {values.get('size') or 'S'} "
+        f"({values.get('mem_mib') or '0'} MiB, {values.get('vcpus') or '1'} vCPUs). "
+        f"Network access is {network}. "
+        "Do not assume a browser is available. "
+        "Use Playwright MCP tools only if they are registered."
+    )
 
 
 def cap_prompt(text: str) -> str:

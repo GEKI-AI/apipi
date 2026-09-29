@@ -211,6 +211,11 @@ agent turn that needs the computer:
    directory. Absolute OpenAI paths `/workspace` and `/tmp/workspace`
    map to that directory. Other absolute paths are rejected.
 
+Hosted workspaces include an `inputs/` directory. Put files the user
+provided there, including `environment.files` paths under `inputs/`.
+Existing paths still work. `inputs/` is not published. Only `outputs/`
+is.
+
 `network.access` is `enabled`, `disabled`, or `restricted`.
 `restricted` requires `allowed_domains` (1–100 exact hostnames).
 `enabled` allows outbound traffic to the public internet. Private and
