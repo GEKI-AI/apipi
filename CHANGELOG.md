@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-29
+
+### Fixed
+
+- The wheel build no longer lists `src/apipi/worker/pi/prompts` in
+  `force-include`. Those files are already in the package, and the
+  duplicate stopped the 0.10.0 publish.
+
 ## [0.10.0] - 2026-09-29
 
 ### Added
