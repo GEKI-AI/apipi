@@ -1,76 +1,86 @@
 # Agent versions
 
-An agent definition is saved as an immutable version. `GET /v1/agents/{id}`
-returns the active version, in the same shape as before, plus
-`active_version`. Editing an agent writes a new version and activates it.
-A session keeps the version it was created with. A later edit does not
-change that session.
+The agent row is the live definition. A version is an explicit snapshot
+of that row. Creating or editing an agent does not write a version, and
+a session always uses the live row. An edit therefore changes the next
+turn of a session that already exists.
 
 Versions live under `/v1/apipi/agents/{id}/versions`. OpenAI's Agents API
 has no agent version. If it adds one, these routes stay as aliases for at
 least one minor release.
 
-## What a version stores
+## What a snapshot stores
 
 The snapshot holds every definition field: `name`, `model`,
-`instructions`, `idle_ttl`, `metadata`, `tools`, `session_defaults`, and
-`reasoning`. `service_tier` and `text` are not versioned because they are
-not implemented.
+`instructions`, `idle_ttl`, `metadata` (including `apipi.thinking` and
+`apipi.system_prompt`), `tools`, `session_defaults`, and `reasoning`.
+`service_tier` and `text` are not versioned because they are not
+implemented.
 
-Skills, files, vaults, and credentials are stored as ids. The snapshot
-does not copy secret values or file bytes. Rotating a vault credential
-applies to every version that references it.
+Skills, files, vaults, and credentials are stored as ids only. A snapshot
+does not keep skill zip contents, file bytes, vault contents, or
+credential tokens. Re-uploading a skill, rotating a credential, or
+deleting a file changes every snapshot that references that id.
 
-`status` is `ready` for every version in this release. Creation and
-activation are separate service calls. A later draft or approval flow can
-add statuses and an approver on the activation row without a new table.
+`metadata["apipi.agent_version"]` has no meaning. It is stored like any
+other metadata key.
 
-## Create, activate, and delete
+## Create, restore, and delete
 
-`POST /v1/agents` creates version 1 and activates it. `POST /v1/agents/{id}`
-writes a new version only when the definition changes, and activates it.
-A no-op update does not create a version.
+`POST /v1/apipi/agents/{id}/versions` snapshots the current live
+definition. The body may set `name` and `comment`. It does not take a
+definition and it does not activate anything. Numbers start at 1 for each
+agent and are never reused, including after the newest snapshot is
+deleted.
 
-`POST /v1/apipi/agents/{id}/versions` snapshots the active definition, or
-takes a full definition. It does not activate unless `activate` is true.
+`GET` lists newest first. `{version}` is the id or the number.
+`?include=definition` adds definitions to the list. One version always
+includes its definition. The definition cannot be edited.
 
-`POST /v1/apipi/agents/{id}/versions/{version}/activate` makes that version
-active. `{version}` is the id or the number. Activating an older number is
-how you roll back. No new version is written. Activation checks that the
-model, skills, files, vaults, and credentials still exist. A missing
-reference is `400` and the active version does not change. Each activation
-records who did it, when, and which version was active before.
+`POST /v1/apipi/agents/{id}/versions/{version}/restore` copies that
+snapshot back into the agent row, in one transaction:
 
-`DELETE` is allowed only when the version is not active and no session or
-turn still uses it. Numbers are never reused.
-`APIPI_AGENT_VERSIONS_KEEP` prunes the oldest unreferenced inactive
-versions beyond that count. Unset means keep them all.
+1. It checks that the model, skills, files, vaults, and credentials still
+   exist. A missing reference is `400`. The agent row is unchanged and no
+   snapshot is written.
+2. It snapshots the current live definition with source `pre_restore` and
+   a comment such as `before restore of v3`. Restoring that snapshot
+   undoes the restore.
+3. It copies the target definition into the agent row.
+4. It applies retention.
 
-Deleting an agent deletes its versions. Session version columns become
-null with the agent id. A later turn on that session has no saved
-definition, the same as today.
+The response is the updated agent plus `pre_restore_version`. Restoring
+a definition that already matches the live row still writes the
+pre-restore snapshot.
 
-## Sessions and turns
+`DELETE` removes any snapshot. There is no "active" snapshot to protect.
+The number is not reused.
 
-A session with `agent_id` stores `agent_version`. The default is the
-active version. `metadata["apipi.agent_version"]` pins a number or id.
-Stock clients can send that key. `"active"` is not implemented.
+`POST …/activate` is not a route.
 
-The runtime reads that pinned definition, not the live agent row.
-`POST /v1/agents/sessions` and `/v1/apipi/chat/sessions` both use this
-rule. Inline agents have `agent_version` null.
+## Retention
 
-A turn stores the same version. Session and turn responses, usage events,
-and lifecycle events include `agent_version`.
+`APIPI_AGENT_VERSIONS_KEEP` defaults to 10 and must be an integer of 1 or
+more. Anything else is a startup error. After a snapshot is written, the
+oldest snapshots beyond that count are deleted. The automatic pre-restore
+snapshot counts. Nothing else references versions, so the limit is exact.
 
-To move a session, update `metadata["apipi.agent_version"]` while the
-session is not `in_progress`. The next turn uses the new version. A move
-during `in_progress` is `400`.
+On restore, the target definition is copied into the agent row before
+pruning. If pruning then deletes that snapshot because it was the oldest,
+the restore has still succeeded.
 
-## Export
+Deleting an agent deletes its snapshots.
 
-`GET /v1/apipi/agents/{id}/export?version=` exports that version. Omit
-`version` to export the active one. The zip manifest may include
-`source_version`. Import does not require it. Instantiating a template
-creates a new agent at version 1 with source `template`. Version history
-is not copied.
+## Export and templates
+
+`GET /v1/apipi/agents/{id}/export?version=` exports that snapshot. The zip
+manifest includes `source_version` with the id and number. Import does
+not require that field. Omit `version` to export the live agent. That
+export has no `source_version`.
+
+Importing a bundle or instantiating a template creates an agent and no
+snapshots. Snapshot the new agent explicitly if you want history.
+
+A later session pin can use the same snapshot shape. Session turns read
+the live definition through one function, so a pin can be added there
+without a new table.

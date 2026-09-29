@@ -12,9 +12,8 @@ router = APIRouter()
 
 
 class VersionCreate(StrictModel):
-    definition: dict[str, Any] | None = None
-    note: str | None = None
-    activate: bool = False
+    name: str | None = None
+    comment: str | None = None
 
 
 def _versions(request: Request) -> Any:
@@ -29,18 +28,17 @@ def _actor(request: Request) -> str | None:
 @router.post("/v1/apipi/agents/{agent_id}/versions")
 async def create_version(
     agent_id: uuid.UUID,
-    body: VersionCreate,
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
+    body: VersionCreate | None = None,
 ) -> dict[str, Any]:
+    payload = body if body is not None else VersionCreate()
     return await _versions(request).create_explicit(
         tenant.id,
         agent_id,
-        definition=body.definition,
-        note=body.note,
-        activate=body.activate,
+        name=payload.name,
+        comment=payload.comment,
         created_by=_actor(request),
-        api_key=model_key(request),
     )
 
 
@@ -72,18 +70,18 @@ async def read_version(
     return await _versions(request).get_version(tenant.id, agent_id, version)
 
 
-@router.post("/v1/apipi/agents/{agent_id}/versions/{version}/activate")
-async def activate_version(
+@router.post("/v1/apipi/agents/{agent_id}/versions/{version}/restore")
+async def restore_version(
     agent_id: uuid.UUID,
     version: str,
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _versions(request).activate(
+    return await _versions(request).restore(
         tenant.id,
         agent_id,
         version,
-        activated_by=_actor(request),
+        created_by=_actor(request),
         api_key=model_key(request),
     )
 

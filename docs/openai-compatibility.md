@@ -132,10 +132,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | Metadata | `apipi.sandbox_size`, `apipi.sandbox_image` | Stock SDK inputs. |
 | Metadata | `apipi.sandbox_eager_boot` | Overrides eager boot. |
 | Metadata | `apipi.thinking`, `apipi.system_prompt`, `apipi.idle_ttl` | Pi and idle overrides. `reasoning.effort` is the same thinking level. `none` is `off`. |
-| Metadata | `apipi.agent_version` | Pin a version number or id on session create or update. Default is the active version. |
-| Field | `active_version` | Agent response. `{id, number}` of the active version. |
-| Field | `agent_version` | Session, turn, usage, and lifecycle. Null when there is no saved agent. |
-| Route | `/v1/apipi/agents/{id}/versions` | List, get, create, activate, and delete agent versions. |
+| Route | `/v1/apipi/agents/{id}/versions` | Explicit snapshots. Create, list, get, restore, and delete. Sessions keep using the live agent. |
 | Metadata | `apipi.session_kind` | `chat` for chat sessions. |
 | Event data | `data.sandbox` | Hosted `environment.*` events. |
 | Route | `/v1/apipi/agents/{id}/export` | Agent zip. |

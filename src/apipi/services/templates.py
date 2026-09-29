@@ -196,9 +196,6 @@ class TemplateService:
         version: str | None = None,
     ) -> tuple[str, bytes]:
         agent = await self.agents.get(tenant_id, agent_id)
-        active = agent.get("active_version")
-        if isinstance(active, dict):
-            agent["source_version"] = active
         if version is not None:
             from apipi.services.agent_versions import AgentVersionService
 
@@ -259,7 +256,6 @@ class TemplateService:
                 AgentWrite.model_validate(agent_body),
                 api_key=api_key,
                 check_model=False,
-                source="template",
             )
         except Exception:
             await self._rollback(tenant_id, created_skills, created_files)

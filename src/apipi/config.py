@@ -828,8 +828,8 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("APIPI_MAX_FILE_BYTES", "max_file_bytes"),
     )
-    agent_versions_keep: int | None = Field(
-        default=None,
+    agent_versions_keep: int = Field(
+        default=10,
         ge=1,
         validation_alias=AliasChoices(
             "APIPI_AGENT_VERSIONS_KEEP", "agent_versions_keep"

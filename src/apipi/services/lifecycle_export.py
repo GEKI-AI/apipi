@@ -206,7 +206,6 @@ class LifecycleEmitter:
             "org_id": _text(fields.get("org_id")),
             "session_id": _text(fields.get("session_id")),
             "agent_id": _text(fields.get("agent_id")),
-            "agent_version": fields.get("agent_version"),
             "user_id": self._user(fields.get("user_id")),
             "key_id": _text(fields.get("key_id")),
             "environment_type": fields.get("environment_type"),

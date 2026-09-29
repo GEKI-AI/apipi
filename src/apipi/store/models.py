@@ -70,8 +70,8 @@ class Agent(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
-    active_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), nullable=True
+    version_seq: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
     )
 
 
@@ -96,41 +96,13 @@ class AgentVersion(Base):
     )
     agent_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     number: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
     definition: Mapped[dict[str, Any]] = mapped_column(
         JSONType, default=dict, nullable=False
     )
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    note: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
-    )
-
-
-class AgentVersionActivation(Base):
-    __tablename__ = "agent_version_activations"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "id"),
-        ForeignKeyConstraint(
-            ["tenant_id", "version_id"],
-            ["agent_versions.tenant_id", "agent_versions.id"],
-            ondelete="CASCADE",
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
-    )
-    agent_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    version_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    from_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), nullable=True
-    )
-    activated_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -149,6 +121,7 @@ class SessionRow(Base):
             "status IN ('idle', 'in_progress', 'requires_action', 'failed')",
             name="sessions_status_check",
         ),
+        Index("ix_sessions_tenant_user", "tenant_id", "user_id"),
         Index(
             "ix_sessions_lease_until",
             "lease_until",
@@ -179,10 +152,6 @@ class SessionRow(Base):
     agent_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), nullable=True
     )
-    agent_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), nullable=True
-    )
-    agent_version_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     instructions: Mapped[str | None] = mapped_column(String, nullable=True)
     idle_ttl: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -301,10 +270,6 @@ class Turn(Base):
         Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
     )
     session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    agent_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), nullable=True
-    )
-    agent_version_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     usage: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
