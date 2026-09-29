@@ -71,6 +71,7 @@ packages = ["src/apipi"]
 "src/apipi/worker/pi/extensions/mcp.ts" = "apipi/worker/pi/extensions/mcp.ts"
 "src/apipi/worker/pi/prompts" = "apipi/worker/pi/prompts"
 "images/build.sh" = "apipi/worker/pi/images/build.sh"
+"images/kernel.env" = "apipi/worker/pi/images/kernel.env"
 "images/default/image.env" = "apipi/worker/pi/images/default/image.env"
 "images/browser/image.env" = "apipi/worker/pi/images/browser/image.env"
 "images/browser/setup.sh" = "apipi/worker/pi/images/browser/setup.sh"

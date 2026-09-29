@@ -175,6 +175,25 @@ def mem_mib_for_size(settings: Settings, size: str | None) -> int:
     return settings.sandbox_mem_mib(size if size is not None else "S")
 
 
+PLAYWRIGHT_CONFIG_GUEST = "/workspace/.apipi/playwright.json"
+PLAYWRIGHT_NAVIGATION_MS = 30_000
+CHROMIUM_LAUNCH_ARGS = (
+    "--no-first-run",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-sync",
+    "--disable-domain-reliability",
+    "--disable-features=Translate,OptimizationHints,MediaRouter",
+)
+
+
+def playwright_config() -> dict[str, Any]:
+    return {
+        "browser": {"launchOptions": {"args": list(CHROMIUM_LAUNCH_ARGS)}},
+        "timeouts": {"navigation": PLAYWRIGHT_NAVIGATION_MS},
+    }
+
+
 def playwright_tool(_settings: Settings) -> dict[str, Any]:
     return {
         "type": "mcp",
@@ -189,6 +208,8 @@ def playwright_tool(_settings: Settings) -> dict[str, Any]:
                 "--no-sandbox",
                 "--output-dir=/workspace/outputs",
                 f"--executable-path={PLAYWRIGHT_CHROMIUM}",
+                f"--config={PLAYWRIGHT_CONFIG_GUEST}",
+                f"--timeout-navigation={PLAYWRIGHT_NAVIGATION_MS}",
             ],
         },
     }

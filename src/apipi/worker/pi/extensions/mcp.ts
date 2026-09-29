@@ -273,11 +273,20 @@ function registerTools(
         if (signal?.aborted) {
           return { content: [{ type: "text", text: "aborted" }], isError: true };
         }
-        const result = await client.request("tools/call", {
-          name: tool.name,
-          arguments: params,
-        });
-        return contentOf(result);
+        const started = Date.now();
+        try {
+          const result = await client.request("tools/call", {
+            name: tool.name,
+            arguments: params,
+          });
+          return contentOf(result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(
+            `mcp: tools/call ${name} failed after ${Date.now() - started}ms: ${message}`,
+          );
+          throw err;
+        }
       },
     });
     first = false;

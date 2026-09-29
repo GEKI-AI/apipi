@@ -34,6 +34,7 @@ from apipi.worker.pi.microvm import (
     SHELL_SUDO_MARK,
     VSOCK_PORT,
     StartedMicrovm,
+    _console_level,
     _enable_forward,
     _run,
     connect_vsock,
@@ -409,12 +410,20 @@ def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
         rnd = tar.extractfile(".apipi/random")
         assert rnd is not None
         assert len(rnd.read()) == 256
+        config = tar.extractfile(".apipi/playwright.json")
+        assert config is not None
+        assert b"disable-background-networking" in config.read()
     assert "OPENAI_API_KEY" in text
     assert "DATABASE_URL" not in text
     assert net.guest_ip in net_text
     assert net.host_ip in net_text
     assert "127.0.0.1" not in net_text
     assert ".apipi/shell" not in names
+
+
+def test_mcp_console_is_info() -> None:
+    assert _console_level("mcp: tools/call failed after 120000ms") == logging.INFO
+    assert _console_level("pi ready") == logging.DEBUG
 
 
 def test_seed_rng_credits_host_random(

@@ -18,6 +18,8 @@ def test_mcp_extension_source_is_pi_module() -> None:
     assert "mcp_http.mjs" in text
     assert "APIPI_MCP_SERVERS" in text
     assert "bash-install.txt" in text
+    assert "tools/call" in text
+    assert "failed after" in text
     assert "Do not install Playwright" not in text
     assert "Save screenshots" not in text
     assert "Today is" not in text

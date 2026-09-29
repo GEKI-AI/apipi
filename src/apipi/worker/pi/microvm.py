@@ -782,6 +782,14 @@ def write_workspace_image(
         _add_bytes(tar, MCP_HTTP_REL, mcp_http_source(), mode=0o644)
         _add_bytes(tar, MCP_EXTENSION_REL, mcp_extension_source(), mode=0o644)
         _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
+        from apipi.worker.pi.sandbox import playwright_config
+
+        _add_bytes(
+            tar,
+            ".apipi/playwright.json",
+            (json.dumps(playwright_config()) + "\n").encode(),
+            mode=0o644,
+        )
         if shell:
             _add_bytes(tar, ".apipi/shell", b"", mode=0o644)
     data = buf.getvalue()
@@ -1291,6 +1299,12 @@ async def _close_writer(writer: asyncio.StreamWriter) -> None:
         await writer.wait_closed()
 
 
+def _console_level(text: str) -> int:
+    if text.startswith("mcp:") or text.startswith("mcp "):
+        return logging.INFO
+    return logging.DEBUG
+
+
 async def _log_console(stream: asyncio.StreamReader | None) -> None:
     if stream is None:
         return
@@ -1300,7 +1314,8 @@ async def _log_console(stream: asyncio.StreamReader | None) -> None:
             return
         text = line.decode("utf-8", errors="replace").rstrip("\n\r")
         if text:
-            log.debug("console", extra={"line": text[:500]})
+            clipped = text[:500]
+            log.log(_console_level(clipped), "console", extra={"line": clipped})
 
 
 async def connect_vsock(

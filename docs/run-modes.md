@@ -99,10 +99,13 @@ older commands still work.
 | `work` | `./images/build.sh work` | `rootfs-work.ext4` |
 
 Each build writes a Firecracker `vmlinux` (when the download works) under
-`$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). Pass a
-directory argument to choose another location. The files do not
-overwrite each other. The script needs `curl`, `tar`, `mkfs.ext4`,
-`mount`, and root (or `sudo`) for the loop mount and chroot.
+`$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). The
+kernel is Linux 6.1.186 from the Firecracker 1.17 CI set
+(`images/kernel.env`). It is the newest 6.1 guest that release
+validates, and it includes virtio-rng. Pass a directory argument to
+choose another location. The files do not overwrite each other. The
+script needs `curl`, `tar`, `mkfs.ext4`, `mount`, and root (or `sudo`)
+for the loop mount and chroot.
 
 `default` installs Alpine, Node, the pinned Pi CLI, Python 3, `pip`,
 a pinned `uv`, `ip`, `socat`, `curl`, and `git`, and copies
@@ -175,9 +178,9 @@ server against system Chromium unless `auto_playwright` is off. Session
 `packages` and `setup_commands` still run on whichever image that
 session booted.
 
-If the kernel download fails, get a Firecracker-compatible `vmlinux`
-from the [Firecracker getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)
-guide and point `APIPI_MICROVM_KERNEL` at it. Missing `/dev/kvm`,
+If the kernel download fails, get a Firecracker 6.1 `vmlinux` and
+point `APIPI_MICROVM_KERNEL` at it. The pin is `images/kernel.env`.
+Missing `/dev/kvm`,
 binaries, images, `ip`, `iptables`, or `tc` exits the process. How to run
 the live microvm tests is in [tests](tests.md).
 
@@ -247,9 +250,10 @@ that tmpfs, so they use guest RAM and count against the sandbox size.
 guest image. See [environments](environments.md).
 
 The guest kernel needs entropy before Pi can open TLS to the model.
-Firecracker attaches a virtio-rng device, and the workspace includes
-host random that guest init credits into `/dev/urandom`. Without that,
-Linux 4.14 `getrandom()` blocks and the turn stays in progress.
+The pinned 6.1 kernel has virtio-rng (`CONFIG_HW_RANDOM_VIRTIO`), and
+Firecracker attaches that device. Guest init still credits host random
+into `/dev/urandom` so `getrandom()` does not block if the device is
+late.
 
 RPC is JSON lines over vsock. Egress uses a TAP device and NAT. Guest
 localhost works. There is no host loopback to Postgres. By default the
