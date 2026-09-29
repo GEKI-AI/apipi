@@ -124,12 +124,22 @@ def artifact_body(artifact: Artifact) -> dict[str, Any]:
     }
 
 
+async def _expire_sandbox(
+    db: Any, hub: EventHub, tenant_id: uuid.UUID, row: SessionRow
+) -> None:
+    from apipi.services.sandbox_status import expire_if_stale
+
+    await expire_if_stale(db, hub, tenant_id, row)
+
+
 def session_body(row: SessionRow) -> dict[str, Any]:
+    from apipi.services.sandbox_status import overlay_environment
+
     return {
         "id": str(row.id),
         "agent_id": str(row.agent_id) if row.agent_id is not None else None,
         "status": row.status,
-        "environment": row.environment,
+        "environment": overlay_environment(row),
         "idle_ttl": row.idle_ttl,
         "metadata": row.metadata_json,
         "required_actions": row.required_actions,
@@ -440,8 +450,8 @@ class SessionService:
         model: str | None = None
         instructions: str | None = None
         chat = is_chat_session({"metadata": metadata or {}})
+        agent_metadata: dict[str, Any] | None = None
         async with self.store.session() as db:
-            agent_metadata: dict[str, Any] | None = None
             if agent_id is not None:
                 saved = await get_agent(db, tenant_id, agent_id)
                 if saved is None:
@@ -544,8 +554,17 @@ class SessionService:
                         code="artifact_store",
                         status_code=503,
                     ) from exc
-                env = {**env, "directory": str(directory)}
+                hosted_env_id = uuid.uuid4()
+                env = {**env, "directory": str(directory), "id": str(hosted_env_id)}
                 row.environment = env
+                await create_environment(
+                    db,
+                    tenant_id,
+                    row.id,
+                    environment_id=hosted_env_id,
+                    key_hash=hash_token(secrets.token_urlsafe(32)),
+                    status="disconnected",
+                )
                 await db.flush()
             elif env.get("type") == "self_hosted":
                 env_id = uuid.uuid4()
@@ -717,6 +736,25 @@ class SessionService:
             if env_id is not None and env_key is not None:
                 payload["environment_id"] = str(env_id)
                 payload["key"] = env_key
+        if env.get("type") == "openai_hosted":
+            from apipi.services.sandbox_status import eager_boot_enabled
+
+            if eager_boot_enabled(
+                self.settings,
+                session_metadata=metadata,
+                agent_metadata=agent_metadata,
+                session_defaults=agent_defaults,
+            ):
+                task = asyncio.create_task(
+                    self.execution.boot_hosted(
+                        tenant_id,
+                        session_id,
+                        mcp_http=self.mcp_http.get(session_id),
+                        mcp_stdio=self.mcp_stdio.get(session_id),
+                    )
+                )
+                self._turn_tasks.add(task)
+                task.add_done_callback(self._turn_tasks.discard)
         return payload
 
     async def list(
@@ -734,6 +772,7 @@ class SessionService:
                         db, self.event_hub, tenant_id, row.id
                     )
                     row = recovered if recovered is not None else row
+                await _expire_sandbox(db, self.event_hub, tenant_id, row)
                 out.append(session_body(row))
             return {"data": out}
 
@@ -757,6 +796,7 @@ class SessionService:
                 )
                 if recovered is not None:
                     row = recovered
+            await _expire_sandbox(db, self.event_hub, tenant_id, row)
             return session_body(row)
 
     async def update(

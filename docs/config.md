@@ -488,6 +488,7 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | `APIPI_SANDBOX_DEFAULT_IMAGE` | `[sandbox].default_image` | `default` | Guest image when the session does not set `environment.sandbox_image` or `metadata["apipi.sandbox_image"]`, and the size is not `L`. `L` still selects `browser`. This is not `APIPI_MICROVM_IMAGE`, which only selects the image for `apipi install` and `apipi microvm shell`. |
 | `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. Playwright MCP is injected when the image is `browser` unless you turn that off. Size `L` still selects that image when none is set. Install that rootfs with `apipi install --microvm --image browser`. |
 | `APIPI_SANDBOX_AUTO_PLAYWRIGHT` | `[sandbox.browser].auto_playwright` | on | When on, image `browser` on `microvm` injects the vendored Playwright MCP server (system Chromium). Off keeps that image and its RAM but does not attach browser tools. |
+| `APIPI_SANDBOX_EAGER_BOOT` | `[sandbox].eager_boot` | off | When on, creating an `openai_hosted` session starts the computer before the first turn. Off keeps the default: boot on the first turn. A session or agent `metadata["apipi.sandbox_eager_boot"]` overrides this. `on` or `off`. |
 
 ```toml
 [sandbox]

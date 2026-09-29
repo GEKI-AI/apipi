@@ -23,6 +23,8 @@ runs, and where files run.
            +-- model host         OPENAI_BASE_URL
 ```
 
+A hosted computer is not paused. Idle expiry stops Pi and deletes the workspace. The session stays. The next turn builds a new computer and reloads the transcript. See [environments](environments.md).
+
 A turn is one model loop. The client posts a message. The API
 authenticates the bearer, loads the session, and asks execution to
 run. Combined `apipi serve` runs Pi in that process.

@@ -47,6 +47,8 @@ creates an empty `/workspace`, re-applies skills, packages, setup
 commands, files, env, and network policy, and reloads the cached
 session file so Pi continues the
 conversation. Published files are not copied back into `/workspace`.
+There is no pause. A TTL stop kills Pi and deletes the workspace. The public state is `stopped` with `reason: idle`. A client may label that "paused" or "sleeping", but must not imply that files survive.
+
 The directory is bounded by `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB).
 Artifact bytes are copied to the gateway host when a turn completes,
 up to `APIPI_MAX_ARTIFACT_BYTES` (default 512MiB) per session. See

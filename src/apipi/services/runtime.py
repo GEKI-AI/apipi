@@ -1238,9 +1238,9 @@ async def fail_environment(
     *,
     code: str | None = None,
 ) -> None:
-    data: dict[str, Any] = {"error": message}
-    if code:
-        data["code"] = code
+    from apipi.services.sandbox_status import note_failed
+
+    data = await note_failed(db, hub, tenant_id, session_id, message, code=code)
     await persist_event(
         db,
         hub,
@@ -1250,6 +1250,117 @@ async def fail_environment(
         data=data,
     )
     await fail_session(db, hub, tenant_id, session_id, message, code=code)
+
+
+async def load_boot_kwargs(
+    store: Store,
+    settings: Settings,
+    env_hub: EnvironmentHub | None,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    mcp_http: list[Any] | None = None,
+    mcp_stdio: list[Any] | None = None,
+) -> dict[str, Any] | None:
+    from apipi.worker.pi.platform_prompt import compose_instructions
+    from apipi.worker.pi.sandbox import (
+        image_for_size,
+        mem_mib_for_size,
+        sandbox_image_of,
+        sandbox_size_of,
+    )
+
+    async with store.session() as db:
+        row = await get_session(db, tenant_id, session_id)
+        if row is None or not isinstance(row.environment, dict):
+            return None
+        if row.environment.get("type") != "openai_hosted":
+            return None
+        (
+            _function_tools,
+            model,
+            instructions,
+            raw_tools,
+            agent_metadata,
+            agent_idle,
+        ) = await _agent_tools_and_model(db, tenant_id, row)
+        session_metadata = (
+            row.metadata_json if isinstance(row.metadata_json, dict) else {}
+        )
+        ensure_openai_workspace(row.environment)
+        gateway_allowlist = settings.microvm_egress_allowlist
+        gateway_hosts: tuple[str, ...] = ()
+        if settings.run_mode == "microvm":
+            from apipi.worker.pi.microvm import microvm_egress_hosts
+
+            gateway_hosts = tuple(microvm_egress_hosts(settings))
+        backend = object_store(settings)
+        extra_files = await FileService(store, backend, settings).workspace_files(
+            tenant_id, row.environment
+        )
+        provision_hosted(
+            row.environment,
+            run_mode=settings.run_mode,
+            max_bytes=settings.max_workspace_bytes,
+            gateway_allowlist=gateway_allowlist,
+            gateway_hosts=gateway_hosts,
+            extra_files=extra_files,
+        )
+        directory = row.environment.get("directory")
+        if isinstance(directory, str) and directory:
+            await SkillService(store, backend, settings).install(
+                tenant_id, row.environment, Path(directory)
+            )
+        cwd_path, tools, _env_id = _cwd_and_tools(row.environment, env_hub)
+        sandbox_size = sandbox_size_of(row.environment)
+        stored_image = sandbox_image_of(row.environment)
+        sandbox_image = stored_image or image_for_size(sandbox_size)
+        if mcp_stdio is None:
+            mcp_stdio = await _stdio_for_turn(
+                None,
+                raw_tools,
+                size=sandbox_size,
+                settings=settings,
+                image=sandbox_image,
+            )
+        composed = compose_instructions(
+            settings,
+            instructions,
+            env_type="openai_hosted",
+            chat=is_chat_profile(session_metadata),
+            sandbox_size=sandbox_size,
+            mem_mib=mem_mib_for_size(settings, sandbox_size),
+            network=_network_access(row.environment),
+        )
+        kwargs: dict[str, Any] = {
+            "cwd": cwd_path,
+            "tools": tools,
+            "mcp_http": mcp_http,
+            "mcp_stdio": mcp_stdio,
+            "skill_dirs": _skill_dirs(row.environment),
+            "tenant_id": tenant_id,
+            "model": model,
+            "instructions": composed,
+            "key_id": row.key_id,
+            "env_type": "openai_hosted",
+            "mem_mib": mem_mib_for_size(settings, sandbox_size),
+            "image": sandbox_image,
+            "extra_env": session_env_from(row.environment),
+            "agent_id": str(row.agent_id) if row.agent_id else None,
+            "user_id": row.user_id,
+            "org_id": row.org_id,
+        }
+        kwargs.update(_pi_spawn_overrides(settings, session_metadata, agent_metadata))
+        kwargs.update(
+            _idle_spawn(
+                settings,
+                "openai_hosted",
+                session_idle=row.idle_ttl,
+                session_metadata=session_metadata,
+                agent_idle=agent_idle,
+            )
+        )
+        return kwargs
 
 
 def _model_span_attrs(

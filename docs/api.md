@@ -339,9 +339,15 @@ stream includes `agent.session.error` with a `code` and then
 `agent.session.failed`. The stream ends on `agent.session.failed`, so
 a client does not wait for a later event.
 
-Status: `idle | in_progress | requires_action | failed`.
+Status: `idle | in_progress | requires_action | failed`. That is the turn, not the sandbox. An idle session can still have a live computer.
 
-`required_actions`: `function_call`, `environment_connection`.
+`required_actions`: `function_call`, `environment_connection`. A hosted stop does not add `environment_connection`. The next turn rebuilds the computer.
+
+A hosted session (`openai_hosted`) has `environment.id`, `environment.status`, and `environment.sandbox`. `environment.status` is the OpenAI value: `provisioning` while the computer is starting, `connected` when Pi is ready, `disconnected` when it has not started or has stopped, `failed` when boot or setup failed. `environment.sandbox` is ApiPi detail: `state` (`none`, `starting`, `ready`, `stopped`, `failed`), `reason`, `since`, `image`, `image_version`, `size`, `cold_boots`, and `last_boot_ms`. It does not include a worker id. `none` and `self_hosted` set `environment.sandbox` to null and keep their existing connection fields. Chat responses omit `environment`.
+
+`GET /v1/agents/environments/{environment_id}` returns `id`, `type`, `status`, and `sandbox` for that session. Another tenant's id is `404`. There is no pause. A stop deletes the hosted workspace. Clients may label a stopped computer "paused" in the UI, but files do not survive.
+
+Boot stays lazy until the first turn unless `APIPI_SANDBOX_EAGER_BOOT` is on, or the session or agent sets `metadata["apipi.sandbox_eager_boot"]`. When that is on, create starts the boot and the client can wait for `environment.connected` before sending input. A warm reuse emits no environment event. The current state is on GET.
 
 When auth includes `user_id`, create stores it on the session and
 returns it as `user_id`. List, get, update, delete, and later turns
@@ -440,10 +446,10 @@ log line.
 | `agent.session.turn.compaction.completed` | Pi finished compaction. Stored. `reason`, `aborted`, `will_retry`, `tokens_before`, `tokens_after`, and a short `error` when present. The summary text is not stored. |
 | `agent.session.turn.retrying` | Pi will retry the model call. Stored. `attempt`, `max_attempts`, `delay_ms`, `code`, `failure_source`, `upstream_status`. The raw error text is not stored. |
 | `agent.session.turn.retry.completed` | That retry wait finished. Stored. `success`, `attempts`. A success does not end the turn. |
-| `agent.session.environment.pending` | Waiting for a computer |
-| `agent.session.environment.connected` | Computer ready |
-| `agent.session.environment.disconnected` | Computer gone |
-| `agent.session.environment.failed` | Could not attach, or hosted setup failed |
+| `agent.session.environment.pending` | Hosted cold boot started, or a self-hosted runner is not connected yet. Hosted `data.sandbox` has `state`, `cold`, `cause`, `image`, and `size`. |
+| `agent.session.environment.connected` | Computer ready. Hosted `data.sandbox` has `image`, `image_version`, `size`, `run_mode`, `boot_ms`, `lock_wait_ms`, and `setup_ms`. |
+| `agent.session.environment.disconnected` | Computer gone. Hosted `data.sandbox` has `reason` and `live_ms`. |
+| `agent.session.environment.failed` | Could not attach, or hosted setup failed. Hosted `data.sandbox.state` is `failed`. |
 
 Item types: `message`, `function_call`, `mcp_call`,
 `command_execution`. Thinking is not an item. `GET /items` does not

@@ -242,6 +242,7 @@ async def test_compat_environment_none(client: AsyncClient) -> None:
         "type": "none",
         "sandbox_size": "S",
         "sandbox_image": "default",
+        "sandbox": None,
     }
     assert created["status"] == "idle"
 

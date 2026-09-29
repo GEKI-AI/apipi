@@ -110,6 +110,7 @@ _SANDBOX_TOML = {
     "image_s3_addressing": "image_s3_addressing",
     "images_dir": "images_dir",
     "images": "sandbox_images",
+    "eager_boot": "sandbox_eager_boot",
 }
 _SANDBOX_RESOURCES_TOML = {
     "mem_mib": "microvm_mem_mib",
@@ -392,6 +393,14 @@ class MappingSource(PydanticBaseSettingsSource):
 
     def __call__(self) -> dict[str, Any]:
         return dict(self._values)
+
+
+def parse_on_off(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in _FLAG_OFF
+    raise ValueError("must be on or off")
 
 
 class Settings(BaseSettings):
@@ -723,6 +732,10 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "APIPI_SANDBOX_AUTO_PLAYWRIGHT", "sandbox_auto_playwright"
         ),
+    )
+    sandbox_eager_boot: Annotated[bool, BeforeValidator(parse_on_off)] = Field(
+        default=False,
+        validation_alias=AliasChoices("APIPI_SANDBOX_EAGER_BOOT", "sandbox_eager_boot"),
     )
     sandbox_l_vcpus: int = Field(
         default=2,
@@ -1292,6 +1305,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_SANDBOX_L_MEM_MIB must be at least 1"
         if "sandbox_auto_playwright" in loc or "APIPI_SANDBOX_AUTO_PLAYWRIGHT" in loc:
             return "APIPI_SANDBOX_AUTO_PLAYWRIGHT must be on or off"
+        if "sandbox_eager_boot" in loc or "APIPI_SANDBOX_EAGER_BOOT" in loc:
+            return "APIPI_SANDBOX_EAGER_BOOT must be on or off"
         if "sandbox_l_vcpus" in loc or "APIPI_SANDBOX_L_VCPUS" in loc:
             return "APIPI_SANDBOX_L_VCPUS must be at least 1"
         if "microvm_vcpus" in loc:

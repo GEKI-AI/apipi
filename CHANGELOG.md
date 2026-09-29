@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Hosted sessions expose sandbox runtime status. Cold boot emits
+  `agent.session.environment.pending` and `environment.connected`.
+  Every stop emits `environment.disconnected` with a reason. GET
+  session includes `environment.status` and `environment.sandbox`.
+  `GET /v1/agents/environments/{id}` returns that status. Eager boot
+  is off unless `APIPI_SANDBOX_EAGER_BOOT` or
+  `metadata["apipi.sandbox_eager_boot"]` is set.
 - `apipi images check browser` is a local developer check for the
   browser image. It is not part of CI.
 

@@ -52,7 +52,9 @@ from apipi.store.repo import (
 from apipi.worker.pi.sandbox import mem_mib_for_size, sandbox_size_of
 from apipi.worker.placement import placement_for, worker_accepts
 
-COMMAND_OPS = frozenset({"turn.start", "turn.cancel", "turn.continue", "session.stop"})
+COMMAND_OPS = frozenset(
+    {"turn.start", "turn.cancel", "turn.continue", "session.stop", "sandbox.boot"}
+)
 WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})
 log = logging.getLogger("apipi.worker")
 
@@ -969,6 +971,9 @@ async def _run_command(
     if op == "session.stop":
         await execution.teardown(session_id)
         await _wipe_stopped_session(execution, tenant_id, session_id)
+        return
+    if op == "sandbox.boot":
+        await execution.boot_hosted(tenant_id, session_id)
 
 
 async def _wipe_stopped_session(
@@ -1100,6 +1105,9 @@ async def run_worker(
     lifecycle = getattr(execution, "lifecycle_loop", None)
     if lifecycle is not None:
         tasks.add(asyncio.create_task(lifecycle()))
+    seen = getattr(execution, "sandbox_seen_loop", None)
+    if seen is not None:
+        tasks.add(asyncio.create_task(seen()))
     emitter = getattr(getattr(execution, "pool", None), "lifecycle", None)
     if emitter is not None:
         emitter.start()
