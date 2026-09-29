@@ -153,6 +153,16 @@ def test_browser_image_rejects_size_s() -> None:
     require_image_size("default", "L")
 
 
+def test_work_image_rejects_size_s() -> None:
+    with pytest.raises(
+        ApiError, match="sandbox_image work needs sandbox_size M"
+    ) as exc:
+        require_image_size("work", "S")
+    assert exc.value.status_code == 400
+    require_image_size("work", "M")
+    require_image_size("work", "L")
+
+
 def _none_settings(sandbox_images: list[str] | None = None) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",

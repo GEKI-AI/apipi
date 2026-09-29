@@ -343,7 +343,7 @@ def test_microvm_image_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     monkeypatch.setenv("APIPI_RUN_MODE", "none")
     monkeypatch.setenv("APIPI_MICROVM_IMAGE", "gpu")
     with pytest.raises(
-        ConfigError, match="APIPI_MICROVM_IMAGE must be default or browser"
+        ConfigError, match="APIPI_MICROVM_IMAGE must be default, browser, or work"
     ):
         load_settings()
 

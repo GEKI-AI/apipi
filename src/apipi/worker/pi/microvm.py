@@ -248,8 +248,8 @@ def microvm_image_name(settings: Settings | None = None) -> str:
         return settings.microvm_image
     raw = os.environ.get("APIPI_MICROVM_IMAGE", "default")
     image = raw.strip() or "default"
-    if image not in {"default", "browser"}:
-        raise ConfigError("APIPI_MICROVM_IMAGE must be default or browser")
+    if image not in {"default", "browser", "work"}:
+        raise ConfigError("APIPI_MICROVM_IMAGE must be default, browser, or work")
     return image
 
 
@@ -368,7 +368,8 @@ def microvm_images(
             None, default_rootfs_path(), "APIPI_MICROVM_ROOTFS"
         )
     raise ConfigError(
-        f"sandbox_image {selected} is not in the images dir. Run apipi images pull."
+        f"sandbox_image {selected} is not in the images dir. "
+        f"Run apipi images pull, or apipi install --microvm --image {selected}."
     )
 
 

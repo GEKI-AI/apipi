@@ -256,8 +256,15 @@ def _print_microvm_snippet(image: str, stream: TextIO) -> None:
     if image == "browser":
         print(f"export APIPI_MICROVM_ROOTFS_BROWSER={rootfs}", file=stream)
         print("export APIPI_MICROVM_IMAGE=browser", file=stream)
-    else:
+    elif image == "default":
         print(f"export APIPI_MICROVM_ROOTFS={rootfs}", file=stream)
+    else:
+        print(
+            f"use apipi images pull and sandbox_image={image}. "
+            "Do not set APIPI_MICROVM_ROOTFS to this file.",
+            file=stream,
+        )
+        return
     print(
         "Unset, apipi uses those files when they exist. "
         "apipi microvm shell re-runs under sudo if TAP/jailer need root.",
@@ -385,12 +392,12 @@ def resolve_install_targets(
         if want_microvm and image is None and tty:
             picked = _read_choice(
                 "MicroVM image flavor?",
-                {"1": "default", "2": "browser"},
+                {"1": "default", "2": "browser", "3": "work"},
                 "1",
                 inp,
                 out,
             )
-            flavor = "browser" if picked == "2" else "default"
+            flavor = {"2": "browser", "3": "work"}.get(picked, "default")
         return want_pi, want_microvm, flavor
     if not tty:
         return True, False, flavor
@@ -410,12 +417,12 @@ def resolve_install_targets(
     if want_microvm and image is None:
         flavor_pick = _read_choice(
             "MicroVM image flavor?",
-            {"1": "default", "2": "browser"},
+            {"1": "default", "2": "browser", "3": "work"},
             "1",
             inp,
             out,
         )
-        flavor = "browser" if flavor_pick == "2" else "default"
+        flavor = {"2": "browser", "3": "work"}.get(flavor_pick, "default")
     return want_pi, want_microvm, flavor
 
 

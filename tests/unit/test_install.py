@@ -352,7 +352,7 @@ def test_cli_install_microvm_dry_run(
 
 
 def test_recipe_ids_list_shipped_images() -> None:
-    assert recipe_ids() == ["browser", "default"]
+    assert recipe_ids() == ["browser", "default", "work"]
     default = read_image_env(require_recipe("default") / "image.env")
     browser = read_image_env(require_recipe("browser") / "image.env")
     assert default["SIZE_MIB"] == "2048"
@@ -361,6 +361,16 @@ def test_recipe_ids_list_shipped_images() -> None:
     assert browser["SIZE_MIB"] == "4096"
     assert "chromium" in browser["PACKAGES"].split()
     assert browser["MIN_SIZE"] == "M"
+    work = read_image_env(require_recipe("work") / "image.env")
+    assert work["IMAGE_ID"] == "work"
+    assert work["SIZE_MIB"] == "3072"
+    assert work["MIN_SIZE"] == "M"
+    assert "py3-pandas" in work["PACKAGES"].split()
+    setup = (require_recipe("work") / "setup.sh").read_text()
+    assert "python-docx==1.2.0" in setup
+    assert "python-pptx==1.0.2" in setup
+    assert "fpdf2==2.8.9" in setup
+    assert "pdftotext" in setup
     assert rootfs_script_path().name == "build.sh"
 
 

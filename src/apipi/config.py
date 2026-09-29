@@ -26,7 +26,7 @@ ArtifactStore = Literal["local", "s3"]
 S3Addressing = Literal["auto", "path", "virtual"]
 UsageStore = Literal["off", "rollups", "turns"]
 ModelList = Literal["probe", "turn", "off"]
-MicrovmImage = Literal["default", "browser"]
+MicrovmImage = Literal["default", "browser", "work"]
 SandboxSize = Literal["S", "M", "L"]
 EnvNonePlacement = Literal["chat", "microvm", "reject"]
 ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -35,7 +35,7 @@ THINKING_HELP = (
     "APIPI_PI_THINKING must be off, minimal, low, medium, high, xhigh, or max"
 )
 BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "chat", "microvm"})
-MICROVM_IMAGE_HELP = "APIPI_MICROVM_IMAGE must be default or browser"
+MICROVM_IMAGE_HELP = "APIPI_MICROVM_IMAGE must be default, browser, or work"
 SANDBOX_SIZE_HELP = "APIPI_SANDBOX_DEFAULT_SIZE must be S, M, or L"
 ENV_NONE_PLACEMENT_HELP = "APIPI_ENV_NONE_PLACEMENT must be chat, microvm, or reject"
 

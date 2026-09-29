@@ -110,7 +110,7 @@ def min_size_for_image(image_id: str) -> str | None:
     raw = env.get("MIN_SIZE")
     if raw in SANDBOX_SIZES:
         return raw
-    if image_id == "browser":
+    if image_id in {"browser", "work"}:
         return "M"
     if image_id == "default":
         return "S"
@@ -290,10 +290,20 @@ def validate_sandbox_metadata(
     require_image_size(image, size)
 
 
+def _builtin_images() -> frozenset[str]:
+    from apipi.worker.pi.install import recipe_ids
+
+    try:
+        found = frozenset(recipe_ids())
+    except ConfigError:
+        found = frozenset()
+    return found | {"default", "browser", "work"}
+
+
 def require_known_image(settings: Settings, image_id: str) -> None:
     if settings.sandbox_images is not None:
         known = image_id in settings.sandbox_images
-    elif image_id in {"default", "browser"}:
+    elif image_id in _builtin_images():
         known = True
     else:
         from apipi.worker.pi.image_pull import available_images
