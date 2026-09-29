@@ -289,6 +289,9 @@ def models_json_for_base_url(
                     settings, models, thinking=thinking
                 )
         return (json.dumps(payload, indent=2) + "\n").encode()
+    models: list[Any] = []
+    if isinstance(model, str) and model:
+        models.append({"id": model})
     return (
         json.dumps(
             {
@@ -298,7 +301,9 @@ def models_json_for_base_url(
                         "api": "openai-completions",
                         "apiKey": "$OPENAI_API_KEY",
                         "compat": _provider_compat(settings, thinking),
-                        "models": [],
+                        "models": _merge_registry_models(
+                            settings, models, thinking=thinking
+                        ),
                     }
                 }
             },

@@ -130,6 +130,40 @@ async def test_session_reasoning_update_replaces_effort(client: AsyncClient) -> 
     assert kept.json()["reasoning"]["effort"] == "medium"
 
 
+async def test_service_tier_null_is_ignored(client: AsyncClient) -> None:
+    token = "tier-null"
+    created = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={"name": "b", "model": "test", "service_tier": None},
+    )
+    assert created.status_code == 200
+    updated = await client.post(
+        f"/v1/agents/{created.json()['id']}",
+        headers=_auth(token),
+        json={"service_tier": "auto", "reasoning": {"effort": "low"}},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["reasoning"]["effort"] == "low"
+    session = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": created.json()["id"],
+            "environment": {"type": "none"},
+            "agent": {"service_tier": None, "reasoning": {"effort": "high"}},
+        },
+    )
+    assert session.status_code == 200
+    refused = await client.post(
+        f"/v1/agents/{created.json()['id']}",
+        headers=_auth(token),
+        json={"service_tier": "flex"},
+    )
+    assert refused.status_code == 400
+    assert refused.json()["error"]["type"] == "not_implemented"
+
+
 async def test_reasoning_effort_is_stored_as_thinking(client: AsyncClient) -> None:
     token = "pi-reasoning"
     created = await client.post(

@@ -112,6 +112,32 @@ def test_reasoning_effort_mirrors_thinking() -> None:
         reject_reasoning_conflict({"apipi.thinking": "low"}, "high")
 
 
+def test_thinking_level_map_matches_pi() -> None:
+    from apipi.worker.pi.settings_json import (
+        require_thinking_supported,
+        thinking_level_supported,
+    )
+
+    levels = {"high": "high", "minimal": None}
+    assert thinking_level_supported(levels, "high")
+    assert not thinking_level_supported(levels, "minimal")
+    assert thinking_level_supported(levels, "low")
+    assert thinking_level_supported(levels, "off")
+    assert not thinking_level_supported(levels, "xhigh")
+    assert thinking_level_supported({"xhigh": "xhigh"}, "xhigh")
+    assert not thinking_level_supported({"off": None}, "off")
+    assert thinking_level_supported(None, "max")
+    settings = _settings(
+        model_registry={"m": {"thinking_levels": levels, "reasoning": True}}
+    )
+    require_thinking_supported(settings, "m", "low")
+    require_thinking_supported(settings, "m", "off")
+    with pytest.raises(ApiError):
+        require_thinking_supported(settings, "m", "minimal")
+    with pytest.raises(ApiError):
+        require_thinking_supported(settings, "m", "max")
+
+
 def test_thinking_resolve_session_over_agent() -> None:
     settings = _settings(pi_thinking="off")
     assert (

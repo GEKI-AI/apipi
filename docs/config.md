@@ -96,7 +96,7 @@ hosted files and skills).
 | `APIPI_FORWARD_MODELS` | `forward_models` | on | Proxy `GET /v1/models` to `{OPENAI_BASE_URL}/models` when `APIPI_MODEL_LIST` is `probe` or `turn`. Off returns `400` with code `forward_models`. With `APIPI_MODEL_LIST=off`, the route returns the static `APIPI_MODELS` list instead of calling the host. |
 | `APIPI_MODEL_LIST` | `model_list` | `probe` | `probe` \| `turn` \| `off`. Checked when an agent is created or its model is edited, not on turns. `probe` lists `{OPENAI_BASE_URL}/models` at startup and reuses that list. `turn` lists on each agent write and does not list at startup. `off` never calls `/models`. |
 | `APIPI_MODELS` | `models` | empty | Comma-separated model ids, or a TOML list. Used when `APIPI_MODEL_LIST=off`. An empty list skips the check. Do not combine this list with a `[models."id"]` table in the same file. |
-| `APIPI_MODEL_REGISTRY` | `[models."id"]` | empty | JSON object, or a TOML table of model capabilities. Each entry may set `input`, `reasoning`, `thinking_levels`, `context_window`, `max_tokens`, and `compat`. Models not listed keep today's defaults. `GET /v1/apipi/models` returns this table. |
+| `APIPI_MODEL_REGISTRY` | `[models."id"]` | empty | JSON object, or a TOML table of model capabilities. Each entry may set `input`, `reasoning`, `thinking_levels`, `context_window`, `max_tokens`, and `compat` (for example `thinkingFormat`). Models not listed keep today's defaults. `GET /v1/apipi/models` returns this table. |
 | `APIPI_MAX_IMAGE_BYTES` | `max_image_bytes` | 5242880 | Maximum decoded bytes for one `input_image`. |
 | `APIPI_MAX_IMAGES` | `max_images` | 8 | Maximum images in one message. |
 | `APIPI_IMAGE_MIMES` | `image_mimes` | `image/png,image/jpeg,image/webp,image/gif` | Comma-separated MIME types allowed on `input_image`. |
@@ -366,22 +366,36 @@ with `reasoning` true and `supportsReasoningEffort` true. That session
 file uses the resolved level, not only the process default, so a
 session or agent level still marks reasoning when
 `APIPI_PI_THINKING=off`. That asks an
-OpenAI-compatible host for `reasoning_effort`. Hosts that need another
-Pi thinking format, such as `chat-template` or `qwen`, are not
-configured here. `xhigh` and `max` are passed through. Pi drops a
-level the model does not support. `off` leaves `models.json` as it is
-today and does not pass `--thinking`. The process default is
+OpenAI-compatible host for `reasoning_effort`. A host that needs another
+Pi thinking format, such as `chat-template` or `qwen`, sets it on that
+model in `APIPI_MODEL_REGISTRY` under `compat.thinkingFormat`.
+
+`thinking_levels` is Pi's thinking level map. A missing key for `off`,
+`minimal`, `low`, `medium`, or `high` means the provider default, and
+ApiPi accepts it. A string means that value is sent. `null` means the
+level is unsupported. `xhigh` and `max` need an explicit string. `off`
+is always allowed unless it is `null`.
+
+```toml
+[models.example]
+thinking_levels = { high = "high", minimal = null }
+```
+
+For a model in the registry, an unsupported level is `400`. Models not
+in the registry still pass the level through, and Pi may clamp it.
+`off` does not pass `--thinking`. The process default is
 `[pi].thinking`. A session may set `metadata["apipi.thinking"]` or
 `reasoning.effort`. A saved agent may set the same key or
-`reasoning.effort`. `none` is stored as `off`. Session effort wins over
-the metadata alias. If both are set and disagree, the request is `400`.
-A level the model registry does not list is `400`. Models not in the
-registry still pass the level through. `summary`, `service_tier`, and
-`text` are `not_implemented`. Resolve order is session, then
-agent, then the process default. Inline agents copy that key onto the
-session when the session did not set it. The level is applied when Pi
-starts. A later change respawns Pi. Public events then carry a preview
-of the first 100 Unicode code points, a duration, and a reasoning token
+`reasoning.effort`. `none` is stored as `off`. On update,
+`reasoning.effort` replaces the stored level. A `400` happens only when
+the same request also sets a different `apipi.thinking`. `summary` and
+`text` are `not_implemented`. `service_tier` of `null` or `auto` is
+ignored. Any other tier is `not_implemented`. Resolve order is session,
+then agent, then the process default. Inline agents copy that key onto
+the session when the session did not set it. The level is applied when
+Pi starts. A later change respawns Pi. Public events then carry a
+preview of the first 100 Unicode code points, a duration, and a
+reasoning token
 count. The full thinking text is not a public event. See
 [events](api.md#events).
 

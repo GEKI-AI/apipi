@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Registry `thinking_levels` follows Pi's map: a missing standard
+  level is allowed, `null` is unsupported, and `xhigh` or `max` need
+  an explicit string. A missing `models.json` still includes the
+  session model and registry capabilities. `service_tier` of `null` or
+  `auto` is ignored.
 - An agent update that sends only `reasoning` keeps the other metadata
   keys. A session update can change `reasoning.effort`, including back
   to the agent or model default. A 400 for a disagreeing level happens
