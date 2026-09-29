@@ -53,7 +53,7 @@ async def test_hosted_environment_get_is_tenant_scoped(
     assert env["sandbox"]["cold_boots"] == 0
     env_id = env["id"]
     uuid.UUID(env_id)
-    assert "directory" in env
+    assert "directory" not in env
     got = await client.get(f"/v1/agents/environments/{env_id}", headers=_auth(token))
     assert got.status_code == 200
     assert got.json()["id"] == env_id

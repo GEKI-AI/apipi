@@ -35,7 +35,16 @@ async def _hosted_session(client: AsyncClient, token: str) -> tuple[str, Path]:
         json={"agent_id": agent.json()["id"]},
     )
     assert created.status_code == 200
-    directory = Path(created.json()["environment"]["directory"])
+    from typing import Any, cast
+
+    from httpx import ASGITransport
+    from tests.support.workspace import hosted_dir
+
+    transport = client._transport
+    assert isinstance(transport, ASGITransport)
+    app = cast(Any, transport.app)
+    settings = app.state.gateway.settings
+    directory = hosted_dir(settings, token, created.json()["id"])
     return str(created.json()["id"]), directory
 
 

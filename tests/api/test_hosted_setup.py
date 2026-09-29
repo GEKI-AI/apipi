@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.workspace import hosted_dir
 
 from apipi.config import Settings
 from apipi.env.setup import SetupError
@@ -30,7 +31,58 @@ async def _agent(client: AsyncClient, token: str) -> str:
     return str(response.json()["id"])
 
 
-async def test_packages_and_setup_commands_are_stored(client: AsyncClient) -> None:
+async def test_public_session_omits_directory(client: AsyncClient) -> None:
+    token = "no-directory"
+    agent_id = await _agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent_id, "environment": {"type": "openai_hosted"}},
+    )
+    assert created.status_code == 200
+    assert "directory" not in created.json()["environment"]
+    listed = await client.get("/v1/agents/sessions", headers=_auth(token))
+    assert "directory" not in listed.json()["data"][0]["environment"]
+
+
+async def test_host_setup_does_not_block_other_requests(
+    settings: Settings, store: Store
+) -> None:
+    import asyncio
+    import time
+
+    app = create_app(settings, store=store, harness=FakeHarness())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        token = "setup-thread"
+        agent_id = await _agent(client, token)
+        started = time.monotonic()
+        created = asyncio.create_task(
+            client.post(
+                "/v1/agents/sessions",
+                headers=_auth(token),
+                json={
+                    "agent_id": agent_id,
+                    "environment": {
+                        "type": "openai_hosted",
+                        "setup_commands": [{"command": "sleep 1"}],
+                    },
+                    "input": "hello",
+                },
+            )
+        )
+        await asyncio.sleep(0.05)
+        health = await client.get("/health")
+        assert health.status_code == 200
+        assert time.monotonic() - started < 0.8
+        result = await created
+        assert result.status_code == 200
+
+
+async def test_packages_and_setup_commands_are_stored(
+    client: AsyncClient, settings: Settings
+) -> None:
     token = "setup-store"
     agent_id = await _agent(client, token)
     created = await client.post(
@@ -49,7 +101,7 @@ async def test_packages_and_setup_commands_are_stored(client: AsyncClient) -> No
     env = created.json()["environment"]
     assert env["packages"] == {"python": ["pandas==2.2.3"], "npm": ["typescript"]}
     assert env["setup_commands"] == [{"command": "mkdir -p reports"}]
-    script = Path(env["directory"]) / ".apipi" / "setup.sh"
+    script = hosted_dir(settings, token, created.json()["id"]) / ".apipi" / "setup.sh"
     assert script.is_file()
     text = script.read_text()
     assert "pandas==2.2.3" in text
@@ -58,7 +110,7 @@ async def test_packages_and_setup_commands_are_stored(client: AsyncClient) -> No
 
 
 async def test_setup_runs_before_turn(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_run(workspace: Path, **_kwargs: object) -> None:
         (workspace / "ready.txt").write_text("ok")
@@ -80,7 +132,7 @@ async def test_setup_runs_before_turn(
     )
     assert created.status_code == 200
     assert created.json()["status"] == "idle"
-    ready = Path(created.json()["environment"]["directory"]) / "ready.txt"
+    ready = hosted_dir(settings, token, created.json()["id"]) / "ready.txt"
     assert ready.read_text() == "ok"
     events = await client.get(
         f"/v1/agents/sessions/{created.json()['id']}/events", headers=_auth(token)
@@ -189,7 +241,7 @@ async def test_sandbox_ttl_wipes_scratch_and_rehydrates(
     )
     assert created.status_code == 200
     session_id = created.json()["id"]
-    directory = Path(created.json()["environment"]["directory"])
+    directory = hosted_dir(settings, token, session_id)
     (directory / "scratch.txt").write_text("gone")
     async with store.session() as db:
         row = await get_session_by_id(db, UUID(session_id))
@@ -223,7 +275,7 @@ async def test_reap_skips_held_hosted_workspace(
     )
     assert created.status_code == 200
     session_id = UUID(created.json()["id"])
-    directory = Path(created.json()["environment"]["directory"])
+    directory = hosted_dir(settings, token, str(session_id))
     (directory / "scratch.txt").write_text("keep", encoding="utf-8")
     async with store.session() as db:
         row = await get_session_by_id(db, session_id)
@@ -298,7 +350,9 @@ async def test_spawn_oserror_fails_turn_not_500(
         assert error["data"]["code"] == "spawn_failed"
 
 
-async def test_env_and_inline_files_are_stored(client: AsyncClient) -> None:
+async def test_env_and_inline_files_are_stored(
+    client: AsyncClient, settings: Settings
+) -> None:
     token = "env-files"
     agent_id = await _agent(client, token)
     payload = base64.b64encode(b"a,b\n1,2\n").decode()
@@ -324,7 +378,7 @@ async def test_env_and_inline_files_are_stored(client: AsyncClient) -> None:
     env = created.json()["environment"]
     assert env["env"] == {"REPORT": "yes"}
     assert env["files"][0]["path"] == "/workspace/amounts.csv"
-    directory = Path(env["directory"])
+    directory = hosted_dir(settings, token, created.json()["id"])
     assert (directory / "amounts.csv").read_bytes() == b"a,b\n1,2\n"
     user_env = (directory / ".apipi" / "user.env").read_text()
     assert "REPORT=" in user_env
@@ -383,7 +437,7 @@ async def test_unknown_files_type_not_implemented(client: AsyncClient) -> None:
     assert error["code"] == "files"
 
 
-async def test_network_is_stored(client: AsyncClient) -> None:
+async def test_network_is_stored(client: AsyncClient, settings: Settings) -> None:
     token = "net-store"
     agent_id = await _agent(client, token)
     created = await client.post(
@@ -406,7 +460,7 @@ async def test_network_is_stored(client: AsyncClient) -> None:
         "access": "restricted",
         "allowed_domains": ["api.example.com"],
     }
-    policy = Path(env["directory"]) / ".apipi" / "network"
+    policy = hosted_dir(settings, token, created.json()["id"]) / ".apipi" / "network"
     assert "api.example.com" in policy.read_text()
 
 

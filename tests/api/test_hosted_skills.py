@@ -1,6 +1,5 @@
 import io
 import zipfile
-from pathlib import Path
 
 from httpx import AsyncClient
 
@@ -60,7 +59,16 @@ async def test_skill_upload_and_session_attach(client: AsyncClient) -> None:
     assert created.status_code == 200
     env = created.json()["environment"]
     assert env["skills"][0]["skill_id"] == skill_id
-    directory = Path(env["directory"])
+    from typing import Any, cast
+
+    from httpx import ASGITransport
+    from tests.support.workspace import hosted_dir
+
+    transport = client._transport
+    assert isinstance(transport, ASGITransport)
+    app = cast(Any, transport.app)
+    settings = app.state.gateway.settings
+    directory = hosted_dir(settings, token, created.json()["id"])
     skill_md = directory / ".agents" / "skills" / "demo" / "SKILL.md"
     assert skill_md.is_file()
     trees = discover_skill_dirs(directory)

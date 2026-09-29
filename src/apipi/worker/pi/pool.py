@@ -35,6 +35,12 @@ def _hosted(env_type: str | None) -> bool:
     return env_type in {"openai_hosted", "hosted"}
 
 
+def _consume_future(future: asyncio.Future[Any]) -> None:
+    if future.cancelled():
+        return
+    future.exception()
+
+
 class PiPool:
     def __init__(
         self,
@@ -68,6 +74,8 @@ class PiPool:
         self.lifecycle: LifecycleEmitter | None = None
         self.on_transition: OnTransition | None = None
         self._booting: set[uuid.UUID] = set()
+        self._reserved: dict[uuid.UUID, tuple[uuid.UUID | None, int]] = {}
+        self._inflight: dict[uuid.UUID, asyncio.Future[PiProc]] = {}
         self._lock = asyncio.Lock()
 
     async def get(
@@ -106,159 +114,295 @@ class PiPool:
         )
         session_mem = mem_mib if mem_mib is not None else self.settings.microvm_mem_mib
         cause = "spawn"
-        wait_started = time.monotonic()
-        async with self._lock:
-            lock_wait_ms = int((time.monotonic() - wait_started) * 1000)
-            proc = self._procs.get(session_id)
-            if proc is not None and not proc.alive:
-                await self.kill(session_id, reason="crash")
-                proc = None
-            spawned = self._spawn_tools.get(session_id)
-            same = spawned == tools and self._models.get(session_id) == model
-            same = same and self._instructions.get(session_id) == instructions
-            same = same and self._thinking.get(session_id) == level
-            same = same and self._system_prompts.get(session_id) == prompt
-            same = same and self._key_ids.get(session_id) == key_id
-            if proc is not None and proc.alive and not same:
-                await self.kill(session_id, reason="respawn")
-                proc = None
-                cause = "respawn"
-            reused = proc is not None and proc.alive
-            with start_span(
-                self.tracing,
-                "sandbox.attach" if reused else "sandbox.boot",
-                session_id=session_id,
-            ):
-                if proc is None or not proc.alive:
-                    code = self.capacity_code(
-                        session_id, tenant_id, session_mem_mib=session_mem
-                    )
-                    if code is not None:
-                        message = (
-                            "Too many live sessions for this tenant"
-                            if code == "capacity_tenant"
-                            else "Too many live sessions"
-                        )
-                        log_event(
-                            log,
-                            logging.WARNING,
-                            "worker assign failed",
-                            event="worker.assign.failed",
-                            error_code=code,
-                            tenant_id=tenant_id,
-                            session_id=session_id,
-                        )
-                        raise CapacityError(message, code=code)
-                    log.info(
-                        "pi spawn",
-                        extra={
-                            "session_id": str(session_id),
-                            "run_mode": self.settings.run_mode,
-                        },
-                    )
-                    size = size_for_mem(self.settings, session_mem)
-                    started = time.monotonic()
-                    if _hosted(env_type):
-                        self._booting.add(session_id)
-                        await self._notify(
+        while True:
+            wait_started = time.monotonic()
+            async with self._lock:
+                lock_wait_ms = int((time.monotonic() - wait_started) * 1000)
+                inflight = self._inflight.get(session_id)
+                if inflight is None:
+                    current = self._procs.get(session_id)
+                    if current is not None and not current.alive:
+                        await self.kill(session_id, reason="crash")
+                    elif (
+                        current is not None
+                        and current.alive
+                        and not self._same(
                             session_id,
-                            "starting",
-                            {
-                                "tenant_id": tenant_id,
-                                "cold": True,
-                                "cause": cause,
-                                "image": image,
-                                "size": size,
-                                "lock_wait_ms": lock_wait_ms,
-                            },
-                        )
-                    try:
-                        proc = await spawn_pi(
-                            self.settings,
-                            cwd=cwd,
                             tools=tools,
-                            mcp_http=mcp_http,
-                            mcp_stdio=mcp_stdio,
-                            skill_dirs=skill_dirs,
                             model=model,
                             instructions=instructions,
-                            api_key=api_key,
-                            mem_mib=mem_mib,
-                            image=image,
-                            extra_env=extra_env,
-                            thinking=level,
-                            system_prompt=prompt,
-                            system_prompt_set=True,
+                            level=level,
+                            prompt=prompt,
+                            key_id=key_id,
                         )
-                    except Exception:
-                        self._booting.discard(session_id)
-                        self._observe_boot(size, "error", time.monotonic() - started)
-                        self._observe_pi_spawn("error")
-                        raise
-                    self._booting.discard(session_id)
-                    boot_ms = int((time.monotonic() - started) * 1000)
-                    self._observe_boot(size, "ok", time.monotonic() - started)
-                    self._observe_pi_spawn("ok", proc)
-                    log.info("pi ready", extra={"session_id": str(session_id)})
-                    self._procs[session_id] = proc
-                    self._spawn_tools[session_id] = tools
-                    self._models[session_id] = model
-                    self._instructions[session_id] = instructions
-                    self._thinking[session_id] = level
-                    self._system_prompts[session_id] = prompt
-                    self._key_ids[session_id] = key_id
-                    self._env_types[session_id] = env_type
-                    self._mem[session_id] = session_mem
-                    self._sizes[session_id] = size
-                    born = time.monotonic()
-                    self._born[session_id] = born
-                    if tenant_id is not None:
-                        self._tenants[session_id] = tenant_id
-                    self._note_start(
+                    ):
+                        await self.kill(session_id, reason="respawn")
+                        cause = "respawn"
+                    ready = self._claim_or_reuse(
                         session_id,
-                        proc,
-                        cause=cause,
-                        born=born,
-                        tenant_id=tenant_id,
-                        agent_id=agent_id,
-                        user_id=user_id,
-                        org_id=org_id,
+                        tools=tools,
+                        model=model,
+                        instructions=instructions,
+                        level=level,
+                        prompt=prompt,
                         key_id=key_id,
+                        tenant_id=tenant_id,
+                        session_mem=session_mem,
                         env_type=env_type,
-                        size=size,
+                        idle_ttl=idle_ttl,
+                        idle_ttl_set=idle_ttl_set,
+                        lock_wait_ms=lock_wait_ms,
                     )
-                    if _hosted(env_type):
-                        image_id, image_version, _digest = self._image_fields(
-                            proc, env_type
-                        )
-                        setup_ms = getattr(proc, "setup_ms", None)
-                        await self._notify(
-                            session_id,
-                            "ready",
-                            {
-                                "tenant_id": tenant_id,
-                                "image": image_id or image,
-                                "image_version": image_version,
-                                "size": size,
-                                "run_mode": self.settings.run_mode,
-                                "boot_ms": boot_ms,
-                                "lock_wait_ms": lock_wait_ms,
-                                "setup_ms": setup_ms
-                                if isinstance(setup_ms, int)
-                                else 0,
-                            },
-                        )
-                elif env_type is not None:
+                    if not isinstance(ready, str):
+                        return ready
+                    future: asyncio.Future[PiProc] = (
+                        asyncio.get_running_loop().create_future()
+                    )
+                    self._inflight[session_id] = future
+                    self._reserved[session_id] = (tenant_id, session_mem)
+                    self._booting.add(session_id)
+                    break
+            try:
+                await inflight
+            except Exception:
+                continue
+        size = size_for_mem(self.settings, session_mem)
+        started = time.monotonic()
+        try:
+            if _hosted(env_type):
+                await self._notify(
+                    session_id,
+                    "starting",
+                    {
+                        "tenant_id": tenant_id,
+                        "cold": True,
+                        "cause": cause,
+                        "image": image,
+                        "size": size,
+                        "lock_wait_ms": lock_wait_ms,
+                    },
+                )
+            with start_span(
+                self.tracing,
+                "sandbox.boot",
+                session_id=session_id,
+                lock_wait_ms=lock_wait_ms,
+            ):
+                proc = await spawn_pi(
+                    self.settings,
+                    cwd=cwd,
+                    tools=tools,
+                    mcp_http=mcp_http,
+                    mcp_stdio=mcp_stdio,
+                    skill_dirs=skill_dirs,
+                    model=model,
+                    instructions=instructions,
+                    api_key=api_key,
+                    mem_mib=mem_mib,
+                    image=image,
+                    extra_env=extra_env,
+                    thinking=level,
+                    system_prompt=prompt,
+                    system_prompt_set=True,
+                )
+        except Exception as exc:
+            self._observe_boot(size, "error", time.monotonic() - started)
+            self._observe_pi_spawn("error")
+            await self._finish_spawn(session_id, error=exc)
+            raise
+        boot_ms = int((time.monotonic() - started) * 1000)
+        self._observe_boot(size, "ok", time.monotonic() - started)
+        self._observe_pi_spawn("ok", proc)
+        log.info("pi ready", extra={"session_id": str(session_id)})
+        async with self._lock:
+            self._store_proc(
+                session_id,
+                proc,
+                tools=tools,
+                model=model,
+                instructions=instructions,
+                level=level,
+                prompt=prompt,
+                key_id=key_id,
+                env_type=env_type,
+                session_mem=session_mem,
+                size=size,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                user_id=user_id,
+                org_id=org_id,
+                cause=cause,
+                idle_ttl=idle_ttl,
+                idle_ttl_set=idle_ttl_set,
+            )
+            done = self._inflight.pop(session_id, None)
+            self._reserved.pop(session_id, None)
+            self._booting.discard(session_id)
+            if done is not None and not done.done():
+                done.set_result(proc)
+        if _hosted(env_type):
+            image_id, image_version, _digest = self._image_fields(proc, env_type)
+            setup_ms = getattr(proc, "setup_ms", None)
+            await self._notify(
+                session_id,
+                "ready",
+                {
+                    "tenant_id": tenant_id,
+                    "image": image_id or image,
+                    "image_version": image_version,
+                    "size": size,
+                    "run_mode": self.settings.run_mode,
+                    "boot_ms": boot_ms,
+                    "lock_wait_ms": lock_wait_ms,
+                    "setup_ms": setup_ms if isinstance(setup_ms, int) else 0,
+                },
+            )
+        return proc
+
+    def _same(
+        self,
+        session_id: uuid.UUID,
+        *,
+        tools: bool,
+        model: str | None,
+        instructions: str | None,
+        level: str,
+        prompt: str | None,
+        key_id: str | None,
+    ) -> bool:
+        same = self._spawn_tools.get(session_id) == tools
+        same = same and self._models.get(session_id) == model
+        same = same and self._instructions.get(session_id) == instructions
+        same = same and self._thinking.get(session_id) == level
+        same = same and self._system_prompts.get(session_id) == prompt
+        return same and self._key_ids.get(session_id) == key_id
+
+    def _claim_or_reuse(
+        self,
+        session_id: uuid.UUID,
+        *,
+        tools: bool,
+        model: str | None,
+        instructions: str | None,
+        level: str,
+        prompt: str | None,
+        key_id: str | None,
+        tenant_id: uuid.UUID | None,
+        session_mem: int,
+        env_type: str | None,
+        idle_ttl: timedelta | None,
+        idle_ttl_set: bool,
+        lock_wait_ms: int,
+    ) -> PiProc | str:
+        proc = self._procs.get(session_id)
+        if proc is not None and proc.alive:
+            with start_span(
+                self.tracing,
+                "sandbox.attach",
+                session_id=session_id,
+                lock_wait_ms=lock_wait_ms,
+            ):
+                if env_type is not None:
                     self._env_types[session_id] = env_type
                 if idle_ttl_set:
                     self._ttls[session_id] = (
                         idle_ttl.total_seconds() if idle_ttl is not None else None
                     )
                 self._last[session_id] = time.monotonic()
-                return proc
+            return proc
+        code = self.capacity_code(session_id, tenant_id, session_mem_mib=session_mem)
+        if code is not None:
+            message = (
+                "Too many live sessions for this tenant"
+                if code == "capacity_tenant"
+                else "Too many live sessions"
+            )
+            log_event(
+                log,
+                logging.WARNING,
+                "worker assign failed",
+                event="worker.assign.failed",
+                error_code=code,
+                tenant_id=tenant_id,
+                session_id=session_id,
+            )
+            raise CapacityError(message, code=code)
+        log.info(
+            "pi spawn",
+            extra={"session_id": str(session_id), "run_mode": self.settings.run_mode},
+        )
+        return "spawn"
+
+    async def _finish_spawn(
+        self, session_id: uuid.UUID, *, error: BaseException
+    ) -> None:
+        async with self._lock:
+            self._reserved.pop(session_id, None)
+            self._booting.discard(session_id)
+            future = self._inflight.pop(session_id, None)
+            if future is not None and not future.done():
+                future.set_exception(error)
+                future.add_done_callback(_consume_future)
+
+    def _store_proc(
+        self,
+        session_id: uuid.UUID,
+        proc: PiProc,
+        *,
+        tools: bool,
+        model: str | None,
+        instructions: str | None,
+        level: str,
+        prompt: str | None,
+        key_id: str | None,
+        env_type: str | None,
+        session_mem: int,
+        size: str,
+        tenant_id: uuid.UUID | None,
+        agent_id: str | None,
+        user_id: str | None,
+        org_id: str | None,
+        cause: str,
+        idle_ttl: timedelta | None,
+        idle_ttl_set: bool,
+    ) -> None:
+        self._procs[session_id] = proc
+        self._spawn_tools[session_id] = tools
+        self._models[session_id] = model
+        self._instructions[session_id] = instructions
+        self._thinking[session_id] = level
+        self._system_prompts[session_id] = prompt
+        self._key_ids[session_id] = key_id
+        self._env_types[session_id] = env_type
+        self._mem[session_id] = session_mem
+        self._sizes[session_id] = size
+        born = time.monotonic()
+        self._born[session_id] = born
+        if tenant_id is not None:
+            self._tenants[session_id] = tenant_id
+        if idle_ttl_set:
+            self._ttls[session_id] = (
+                idle_ttl.total_seconds() if idle_ttl is not None else None
+            )
+        self._last[session_id] = time.monotonic()
+        self._note_start(
+            session_id,
+            proc,
+            cause=cause,
+            born=born,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            user_id=user_id,
+            org_id=org_id,
+            key_id=key_id,
+            env_type=env_type,
+            size=size,
+        )
 
     def live(self) -> int:
-        return sum(1 for proc in self._procs.values() if proc.alive)
+        return sum(1 for proc in self._procs.values() if proc.alive) + len(
+            self._reserved
+        )
 
     def live_procs(self) -> list[tuple[str, PiProc]]:
         return [
@@ -268,11 +412,13 @@ class PiPool:
         ]
 
     def live_for(self, tenant_id: uuid.UUID) -> int:
-        return sum(
+        running = sum(
             1
             for sid, proc in self._procs.items()
             if proc.alive and self._tenants.get(sid) == tenant_id
         )
+        waiting = sum(1 for tid, _mem in self._reserved.values() if tid == tenant_id)
+        return running + waiting
 
     def capacity_code(
         self,
@@ -300,6 +446,7 @@ class PiPool:
             for sid, item in self._procs.items()
             if item.alive
         )
+        used += sum(mem for _tid, mem in self._reserved.values())
         if used + incoming > self.settings.node_memory_mb():
             return "capacity"
         return None

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.config import CapacityError, Settings
 from apipi.env.computer import Computer, bind_computer, computer_item_events
 from apipi.env.hub import EnvironmentHub
-from apipi.env.setup import SetupError, provision_hosted, session_env_from
+from apipi.env.setup import SetupError, provision_hosted_async, session_env_from
 from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics, observe_turn
@@ -1053,6 +1053,13 @@ async def _cancel_turn(
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
 
+def _lease_live(until: datetime | None) -> bool:
+    if until is None:
+        return False
+    current = until if until.tzinfo is not None else until.replace(tzinfo=UTC)
+    return current > utc_now()
+
+
 async def fail_stale_in_progress(
     db: AsyncSession,
     hub: EventHub,
@@ -1063,6 +1070,8 @@ async def fail_stale_in_progress(
 ) -> SessionRow | None:
     row = await get_session(db, tenant_id, session_id)
     if row is None or row.status != "in_progress":
+        return row
+    if _lease_live(row.lease_until):
         return row
     turns = await list_turns(db, tenant_id, session_id)
     if turns:
@@ -1298,13 +1307,14 @@ async def load_boot_kwargs(
         extra_files = await FileService(store, backend, settings).workspace_files(
             tenant_id, row.environment
         )
-        provision_hosted(
+        await provision_hosted_async(
             row.environment,
             run_mode=settings.run_mode,
             max_bytes=settings.max_workspace_bytes,
             gateway_allowlist=gateway_allowlist,
             gateway_hosts=gateway_hosts,
             extra_files=extra_files,
+            timeout=settings.turn_timeout.total_seconds(),
         )
         directory = row.environment.get("directory")
         if isinstance(directory, str) and directory:
@@ -1486,7 +1496,7 @@ async def run_turn(
                     extra_files = await FileService(
                         store, backend, settings
                     ).workspace_files(tenant_id, row.environment)
-                provision_hosted(
+                await provision_hosted_async(
                     row.environment,
                     run_mode=settings.run_mode if settings is not None else "none",
                     max_bytes=(
@@ -1495,6 +1505,11 @@ async def run_turn(
                     gateway_allowlist=gateway_allowlist,
                     gateway_hosts=gateway_hosts,
                     extra_files=extra_files,
+                    timeout=(
+                        settings.turn_timeout.total_seconds()
+                        if settings is not None
+                        else None
+                    ),
                 )
                 if settings is not None and backend is not None:
                     directory = row.environment.get("directory")

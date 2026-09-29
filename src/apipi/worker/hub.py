@@ -1142,6 +1142,26 @@ async def run_worker(
                 )
                 raise ConfigError(f"worker register failed: {error}")
             log.info("worker hello", extra={"worker_id": hello.get("worker_id")})
+            session_leases: dict[uuid.UUID, str] = {}
+
+            async def release_lease(session_id: uuid.UUID) -> None:
+                lease_id = session_leases.pop(session_id, None)
+                if lease_id is None:
+                    return
+                try:
+                    await sock.send(
+                        json.dumps(
+                            {
+                                "type": "lease.release",
+                                "session_id": str(session_id),
+                                "lease_id": lease_id,
+                            }
+                        )
+                    )
+                except Exception:
+                    log.exception("lease release failed")
+
+            execution.note_stopped = release_lease
             raw_worker = hello.get("worker_id")
             if emitter is not None:
                 emitter.set_worker_id(str(raw_worker) if raw_worker else None)
@@ -1179,6 +1199,11 @@ async def run_worker(
                 message = json.loads(text)
                 if not isinstance(message, dict):
                     continue
+                if message.get("type") == "command":
+                    raw_lease = message.get("lease_id")
+                    raw_session = message.get("session_id")
+                    if isinstance(raw_lease, str) and isinstance(raw_session, str):
+                        session_leases[uuid.UUID(raw_session)] = raw_lease
                 if (
                     message.get("type") == "command"
                     and message.get("op") == "session.stop"
@@ -1193,6 +1218,11 @@ async def run_worker(
                             }
                         )
                     )
+                    continue
+                if message.get("type") == "lease.revoke":
+                    revoked = message.get("session_id")
+                    if isinstance(revoked, str):
+                        await execution.teardown(uuid.UUID(revoked))
                     continue
                 if message.get("type") == "command":
                     await sock.send(

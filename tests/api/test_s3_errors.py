@@ -145,7 +145,9 @@ async def test_persist_pi_session_s3_failure_is_artifact_store(
         json={"agent_id": agent.json()["id"]},
     )
     session_id = uuid.UUID(created.json()["id"])
-    directory = Path(created.json()["environment"]["directory"])
+    from tests.support.workspace import hosted_dir
+
+    directory = hosted_dir(settings, token, str(session_id))
     path = pi_session_file(directory)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b'{"ok":true}\n')

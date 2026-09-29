@@ -49,7 +49,9 @@ async def test_planted_skill_is_passed_to_harness(
             json={"agent_id": agent_id, "environment": {"type": "openai_hosted"}},
         )
         assert created.status_code == 200
-        directory = Path(created.json()["environment"]["directory"])
+        from tests.support.workspace import hosted_dir
+
+        directory = hosted_dir(settings, token, created.json()["id"])
         tree = directory / ".agents" / "skills" / "demo"
         _write_skill(tree, "demo")
         posted = await client.post(
@@ -86,7 +88,9 @@ async def test_capability_directories_copied_and_discovered(
         assert created.status_code == 200
         env = created.json()["environment"]
         assert env["capability_directories"] == [str(caps)]
-        directory = Path(env["directory"])
+        from tests.support.workspace import hosted_dir
+
+        directory = hosted_dir(settings, token, created.json()["id"])
         copied = directory / "pack" / "cap-skill"
         assert (copied / "SKILL.md").is_file()
         assert harness.skill_dirs is not None

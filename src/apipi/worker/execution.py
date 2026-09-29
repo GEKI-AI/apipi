@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn, Protocol
 
 from apipi.config import Settings
@@ -149,6 +150,7 @@ class LocalExecution:
         self.objects = objects
         self.metrics = metrics
         self.tracing = tracing
+        self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
         if pool.on_kill is None:
             pool.on_kill = self._harvest_killed
         if pool.on_transition is None:
@@ -505,24 +507,29 @@ class LocalExecution:
             await emitter.close()
 
     async def _harvest_killed(self, session_id: uuid.UUID, proc: PiProc | None) -> None:
-        store = self.store
-        if store is None:
-            return
-        async with store.session() as db:
-            try:
-                await harvest_session(
-                    db,
-                    self.settings,
-                    session_id,
-                    proc,
-                    self.env_hub,
-                    sync_workspace=False,
-                    blobs=self.blobs,
-                )
-            except (OSError, ObjectStoreError):
+        try:
+            store = self.store
+            if store is None:
                 return
-            except asyncio.CancelledError:
-                return
+            async with store.session() as db:
+                try:
+                    await harvest_session(
+                        db,
+                        self.settings,
+                        session_id,
+                        proc,
+                        self.env_hub,
+                        sync_workspace=False,
+                        blobs=self.blobs,
+                    )
+                except (OSError, ObjectStoreError):
+                    return
+                except asyncio.CancelledError:
+                    return
+        finally:
+            note = self.note_stopped
+            if note is not None:
+                await note(session_id)
 
 
 def local_execution(

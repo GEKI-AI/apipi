@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import os
@@ -588,6 +589,33 @@ def run_host_setup(workspace: Path, *, extra_env: dict[str, str] | None = None) 
         detail = (result.stderr or result.stdout or "environment setup failed").strip()
         raise SetupError(detail or "environment setup failed")
     done.write_text("ok\n")
+
+
+async def provision_hosted_async(
+    environment: dict[str, Any],
+    *,
+    run_mode: str,
+    max_bytes: int | None = None,
+    gateway_allowlist: bool = False,
+    gateway_hosts: tuple[str, ...] = (),
+    extra_files: list[tuple[str, bytes]] | None = None,
+    timeout: float | None = None,
+) -> None:
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(
+                provision_hosted,
+                environment,
+                run_mode=run_mode,
+                max_bytes=max_bytes,
+                gateway_allowlist=gateway_allowlist,
+                gateway_hosts=gateway_hosts,
+                extra_files=extra_files,
+            ),
+            timeout=timeout,
+        )
+    except TimeoutError as exc:
+        raise SetupError("environment setup timed out") from exc
 
 
 def provision_hosted(
