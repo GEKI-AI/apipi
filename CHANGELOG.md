@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- An agent edit no longer changes sessions that already exist. Each
+  session keeps the agent version it was created with. Move a session
+  by setting `metadata["apipi.agent_version"]` while it is idle.
+  See [agent versions](docs/agent-versions.md).
+
 ### Fixed
 
 - `apipi images check browser` mounts `/dev` before it creates `shm`

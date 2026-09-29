@@ -61,6 +61,7 @@ class PiHarness:
         idle_ttl = raw_idle if isinstance(raw_idle, timedelta) else None
         idle_ttl_set = _kwargs.get("idle_ttl_set") is True
         raw_agent = _kwargs.get("agent_id")
+        raw_version = _kwargs.get("agent_version")
         raw_user = _kwargs.get("user_id")
         raw_org = _kwargs.get("org_id")
         proc = await self.pool.get(
@@ -85,6 +86,7 @@ class PiHarness:
             idle_ttl=idle_ttl,
             idle_ttl_set=idle_ttl_set,
             agent_id=str(raw_agent) if raw_agent else None,
+            agent_version=raw_version if isinstance(raw_version, dict) else None,
             user_id=raw_user if isinstance(raw_user, str) else None,
             org_id=raw_org if isinstance(raw_org, str) else None,
         )

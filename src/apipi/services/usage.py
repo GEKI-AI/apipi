@@ -93,6 +93,8 @@ def usage_event(
     retryable: bool | None = None,
     legacy_code: str | None = None,
     upstream_attempts: int | None = None,
+    agent_version_id: uuid.UUID | None = None,
+    agent_version_number: int | None = None,
 ) -> dict[str, Any]:
     stored = usage_from(usage)
     return {
@@ -102,6 +104,14 @@ def usage_event(
         "session_id": str(session_id),
         "turn_id": str(turn_id),
         "agent_id": str(agent_id) if agent_id is not None else None,
+        "agent_version": (
+            {
+                "id": str(agent_version_id),
+                "number": agent_version_number,
+            }
+            if agent_version_id is not None
+            else None
+        ),
         "model": model,
         "status": status,
         "latency_ms": latency_ms,

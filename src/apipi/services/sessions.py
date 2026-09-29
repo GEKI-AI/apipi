@@ -100,12 +100,21 @@ from apipi.worker.placement import CHAT, SESSION_KIND_KEY
 log = logging.getLogger("apipi")
 
 
+def _version_ref(
+    version_id: uuid.UUID | None, number: int | None
+) -> dict[str, Any] | None:
+    if version_id is None:
+        return None
+    return {"id": str(version_id), "number": number}
+
+
 def turn_body(turn: Turn) -> dict[str, Any]:
     return {
         "id": str(turn.id),
         "session_id": str(turn.session_id),
         "status": turn.status,
         "usage": usage_from(turn.usage) if turn.usage is not None else None,
+        "agent_version": _version_ref(turn.agent_version_id, turn.agent_version_number),
         "created_at": turn.created_at.isoformat(),
         "updated_at": turn.updated_at.isoformat(),
     }
@@ -147,6 +156,7 @@ def session_body(row: SessionRow) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "agent_id": str(row.agent_id) if row.agent_id is not None else None,
+        "agent_version": _version_ref(row.agent_version_id, row.agent_version_number),
         "status": row.status,
         "environment": overlay_environment(row),
         "idle_ttl": row.idle_ttl,
@@ -462,13 +472,21 @@ class SessionService:
         chat = is_chat_session({"metadata": metadata or {}})
         agent_metadata: dict[str, Any] | None = None
         async with self.store.session() as db:
+            pinned_version = None
             if agent_id is not None:
-                saved = await get_agent(db, tenant_id, agent_id)
-                if saved is None:
+                from apipi.services.agent_versions import AgentVersionService
+
+                pinned_version = await AgentVersionService(
+                    self.store, self.settings
+                ).resolve(db, tenant_id, agent_id, metadata)
+                definition = pinned_version.definition
+                if not isinstance(definition, dict):
                     not_found()
-                raw_tools = saved.tools
-                model = saved.model
-                agent_metadata = saved.metadata_json
+                raw_tools = definition.get("tools") or []
+                model = definition.get("model")
+                agent_metadata = definition.get("metadata")
+                if not isinstance(agent_metadata, dict):
+                    agent_metadata = {}
             if agent is not None:
                 if agent.model is not None:
                     model = agent.model
@@ -562,6 +580,10 @@ class SessionService:
                 user_id=user_id,
                 org_id=org_id,
                 vault_ids=vault_id_strs,
+                agent_version_id=None if pinned_version is None else pinned_version.id,
+                agent_version_number=None
+                if pinned_version is None
+                else pinned_version.number,
             )
             if env.get("type") == "openai_hosted":
                 directory = session_workspace(self.settings, tenant_id, row.id)
@@ -869,13 +891,40 @@ class SessionService:
             if metadata is not None or (
                 agent is not None and agent.reasoning is not None
             ):
+                from apipi.services.agent_versions import AGENT_VERSION_KEY
+
+                if (
+                    metadata is not None
+                    and AGENT_VERSION_KEY in metadata
+                    and current.agent_id is not None
+                ):
+                    if current.status == "in_progress":
+                        raise ApiError(
+                            "invalid_request",
+                            "Cannot move the agent version while a turn is in progress",
+                            code="invalid_request",
+                        )
+                    from apipi.services.agent_versions import AgentVersionService
+
+                    moved = await AgentVersionService(
+                        self.store, self.settings
+                    ).resolve(db, tenant_id, current.agent_id, metadata)
+                    changes["agent_version_id"] = moved.id
+                    changes["agent_version_number"] = moved.number
                 validate_pi_metadata(merged)
                 validate_idle_metadata(merged)
                 model = changes.get("model", current.model)
                 if not isinstance(model, str) and current.agent_id is not None:
-                    saved = await get_agent(db, tenant_id, current.agent_id)
-                    if saved is not None:
-                        model = saved.model
+                    from apipi.services.agent_versions import load_pinned_version
+
+                    pinned = await load_pinned_version(db, tenant_id, current)
+                    raw_model = (
+                        pinned.definition.get("model")
+                        if isinstance(pinned.definition, dict)
+                        else None
+                    )
+                    if isinstance(raw_model, str):
+                        model = raw_model
                 require_thinking_supported(
                     self.settings,
                     model if isinstance(model, str) else None,
@@ -978,9 +1027,16 @@ class SessionService:
                 stale = row.status == "in_progress"
                 follow_model = row.model
                 if not follow_model and row.agent_id is not None:
-                    saved = await get_agent(db, tenant_id, row.agent_id)
-                    if saved is not None:
-                        follow_model = saved.model
+                    from apipi.services.agent_versions import load_pinned_version
+
+                    pinned = await load_pinned_version(db, tenant_id, row)
+                    raw_model = (
+                        pinned.definition.get("model")
+                        if isinstance(pinned.definition, dict)
+                        else None
+                    )
+                    if isinstance(raw_model, str):
+                        follow_model = raw_model
         if action == "message":
             require_image_model(self.settings, follow_model, parsed)
         if action == "cancel":

@@ -38,4 +38,5 @@ def test_alembic_revisions_chain() -> None:
         "0016_turn_failure.py",
         "0017_upstream_attempts.py",
         "0018_sandbox_status.py",
+        "0019_agent_versions.py",
     ]

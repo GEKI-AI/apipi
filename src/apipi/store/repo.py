@@ -146,10 +146,14 @@ async def create_session(
     user_id: str | None = None,
     org_id: str | None = None,
     vault_ids: list[str] | None = None,
+    agent_version_id: uuid.UUID | None = None,
+    agent_version_number: int | None = None,
 ) -> SessionRow:
     row = SessionRow(
         tenant_id=tenant_id,
         agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        agent_version_number=agent_version_number,
         model=model,
         instructions=instructions,
         idle_ttl=idle_ttl,
@@ -224,6 +228,10 @@ async def update_session(
         row.environment = changes["environment"]
     if "required_actions" in changes:
         row.required_actions = changes["required_actions"]
+    if "agent_version_id" in changes:
+        row.agent_version_id = changes["agent_version_id"]
+    if "agent_version_number" in changes:
+        row.agent_version_number = changes["agent_version_number"]
     row.updated_at = utc_now()
     await db.flush()
     return row
@@ -316,8 +324,17 @@ async def create_turn(
     *,
     status: str,
     usage: dict[str, Any] | None = None,
+    agent_version_id: uuid.UUID | None = None,
+    agent_version_number: int | None = None,
 ) -> Turn:
-    turn = Turn(tenant_id=tenant_id, session_id=session_id, status=status, usage=usage)
+    turn = Turn(
+        tenant_id=tenant_id,
+        session_id=session_id,
+        status=status,
+        usage=usage,
+        agent_version_id=agent_version_id,
+        agent_version_number=agent_version_number,
+    )
     db.add(turn)
     await db.flush()
     return turn

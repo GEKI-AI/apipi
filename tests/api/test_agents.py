@@ -70,6 +70,7 @@ async def test_agent_crud(client: AsyncClient) -> None:
         "reasoning",
         "created_at",
         "updated_at",
+        "active_version",
     }
     assert body["name"] == "one"
     assert body["model"] == "test-model"
