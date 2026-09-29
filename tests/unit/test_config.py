@@ -883,32 +883,16 @@ def test_model_retry_from_toml_and_env(
         load_settings()
 
 
-def test_removed_toml_keys_are_ignored(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_removed_toml_keys_are_unknown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "apipi.toml").write_text(
         'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
         "thinking_summary = true\n"
-        "auto_title = true\n"
-        'sidekick_model = "old"\n'
-        'sidekick_base_url = "https://sidekick.example"\n'
-        'sidekick_api_key = "secret"\n'
     )
-    caplog.set_level("WARNING", logger="apipi")
-    loaded = load_settings()
-    assert not hasattr(loaded, "thinking_summary")
-    assert not hasattr(loaded, "auto_title")
-    assert not hasattr(loaded, "sidekick_model")
-    text = caplog.text
-    for key in (
-        "thinking_summary",
-        "auto_title",
-        "sidekick_model",
-        "sidekick_base_url",
-        "sidekick_api_key",
-    ):
-        assert f"{key} was removed in 0.7.0 and is ignored" in text
+    with pytest.raises(ConfigError, match="unknown setting: thinking_summary"):
+        load_settings()
 
 
 def test_removed_playwright_mcp_is_ignored(
