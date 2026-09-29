@@ -113,23 +113,34 @@ def apply_reasoning_effort(
     return out
 
 
+_STANDARD_THINKING = frozenset({"off", "minimal", "low", "medium", "high"})
+
+
+def thinking_level_supported(levels: dict[str, str | None] | None, level: str) -> bool:
+    if levels is None:
+        return True
+    if level in levels:
+        return isinstance(levels[level], str)
+    return level in _STANDARD_THINKING
+
+
 def require_thinking_supported(
     settings: Settings, model: str | None, level: str | None
 ) -> None:
-    if level is None or level == "off" or not isinstance(model, str) or not model:
+    if level is None or not isinstance(model, str) or not model:
         return
     from apipi.worker.pi.model_caps import registry_of
 
     caps = registry_of(settings.model_registry).get(model)
     if caps is None:
         return
-    if caps.reasoning is False:
+    if level != "off" and caps.reasoning is False:
         raise ApiError(
             "invalid_request",
             f"model {model} does not support reasoning",
             code="invalid_request",
         )
-    if caps.thinking_levels is not None and level not in caps.thinking_levels:
+    if not thinking_level_supported(caps.thinking_levels, level):
         raise ApiError(
             "invalid_request",
             "model "

@@ -96,6 +96,35 @@ def test_write_pi_models_json_marks_reasoning_when_thinking_on(tmp_path: Path) -
     assert fallback["compat"]["supportsReasoningEffort"] is True
 
 
+def test_missing_models_json_includes_session_model_and_registry(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path).model_copy(
+        update={
+            "model_registry": {
+                "vision": {
+                    "input": ["text", "image"],
+                    "reasoning": True,
+                    "thinking_levels": {"high": "high"},
+                    "context_window": 8192,
+                }
+            }
+        }
+    )
+    raw = models_json_for_base_url(
+        settings,
+        "http://broker.test/v1",
+        model="vision",
+        thinking="high",
+    )
+    provider = json.loads(raw)["providers"][PI_PROVIDER]
+    rows = {row["id"]: row for row in provider["models"]}
+    assert rows["vision"]["input"] == ["text", "image"]
+    assert rows["vision"]["reasoning"] is True
+    assert rows["vision"]["thinkingLevelMap"] == {"high": "high"}
+    assert rows["vision"]["contextWindow"] == 8192
+
+
 def test_models_json_uses_session_thinking_over_process_off(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     write_pi_models_json(settings, ["m1"])

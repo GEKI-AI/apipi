@@ -121,12 +121,15 @@ class AgentWrite(StrictModel):
     def reject_unimplemented(cls, data: Any) -> Any:
         if isinstance(data, dict):
             for field in (*_UNIMPLEMENTED, "service_tier", "text"):
-                if field in data:
-                    raise PydanticCustomError(
-                        "not_implemented",
-                        "{field} is not implemented",
-                        {"field": field},
-                    )
+                if field not in data:
+                    continue
+                if field == "service_tier" and data[field] in (None, "auto"):
+                    continue
+                raise PydanticCustomError(
+                    "not_implemented",
+                    "{field} is not implemented",
+                    {"field": field},
+                )
         return data
 
 
@@ -186,6 +189,7 @@ def fold_reasoning(
 def write_payload(body: AgentWrite) -> dict[str, Any]:
     payload = body.model_dump(exclude_unset=True)
     payload.pop("reasoning", None)
+    payload.pop("service_tier", None)
     if "tools" in payload and body.tools is not None:
         payload["tools"] = [tool.model_dump(exclude_none=True) for tool in body.tools]
     if "session_defaults" in payload and body.session_defaults is not None:

@@ -153,6 +153,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | `tools` type `function` | Same API |
 | `tools` type `mcp` with nested `transport` (`http` or `stdio`) | Same API |
 | Top-level MCP `server_url` / `command` / `args` | Error (`unknown_field`) |
+| `service_tier` `null` or `auto` | Ignored. ApiPi has no tiers. Any other value is `not_implemented`. |
 | `multi_agent`, `tool_search`, `programmatic_tool_calling` | Error (`not_implemented`) |
 | First-party `web_search` | Error; use MCP (example: Tavily) |
 | First-party browser | Error; use MCP (example: Playwright) |
