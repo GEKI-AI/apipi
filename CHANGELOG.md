@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `apipi images check browser` mounts `/dev` before it creates `shm`
+  and `pts`, so the read-only rootfs check no longer fails with
+  "Read-only file system".
+
 ### Changed
 
 - Guest kernel is Linux 6.1.186 from the Firecracker 1.17 CI set,
