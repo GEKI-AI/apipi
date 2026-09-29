@@ -49,6 +49,8 @@ if [ -d /var/cache/npm ]; then
 fi
 export NPM_CONFIG_CACHE=/tmp/npm-cache
 export npm_config_cache=/tmp/npm-cache
+mkdir -p /tmp/uv-cache
+export UV_CACHE_DIR=/tmp/uv-cache
 if [ -f "$WS/.apipi/setup.sh" ] && [ ! -f "$WS/.apipi/setup.done" ]; then
   if ! /bin/sh "$WS/.apipi/setup.sh" > "$WS/.apipi/setup.log" 2>&1; then
     echo "environment setup failed" >&2

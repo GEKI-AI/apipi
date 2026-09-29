@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.0]
 
+### Added
+
+- Every guest image includes `pip` and a pinned static `uv`. `pip`
+  installs into the workspace user site. `uv` cache stays on `/tmp`.
+
 ### Documentation
 
 - A replacement system prompt keeps the platform blocks, instructions,

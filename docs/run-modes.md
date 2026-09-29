@@ -103,9 +103,14 @@ directory argument to choose another location. The files do not
 overwrite each other. The script needs `curl`, `tar`, `mkfs.ext4`,
 `mount`, and root (or `sudo`) for the loop mount and chroot.
 
-`default` installs Alpine, Node, the pinned Pi CLI, Python 3, `ip`,
-`socat`, `curl`, and `git`, and copies `src/apipi/worker/pi/guest.sh` to
-`/sbin/apipi-guest`.
+`default` installs Alpine, Node, the pinned Pi CLI, Python 3, `pip`,
+a pinned `uv`, `ip`, `socat`, `curl`, and `git`, and copies
+`src/apipi/worker/pi/guest.sh` to `/sbin/apipi-guest`. The image sets
+`pip` to install into the user site. With `HOME=/workspace`,
+`pip install <pkg>` lands in `/workspace/.local` and is importable.
+That uses guest RAM. `uv run --with <pkg> script.py` and
+`uv venv --system-site-packages /tmp/venv` also work. `uv pip install
+--system` does not, because the root filesystem is read-only.
 `browser` is that image plus Alpine Chromium, Noto fonts (including
 CJK and emoji), font/NSS packages, and a pinned `@playwright/mcp`
 installed at `/opt/apipi/playwright-mcp`. Auto-inject starts that

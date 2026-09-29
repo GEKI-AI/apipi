@@ -17,14 +17,27 @@ It only says what is different.
 | --- | --- |
 | `IMAGE_ID` | Same as the directory name. |
 | `SIZE_MIB` | ext4 size in MiB. `SIZE_MIB` in the environment overrides this. |
-| `PACKAGES` | Extra Alpine packages, space-separated. The base set is always `nodejs`, `npm`, `python3`, `iproute2`, `socat`, `curl`, and `git`. |
+| `PACKAGES` | Extra Alpine packages, space-separated. The base set is always `nodejs`, `npm`, `python3`, `py3-pip`, `iproute2`, `socat`, `curl`, and `git`. |
 | `MIN_SIZE` | Smallest sandbox size this image is meant for (`S`, `M`, or `L`). |
 | `DESCRIPTION` | One line for operators. |
 
 `ALPINE_VER` and `PINNED_PI` are environment overrides of the shared
 script, not recipe fields. The default Alpine version is `3.21.3`. The
 Pi pin is read from `src/apipi/worker/pi/version.py` when `PINNED_PI`
-is unset.
+is unset. The uv pin and its sha256 values are read from that same
+file. They are not recipe fields.
+
+Every image also installs a pinned static musl `uv` and `uvx` at
+`/usr/local/bin`, and writes `/etc/pip.conf` with `user = true` and
+`break-system-packages = true`. Guest init sets `HOME=/workspace` and
+`UV_CACHE_DIR=/tmp/uv-cache`. `pip install <pkg>` then lands in
+`/workspace/.local`, which Python imports without extra path setup.
+That directory is on the workspace tmpfs, so it uses guest RAM.
+`uv pip install --system` cannot write the read-only root. Use
+`uv run --with <pkg> script.py` or
+`uv venv --system-site-packages /tmp/venv` instead. The build checks
+`pip --version`, `uv --version`, and a `pip install --user` into a
+temporary home before it unmounts the image.
 
 ## Build
 

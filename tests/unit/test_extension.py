@@ -53,6 +53,7 @@ def test_browser_recipe_vendors_playwright_mcp() -> None:
     assert PLAYWRIGHT_MCP_CLI.endswith("node_modules/@playwright/mcp/cli.js")
     guest = (root / "src" / "apipi" / "worker" / "pi" / "guest.sh").read_text()
     assert "npm_config_cache=/tmp/npm-cache" in guest
+    assert "UV_CACHE_DIR=/tmp/uv-cache" in guest
     assert "cp -a /var/cache/npm/." in guest
     assert "mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm" in guest
     assert 'PATH="$WS/.venv/bin:$PATH"' in guest

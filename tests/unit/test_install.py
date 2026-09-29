@@ -380,6 +380,10 @@ def test_build_script_base_packages_include_curl_and_git() -> None:
     packages = apk.split()
     assert "curl" in packages
     assert "git" in packages
+    assert "py3-pip" in packages
+    assert "PINNED_UV" in script
+    assert "/etc/pip.conf" in script
+    assert "UV_CACHE_DIR" not in script
 
 
 def test_rootfs_build_args_for_shipped_images(tmp_path: Path) -> None:
