@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-30
+
 - The official image publish is x86_64 `default` and `browser` only.
   It does not build `work` or aarch64. Build those locally if you need
   them.
@@ -27,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recommended floor logs a warning.
 
 ## [0.12.0] - 2026-09-30
+
+The 0.12.0 image store was not signed by the release tag. Use 0.12.1
+for official images.
 
 ### Breaking
 
