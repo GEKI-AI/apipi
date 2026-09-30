@@ -423,7 +423,20 @@ def require_compatible(
         )
 
 
+def is_versioned_store(index: ImageIndex) -> bool:
+    return index.schema_version == 2 and bool(index.store_version)
+
+
 def latest_entry(index: ImageIndex, image_id: str, arch: str) -> ImageIndexEntry:
+    if is_versioned_store(index):
+        matches = [
+            item for item in index.images if item.id == image_id and item.arch == arch
+        ]
+        if len(matches) != 1:
+            raise ImageFormatError(
+                f"index needs exactly one {image_id} {arch}, found {len(matches)}"
+            )
+        return matches[0]
     matches = [
         item
         for item in index.images

@@ -173,6 +173,48 @@ def test_list_local_and_remote(tmp_path: Path) -> None:
     assert rows[0][3] == "local+remote"
 
 
+def _published_versioned(tmp_path: Path) -> Path:
+    work = tmp_path / "vsrc"
+    work.mkdir()
+    rootfs = work / "rootfs.ext4"
+    kernel = work / "vmlinux"
+    rootfs.write_bytes(b"rootfs-bytes")
+    kernel.write_bytes(b"kernel-bytes")
+    out = tmp_path / "vout"
+    out.mkdir()
+    package_image(
+        image_id="default",
+        rootfs=rootfs,
+        kernel=kernel,
+        out_dir=out,
+        arch="x86_64",
+    )
+    versioned = tmp_path / "vstore" / "v0.12.1"
+    publish_images(
+        open_image_store(versioned.as_uri(), write=True),
+        out,
+        ids=["default"],
+        store_version="0.12.1",
+    )
+    return versioned
+
+
+def test_pull_from_versioned_store_without_latest_flag(tmp_path: Path) -> None:
+    versioned = _published_versioned(tmp_path)
+    settings = _settings(tmp_path, image_source=versioned.as_uri())
+    lines = pull_images(settings, ids=["default"])
+    version = read_current(tmp_path / "images", "default")
+    assert version is not None
+    assert lines == [f"default {version}"]
+
+
+def test_list_remote_from_versioned_store(tmp_path: Path) -> None:
+    versioned = _published_versioned(tmp_path)
+    settings = _settings(tmp_path, image_source=versioned.as_uri())
+    rows = list_images(settings, remote=True)
+    assert [(row[0], row[3]) for row in rows] == [("default", "remote")]
+
+
 def test_images_dir_beats_legacy_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
