@@ -699,6 +699,12 @@ class Settings(BaseSettings):
         default=True,
         validation_alias=AliasChoices("APIPI_FORWARD_MODELS", "forward_models"),
     )
+    model_attribution_headers: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "APIPI_MODEL_ATTRIBUTION_HEADERS", "model_attribution_headers"
+        ),
+    )
     model_list: ModelList = Field(
         default="probe",
         validation_alias=AliasChoices("APIPI_MODEL_LIST", "model_list"),

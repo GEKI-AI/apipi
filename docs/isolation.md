@@ -145,3 +145,26 @@ The API never opens `/dev/kvm`. The worker does. See
 sandbox for Pi.” They are not the same setting. Worker placement for
 `environment.type=none` is `APIPI_ENV_NONE_PLACEMENT` (default `chat`).
 See [workers](workers.md).
+
+## Model attribution headers
+
+Every model-host request goes through the per-session credential
+broker, in both run modes. The broker drops every guest-supplied
+header starting with `x-apipi-` (case-insensitive), then stamps its
+own attribution headers:
+
+| Header | Value |
+|---|---|
+| `x-apipi-session-id` | Session UUID |
+| `x-apipi-turn-id` | UUID of the turn running on that Pi process; absent outside a turn |
+| `x-apipi-agent-id` | Saved agent UUID; omitted for inline, agent-less sessions |
+| `x-apipi-agent-revision` | Agent definition revision at turn start; omitted for agent-less sessions |
+
+The turn id is updated per turn; consecutive turns on a warm process
+carry different ids. All calls of one turn (streaming, retries,
+compaction) carry the same revision even if the agent is updated
+mid-turn; the next turn picks up the new value. `APIPI_MODEL_ATTRIBUTION_HEADERS`
+(default `true`) disables stamping; stripping of guest-set
+`x-apipi-*` always applies. The headers are attribution metadata
+only, unsigned, with no authorization meaning. The model host must
+still authenticate the `Authorization` bearer.

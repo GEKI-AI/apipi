@@ -32,3 +32,52 @@ def test_public_event_types_match_spec() -> None:
     assert "agent.session.turn.thinking.started" not in LIVE_EVENT_TYPES
     assert LIVE_EVENT_TYPES <= PUBLIC_EVENT_TYPES
     assert "pi.internal" not in PUBLIC_EVENT_TYPES
+
+
+async def test_pi_harness_sets_and_clears_turn_context() -> None:
+    import uuid
+    from typing import Any
+
+    from apipi.worker.pi.harness import PiHarness
+
+    calls: list[tuple[str, object, object]] = []
+
+    class _Broker:
+        def set_context(self, session_id: object, agent_id: object) -> None:
+            calls.append(("context", session_id, agent_id))
+
+        def set_turn(self, turn_id: object, revision: object = None) -> None:
+            calls.append(("turn", turn_id, revision))
+
+        def clear_turn(self) -> None:
+            calls.append(("clear", None, None))
+
+    class _Proc:
+        broker = _Broker()
+
+        async def prompt(self, _text: str, **_kwargs: object):  # type: ignore[no-untyped-def]
+            yield {"type": "agent_settled", "success": True}
+            return
+
+    class _Pool:
+        async def get(self, *args: object, **kwargs: object) -> Any:  # type: ignore[no-untyped-def]
+            return _Proc()
+
+        def touch(self, session_id: object) -> None:
+            del session_id
+
+    harness = PiHarness(_Pool())  # ty: ignore[invalid-argument-type]
+    session_id = uuid.uuid4()
+    [
+        event
+        async for event in harness.generate(
+            "hi",
+            session_id=session_id,
+            turn_id="turn-1",
+            agent_id="agent-1",
+            agent_revision=3,
+        )
+    ]
+    assert calls[0] == ("context", str(session_id), "agent-1")
+    assert calls[1] == ("turn", "turn-1", 3)
+    assert calls[-1] == ("clear", None, None)

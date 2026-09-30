@@ -203,6 +203,7 @@ def agent_body(agent: Agent) -> dict[str, Any]:
         "tools": agent.tools,
         "session_defaults": defaults,
         "reasoning": reasoning_body(agent.metadata_json),
+        "revision": agent.revision or 1,
         "created_at": agent.created_at.isoformat(),
         "updated_at": agent.updated_at.isoformat(),
     }

@@ -42,6 +42,14 @@ def _filter_headers(headers: Any) -> dict[str, str]:
     return {key: value for key, value in headers.items() if key.lower() not in _HOP}
 
 
+def strip_apipi_headers(headers: dict[str, str]) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in headers.items()
+        if not key.lower().startswith("x-apipi-")
+    }
+
+
 @dataclass(frozen=True)
 class McpRoute:
     route_id: str
@@ -68,6 +76,7 @@ class SessionBroker:
         model_base_url: str,
         model_key: str | None,
         mcp_routes: list[McpRoute],
+        attribution: bool = True,
     ) -> None:
         self.host = host
         self.port = port
@@ -76,6 +85,11 @@ class SessionBroker:
         self.model_base_url = model_base_url
         self.model_key = model_key
         self.mcp_routes = {route.route_id: route for route in mcp_routes}
+        self.attribution = attribution
+        self._session_id: str | None = None
+        self._agent_id: str | None = None
+        self._turn_id: str | None = None
+        self._agent_revision: int | None = None
         self._client = httpx.AsyncClient(timeout=None)
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task[None] | None = None
@@ -111,6 +125,32 @@ class SessionBroker:
     def mcp_url(self, route_id: str) -> str:
         return f"http://{self.public_host}:{self.port}/{self.token}/mcp/{route_id}"
 
+    def set_context(self, session_id: str | None, agent_id: str | None) -> None:
+        self._session_id = session_id
+        self._agent_id = agent_id
+
+    def set_turn(self, turn_id: str | None, agent_revision: int | None = None) -> None:
+        self._turn_id = turn_id
+        self._agent_revision = agent_revision
+
+    def clear_turn(self) -> None:
+        self._turn_id = None
+        self._agent_revision = None
+
+    def attribution_headers(self) -> dict[str, str]:
+        if not self.attribution:
+            return {}
+        headers: dict[str, str] = {}
+        if self._session_id is not None:
+            headers["x-apipi-session-id"] = self._session_id
+        if self._turn_id is not None:
+            headers["x-apipi-turn-id"] = self._turn_id
+        if self._agent_id is not None:
+            headers["x-apipi-agent-id"] = self._agent_id
+            if self._agent_revision is not None:
+                headers["x-apipi-agent-revision"] = str(self._agent_revision)
+        return headers
+
     def _check_token(self, request: Request) -> bool:
         got = str(request.path_params.get("token") or "")
         return secrets.compare_digest(got, self.token)
@@ -118,7 +158,7 @@ class SessionBroker:
     async def _forward(
         self, request: Request, url: str, extra: dict[str, str]
     ) -> Response:
-        headers = _filter_headers(request.headers)
+        headers = strip_apipi_headers(_filter_headers(request.headers))
         headers.update(extra)
         body = await request.body()
         upstream = self._client.build_request(
@@ -147,6 +187,7 @@ class SessionBroker:
         extra: dict[str, str] = {}
         if self.model_key:
             extra["Authorization"] = f"Bearer {self.model_key}"
+        extra.update(self.attribution_headers())
         return await self._forward(request, url, extra)
 
     async def _mcp(self, request: Request) -> Response:
@@ -244,6 +285,7 @@ async def start_broker(
         model_base_url=base,
         model_key=key,
         mcp_routes=_mcp_routes(mcp_http),
+        attribution=settings.model_attribution_headers,
     )
     await broker.start()
     return broker

@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thread; plugins that relied on running on the event loop thread
   should become `async def`.
 
+### Added
+
+- Model-host attribution. The per-session broker stamps
+  `x-apipi-session-id`, `x-apipi-turn-id`, `x-apipi-agent-id`, and
+  `x-apipi-agent-revision` on every model request and strips
+  guest-set `x-apipi-*` headers. Agents gain a read-only `revision`
+  (`1` on create, plus one per update and restore). New
+  `APIPI_MODEL_ATTRIBUTION_HEADERS` (default `true`) controls
+  stamping.
+
 ### Breaking
 
 - Pi 0.99.1 (was 0.85.1). All guest images are rebuilt with a new

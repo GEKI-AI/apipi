@@ -236,6 +236,7 @@ class AgentVersionService:
                 created_by=created_by,
             )
             apply_definition(agent, definition)
+            agent.revision = (agent.revision or 0) + 1
             await db.flush()
             await self._prune(db, tenant_id, agent_id)
             body = agent_body(agent)

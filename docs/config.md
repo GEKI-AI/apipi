@@ -95,6 +95,7 @@ hosted files and skills).
 | `APIPI_PRESIGN_TTL` | `presign_ttl` | `15m` | Lifetime of presigned PUT/GET URLs. Needs `artifact_store=s3`. |
 | `OPENAI_BASE_URL` | `model_base_url` | required for serve | Model host passed to Pi. Not the gateway URL. Put this in `.env`. |
 | `OPENAI_API_KEY_OVERWRITE` | `model_api_key_overwrite` | unset | Optional operator model key. When unset, Pi gets the request bearer. A process `OPENAI_API_KEY` is ignored. |
+| `APIPI_MODEL_ATTRIBUTION_HEADERS` | `model_attribution_headers` | `true` | Stamp `x-apipi-session-id`, `x-apipi-turn-id`, `x-apipi-agent-id`, and `x-apipi-agent-revision` on every model-host request. Guest-set `x-apipi-*` headers are stripped in both cases. |
 | `APIPI_FORWARD_MODELS` | `forward_models` | on | Proxy `GET /v1/models` to `{OPENAI_BASE_URL}/models` when `APIPI_MODEL_LIST` is `probe` or `turn`. Off returns `400` with code `forward_models`. With `APIPI_MODEL_LIST=off`, the route returns the static `APIPI_MODELS` list instead of calling the host. |
 | `APIPI_MODEL_LIST` | `model_list` | `probe` | `probe` \| `turn` \| `off`. Checked when an agent is created or its model is edited, not on turns. `probe` lists `{OPENAI_BASE_URL}/models` at startup and reuses that list. `turn` lists on each agent write and does not list at startup. `off` never calls `/models`. |
 | `APIPI_MODELS` | `models` | empty | Comma-separated model ids, or a TOML list. Used when `APIPI_MODEL_LIST=off`. An empty list skips the check. Do not combine this list with a `[models."id"]` table in the same file. |
