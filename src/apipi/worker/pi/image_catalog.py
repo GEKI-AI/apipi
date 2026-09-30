@@ -1,10 +1,12 @@
 import hashlib
 import logging
 import re
+import warnings
+from datetime import UTC, datetime
 from pathlib import Path
 
 from apipi.config import ConfigError, Settings
-from apipi.worker.pi.images import sha256_bytes
+from apipi.worker.pi.images import ImageIndex, ImageManifest, sha256_bytes
 
 log = logging.getLogger("apipi.worker.pi")
 
@@ -84,6 +86,120 @@ def verify_checksums(files: dict[str, bytes], sums: str) -> None:
             raise ConfigError(f"SHA256SUMS is missing {name}")
 
 
+OFFICIAL_IMAGE_IDS = ("default", "browser")
+OFFICIAL_ARCH = "x86_64"
+
+
+def signer_identity(version: str) -> str:
+    return SIGSTORE_IDENTITY.format(version=normalize_version(version))
+
+
+def warn_signer_override(
+    version: str, identity: str | None, issuer: str | None
+) -> None:
+    expected = signer_identity(version)
+    if identity and identity != expected:
+        warnings.warn(
+            f"image store signer identity {identity} is not the default {expected}",
+            stacklevel=3,
+        )
+    if issuer and issuer != SIGSTORE_ISSUER:
+        warnings.warn(
+            f"image store signer issuer {issuer} is not the default {SIGSTORE_ISSUER}",
+            stacklevel=3,
+        )
+
+
+def current_image_stamp(image_id: str) -> dict[str, str]:
+    from apipi.worker.pi.image_ops import guest_sh_path
+    from apipi.worker.pi.images import image_version, recipe_sha256, sha256_file
+    from apipi.worker.pi.install import images_root
+    from apipi.worker.pi.version import (
+        PINNED_AGENT_BROWSER,
+        PINNED_CHROME_HEADLESS_SHELL,
+        PINNED_DEBIAN_DIGEST,
+        PINNED_NODE,
+        PINNED_PI,
+    )
+
+    guest = sha256_file(guest_sh_path())
+    recipe = recipe_sha256(images_root(), image_id)
+    agent_browser = PINNED_AGENT_BROWSER if image_id == "browser" else ""
+    chrome = PINNED_CHROME_HEADLESS_SHELL if image_id == "browser" else ""
+    version = image_version(
+        PINNED_PI,
+        PINNED_DEBIAN_DIGEST,
+        PINNED_NODE,
+        guest,
+        recipe,
+        agent_browser=agent_browser,
+        chrome=chrome,
+    )
+    return {
+        "version": version,
+        "base": PINNED_DEBIAN_DIGEST,
+        "node_version": PINNED_NODE,
+        "pi_version": PINNED_PI,
+        "guest_sh_sha256": guest,
+        "recipe_sha256": recipe,
+        "agent_browser": agent_browser,
+        "chrome": chrome,
+    }
+
+
+def reuse_mismatch(
+    index: ImageIndex, manifests: dict[tuple[str, str], ImageManifest]
+) -> str | None:
+    images = index.images
+    found = {(item.id, str(item.arch)) for item in images}
+    wanted = {(image_id, OFFICIAL_ARCH) for image_id in OFFICIAL_IMAGE_IDS}
+    if found != wanted:
+        return "official store image set differs"
+    for item in images:
+        manifest = manifests[(item.id, str(item.arch))]
+        stamp = current_image_stamp(item.id)
+        for key, value in stamp.items():
+            if getattr(manifest, key) != value:
+                return f"{item.id} {key} differs"
+    return None
+
+
+def republish_store(
+    files: dict[str, bytes],
+    *,
+    version: str,
+    commit: str,
+) -> dict[str, bytes]:
+    from apipi import __version__
+    from apipi.worker.pi.images import dump_index, load_index, load_manifest
+
+    index = load_index(files["index.json"])
+    manifests: dict[tuple[str, str], ImageManifest] = {
+        (item.id, str(item.arch)): load_manifest(files[item.manifest])
+        for item in index.images
+    }
+    reason = reuse_mismatch(index, manifests)
+    if reason:
+        raise ConfigError(f"image store cannot be reused: {reason}")
+    index.store_version = normalize_version(version)
+    index.apipi_version = __version__
+    index.source_commit = commit
+    index.created_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out: dict[str, bytes] = {"index.json": dump_index(index).encode()}
+    for item in index.images:
+        out[item.manifest] = files[item.manifest]
+        manifest = manifests[(item.id, str(item.arch))]
+        if manifest.rootfs.parts:
+            for part in manifest.rootfs.parts:
+                out[part.path] = files[part.path]
+        else:
+            out[manifest.rootfs.path] = files[manifest.rootfs.path]
+    for kernel in index.kernels:
+        out[kernel.path] = files[kernel.path]
+    out["SHA256SUMS"] = checksum_lines(out).encode()
+    return out
+
+
 def verify_signature(
     sums: bytes,
     bundle: bytes,
@@ -135,6 +251,8 @@ def mirror_store(
     version: str | None = None,
     no_signature: bool = False,
     dry_run: bool = False,
+    signer_identity: str | None = None,
+    signer_issuer: str | None = None,
 ) -> list[str]:
     from apipi.worker.pi.image_store import open_image_store
     from apipi.worker.pi.images import load_index, sha256_bytes
@@ -151,7 +269,14 @@ def mirror_store(
         bundle = src.get("SHA256SUMS.sigstore.json")
         if not isinstance(bundle, bytes):
             bundle = bytes(bundle)
-        verify_signature(sums, bundle, version=resolved)
+        warn_signer_override(resolved, signer_identity, signer_issuer)
+        verify_signature(
+            sums,
+            bundle,
+            version=resolved,
+            identity=signer_identity,
+            issuer=signer_issuer,
+        )
     expected = parse_checksums(sums.decode())
     index_bytes = src.get("index.json")
     if not isinstance(index_bytes, bytes):
@@ -211,6 +336,8 @@ def verify_store(
     version: str | None,
     local: bool,
     no_signature: bool,
+    signer_identity: str | None = None,
+    signer_issuer: str | None = None,
 ) -> None:
     from apipi.worker.pi.image_pull import configured_images_dir
     from apipi.worker.pi.image_store import open_image_store
@@ -245,7 +372,14 @@ def verify_store(
         bundle = store.get("SHA256SUMS.sigstore.json")
         if not isinstance(bundle, bytes):
             bundle = bytes(bundle)
-        verify_signature(sums, bundle, version=resolved)
+        warn_signer_override(resolved, signer_identity, signer_issuer)
+        verify_signature(
+            sums,
+            bundle,
+            version=resolved,
+            identity=signer_identity,
+            issuer=signer_issuer,
+        )
     expected = parse_checksums(sums.decode())
     index_bytes = store.get("index.json")
     if not isinstance(index_bytes, bytes):

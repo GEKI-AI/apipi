@@ -113,7 +113,12 @@ not affected by the image settings.
 
 The official Images workflow publishes x86_64 `default` and `browser`
 as GitHub release assets. It does not publish `work` or aarch64.
-Build those locally if a worker needs them.
+Build those locally if a worker needs them. It runs only from the
+release tag. A release that does not change image inputs reuses the
+previous store and signs it again. It does not rebuild the guest.
+The 0.12.0 store was signed from `main`, so `verify` needs
+`--no-signature` or `--signer-identity` for that tag. Use 0.12.1
+instead.
 
 ## Scale-out
 

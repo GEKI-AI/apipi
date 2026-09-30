@@ -5,11 +5,6 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      version:
-        description: Release version to fill, such as 0.12.0
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -20,71 +15,100 @@ jobs:
     name: Build x86_64
     runs-on: ubuntu-latest
     steps:
+      - name: Require a release tag
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) ;;
+            *)
+              echo "dispatch this workflow on the release tag (--ref vX.Y.Z)" >&2
+              exit 1
+              ;;
+          esac
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.13"
           enable-cache: true
-      - name: Packages
-        run: sudo apt-get update && sudo apt-get install -y e2fsprogs xz-utils
       - name: Sync
         run: uv sync --locked
+      - name: Check download pins
+        run: uv run python scripts/check_image_pins.py
+      - name: Reuse an unchanged image store
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          uv run python scripts/reuse_image_store.py --out image-store
+          code=$?
+          set -e
+          if [ "$code" -eq 10 ]; then
+            echo "reused=false" >> "$GITHUB_OUTPUT"
+          elif [ "$code" -ne 0 ]; then
+            exit "$code"
+          else
+            echo "reused=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Packages
+        if: steps.reuse.outputs.reused != 'true'
+        run: sudo apt-get update && sudo apt-get install -y e2fsprogs xz-utils
       - name: Build default
+        if: steps.reuse.outputs.reused != 'true'
         run: uv run apipi images build default --out image-out --arch x86_64
       - name: Build browser
+        if: steps.reuse.outputs.reused != 'true'
         run: uv run apipi images build browser --out image-out --arch x86_64
+      - name: Publish a versioned store
+        if: steps.reuse.outputs.reused != 'true'
+        run: |
+          uv run apipi images publish \
+            --from "$GITHUB_WORKSPACE/image-out" \
+            --to "file://$GITHUB_WORKSPACE/image-store" \
+            --store-version "${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@v4
         with:
-          name: images-x86_64
-          path: image-out/*
+          name: image-store
+          path: image-store/
 
   release:
     name: Release
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Require a release tag
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) ;;
+            *)
+              echo "dispatch this workflow on the release tag (--ref vX.Y.Z)" >&2
+              exit 1
+              ;;
+          esac
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.13"
-          enable-cache: true
-      - name: Sync
-        run: uv sync --locked
+          ref: ${{ github.ref }}
       - uses: actions/download-artifact@v4
         with:
-          pattern: images-*
-          path: image-in
-          merge-multiple: true
-      - name: Resolve version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          fi
+          name: image-store
+          path: image-store
       - name: Refuse an existing store
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v${{ steps.version.outputs.value }}"
+          tag="$GITHUB_REF_NAME"
           names=$(gh release view "$tag" --json assets --jq '.assets[].name' || true)
           if printf '%s\n' "$names" | grep -qx index.json; then
             echo "release $tag already has index.json" >&2
             exit 1
           fi
-      - name: Publish a versioned store
-        run: |
-          uv run apipi images publish \
-            --from "$GITHUB_WORKSPACE/image-in" \
-            --to "file://$GITHUB_WORKSPACE/image-store" \
-            --store-version "${{ steps.version.outputs.value }}"
       - name: Sign checksums
         uses: sigstore/gh-action-sigstore-python@v3.0.0
         with:
-          inputs: image-store/v${{ steps.version.outputs.value }}/SHA256SUMS
+          inputs: image-store/${{ github.ref_name }}/SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.value }}
-          files: image-store/v${{ steps.version.outputs.value }}/*
+          tag_name: ${{ github.ref_name }}
+          files: image-store/${{ github.ref_name }}/*
           make_latest: false

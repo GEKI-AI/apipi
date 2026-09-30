@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It does not build `work` or aarch64. Build those locally if you need
   them.
 
+### Fixed
+
+- The aarch64 Node tarball pin matches nodejs.org. A local aarch64
+  image build no longer fails the checksum.
+- The Images workflow runs only on a release tag. Dispatch it with
+  `--ref vX.Y.Z`. A branch dispatch fails before it builds or signs.
+- `apipi images verify` and `apipi images mirror` accept
+  `--signer-identity` and `--signer-issuer` for a store that was not
+  signed by the tag. The 0.12.0 store was signed from `main`.
+- A release that does not change image inputs reuses the previous
+  store and signs it for the new tag. It does not rebuild the guest.
+
 ## [0.12.0] - 2026-09-30
 
 ### Breaking
