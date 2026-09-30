@@ -186,8 +186,9 @@ stream, then checks the ext4 sha256. Peak RAM does not grow with the
 image size. `apipi images list --remote` compares the local images
 with that source. See [production](production.md).
 
-The optional Images workflow builds the official `default` and
-`browser` images and attaches them to a GitHub release. After that
+The Images workflow builds the official x86_64 `default` and `browser`
+images and attaches them to a GitHub release. It does not build `work`
+or aarch64. Build those locally if you need them. After that workflow
 runs, the release asset URL is an `https://` image source.
 
 ## From a git checkout

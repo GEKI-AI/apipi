@@ -164,9 +164,10 @@ not bump on every merge.
    GitHub Release).
 
 Official guest images publish with the same `v*` tag. The Images
-workflow builds the store, signs `SHA256SUMS`, and attaches the flat
-assets to that GitHub release. It does not run on pull requests. A
-release that already has `index.json` is left unchanged.
+workflow builds the x86_64 `default` and `browser` store, signs
+`SHA256SUMS`, and attaches the flat assets to that GitHub release.
+It does not build `work` or aarch64. It does not run on pull requests.
+A release that already has `index.json` is left unchanged.
 
 Before the first upload, an owner must create the PyPI project (name
 `geki-apipi`) and a Trusted Publisher: GitHub org `GEKI-AI`, repository
