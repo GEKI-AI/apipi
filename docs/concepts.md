@@ -84,7 +84,7 @@ transcript item. A replacement system prompt is
 `metadata["apipi.system_prompt"]` on the session, then the agent, then
 `[pi].system_prompt`. That replacement keeps the appended platform
 blocks, instructions, context files, and skills. It removes Pi's tool
-list and all tool guidelines, including MCP and Playwright guidance.
+list and all tool guidelines, including MCP guidance.
 The tools stay callable. See [config](config.md#pi).
 
 Changing a saved agent later does not rewrite history on existing

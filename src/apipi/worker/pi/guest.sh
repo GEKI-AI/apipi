@@ -4,7 +4,11 @@ mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 mkdir -p /dev/shm /dev/pts
-mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm
+SHM_SIZE=64m
+if [ -f /etc/apipi/browser.env ]; then
+  SHM_SIZE=512m
+fi
+mount -t tmpfs -o mode=1777,nosuid,nodev,size="$SHM_SIZE" tmpfs /dev/shm
 mount -t devpts devpts /dev/pts
 mount -t tmpfs tmpfs /tmp
 WS=/workspace
@@ -36,7 +40,17 @@ if [ -f "$WS/.apipi/net" ]; then
   printf "nameserver %s\nnameserver %s\n" "${GUEST_DNS:-1.1.1.1}" "${GUEST_DNS2:-8.8.8.8}" > /tmp/resolv.conf
   cp /tmp/resolv.conf /etc/resolv.conf 2>/dev/null || mount --bind /tmp/resolv.conf /etc/resolv.conf 2>/dev/null || true
 fi
+if [ -f /etc/apipi/browser.env ]; then
+  set -a
+  . /etc/apipi/browser.env
+  set +a
+  mkdir -p /tmp/agent-browser "$WS/.browser/screenshots" "$WS/.browser/downloads"
+fi
 cd "$WS"
+if [ -f "$WS/.apipi/browser-check.sh" ]; then
+  mkdir -p "$WS/outputs"
+  /bin/sh "$WS/.apipi/browser-check.sh" || true
+fi
 if [ -f "$WS/.apipi/env" ]; then
   set -a
   . "$WS/.apipi/env"

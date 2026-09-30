@@ -85,6 +85,12 @@ def _select_ids(index: ImageIndex, ids: list[str] | None, arch: str) -> list[str
     if ids:
         missing = [item for item in ids if item not in known]
         if missing:
+            published = {item.id for item in index.images}
+            wrong_arch = [item for item in missing if item in published]
+            if wrong_arch:
+                raise ConfigError(
+                    f"image {', '.join(wrong_arch)} is not built for {arch}"
+                )
             raise ConfigError(f"unknown image {', '.join(missing)}")
         return list(ids)
     return sorted(known)
@@ -259,6 +265,7 @@ def available_images(settings: Settings) -> list[LocalImage]:
                 arch=_host_arch(),
                 digest="legacy",
                 min_size="M" if image_id == "browser" else "S",
+                min_vcpus=2 if image_id == "browser" else 1,
                 rootfs=path,
                 manifest_path=path,
             )

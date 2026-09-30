@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import secrets
 import signal
 import time
@@ -75,6 +76,7 @@ class WorkerConnection:
     capacity: int
     memory_mb: int
     run_mode: str
+    arch: str = ""
     leases: set[uuid.UUID] = field(default_factory=set)
     lease_mem: dict[uuid.UUID, int] = field(default_factory=dict)
     draining: bool = False
@@ -259,8 +261,7 @@ class WorkerHub:
         if image is not None and mode_live and not self.has_image(required, image):
             raise ApiError(
                 "api_error",
-                f'No worker has sandbox_image "{image}". '
-                "Run apipi images pull on a worker.",
+                image_unavailable_message(self, image),
                 code="image_unavailable",
                 status_code=503,
                 session_id=str(session_id),
@@ -346,8 +347,7 @@ class WorkerHub:
             if follow_image not in conn.images:
                 raise ApiError(
                     "api_error",
-                    f'No worker has sandbox_image "{follow_image}". '
-                    "Run apipi images pull on a worker.",
+                    image_unavailable_message(self, follow_image),
                     code="image_unavailable",
                     status_code=503,
                     session_id=str(session_id),
@@ -522,11 +522,28 @@ def _session_image(environment: dict[str, Any] | None) -> str:
     return image_for_size(sandbox_size_of(environment))
 
 
-def _legacy_images() -> dict[str, WorkerImage]:
-    return {
+def _legacy_images(arch: str | None = None) -> dict[str, WorkerImage]:
+    images = {
         "default": WorkerImage("default", "legacy", "legacy", "S"),
-        "browser": WorkerImage("browser", "legacy", "legacy", "M"),
     }
+    if arch != "aarch64":
+        images["browser"] = WorkerImage("browser", "legacy", "legacy", "M")
+    return images
+
+
+def image_unavailable_message(hub: WorkerHub, image: str) -> str:
+    from apipi.worker.pi.install import recipe_archs
+
+    arches = {
+        conn.arch
+        for conn in hub._conns.values()
+        if conn.run_mode == "microvm" and conn.arch and image not in conn.images
+    }
+    supported = recipe_archs(image)
+    if arches and supported and arches.isdisjoint(supported):
+        listed = ", ".join(sorted(arches))
+        return f'sandbox_image "{image}" is not built for {listed}'
+    return f'No worker has sandbox_image "{image}". Run apipi images pull on a worker.'
 
 
 def images_from_message(
@@ -534,7 +551,9 @@ def images_from_message(
 ) -> dict[str, WorkerImage]:
     if "images" not in message:
         if run_mode == "microvm":
-            return _legacy_images()
+            raw_arch = message.get("arch")
+            arch = raw_arch if isinstance(raw_arch, str) else None
+            return _legacy_images(arch)
         return {}
     raw = message.get("images")
     found: dict[str, WorkerImage] = {}
@@ -608,6 +627,8 @@ async def register_worker(
             memory_mb=memory_mb,
             api_instance_id=hub.settings.instance_id,
         )
+    raw_arch = message.get("arch")
+    arch = raw_arch if isinstance(raw_arch, str) else ""
     conn = WorkerConnection(
         worker_id=row.id,
         generation=row.generation,
@@ -616,6 +637,7 @@ async def register_worker(
         memory_mb=row.memory_mb,
         run_mode=run_mode,
         images=images_from_message(message, run_mode),
+        arch=arch,
     )
     await hub.attach(conn)
     await _send(
@@ -667,6 +689,9 @@ async def heartbeat_worker(
     if parsed_mode is not None:
         conn.run_mode = parsed_mode
         hub._observe()
+    raw_arch = message.get("arch")
+    if isinstance(raw_arch, str) and raw_arch:
+        conn.arch = raw_arch
     if "images" in message or parsed_mode is not None:
         conn.images = images_from_message(message, conn.run_mode)
     if message.get("drain") is True:
@@ -696,8 +721,13 @@ async def _reject_missing_image(
     image: str,
     request_id: str | None,
 ) -> None:
+    hub = getattr(execution, "hub", None)
     message = (
-        f'No worker has sandbox_image "{image}". Run apipi images pull on a worker.'
+        image_unavailable_message(hub, image)
+        if hub is not None
+        else (
+            f'No worker has sandbox_image "{image}". Run apipi images pull on a worker.'
+        )
     )
     log_event(
         log,
@@ -710,7 +740,6 @@ async def _reject_missing_image(
         request_id=request_id,
     )
     store = getattr(execution, "store", None)
-    hub = getattr(execution, "hub", None)
     if store is None or hub is None:
         return
     async with store.session() as db:
@@ -1014,6 +1043,10 @@ def worker_ws_url(base: str) -> str:
     return urlunparse(parsed._replace(path=path, fragment=""))
 
 
+def worker_arch() -> str:
+    return os.uname().machine
+
+
 def _heartbeat_images(settings: Settings) -> list[dict[str, str]]:
     if settings.run_mode != "microvm":
         return []
@@ -1036,6 +1069,7 @@ def worker_heartbeat(settings: Settings, *, drain: bool = False) -> dict[str, ob
         "capacity": settings.max_sessions,
         "memory_mb": settings.node_memory_mb(),
         "run_mode": settings.run_mode,
+        "arch": worker_arch(),
         "images": _heartbeat_images(settings),
     }
     if drain:

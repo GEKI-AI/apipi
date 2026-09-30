@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-SCHEMA = 1
+SCHEMA = 2
 IMAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
@@ -86,18 +86,22 @@ class KernelRef(_Model):
 
 
 class ImageManifest(_Model):
-    schema_version: Literal[1] = Field(default=1, alias="schema")
+    schema_version: Literal[2] = Field(default=2, alias="schema")
     id: str
     version: str
     arch: Literal["x86_64", "aarch64"]
     rootfs: RootfsArtifact
     kernel: KernelRef
-    alpine_version: str
+    base: str
+    node_version: str
     pi_version: str
     guest_sh_sha256: str
     recipe_sha256: str
     min_apipi_version: str
     min_size: Literal["S", "M", "L"]
+    min_vcpus: int = 1
+    agent_browser: str = ""
+    chrome: str = ""
     packages: list[str]
     created_at: str
 
@@ -112,6 +116,13 @@ class ImageManifest(_Model):
     @classmethod
     def digest(cls, value: str) -> str:
         return _sha256(value)
+
+    @field_validator("min_vcpus")
+    @classmethod
+    def vcpu_floor(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("min_vcpus must be >= 1")
+        return value
 
 
 class KernelIndexEntry(_Model):
@@ -153,7 +164,7 @@ class ImageIndexEntry(_Model):
 
 
 class ImageIndex(_Model):
-    schema_version: Literal[1] = Field(default=1, alias="schema")
+    schema_version: Literal[2] = Field(default=2, alias="schema")
     kernels: list[KernelIndexEntry]
     images: list[ImageIndexEntry]
 
@@ -167,6 +178,7 @@ class LocalImage:
         arch: str,
         digest: str,
         min_size: str,
+        min_vcpus: int = 1,
         rootfs: Path,
         manifest_path: Path,
     ) -> None:
@@ -175,6 +187,7 @@ class LocalImage:
         self.arch = arch
         self.digest = digest
         self.min_size = min_size
+        self.min_vcpus = min_vcpus
         self.rootfs = rootfs
         self.manifest_path = manifest_path
 
@@ -197,19 +210,39 @@ def kernel_version(kernel_sha256: str) -> str:
 
 
 def version_suffix(
-    alpine_version: str, guest_sh_sha256: str, recipe_sha256: str
+    base: str,
+    node_version: str,
+    guest_sh_sha256: str,
+    recipe_sha256: str,
+    *,
+    agent_browser: str = "",
+    chrome: str = "",
 ) -> str:
-    payload = f"{alpine_version}\n{guest_sh_sha256}\n{recipe_sha256}\n".encode()
+    payload = (
+        f"{base}\n{node_version}\n{guest_sh_sha256}\n{recipe_sha256}\n"
+        f"{agent_browser}\n{chrome}\n"
+    ).encode()
     return sha256_bytes(payload)[:8]
 
 
 def image_version(
     pi_version: str,
-    alpine_version: str,
+    base: str,
+    node_version: str,
     guest_sh_sha256: str,
     recipe_sha256: str,
+    *,
+    agent_browser: str = "",
+    chrome: str = "",
 ) -> str:
-    suffix = version_suffix(alpine_version, guest_sh_sha256, recipe_sha256)
+    suffix = version_suffix(
+        base,
+        node_version,
+        guest_sh_sha256,
+        recipe_sha256,
+        agent_browser=agent_browser,
+        chrome=chrome,
+    )
     return f"{pi_version}-{suffix}"
 
 
@@ -379,6 +412,7 @@ def local_images(images_dir: Path) -> list[LocalImage]:
                 arch=manifest.arch,
                 digest=manifest.rootfs.sha256,
                 min_size=manifest.min_size,
+                min_vcpus=manifest.min_vcpus,
                 rootfs=rootfs,
                 manifest_path=manifest_path,
             )

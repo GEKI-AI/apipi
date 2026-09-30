@@ -15,7 +15,7 @@ chat playground. Keys come from the environment, not from these files.
 | [auth_callback.py](auth_callback.py) | Auth callback (`APIPI_AUTH`) |
 | [isolation.py](isolation.py) | Custom isolation backend (`APIPI_RUN_MODE`) |
 | [tavily.yaml](tavily.yaml) | Web search (Tavily hosted MCP) |
-| [playwright.yaml](playwright.yaml) | Browser (Playwright MCP, headless) |
+| [sessions/browser_screenshot.py](sessions/browser_screenshot.py) | Browser via the guest `browser` skill and `agent-browser` |
 
 Session clients live in [sessions/](sessions/). How to start a split
 `microvm` API plus worker and run every session script is in

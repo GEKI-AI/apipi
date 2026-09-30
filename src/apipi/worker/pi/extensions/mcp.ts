@@ -8,11 +8,6 @@ import { HttpMcpClient } from "./mcp_http.mjs";
 
 const DEFAULT_BASH_TIMEOUT_SEC = 120;
 const ATTACH_TIMEOUT_MS = 15_000;
-const INSTALL_RE =
-  /\b(?:npm|pnpm|yarn|bun)\s+(?:install|i|add)\b[\s\S]*\bplaywright\b|\b(?:npx\s+)?playwright\s+install\b|\bnpm\s+exec\s+playwright\s+install\b/i;
-const CHECK_URL = "data:text/html,<title>apipi</title><p>ok</p>";
-
-let playwrightTools = false;
 
 type StdioServer = {
   label: string;
@@ -197,22 +192,6 @@ function warmupPackage(pkg: string, timeoutMs: number): Promise<void> {
   });
 }
 
-function isPlaywright(server: StdioServer): boolean {
-  if (server.label.toLowerCase() === "playwright") {
-    return true;
-  }
-  const blob = [server.command, ...server.args].join(" ");
-  return blob.includes("playwright/mcp") || blob.includes("playwright-mcp");
-}
-
-function chromiumPath(server: StdioServer): string | null {
-  const blob = [server.command, ...server.args].join(" ");
-  if (blob.includes("/usr/bin/chromium-browser")) {
-    return "/usr/bin/chromium-browser";
-  }
-  return null;
-}
-
 function agentFile(name: string): string {
   const dir = process.env.PI_CODING_AGENT_DIR;
   if (!dir) {
@@ -240,11 +219,11 @@ function registerTools(
   label: string,
   tools: ListedTool[],
   client: RpcClient,
-  opts: { playwright: boolean; chromium: string | null },
-): void {
-  let first = true;
+): string[] {
+  const names: string[] = [];
   for (const tool of tools) {
     const name = `mcp_${sanitize(label)}_${sanitize(tool.name)}`;
+    names.push(name);
     const lines = [
       fill(agentFile("mcp-tool.txt"), {
         tool_name: name,
@@ -252,16 +231,6 @@ function registerTools(
         tool: tool.name,
       }),
     ].filter((line) => line);
-    if (first && opts.playwright) {
-      const browser = agentFile("playwright.txt");
-      const where = opts.chromium
-        ? fill(agentFile("chromium.txt"), { chromium: opts.chromium })
-        : "";
-      const joined = [where, browser].filter((line) => line).join(" ");
-      if (joined) {
-        lines.push(joined);
-      }
-    }
     pi.registerTool({
       name,
       label: `${label} ${tool.name}`,
@@ -289,71 +258,43 @@ function registerTools(
         }
       },
     });
-    first = false;
   }
-  if (opts.playwright && tools.length > 0) {
-    playwrightTools = true;
-  }
+  return names;
 }
 
 function workspaceRoot(): string {
   return process.env.HOME || "/workspace";
 }
 
-function writeCheckReport(report: {
-  tools: string[];
-  screenshot: string | null;
-  error: string | null;
-}): void {
+function writeImageCheck(tools: string[]): void {
   const dir = join(workspaceRoot(), "outputs");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "mcp-check.json"), `${JSON.stringify(report)}\n`);
-}
-
-async function runPlaywrightCheck(
-  client: McpClient,
-  server: StdioServer,
-  tools: ListedTool[],
-): Promise<void> {
-  const names = tools.map(
-    (tool) => `mcp_${sanitize(server.label)}_${sanitize(tool.name)}`,
-  );
-  const report = {
-    tools: names,
-    screenshot: null as string | null,
-    error: null as string | null,
-  };
+  let cmd = "";
   try {
-    const nav = tools.find((tool) => tool.name === "browser_navigate");
-    const shot = tools.find((tool) => tool.name === "browser_take_screenshot");
-    if (!nav || !shot) {
-      throw new Error("missing browser_navigate or browser_take_screenshot");
-    }
-    await client.request("tools/call", {
-      name: nav.name,
-      arguments: { url: CHECK_URL },
-    });
-    await client.request("tools/call", {
-      name: shot.name,
-      arguments: { filename: "check.png" },
-    });
-    report.screenshot = "outputs/check.png";
-  } catch (err) {
-    report.error = err instanceof Error ? err.message : String(err);
+    cmd = readFileSync(join(workspaceRoot(), ".apipi/pi-cmd"), "utf8");
+  } catch {
+    cmd = "";
   }
-  writeCheckReport(report);
-  if (report.error) {
-    throw new Error(report.error);
+  const skill = join(workspaceRoot(), ".apipi/skills/browser/SKILL.md");
+  let skillPresent = false;
+  try {
+    readFileSync(skill);
+    skillPresent = true;
+  } catch {
+    skillPresent = false;
   }
+  const report = {
+    tools,
+    skill: skillPresent && cmd.includes(".apipi/skills/browser"),
+    playwright: tools.some((name) => name.startsWith("mcp_playwright_")),
+  };
+  writeFileSync(join(dir, "image-check.json"), `${JSON.stringify(report)}\n`);
 }
 
-async function attachStdio(
-  pi: ExtensionAPI,
-): Promise<Array<{ server: StdioServer; client: McpClient; tools: ListedTool[] }>> {
+async function attachStdio(pi: ExtensionAPI): Promise<string[]> {
   const deadline = Date.now() + ATTACH_TIMEOUT_MS;
   const remaining = (): number => Math.max(1, deadline - Date.now());
-  const playwright: Array<{ server: StdioServer; client: McpClient; tools: ListedTool[] }> =
-    [];
+  const names: string[] = [];
   for (const server of stdioServers()) {
     if (Date.now() >= deadline) {
       throw attachError(server.label, "spawn", new Error("mcp attach timeout"));
@@ -410,17 +351,9 @@ async function attachStdio(
       proc.kill();
       throw attachError(server.label, "tools/list", err);
     }
-    const tools = listed.tools ?? [];
-    const playwrightServer = isPlaywright(server);
-    registerTools(pi, server.label, tools, client, {
-      playwright: playwrightServer,
-      chromium: chromiumPath(server),
-    });
-    if (playwrightServer && tools.length > 0) {
-      playwright.push({ server, client, tools });
-    }
+    names.push(...registerTools(pi, server.label, listed.tools ?? [], client));
   }
-  return playwright;
+  return names;
 }
 
 async function attachHttp(pi: ExtensionAPI): Promise<void> {
@@ -457,10 +390,7 @@ async function attachHttp(pi: ExtensionAPI): Promise<void> {
     } catch (err) {
       throw attachError(server.label, "tools/list", err);
     }
-    registerTools(pi, server.label, listed.tools ?? [], client, {
-      playwright: server.label.toLowerCase() === "playwright",
-      chromium: null,
-    });
+    registerTools(pi, server.label, listed.tools ?? [], client);
   }
 }
 
@@ -529,13 +459,6 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     const input = event.input as { command?: string; timeout?: number };
-    const command = input.command ?? "";
-    if (playwrightTools && INSTALL_RE.test(command)) {
-      return {
-        block: true,
-        reason: agentFile("bash-install.txt") || "blocked",
-      };
-    }
     if (input.timeout === undefined) {
       input.timeout = DEFAULT_BASH_TIMEOUT_SEC;
     }
@@ -544,13 +467,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let playwright: Array<{
-      server: StdioServer;
-      client: McpClient;
-      tools: ListedTool[];
-    }> = [];
+    let names: string[] = [];
     try {
-      playwright = await Promise.race([
+      names = await Promise.race([
         (async () => {
           let httpError: Error | undefined;
           try {
@@ -558,11 +477,7 @@ export default function (pi: ExtensionAPI) {
           } catch (err) {
             httpError = err instanceof Error ? err : new Error(String(err));
           }
-          let found: Array<{
-            server: StdioServer;
-            client: McpClient;
-            tools: ListedTool[];
-          }> = [];
+          let found: string[] = [];
           let stdioError: Error | undefined;
           try {
             found = await attachStdio(pi);
@@ -598,22 +513,8 @@ export default function (pi: ExtensionAPI) {
         clearTimeout(timer);
       }
     }
-    if (process.env.APIPI_MCP_CHECK !== "1") {
-      return;
-    }
-    const found = playwright[0];
-    if (!found) {
-      const message =
-        "mcp attach failed server=playwright phase=tools/list error=no playwright tools";
-      console.error(message);
-      throw new Error(message);
-    }
-    try {
-      await runPlaywrightCheck(found.client, found.server, found.tools);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(message);
-      throw new Error(message);
+    if (process.env.APIPI_IMAGE_CHECK === "1") {
+      writeImageCheck(names);
     }
   });
 }

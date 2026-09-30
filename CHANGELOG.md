@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- All guest images (`default`, `work`, `browser`) now use Debian
+  trixie slim instead of Alpine. Operators must re-pull or rebuild
+  every image. 0.11.x images and manifests are not compatible.
+- Alpine support is removed from the image build. There is no
+  `ALPINE_VER`, minirootfs, or `apk`. Custom recipes must use Debian
+  package names in `PACKAGES`.
+- Environment `packages.system` now means Debian/apt package names.
+  Alpine names such as `py3-*` and `font-*` no longer work. The
+  restricted-network egress allowlist for system packages uses the
+  Debian mirrors.
+- Guest Python is 3.13. Node comes from a pinned nodejs.org tarball.
+  The guest uses glibc. `ripgrep` (`rg`) is in every image.
+- Images are larger. Check rootfs disk space on workers.
+- The `browser` image is rebuilt on agent-browser and
+  chrome-headless-shell, and is x86_64 only. An aarch64 worker does
+  not offer it. Size `L` or `image: browser` on aarch64 is
+  `image_unavailable`. `default` and `work` stay multi-arch.
+- Playwright MCP is removed. `mcp_playwright_*` tools no longer exist.
+  Use bash and `agent-browser` through the built-in `browser` skill.
+- `APIPI_SANDBOX_AUTO_PLAYWRIGHT` and `[sandbox.browser]` are warned
+  about and ignored.
+- Prompt overrides `APIPI_PLATFORM_PLAYWRIGHT`,
+  `APIPI_PLATFORM_PLAYWRIGHT_FILE`, `APIPI_PLATFORM_CHROMIUM`, and
+  `APIPI_PLATFORM_CHROMIUM_FILE` are removed.
+- Browser VMs get at least 2 vCPUs, including size `M`.
+- The browser no longer writes into `/workspace/outputs` by default.
+  Only artefacts the user explicitly asked for go there.
+- `examples/playwright.yaml` is removed. Browser examples use
+  agent-browser.
+
 ## [0.11.0] - 2026-09-29
 
 ### Breaking

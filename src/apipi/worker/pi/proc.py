@@ -287,6 +287,7 @@ def pi_command_args(
     mcp_http: list[McpHttpServer] | None = None,
     mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
+    extra_skill_dirs: list[str] | None = None,
     model: str | None = None,
     instructions: str | None = None,
     session_file: str | None = None,
@@ -314,6 +315,8 @@ def pi_command_args(
         args.append("--no-skills")
         for path in skill_dirs:
             args.extend(["--skill", path])
+    for path in extra_skill_dirs or []:
+        args.extend(["--skill", path])
     if extension:
         args.extend(["--extension", extension])
     return args

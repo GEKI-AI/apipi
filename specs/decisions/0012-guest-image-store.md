@@ -30,7 +30,8 @@ prefix both work:
 - `vmlinux-<arch>.zst`
 - `index.json`
 
-Schema is `1`. Any other schema fails with a clear error. Unknown JSON
+Schema is `2`. Schema `1` was the Alpine manifest and is rejected.
+Any other schema fails with a clear error. Unknown JSON
 keys fail the same way.
 
 ## Manifest
@@ -49,7 +50,10 @@ version = <pi_version>-<8 hex>
 ```
 
 The 8 hex digits are the leading digits of
-`sha256(alpine_version + "\n" + guest_sh_sha256 + "\n" + recipe_sha256 + "\n")`.
+`sha256(base + "\n" + node_version + "\n" + guest_sh_sha256 + "\n" + recipe_sha256 + "\n" + agent_browser + "\n" + chrome + "\n")`.
+`base` is the digest-pinned Debian trixie slim image. Alpine is no
+longer a base. A Node pin change, an agent-browser pin change, or a
+Chrome pin change also produces a new version.
 `guest_sh_sha256` is the sha256 of `src/apipi/worker/pi/guest.sh`.
 `recipe_sha256` hashes `images/build.sh` and the files in
 `images/<id>/`, sorted by path relative to `images/`. Each file is
@@ -70,6 +74,11 @@ dotted integers (`0.4.0`). `pi_version` must equal this process's
 
 `min_size` comes from the recipe (`S`, `M`, or `L`). It is the smallest
 sandbox size the image is meant for. It is not a RAM number.
+`min_vcpus` is the recipe floor. Spawn uses the larger of the size
+vCPU count and that floor. `node_version` is the pinned Node tarball.
+`agent_browser` and `chrome` are set on the browser image and empty
+on the others. A recipe may set `ARCHS`. An image that was not built
+for the worker arch is `image_unavailable`, not a generic pull error.
 
 ## Index
 

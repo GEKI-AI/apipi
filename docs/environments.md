@@ -126,44 +126,80 @@ It does not include LibreOffice or pandoc. Select it with
 `sandbox_image` `work` and size `M` or `L`. Install it with
 `apipi install --microvm --image work` or `apipi images pull`.
 
-Playwright MCP is injected when the resolved image is `browser` and
-auto-inject is on, not because the size is `L`. The shipped default
-still maps `L` to `browser`, so existing `L` sessions keep the tools.
+The built-in `browser` skill is packed when the resolved image is
+`browser`, not because the size is `L`. The shipped default still
+maps `L` to `browser`, so existing `L` sessions keep that image.
 
 | Size | Guest RAM | Rootfs | When |
 | --- | --- | --- | --- |
 | `S` | `[sandbox.resources].mem_mib` (512) | `default` | Pi and light tools |
 | `M` | `APIPI_SANDBOX_M_MEM_MIB` (1024) | `default` | Heavier non-browser work |
-| `L` | `APIPI_SANDBOX_L_MEM_MIB` (2048) | `browser` | Chromium in the guest, 2 vCPUs by default (`APIPI_SANDBOX_L_VCPUS`). Playwright MCP tools are injected when auto-inject is on, and named in the prompt only after they register. Install the browser rootfs. |
+| `L` | `APIPI_SANDBOX_L_MEM_MIB` (2048) | `browser` | agent-browser and chrome-headless-shell, at least 2 vCPUs. Install the browser rootfs. It is x86_64 only. |
 
 Isolation `none` accepts the field and does not apply RAM or rootfs.
 Isolation `microvm` applies both, including when `environment.type` is
 `none` (Pi still runs in a guest). Each live lease consumes that
 size's RAM against worker `memory_mb` and still counts as one session.
 
-On `microvm`, image `browser` starts the Playwright MCP server that
-the browser rootfs already contains. The command is `node` and
-`/opt/apipi/playwright-mcp/node_modules/@playwright/mcp/cli.js`, with
-headless Chromium, `--no-sandbox`, and a config that turns off
-Chromium's first-run network. Navigation times out after 30 seconds
-so a hung page is Playwright's error, not a 120 second client timeout.
-It does not run `npx`. Size `L`
-still selects `browser` when the image is omitted. Install that
-rootfs with `apipi install --microvm --image browser`. An older
-browser rootfs without that file cannot attach. Attach waits at most
-15 seconds, then the turn continues without those tools. The worker
-logs `pi.extension_error` with the server label, the phase, and the
-error. Playwright names are registered only after attach succeeds, and
-that is the only time the prompt tells the model to use them. If the
-agent already has a Playwright MCP tool, that tool is kept and nothing
-is duplicated. Set `[sandbox.browser].auto_playwright = false` to keep
-the browser image and its RAM but attach MCP yourself. A failed attach
-does not fail the turn, and the prompt then makes no browser or
-Playwright claim. A hosted microvm session gets a size line that
-states RAM only (`Sandbox size is L (2048 MiB).`). It does not claim
-Chromium because the size is `L`. Chat sessions and `environment.type`
-`none` get no sandbox, size, or `/workspace` text. The full fragment
-table is in [config](config.md#pi).
+On `microvm`, image `browser` packs the built-in `browser` skill and
+starts no browser process until the first `agent-browser` call. The
+daemon then stays up for the session. Cookies persist for that
+session. A new session or a new sandbox is clean, because the profile
+and socket live on `/tmp`. Size `L` still selects `browser` when the
+image is omitted. Install that rootfs with
+`apipi install --microvm --image browser`. The image is x86_64 only.
+An aarch64 worker does not offer it, so the placement error is
+`image_unavailable` and names the architecture. Browser guests get at
+least 2 vCPUs, including size `M`. `/dev/shm` is 512 MiB on the
+browser image and 64 MiB on the others. Chrome still uses `/tmp` for
+shared memory because the image sets `--disable-dev-shm-usage`.
+
+The image sets these defaults in `/etc/apipi/browser.env`:
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `AGENT_BROWSER_EXECUTABLE_PATH` | `/opt/chrome-headless-shell/chrome-headless-shell` | Pinned Chrome for Testing binary, not `agent-browser install`. |
+| `AGENT_BROWSER_ARGS` | `--no-sandbox,--disable-dev-shm-usage` | Set explicitly. The guest runs as root, so upstream would add both anyway. |
+| `AGENT_BROWSER_IDLE_TIMEOUT_MS` | `0` | Upstream shuts the daemon down after one hour idle, which would drop cookies mid-session. |
+| `AGENT_BROWSER_NO_WEBMCP` | `1` | WebMCP is experimental and adds page-tool announcements ApiPi does not expose. |
+| `AGENT_BROWSER_SOCKET_DIR` | `/tmp/agent-browser` | Keep the socket off the workspace. |
+| `AGENT_BROWSER_SCREENSHOT_DIR` | `/workspace/.browser/screenshots` | Inspection screenshots are working files. |
+| `AGENT_BROWSER_DOWNLOAD_PATH` | `/workspace/.browser/downloads` | Downloads are working files. |
+
+The stream WebSocket is left on. Upstream always starts it on an
+OS-assigned port bound to `127.0.0.1`, and there is no env switch to
+turn it off at daemon start. Nothing in ApiPi consumes it. The
+dashboard stays off because `AGENT_BROWSER_DASHBOARD` is unset. Cloud
+providers stay off because `AGENT_BROWSER_PROVIDER` is unset. There is
+no update check or telemetry to disable. Do not run `agent-browser
+install` or `agent-browser upgrade`. A project file
+`./agent-browser.json` is still merged over these defaults if the
+session creates one.
+
+`/workspace/outputs` is not a working directory. Only artefacts the
+user explicitly asked for go there. Working files go in
+`/workspace/.browser` or `/tmp`. When the user asks for a screenshot,
+copy that one file to `outputs/`.
+
+A hosted microvm session gets a capability line that names the image,
+size, RAM, vCPUs, and network. It does not claim a browser because the
+size is `L`. The browser sentence is present only when the image is
+`browser`. Chat sessions and `environment.type` `none` get no sandbox,
+size, or `/workspace` text. The full fragment table is in
+[config](config.md#pi).
+
+A local x86_64 `default` image used about 1.1 GiB of its 2048 MiB
+filesystem. A local `browser` image used about 1.7 GiB of its 4096
+MiB filesystem. Cold start, RAM, and crash recovery were not measured
+in a live VM for this change. The first `agent-browser open` starts the
+daemon and Chrome. Plan on the M=1024 MiB guest being tight once
+Chrome is up.
+Upstream launches Chrome with `--headless=new` even for
+chrome-headless-shell. That flag is harmless for a binary that is
+already headless, but it has not been confirmed in this guest. PDF
+uses CDP `Page.printToPDF`. Screenshot, PDF, download, a Chrome crash
+restart, and unasked downloads still need a VM measurement before you
+treat those paths as proven.
 
 ### Packages, files, env, network, and setup commands
 
@@ -199,12 +235,12 @@ agent turn that needs the computer:
    uses `uv` when it is on `PATH`, otherwise `python3 -m pip` inside
    that virtualenv. Guest images include both. If neither `uv` nor
    `pip` is available, prep fails
-   with a clear message. It does not try to install `pip` with `apk`.
+   with a clear message. It does not try to install `pip` with `apt`.
    npm packages install under `.npm` in the same workspace
    (`npm install -g --prefix`). On isolation `none` and `chat`, Pi's
    `PATH` puts `.venv/bin` and `.npm/bin` first when those directories
    exist. On `microvm`, guest init does the same after prep, before Pi
-   starts. `packages.system` still uses `apk` or `apt-get`. Isolation
+   starts. `packages.system` uses `apt-get` after `apt-get update`. Isolation
    `microvm` has a read-only root filesystem, so `packages.system` is
    rejected with `400` at session create. A turn that still reaches
    prep fails the environment with the same message. Bake those
@@ -235,8 +271,8 @@ re-applies the stored files (inline and Files API ids), env, packages,
 setup commands, and network policy.
 
 Isolation `none` runs that script in the session directory on the host
-(`uv` or `python3 -m pip` into `.venv`, `apk` or `apt-get` if present,
-`npm` into `.npm`). Missing tools fail the session. Isolation `none`
+(`uv` or `python3 -m pip` into `.venv`, `apt-get` if present, `npm`
+into `.npm`). Missing tools fail the session. Isolation `none`
 cannot enforce TAP policy: `disabled` and `restricted` fail the
 environment with a clear error; `enabled` is a no-op. Isolation
 `microvm` packs the same script into the guest and runs it after
@@ -246,7 +282,7 @@ installs land on the `/workspace` tmpfs, so they use guest RAM and
 count against the sandbox size. They are installed again after a
 sandbox stop. `packages.system` cannot write that root and is rejected.
 When the optional TAP allowlist is on, install hosts (PyPI, npm,
-Alpine) are added for that session if the matching package list is set.
+Debian) are added for that session if the matching package list is set.
 
 A nonzero exit emits `agent.session.environment.failed` and
 `agent.session.failed`. Pi does not start. Successful prep is visible
@@ -342,7 +378,8 @@ session that inherits it fails with `400` and names the agent and the
 skill id. Those zips unpack under `.agents/skills/` in the session
 workspace. See [tools](tools.md).
 
-Stdio MCP (for example Playwright) follows Pi, not the remote runner.
+Stdio MCP follows Pi, not the remote runner. The guest browser is a
+skill, not stdio MCP.
 HTTP MCP is reached from the gateway and handed to Pi through the host
 credential broker. Pi lists those tools from the broker URL. The guest
 does not receive the bearer.

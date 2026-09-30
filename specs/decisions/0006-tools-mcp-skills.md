@@ -14,7 +14,10 @@ Extend with:
   `skill_reference`. Discovery is still from directories in the
   workspace after the pack is unpacked.
 
-Search and browser are not built in. Examples: Tavily MCP, Playwright
-MCP (`examples/`). Any other MCP server or skill pack is valid.
+Search is not built in. Example: Tavily MCP (`examples/`). Any other
+MCP server or skill pack is valid. The guest browser is not MCP. It
+is the built-in `browser` skill on the `browser` image, driven with
+bash and `agent-browser`. This note supersedes the earlier Playwright
+MCP example for the browser.
 
 No first-party `web_search`. No browser engine in the gateway.

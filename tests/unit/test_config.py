@@ -414,7 +414,7 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.worker_memory_mb == 16384
     assert settings.node_memory_mb() == 16384
     assert settings.sandbox_default_size == "S"
-    assert settings.sandbox_auto_playwright is True
+    assert not hasattr(settings, "sandbox_auto_playwright")
     assert settings.microvm_mem_mib == 512
     assert settings.sandbox_m_mem_mib == 1024
     assert settings.sandbox_l_mem_mib == 2048
@@ -698,7 +698,7 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.microvm_egress_mbit == 25
     assert settings.workspace_ttl == timedelta(minutes=45)
     assert settings.sandbox_ttl_self_hosted is None
-    assert settings.sandbox_auto_playwright is False
+    assert not hasattr(settings, "sandbox_auto_playwright")
 
 
 def test_nested_toml_platform_prompt(

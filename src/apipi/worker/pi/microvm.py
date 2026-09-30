@@ -450,11 +450,14 @@ async def probe_microvm(settings: Settings) -> None:
         await proc.terminate()
 
 
-def guest_vcpus(settings: Settings, mem_mib: int | None) -> int:
-    from apipi.worker.pi.sandbox import size_for_mem
+def guest_vcpus(
+    settings: Settings, mem_mib: int | None, image: str | None = None
+) -> int:
+    from apipi.worker.pi.sandbox import min_vcpus_for_image, size_for_mem
 
     guest_mem = mem_mib if mem_mib is not None else settings.microvm_mem_mib
-    return settings.sandbox_vcpus(size_for_mem(settings, guest_mem))
+    base = settings.sandbox_vcpus(size_for_mem(settings, guest_mem))
+    return max(base, min_vcpus_for_image(image, settings))
 
 
 def guest_cid(vm_id: str) -> int:
@@ -782,14 +785,6 @@ def write_workspace_image(
         _add_bytes(tar, MCP_HTTP_REL, mcp_http_source(), mode=0o644)
         _add_bytes(tar, MCP_EXTENSION_REL, mcp_extension_source(), mode=0o644)
         _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
-        from apipi.worker.pi.sandbox import playwright_config
-
-        _add_bytes(
-            tar,
-            ".apipi/playwright.json",
-            (json.dumps(playwright_config()) + "\n").encode(),
-            mode=0o644,
-        )
         if shell:
             _add_bytes(tar, ".apipi/shell", b"", mode=0o644)
     data = buf.getvalue()
@@ -1390,6 +1385,16 @@ async def start_microvm(
     chroot_dir = work / Path(firecracker).name / vm_id / "root"
     chroot_dir.mkdir(parents=True)
     guest_skills, extra_dirs = guest_skill_dirs(cwd, skill_dirs)
+    browser_skills: list[str] = []
+    if selected == "browser":
+        from apipi.worker.pi.builtin_skills import browser_skill_dir
+
+        arc = ".apipi/skills/browser"
+        used = {name for _, name in extra_dirs}
+        if arc in used:
+            arc = ".apipi/skills/browser-builtin"
+        extra_dirs = [*(extra_dirs or []), (browser_skill_dir(), arc)]
+        browser_skills = [f"{GUEST_WORKSPACE}/{arc}"]
     extra_dirs = [*(extra_dirs or []), (pi_agent_dir(settings), ".pi/agent")]
     extra_hosts = workspace_egress_hosts(cwd)
     try:
@@ -1501,6 +1506,7 @@ async def start_microvm(
                 mcp_http=mcp_http,
                 mcp_stdio=mcp_stdio,
                 skill_dirs=guest_skills,
+                extra_skill_dirs=browser_skills,
                 model=model,
                 instructions=instructions,
                 session_file=PI_SESSION_REL if cwd else None,
@@ -1524,7 +1530,7 @@ async def start_microvm(
             cid=guest_cid(vm_id),
             net=net,
             mem_mib=guest_mem,
-            vcpus=guest_vcpus(settings, guest_mem),
+            vcpus=guest_vcpus(settings, guest_mem, image=selected),
         )
         (chroot_dir / "config.json").write_text(json.dumps(config))
         argv = jailer_argv(

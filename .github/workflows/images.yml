@@ -31,12 +31,13 @@ jobs:
           python-version: "3.13"
           enable-cache: true
       - name: Packages
-        run: sudo apt-get update && sudo apt-get install -y e2fsprogs
+        run: sudo apt-get update && sudo apt-get install -y e2fsprogs xz-utils
       - name: Sync
         run: uv sync --locked
       - name: Build default
         run: uv run apipi images build default --out image-out --arch ${{ matrix.arch }}
       - name: Build browser
+        if: matrix.arch == 'x86_64'
         run: uv run apipi images build browser --out image-out --arch ${{ matrix.arch }}
       - name: Build work
         run: uv run apipi images build work --out image-out --arch ${{ matrix.arch }}

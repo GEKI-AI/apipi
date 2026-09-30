@@ -7,12 +7,12 @@ when the session has a computer (`openai_hosted` or a connected
 servers, and skills.
 
 `/v1/chat` sessions have no computer, so bash and file tools stay off.
-Chat allows function tools and HTTP MCP only. Stdio MCP, Playwright
-auto-inject, and workspace skills are rejected with code `chat_tool`.
+Chat allows function tools and HTTP MCP only. Stdio MCP and workspace
+skills are rejected with code `chat_tool`.
 See [Chat](api.md#chat).
 
-Copy-paste configs live in `examples/` at the repo root (Tavily,
-Playwright).
+Copy-paste configs live in `examples/` at the repo root (Tavily).
+The browser example is `examples/sessions/browser_screenshot.py`.
 
 ## Function tools
 
@@ -77,11 +77,8 @@ that only accepts `Content-Length` frames will not attach. If a
 listed stdio server cannot start, the turn continues without that
 server's tools and the worker logs `pi.extension_error` with the
 server label, the phase (`spawn`, `initialize`, or `tools/list`),
-and the error. Bash that tries to
-install Playwright or browser binaries is blocked only after
-Playwright MCP tools have registered. A bash call with no `timeout`
-is capped at 120 seconds so a stuck install cannot hold the turn
-until `APIPI_TURN_TIMEOUT`.
+and the error. A bash call with no `timeout` is capped at 120 seconds
+so a stuck command cannot hold the turn until `APIPI_TURN_TIMEOUT`.
 
 Search goes through MCP.
 
@@ -91,29 +88,19 @@ Tavily's hosted MCP is one search option. Set `TAVILY_API_KEY`. See
 `examples/tavily.yaml`. You can swap that for Brave, Exa, or any other
 server that speaks MCP.
 
-### Browser — Playwright example
+### Browser
 
-[Playwright MCP](https://playwright.dev/mcp/introduction) is one
-browser option. `--headless` is the usual server flag. See
-`examples/playwright.yaml`.
+The guest browser is not an MCP server. Image `browser` on isolation
+`microvm` packs a built-in `browser` skill. The model uses bash and
+`agent-browser`. Install the rootfs with
+`apipi install --microvm --image browser`. The image is x86_64 only.
+You do not list a Playwright server on the agent. The platform prompt
+names the skill only when the resolved image is `browser`. It does
+not claim a browser from sandbox size alone.
 
-Image `browser` on isolation `microvm` attaches the vendored
-Playwright MCP server for you (system Chromium in that rootfs). The
-command is `node` and a fixed `cli.js` path, not `npx`. Install the
-rootfs with `apipi install --microvm --image browser`. You do not
-need to list the server on the agent. A caller-supplied Playwright
-MCP tool is not duplicated. Turn auto-inject off with
-`APIPI_SANDBOX_AUTO_PLAYWRIGHT=false` if you want that image and its
-RAM but manual MCP only. Pin a caller-supplied server (the example
-above uses `@playwright/mcp@0.0.82`, the same pin as the browser
-image). On the `browser` image you do not need that tool: auto-inject
-attaches the vendored server. Playwright guidance is added only after
-those tools register. The platform prompt never claims Chromium or
-Playwright from sandbox size alone. Save screenshots under
-`outputs/`.
-
-The browser follows Pi (`none` or `microvm`). Inside a `microvm`,
-Chromium can use its own sandbox in the guest. A small client is
+`/workspace/outputs` is not a working directory. Inspection
+screenshots stay in `/workspace/.browser`. Copy a screenshot to
+`outputs/` only when the user asked for that file. A small client is
 `examples/sessions/browser_screenshot.py`.
 
 ## Skills

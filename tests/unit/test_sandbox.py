@@ -3,13 +3,8 @@ import pytest
 from apipi.config import Settings
 from apipi.gateway.errors import ApiError
 from apipi.worker.pi.sandbox import (
-    PLAYWRIGHT_LABEL,
-    PLAYWRIGHT_MCP_CLI,
-    has_playwright,
     image_for_size,
-    merge_playwright,
-    playwright_attached,
-    playwright_config,
+    min_vcpus_for_image,
     require_image_size,
     resolve_sandbox_image,
     resolve_sandbox_size,
@@ -231,78 +226,7 @@ def test_validate_sandbox_metadata_skips_worker_availability(
     )
 
 
-def test_merge_playwright_follows_image_not_size() -> None:
-    assert merge_playwright([], size="M", image="browser", settings=_microvm())
-    assert merge_playwright([], size="L", image="default", settings=_microvm()) == []
-
-
-def test_merge_playwright_on_l_microvm() -> None:
-    tools = merge_playwright([], size="L", settings=_microvm())
-    assert len(tools) == 1
-    assert tools[0]["server_label"] == PLAYWRIGHT_LABEL
-    assert tools[0]["transport"]["command"] == "node"
-    assert PLAYWRIGHT_MCP_CLI in tools[0]["transport"]["args"]
-    assert "npx" not in tools[0]["transport"]["args"]
-    assert (
-        "--executable-path=/usr/bin/chromium-browser" in tools[0]["transport"]["args"]
-    )
-    assert "--config=/workspace/.apipi/playwright.json" in tools[0]["transport"]["args"]
-    assert "--timeout-navigation=30000" in tools[0]["transport"]["args"]
-    assert (
-        "--disable-background-networking"
-        in playwright_config()["browser"]["launchOptions"]["args"]
-    )
-    assert "--no-sandbox" in tools[0]["transport"]["args"]
-    assert "--output-dir=/workspace/outputs" in tools[0]["transport"]["args"]
-    assert has_playwright(tools)
-    assert playwright_attached(tools)
-
-
-def test_merge_playwright_skips_none_and_small() -> None:
-    none = Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-    )
-    assert merge_playwright([], size="L", settings=none) == []
-    assert merge_playwright([], size="S", settings=_microvm()) == []
-    assert merge_playwright([], size="M", settings=_microvm()) == []
-
-
-def test_merge_playwright_respects_auto_off() -> None:
-    settings = Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="microvm",
-        sandbox_auto_playwright=False,
-    )
-    assert merge_playwright([], size="L", settings=settings) == []
-
-
-def test_merge_playwright_does_not_duplicate() -> None:
-    existing = [
-        {
-            "type": "mcp",
-            "server_label": "playwright",
-            "transport": {
-                "type": "stdio",
-                "command": "npx",
-                "args": ["-y", "@playwright/mcp@1.2.3"],
-            },
-        }
-    ]
-    merged = merge_playwright(existing, size="L", settings=_microvm())
-    assert merged == existing
-
-
-def test_merge_playwright_detects_package_without_label() -> None:
-    existing = [
-        {
-            "type": "mcp",
-            "server_label": "browser",
-            "transport": {
-                "type": "stdio",
-                "command": "npx",
-                "args": ["-y", "@playwright/mcp@latest", "--headless"],
-            },
-        }
-    ]
-    assert merge_playwright(existing, size="L", settings=_microvm()) == existing
+def test_browser_image_has_two_vcpu_floor() -> None:
+    assert min_vcpus_for_image("browser") == 2
+    assert min_vcpus_for_image("default") == 1
+    assert min_vcpus_for_image("work") == 1

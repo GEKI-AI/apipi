@@ -1,2 +1,3 @@
-Image is ${image}. Size is ${size} (${mem_mib} MiB, ${vcpus} vCPUs). Network access is ${network}. Do not assume a browser is available. Use Playwright MCP tools only if they are registered.
+Image is ${image}. Size is ${size} (${mem_mib} MiB, ${vcpus} vCPUs). Network access is ${network}. ${has_browser}
+/workspace/outputs is not a working directory. Put only artefacts the user explicitly asked for there. Working files, inspection screenshots, snapshots, logs, and traces go in a working folder or /tmp.
 Today is ${date}.

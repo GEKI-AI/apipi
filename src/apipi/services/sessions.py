@@ -79,7 +79,6 @@ from apipi.worker.pi.idle import (
 from apipi.worker.pi.model_host import require_model
 from apipi.worker.pi.sandbox import (
     mem_mib_for_size,
-    merge_playwright,
     require_image_rootfs,
     require_image_size,
     require_known_image,
@@ -666,20 +665,8 @@ class SessionService:
                     connected = apply_vault_headers(
                         connected, _plain_vault_creds(self.settings, creds)
                     )
-                attached = (
-                    raw_tools
-                    if chat
-                    else merge_playwright(
-                        raw_tools,
-                        size=size,
-                        settings=self.settings,
-                        image=env.get("sandbox_image")
-                        if isinstance(env.get("sandbox_image"), str)
-                        else None,
-                    )
-                )
                 stdio = await start_mcp_stdio_tools(
-                    attached,
+                    raw_tools,
                     on_host=self.execution.stdio_on_host,
                 )
             except McpConnectError as exc:

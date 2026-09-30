@@ -28,17 +28,12 @@ FILES: dict[str, str] = {
     "network.enabled": "network-enabled.txt",
     "network.restricted": "network-restricted.txt",
     "capability": "capability.txt",
+    "browser": "browser.txt",
     "mcp_tool": "mcp-tool.txt",
-    "playwright": "playwright.txt",
-    "chromium": "chromium.txt",
-    "bash_install_block": "bash-install.txt",
 }
 
 GUIDELINE_FILES: dict[str, str] = {
     "mcp_tool": "mcp-tool.txt",
-    "playwright": "playwright.txt",
-    "chromium": "chromium.txt",
-    "bash_install_block": "bash-install.txt",
 }
 
 VARIABLES = frozenset(
@@ -57,7 +52,6 @@ VARIABLES = frozenset(
         "tool_name",
         "server_label",
         "tool",
-        "chromium",
     }
 )
 
@@ -102,13 +96,8 @@ _ENV = {
         "APIPI_PLATFORM_NETWORK_RESTRICTED_FILE",
     ),
     "capability": ("APIPI_PLATFORM_CAPABILITY", "APIPI_PLATFORM_CAPABILITY_FILE"),
+    "browser": ("APIPI_PLATFORM_BROWSER", "APIPI_PLATFORM_BROWSER_FILE"),
     "mcp_tool": ("APIPI_PLATFORM_MCP_TOOL", "APIPI_PLATFORM_MCP_TOOL_FILE"),
-    "playwright": ("APIPI_PLATFORM_PLAYWRIGHT", "APIPI_PLATFORM_PLAYWRIGHT_FILE"),
-    "chromium": ("APIPI_PLATFORM_CHROMIUM", "APIPI_PLATFORM_CHROMIUM_FILE"),
-    "bash_install_block": (
-        "APIPI_PLATFORM_BASH_INSTALL",
-        "APIPI_PLATFORM_BASH_INSTALL_FILE",
-    ),
 }
 
 _IDENTITY_ENV = ("APIPI_PLATFORM_IDENTITY", "APIPI_PLATFORM_IDENTITY_FILE")
@@ -303,6 +292,10 @@ def capability_block(settings: Settings, values: dict[str, str]) -> str:
         "network": values.get("network") or "disabled",
         "date": "${date}",
     }
+    if filled["image"] == "browser":
+        filled["has_browser"] = fragment_text(settings, "browser", filled, strict=False)
+    else:
+        filled["has_browser"] = "Do not assume a browser is available."
     return fragment_text(settings, "capability", filled, strict=False)
 
 

@@ -26,14 +26,19 @@ def main() -> None:
             agent={
                 "model": model,
                 "instructions": (
-                    "Use the Playwright MCP tools. Do not install packages. "
-                    "Put screenshots under outputs/."
+                    "Use the browser skill and agent-browser through bash. "
+                    "Do not install packages. Copy the screenshot the user "
+                    "asked for to outputs/."
                 ),
             },
-            environment={"type": "openai_hosted", "sandbox_size": "L"},
+            environment={
+                "type": "openai_hosted",
+                "sandbox_size": "L",
+                "sandbox_image": "browser",
+            },
             input=(
-                f"Open {url} in the browser. Tell me the page title and the "
-                "main heading. Save a screenshot as outputs/page.png."
+                f"Open {url} with agent-browser. Tell me the page title and "
+                "the main heading. Save a screenshot as outputs/page.png."
             ),
             stream=True,
         ) as response:

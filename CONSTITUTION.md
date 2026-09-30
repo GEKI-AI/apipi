@@ -15,7 +15,8 @@ file rarely. Edit in place. Do not keep an amendment log.
 
 3. **The computer is replaceable.**
     none, local directory, or `self_hosted`. Independent of run mode
-    (`none` / `microvm`). Search and browser are MCP, not built in.
+    (`none` / `microvm`). Search is MCP, not built in. The guest
+    browser is a skill in the browser image, not a gateway feature.
    OpenAI's field `openai_hosted` is a local session directory, not OpenAI's
    cloud. `hosted` is the same local directory.
 

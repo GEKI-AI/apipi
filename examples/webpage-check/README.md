@@ -4,7 +4,7 @@ An ApiPi-based FastAPI service that keeps the Agents API and adds
 `POST /examples/webpage-check`. The handler creates a session
 in-process (no HTTP loopback), asks a preconfigured agent to fetch the
 page with `curl` over bash, and streams short plain-text lines
-(`using bash…`, then the summary). It does not use Playwright.
+(`using bash…`, then the summary). It does not use the browser image.
 
 Run `apipi migrate` against the same SQLite file first. You need Pi on
 `PATH` and a model host for a live fetch.

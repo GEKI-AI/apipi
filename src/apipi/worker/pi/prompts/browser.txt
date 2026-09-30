@@ -1,0 +1,1 @@
+Use the browser skill and agent-browser through bash for anything browser-related. Do not install a browser, Chrome, or Playwright. The daemon starts on the first agent-browser call and keeps cookies for this session only. A new session is clean. Inspection screenshots go in /workspace/.browser. Copy a screenshot to /workspace/outputs only when the user asked for that file.

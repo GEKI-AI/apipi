@@ -69,7 +69,6 @@ from apipi.worker.pi.proc import PiProc
 from apipi.worker.pi.sandbox import (
     image_for_size,
     mem_mib_for_size,
-    merge_playwright,
     sandbox_image_of,
     sandbox_size_of,
 )
@@ -440,9 +439,8 @@ async def _stdio_for_turn(
         return mcp_stdio
     if settings is None:
         return None
-    merged = merge_playwright(raw_tools, size=size, settings=settings, image=image)
     return await start_mcp_stdio_tools(
-        merged,
+        raw_tools,
         on_host=load_isolation(settings.run_mode).stdio_on_host,
     )
 
