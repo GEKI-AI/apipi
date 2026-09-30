@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-30
+
 ### Breaking
 
 - The image store is versioned per release. `image_source` is the base
@@ -20,9 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and warns. `--force` is refused for a complete versioned prefix.
 - The local kernel layout gains `kernels/<arch>/<kernel_version>/vmlinux`.
   `kernels/<arch>/vmlinux` remains a compatibility copy.
-
-### Breaking
-
 - All guest images (`default`, `work`, `browser`) now use Debian
   trixie slim instead of Alpine. Operators must re-pull or rebuild
   every image. 0.11.x images and manifests are not compatible.
