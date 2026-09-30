@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-30
+
 ### Added
 
 - Gateway auth is bounded and revocable. `APIPI_AUTH_CACHE_MAX`
@@ -27,9 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are `403`. Existing sync `authenticate` plugins now run in a
   thread; plugins that relied on running on the event loop thread
   should become `async def`.
-
-### Added
-
 - Model-host attribution. The per-session broker stamps
   `x-apipi-session-id`, `x-apipi-turn-id`, `x-apipi-agent-id`, and
   `x-apipi-agent-revision` on every model request and strips
