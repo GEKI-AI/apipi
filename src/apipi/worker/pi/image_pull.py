@@ -1,5 +1,7 @@
+import logging
 import os
 import shutil
+import warnings
 from pathlib import Path
 
 import zstandard
@@ -28,6 +30,8 @@ from apipi.worker.pi.images import (
     write_current,
 )
 from apipi.worker.pi.version import PINNED_PI
+
+log = logging.getLogger("apipi.worker.pi")
 
 Store = FileImageStore | S3ImageStore | HttpImageStore
 
@@ -72,9 +76,11 @@ def _download(store: Store, name: str, dest: Path) -> None:
 
 
 def decompress_zstd(source: Path, dest: Path) -> None:
+    from apipi.worker.pi.image_catalog import ZSTD_WINDOW_LOG
+
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")
-    decompressor = zstandard.ZstdDecompressor()
+    decompressor = zstandard.ZstdDecompressor(max_window_size=1 << ZSTD_WINDOW_LOG)
     with source.open("rb") as raw, tmp.open("wb") as out:
         decompressor.copy_stream(raw, out)
     tmp.replace(dest)
@@ -122,6 +128,52 @@ def _install_verified(
     zst.unlink(missing_ok=True)
 
 
+def resolve_image_source(
+    settings: Settings, source: str | None, *, client: object | None = None
+) -> str:
+    from apipi.worker.pi.image_catalog import (
+        has_version_segment,
+        join_store,
+        normalize_version,
+    )
+
+    base = _source(settings, source)
+    if has_version_segment(base):
+        return base
+    version = settings.image_store_version or __version__
+    explicit = bool(settings.image_store_version)
+    versioned = join_store(base, version)
+    store = open_image_store(versioned, settings, write=False, client=client)
+    if store.exists("index.json"):
+        return versioned
+    legacy = open_image_store(base, settings, write=False, client=client)
+    if legacy.exists("index.json"):
+        warnings.warn(
+            f"image store {base} uses the deprecated flat layout",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return base
+    if explicit:
+        raise ConfigError(
+            f"store version {normalize_version(version)} not found at {base}"
+        )
+    if legacy.exists("versions.json"):
+        import json
+
+        raw = json.loads(legacy.get("versions.json"))
+        versions = raw.get("versions") if isinstance(raw, dict) else None
+        if isinstance(versions, list) and versions:
+            picked = str(versions[-1])
+            warnings.warn(
+                f"image store version {version} is missing; using {picked}",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return join_store(base, picked)
+    raise ConfigError(f"store version {normalize_version(version)} not found at {base}")
+
+
 def pull_images(
     settings: Settings,
     *,
@@ -130,7 +182,7 @@ def pull_images(
     force: bool = False,
     client: object | None = None,
 ) -> list[str]:
-    uri = _source(settings, source)
+    uri = resolve_image_source(settings, source, client=client)
     store = open_image_store(uri, settings, write=False, client=client)
     try:
         index = load_index(store.get("index.json"))
@@ -204,6 +256,13 @@ def _pull_kernel(
         dest.unlink(missing_ok=True)
         raise ConfigError("sha256 mismatch for vmlinux")
     meta.write_text(kernel.model_dump_json(indent=2) + "\n")
+    if index.store_version:
+        versioned = images_dir / "kernels" / arch / kernel.version / "vmlinux"
+        versioned.parent.mkdir(parents=True, exist_ok=True)
+        versioned.write_bytes(dest.read_bytes())
+        (versioned.with_name("vmlinux.json")).write_text(
+            kernel.model_dump_json(indent=2) + "\n"
+        )
     incoming.unlink(missing_ok=True)
 
 

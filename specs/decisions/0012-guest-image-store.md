@@ -30,7 +30,16 @@ prefix both work:
 - `vmlinux-<arch>.zst`
 - `index.json`
 
-Schema is `2`. Schema `1` was the Alpine manifest and is rejected.
+Schema `2` is a versioned store: one immutable `v<version>/` prefix,
+no `latest`, and `manifest_sha256`. Schema `1` is the old flat store.
+It is still read, with a deprecation warning. The official store is
+the GitHub release at
+`https://github.com/GEKI-AI/apipi/releases/download/v<version>/`.
+Signing is a Sigstore bundle over `SHA256SUMS`. An OCI registry was
+considered and not used, because this layout stays on the existing
+HTTPS, S3, and file client.
+
+Schema is `2` for image manifests. Schema `1` manifests are rejected.
 Any other schema fails with a clear error. Unknown JSON
 keys fail the same way.
 

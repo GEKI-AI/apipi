@@ -1070,6 +1070,7 @@ def worker_heartbeat(settings: Settings, *, drain: bool = False) -> dict[str, ob
         "memory_mb": settings.node_memory_mb(),
         "run_mode": settings.run_mode,
         "arch": worker_arch(),
+        "image_store_version": settings.image_store_version or "",
         "images": _heartbeat_images(settings),
     }
     if drain:
