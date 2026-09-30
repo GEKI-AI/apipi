@@ -18,8 +18,6 @@ from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics, observe_turn
 from apipi.gateway.otel import Tracing, set_span, start_span
-from apipi.mcp.http import McpConnectError
-from apipi.mcp.stdio import start_mcp_stdio_tools
 from apipi.services.chat_tools import is_chat_profile
 from apipi.services.failures import (
     Failure,
@@ -61,7 +59,6 @@ from apipi.worker.pi.artifacts import (
     restore_pi_session,
 )
 from apipi.worker.pi.idle import resolve_idle_ttl
-from apipi.worker.pi.isolation import load_isolation
 from apipi.worker.pi.model_host import note_pi_model, require_model
 from apipi.worker.pi.platform_prompt import compose_instructions
 from apipi.worker.pi.pool import PiPool
@@ -72,7 +69,11 @@ from apipi.worker.pi.sandbox import (
     sandbox_image_of,
     sandbox_size_of,
 )
-from apipi.worker.pi.settings_json import resolve_system_prompt, resolve_thinking
+from apipi.worker.pi.settings_json import (
+    resolve_codemode,
+    resolve_system_prompt,
+    resolve_thinking,
+)
 
 log = logging.getLogger("apipi")
 
@@ -108,6 +109,7 @@ PUBLIC_EVENT_TYPES = frozenset(
         "agent.session.turn.output_text.done",
         "agent.session.turn.item.added",
         "agent.session.turn.item.done",
+        "agent.session.turn.item.nested",
         "agent.session.turn.thinking.started",
         "agent.session.turn.thinking.completed",
         "agent.session.turn.compaction.started",
@@ -211,7 +213,6 @@ class FakeHarness:
         self.mcp_calls: list[dict[str, Any]] = []
         self.function_tools: list[dict[str, Any]] | None = None
         self.mcp_http: list[Any] | None = None
-        self.mcp_stdio: list[Any] | None = None
         self.skill_dirs: list[str] | None = None
         self.instructions: str | None = None
         self.tools: bool | None = None
@@ -236,7 +237,6 @@ class FakeHarness:
         function_tools: list[dict[str, Any]] | None = None,
         tool_result: dict[str, Any] | None = None,
         mcp_http: list[Any] | None = None,
-        mcp_stdio: list[Any] | None = None,
         skill_dirs: list[str] | None = None,
         abort: asyncio.Event | None = None,
         computer: Computer | None = None,
@@ -255,7 +255,6 @@ class FakeHarness:
             list(function_tools) if function_tools is not None else None
         )
         self.mcp_http = list(mcp_http) if mcp_http is not None else None
-        self.mcp_stdio = list(mcp_stdio) if mcp_stdio is not None else None
         self.skill_dirs = list(skill_dirs) if skill_dirs is not None else None
         raw_instructions = _kwargs.get("instructions")
         self.instructions = (
@@ -414,6 +413,7 @@ def _pi_spawn_overrides(
             settings, session_metadata, agent_metadata
         ),
         "system_prompt_set": True,
+        "codemode": resolve_codemode(session_metadata, agent_metadata),
     }
 
 
@@ -425,24 +425,6 @@ def _skill_dirs(environment: dict[str, Any]) -> list[str]:
     if isinstance(raw, list):
         directories = [item for item in raw if isinstance(item, str)]
     return discover_skill_dirs(workspace, directories)
-
-
-async def _stdio_for_turn(
-    mcp_stdio: list[Any] | None,
-    raw_tools: list[Any],
-    *,
-    size: str,
-    settings: Settings | None,
-    image: str | None = None,
-) -> list[Any] | None:
-    if mcp_stdio is not None:
-        return mcp_stdio
-    if settings is None:
-        return None
-    return await start_mcp_stdio_tools(
-        raw_tools,
-        on_host=load_isolation(settings.run_mode).stdio_on_host,
-    )
 
 
 async def _agent_tools_and_model(
@@ -634,13 +616,14 @@ def _mcp_labels(tools: list[Any] | None) -> list[str]:
     return labels
 
 
-def _mcp_name(raw: object, labels: list[str]) -> str | None:
-    if not isinstance(raw, str) or raw == "":
-        return None
-    for label in labels:
-        if label in raw:
-            return label
-    return raw
+def _mcp_name(data: dict[str, Any]) -> str | None:
+    label = data.get("server_label")
+    if isinstance(label, str) and label:
+        return label
+    name = data.get("name")
+    if isinstance(name, str) and name:
+        return name
+    return None
 
 
 async def _tool_mcp_for_turn(
@@ -650,6 +633,7 @@ async def _tool_mcp_for_turn(
     turn_id: uuid.UUID,
     labels: list[str],
 ) -> tuple[list[str], dict[str, int], list[str], dict[str, int]]:
+    del labels
     tool_names: list[str] = []
     mcp_names: list[str] = []
     items = await list_items(db, tenant_id, session_id)
@@ -662,13 +646,16 @@ async def _tool_mcp_for_turn(
                 tool_names.append(name)
     events = await list_events(db, tenant_id, session_id)
     for event in events:
-        if event.type != "agent.session.turn.item.added":
+        if event.type not in (
+            "agent.session.turn.item.added",
+            "agent.session.turn.item.nested",
+        ):
             continue
         if event.data.get("turn_id") != str(turn_id):
             continue
         if event.data.get("item_type") != "mcp_call":
             continue
-        name = _mcp_name(event.data.get("name"), labels)
+        name = _mcp_name(event.data)
         if name is not None:
             mcp_names.append(name)
     tools, tool_counts = _tally(tool_names)
@@ -1279,7 +1266,6 @@ async def load_boot_kwargs(
     session_id: uuid.UUID,
     *,
     mcp_http: list[Any] | None = None,
-    mcp_stdio: list[Any] | None = None,
 ) -> dict[str, Any] | None:
     from apipi.worker.pi.platform_prompt import compose_instructions
     from apipi.worker.pi.sandbox import (
@@ -1299,7 +1285,7 @@ async def load_boot_kwargs(
             _function_tools,
             model,
             instructions,
-            raw_tools,
+            _raw_tools,
             agent_metadata,
             agent_idle,
         ) = await _agent_tools_and_model(db, tenant_id, row)
@@ -1335,14 +1321,6 @@ async def load_boot_kwargs(
         sandbox_size = sandbox_size_of(row.environment)
         stored_image = sandbox_image_of(row.environment)
         sandbox_image = stored_image or image_for_size(sandbox_size)
-        if mcp_stdio is None:
-            mcp_stdio = await _stdio_for_turn(
-                None,
-                raw_tools,
-                size=sandbox_size,
-                settings=settings,
-                image=sandbox_image,
-            )
         composed = compose_instructions(
             settings,
             instructions,
@@ -1356,7 +1334,6 @@ async def load_boot_kwargs(
             "cwd": cwd_path,
             "tools": tools,
             "mcp_http": mcp_http,
-            "mcp_stdio": mcp_stdio,
             "skill_dirs": _skill_dirs(row.environment),
             "tenant_id": tenant_id,
             "model": model,
@@ -1435,7 +1412,6 @@ async def run_turn(
     images: list[dict[str, str]] | None = None,
     parts: list[dict[str, str]] | None = None,
     mcp_http: list[Any] | None = None,
-    mcp_stdio: list[Any] | None = None,
     request_id: str | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
@@ -1466,7 +1442,6 @@ async def run_turn(
         sandbox_mem: int | None
         sandbox_image: str
         extra_env: dict[str, str]
-        raw_tools: list[Any]
         agent_metadata: dict[str, Any]
         session_metadata: dict[str, Any]
         session_idle: str | None
@@ -1508,7 +1483,7 @@ async def run_turn(
                 function_tools,
                 model,
                 instructions,
-                raw_tools,
+                _raw_tools,
                 agent_metadata,
                 agent_idle,
             ) = await _agent_tools_and_model(db, tenant_id, row)
@@ -1655,18 +1630,6 @@ async def run_turn(
                     user_id=user_id,
                 )
                 return
-        try:
-            mcp_stdio = await _stdio_for_turn(
-                mcp_stdio,
-                raw_tools,
-                size=sandbox_size,
-                settings=settings,
-                image=sandbox_image,
-            )
-        except McpConnectError as exc:
-            async with store.session() as db:
-                await fail_session(db, hub, tenant_id, session_id, str(exc))
-            return
         composed = compose_instructions(
             settings,
             instructions,
@@ -1709,7 +1672,6 @@ async def run_turn(
                     tools=tools,
                     function_tools=function_tools,
                     mcp_http=mcp_http,
-                    mcp_stdio=mcp_stdio,
                     skill_dirs=skill_dirs,
                     abort=abort,
                     computer=computer,
@@ -1913,7 +1875,6 @@ async def continue_turn(
     output: str | None,
     error: str | None,
     mcp_http: list[Any] | None = None,
-    mcp_stdio: list[Any] | None = None,
     request_id: str | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
@@ -2024,7 +1985,7 @@ async def continue_turn(
             function_tools,
             model,
             instructions,
-            raw_tools,
+            _raw_tools,
             agent_metadata,
             agent_idle,
         ) = await _agent_tools_and_model(db, tenant_id, row)
@@ -2058,18 +2019,6 @@ async def continue_turn(
             "error": error,
         }
     try:
-        try:
-            mcp_stdio = await _stdio_for_turn(
-                mcp_stdio,
-                raw_tools,
-                size=sandbox_size,
-                settings=settings,
-                image=sandbox_image,
-            )
-        except McpConnectError as exc:
-            async with store.session() as db:
-                await fail_session(db, hub, tenant_id, session_id, str(exc))
-            return
         composed = compose_instructions(
             settings,
             instructions,
@@ -2103,7 +2052,6 @@ async def continue_turn(
                     function_tools=function_tools,
                     tool_result=result,
                     mcp_http=mcp_http,
-                    mcp_stdio=mcp_stdio,
                     skill_dirs=skill_dirs,
                     computer=computer,
                     tenant_id=tenant_id,

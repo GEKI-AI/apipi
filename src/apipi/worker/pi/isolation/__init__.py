@@ -58,7 +58,6 @@ def _load_custom(path: str) -> Isolation:
     for item in (
         "name",
         "needs_probe",
-        "stdio_on_host",
         "warn_not_production",
         "require",
         "probe",

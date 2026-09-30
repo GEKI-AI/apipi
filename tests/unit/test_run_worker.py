@@ -55,7 +55,6 @@ class _Store:
 
 
 class _Execution:
-    stdio_on_host = False
     tracing = None
 
     def __init__(self, pool: PiPool, workspace: asyncio.Event) -> None:

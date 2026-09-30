@@ -21,7 +21,7 @@ def test_function_and_http_mcp_allowed() -> None:
             {
                 "type": "mcp",
                 "server_label": "search",
-                "transport": {"type": "http", "server_url": "https://mcp.example/mcp"},
+                "server_url": "https://mcp.example/mcp",
             },
         ]
     )

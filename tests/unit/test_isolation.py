@@ -6,7 +6,6 @@ import pytest
 from tests.support.fake_isolation import FakeIsolation
 
 from apipi.config import ConfigError, Settings, require_run_mode
-from apipi.mcp.stdio import McpStdioServer, start_mcp_stdio_tools
 from apipi.worker.pi.isolation import load_isolation
 from apipi.worker.pi.isolation.chat import ChatIsolation
 from apipi.worker.pi.isolation.microvm import MicrovmIsolation
@@ -27,7 +26,6 @@ def test_none_isolation_contract() -> None:
     assert isinstance(backend, NoneIsolation)
     assert backend.name == "none"
     assert backend.needs_probe is False
-    assert backend.stdio_on_host is True
     assert backend.warn_not_production is True
     backend.require(_settings())
 
@@ -38,7 +36,6 @@ def test_chat_isolation_is_none_alias() -> None:
     assert isinstance(backend, NoneIsolation)
     assert backend.name == "chat"
     assert backend.needs_probe is False
-    assert backend.stdio_on_host is True
     assert backend.warn_not_production is False
     backend.require(_settings("chat"))
 
@@ -48,7 +45,6 @@ def test_microvm_isolation_contract() -> None:
     assert isinstance(backend, MicrovmIsolation)
     assert backend.name == "microvm"
     assert backend.needs_probe is True
-    assert backend.stdio_on_host is False
     assert backend.warn_not_production is False
 
 
@@ -246,28 +242,15 @@ async def test_spawn_session_thinking_overrides_process_off(
     await proc.terminate()
 
 
-async def test_stdio_on_host_follows_isolation() -> None:
-    none = load_isolation("none")
-    microvm = load_isolation("microvm")
-    assert none.stdio_on_host is True
-    assert microvm.stdio_on_host is False
-    servers = await start_mcp_stdio_tools(
-        [
-            {
-                "type": "mcp",
-                "server_label": "playwright",
-                "transport": {"type": "stdio", "command": "npx", "args": []},
-            }
-        ],
-        on_host=False,
-    )
-    assert servers == [
-        McpStdioServer(server_label="playwright", command="npx", args=[], process=None)
-    ]
+def test_isolation_names() -> None:
+    from apipi.worker.pi.isolation.microvm import MicrovmIsolation
+    from apipi.worker.pi.isolation.none import NoneIsolation
+
+    assert NoneIsolation().name == "none"
+    assert MicrovmIsolation().name == "microvm"
 
 
 def test_example_isolation_loads() -> None:
     backend = load_isolation("examples.isolation:ExampleIsolation")
     assert backend.name == "example"
     assert backend.needs_probe is False
-    assert backend.stdio_on_host is True

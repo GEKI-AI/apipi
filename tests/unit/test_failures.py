@@ -37,7 +37,7 @@ from apipi.worker.pi.version import PINNED_PI
 
 
 def test_fixtures_match_pinned_pi() -> None:
-    assert FIXTURE_PI == PINNED_PI == "0.85.1"
+    assert FIXTURE_PI == PINNED_PI == "0.99.1"
 
 
 @pytest.mark.parametrize(

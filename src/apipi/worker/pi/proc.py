@@ -5,13 +5,13 @@ import logging
 import os
 import shutil
 import signal
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from apipi.config import Settings
 from apipi.gateway.logutil import log_event
 from apipi.mcp.http import McpHttpServer
-from apipi.mcp.stdio import McpStdioServer
 from apipi.worker.pi.orphan import host_pi_stamp
 from apipi.worker.pi.version import PINNED_PI
 
@@ -91,6 +91,24 @@ def _kill_pgrp_members(pgid: int, sig: int) -> None:
             continue
 
 
+def _response_error(event: dict[str, Any]) -> str:
+    data = event.get("data")
+    if isinstance(data, dict):
+        for key in ("error", "message"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:500]
+    err = event.get("error")
+    if isinstance(err, str) and err.strip():
+        return err.strip()[:500]
+    if isinstance(err, dict):
+        message = err.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()[:500]
+        return json.dumps(err)[:500]
+    return "Pi rejected the prompt before acceptance"
+
+
 class PiProc:
     def __init__(
         self,
@@ -141,27 +159,87 @@ class PiProc:
         self, message: str, images: list[dict[str, str]] | None = None
     ) -> AsyncIterator[dict[str, Any]]:
         log.info("pi prompt")
-        payload: dict[str, Any] = {"type": "prompt", "message": message}
+        req_id = uuid.uuid4().hex
+        payload: dict[str, Any] = {"type": "prompt", "id": req_id, "message": message}
         if images:
             payload["images"] = images
         await self.send(payload)
         first = True
-        async for event in self._events():
+        response_seen = False
+        settled_seen = False
+        async for event in self._raw_events():
             kind = event.get("type")
+            if kind == "response" and event.get("command") == "prompt":
+                if event.get("id") not in (None, req_id):
+                    continue
+                response_seen = True
+                if event.get("success") is False:
+                    detail = _response_error(event)
+                    log.warning("pi prompt rejected", extra={"error": detail[:200]})
+                    yield {
+                        "type": "agent_end",
+                        "messages": [{"stopReason": "error", "errorMessage": detail}],
+                    }
+                    yield {"type": "agent_settled"}
+                    return
+                raw_data = event.get("data")
+                disposition = (
+                    raw_data.get("disposition") if isinstance(raw_data, dict) else None
+                )
+                if disposition == "handled":
+                    log.warning("pi prompt handled by command")
+                    yield {
+                        "type": "agent_end",
+                        "messages": [
+                            {
+                                "stopReason": "error",
+                                "errorMessage": (
+                                    "input_handled_by_command: Pi handled the prompt "
+                                    "as a command; no agent run started"
+                                ),
+                            }
+                        ],
+                    }
+                    yield {"type": "agent_settled"}
+                    return
+                if disposition == "queued":
+                    log.warning("pi prompt queued unexpectedly")
+                    yield {
+                        "type": "agent_end",
+                        "messages": [
+                            {
+                                "stopReason": "error",
+                                "errorMessage": (
+                                    "pi_queued_unexpected: Pi queued the prompt; "
+                                    "ApiPi serialises turns"
+                                ),
+                            }
+                        ],
+                    }
+                    yield {"type": "agent_settled"}
+                    return
+                if settled_seen:
+                    log.info("pi settled")
+                    return
+                continue
             if first:
                 log.info("pi event", extra={"type": kind})
                 first = False
             yield event
             if kind == "agent_settled":
-                log.info("pi settled")
-                return
+                settled_seen = True
+                if response_seen:
+                    log.info("pi settled")
+                    return
+                log.info("pi settled without prompt response; waiting for response")
+        return
 
     async def abort(self) -> None:
         if not self.alive:
             return
         await self.send({"type": "abort"})
 
-    async def _events(self) -> AsyncIterator[dict[str, Any]]:
+    async def _raw_events(self) -> AsyncIterator[dict[str, Any]]:
         if self._stdout is None:
             return
         while True:
@@ -184,10 +262,14 @@ class PiProc:
                 continue
             if not isinstance(event, dict):
                 continue
-            if event.get("type") == "response":
-                continue
             if event.get("type") == "extension_error":
                 log_extension_error(event)
+            yield event
+
+    async def _events(self) -> AsyncIterator[dict[str, Any]]:
+        async for event in self._raw_events():
+            if event.get("type") == "response":
+                continue
             yield event
 
     async def terminate(self) -> None:
@@ -227,7 +309,6 @@ class PiProc:
 def pi_env(
     settings: Settings,
     mcp_http: list[McpHttpServer] | None = None,
-    mcp_stdio: list[McpStdioServer] | None = None,
     *,
     api_key: str | None = None,
     broker: Any | None = None,
@@ -251,12 +332,15 @@ def pi_env(
             env["OPENAI_BASE_URL"] = settings.model_base_url
     env["PI_CODING_AGENT_DIR"] = str(pi_agent_dir(settings))
     env["APIPI_PINNED_PI"] = PINNED_PI
+    env["PI_OFFLINE"] = "1"
     env.update(host_pi_stamp())
     if mcp_http:
         env["APIPI_MCP_SERVERS"] = ",".join(server.server_label for server in mcp_http)
         for index, server in enumerate(mcp_http):
             prefix = f"APIPI_MCP_{index}"
             env[f"{prefix}_LABEL"] = server.server_label
+            if server.allowed_tools:
+                env[f"{prefix}_ALLOWED"] = ",".join(server.allowed_tools)
             if broker is not None:
                 env[f"{prefix}_URL"] = broker.mcp_url(str(index))
             else:
@@ -264,15 +348,6 @@ def pi_env(
                 for header, value in server.headers.items():
                     safe = header.upper().replace("-", "_")
                     env[f"{prefix}_{safe}"] = value
-    if mcp_stdio:
-        env["APIPI_MCP_STDIO"] = ",".join(server.server_label for server in mcp_stdio)
-        for index, server in enumerate(mcp_stdio):
-            prefix = f"APIPI_MCP_STDIO_{index}"
-            env[f"{prefix}_LABEL"] = server.server_label
-            env[f"{prefix}_COMMAND"] = server.command
-            env[f"{prefix}_ARGS"] = "\x1f".join(server.args)
-            if server.cwd:
-                env[f"{prefix}_CWD"] = server.cwd
     if extra_env:
         env.update(extra_env)
     if settings.pi_mem_mib is not None:
@@ -285,19 +360,20 @@ def pi_command_args(
     *,
     tools: bool,
     mcp_http: list[McpHttpServer] | None = None,
-    mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
     extra_skill_dirs: list[str] | None = None,
     model: str | None = None,
     instructions: str | None = None,
     session_file: str | None = None,
-    extension: str | None = None,
+    extension: str | list[str] | None = None,
     thinking: str | None = None,
+    codemode: str = "off",
 ) -> list[str]:
     from apipi.worker.pi.model_host import PI_PROVIDER
 
     command = settings.pi_command.split()
-    args = [*command, "--mode", "rpc"]
+    args = [*command, "--mode", "rpc", "--no-extensions"]
+    codemode_on = codemode in ("on", "only")
     if session_file:
         args.extend(["--session", session_file])
     else:
@@ -310,7 +386,9 @@ def pi_command_args(
     if level != "off":
         args.extend(["--thinking", level])
     if not tools:
-        args.append("--no-builtin-tools" if mcp_http or mcp_stdio else "--no-tools")
+        args.append("--no-builtin-tools" if mcp_http else "--no-tools")
+    if codemode_on and tools:
+        args.extend(["--tools", "read,bash,edit,write,codemode"])
     if skill_dirs is not None:
         args.append("--no-skills")
         for path in skill_dirs:
@@ -318,7 +396,15 @@ def pi_command_args(
     for path in extra_skill_dirs or []:
         args.extend(["--skill", path])
     if extension:
-        args.extend(["--extension", extension])
+        if isinstance(extension, str):
+            args.extend(["--extension", extension])
+        else:
+            for path in extension:
+                args.extend(["--extension", path])
+    if mcp_http:
+        args.extend(["--extension", "builtin:mcp"])
+    if codemode_on and tools:
+        args.extend(["--extension", "builtin:codemode"])
     return args
 
 
@@ -328,7 +414,6 @@ async def spawn_pi(
     cwd: str | None,
     tools: bool,
     mcp_http: list[McpHttpServer] | None = None,
-    mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
     model: str | None = None,
     instructions: str | None = None,
@@ -339,6 +424,7 @@ async def spawn_pi(
     thinking: str | None = None,
     system_prompt: str | None = None,
     system_prompt_set: bool = False,
+    codemode: str = "off",
     env_type: str | None = None,
 ) -> PiProc:
     from apipi.worker.pi.isolation import load_isolation
@@ -348,7 +434,6 @@ async def spawn_pi(
         cwd=cwd,
         tools=tools,
         mcp_http=mcp_http,
-        mcp_stdio=mcp_stdio,
         skill_dirs=skill_dirs,
         model=model,
         instructions=instructions,
@@ -359,5 +444,6 @@ async def spawn_pi(
         thinking=thinking,
         system_prompt=system_prompt,
         system_prompt_set=system_prompt_set,
+        codemode=codemode,
         env_type=env_type,
     )

@@ -21,10 +21,8 @@ def reject_disallowed_chat_tools(tools: list[Any] | None) -> None:
         kind = tool.get("type")
         if kind == "function":
             continue
-        if kind == "mcp":
-            transport = tool.get("transport")
-            if isinstance(transport, dict) and transport.get("type") == "http":
-                continue
+        if kind == "mcp" and tool.get("server_url"):
+            continue
         raise ApiError(
             "invalid_request",
             CHAT_TOOL_HELP,

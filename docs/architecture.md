@@ -14,7 +14,7 @@ The explanation of the system is under [Concepts](concepts.md):
            |
            |  in-process or worker lease
            v
-      Pi  (+ stdio MCP)           none | microvm
+      Pi  (+ MCP)           none | microvm
            |
            +-- local files        next to Pi
            +-- or remote env      self_hosted runner
@@ -23,7 +23,7 @@ The explanation of the system is under [Concepts](concepts.md):
 
 | | What it controls |
 | --- | --- |
-| **Run mode** | Where Pi (and stdio MCP) run |
+| **Run mode** | Where Pi (and MCP) run |
 | **Environment** | Where file/shell tools run |
 
 Guest images are prebuilt files. A worker pulls them from an

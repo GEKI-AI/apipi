@@ -8,8 +8,11 @@ from apipi.gateway.errors import ApiError
 THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
 THINKING_KEY = "apipi.thinking"
 SYSTEM_PROMPT_KEY = "apipi.system_prompt"
+CODEMODE_KEY = "apipi.codemode"
+CODEMODE_MODES = frozenset({"off", "on", "only"})
 THINKING_HELP = "apipi.thinking must be off, minimal, low, medium, high, xhigh, or max"
 SYSTEM_PROMPT_HELP = "apipi.system_prompt must be a string"
+CODEMODE_HELP = "codemode must be off, on, or only"
 
 
 def parse_thinking(value: object) -> str | None:
@@ -41,9 +44,24 @@ def system_prompt_from_metadata(metadata: dict[str, Any] | None) -> str | None:
     return parse_system_prompt(metadata.get(SYSTEM_PROMPT_KEY))
 
 
+def parse_codemode(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in CODEMODE_MODES:
+        raise ApiError("invalid_request", CODEMODE_HELP, code="invalid_request")
+    return value
+
+
+def codemode_from_metadata(metadata: dict[str, Any] | None) -> str | None:
+    if not metadata or CODEMODE_KEY not in metadata:
+        return None
+    return parse_codemode(metadata.get(CODEMODE_KEY))
+
+
 def validate_pi_metadata(metadata: dict[str, Any] | None) -> None:
     thinking_from_metadata(metadata)
     system_prompt_from_metadata(metadata)
+    codemode_from_metadata(metadata)
 
 
 def copy_inline_pi_metadata(
@@ -52,7 +70,7 @@ def copy_inline_pi_metadata(
 ) -> dict[str, Any]:
     out = dict(session_metadata or {})
     agent = agent_metadata or {}
-    for key in (THINKING_KEY, SYSTEM_PROMPT_KEY):
+    for key in (THINKING_KEY, SYSTEM_PROMPT_KEY, CODEMODE_KEY):
         if key not in out and key in agent:
             out[key] = agent[key]
     return out
@@ -163,6 +181,19 @@ def resolve_thinking(
     return settings.pi_thinking
 
 
+def resolve_codemode(
+    session_metadata: dict[str, Any] | None,
+    agent_metadata: dict[str, Any] | None,
+) -> str:
+    session = codemode_from_metadata(session_metadata)
+    if session is not None:
+        return session
+    agent = codemode_from_metadata(agent_metadata)
+    if agent is not None:
+        return agent
+    return "off"
+
+
 def resolve_system_prompt(
     settings: Settings,
     session_metadata: dict[str, Any] | None,
@@ -236,7 +267,9 @@ def model_retry_warnings(settings: Settings) -> list[str]:
     return notes
 
 
-def settings_payload(settings: Settings, *, thinking: str) -> dict[str, Any]:
+def settings_payload(
+    settings: Settings, *, thinking: str, codemode: str = "off"
+) -> dict[str, Any]:
     compaction: dict[str, Any] = {"enabled": settings.pi_auto_compact}
     if settings.pi_compaction_reserve_tokens is not None:
         compaction["reserveTokens"] = settings.pi_compaction_reserve_tokens
@@ -247,9 +280,10 @@ def settings_payload(settings: Settings, *, thinking: str) -> dict[str, Any]:
         if settings.model_retry_enabled
         else settings.model_max_retries
     )
-    return {
+    payload: dict[str, Any] = {
         "compaction": compaction,
         "defaultThinkingLevel": thinking,
+        "defaultProjectTrust": "never",
         "httpIdleTimeoutMs": settings.model_timeout_ms,
         "retry": {
             "enabled": settings.model_retry_enabled,
@@ -262,6 +296,9 @@ def settings_payload(settings: Settings, *, thinking: str) -> dict[str, Any]:
             },
         },
     }
+    if codemode in ("on", "only"):
+        payload["codemode"] = {"mode": codemode}
+    return payload
 
 
 def _load_object(path: Path) -> dict[str, Any]:
@@ -288,9 +325,15 @@ def _merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
 
 
 def merged_settings(
-    settings: Settings, *, thinking: str, current: dict[str, Any] | None = None
+    settings: Settings,
+    *,
+    thinking: str,
+    codemode: str = "off",
+    current: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return _merge(current or {}, settings_payload(settings, thinking=thinking))
+    return _merge(
+        current or {}, settings_payload(settings, thinking=thinking, codemode=codemode)
+    )
 
 
 def settings_json_text(payload: dict[str, Any]) -> str:
@@ -314,10 +357,13 @@ def apply_pi_agent_files(
     thinking: str,
     system_prompt: str | None,
     env_type: str | None = None,
+    codemode: str = "off",
 ) -> dict[str, Any]:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "settings.json"
-    payload = merged_settings(settings, thinking=thinking, current=_load_object(path))
+    payload = merged_settings(
+        settings, thinking=thinking, codemode=codemode, current=_load_object(path)
+    )
     path.write_text(settings_json_text(payload))
     write_system_prompt(directory, system_prompt)
     from apipi.worker.pi.fragments import (

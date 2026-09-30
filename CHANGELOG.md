@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- Pi 0.99.1 (was 0.85.1). All guest images are rebuilt with a new
+  store version; operators must mirror and pull again.
+- MCP runs on Pi's built-in MCP client over streamable HTTP.
+  Model-facing tool names change from `mcp_<server_label>_<tool>` to
+  `mcp__<server_label>__<tool>`, sanitised and hashed when long. API
+  output items still carry `server_label` and the original tool name.
+  `server_label` must match `[A-Za-z0-9_-]`. New `mcp_list_tools`
+  output items list each server's tools at turn start. New
+  `allowed_tools` support restricts the tools. Other
+  `require_approval` values, `connector_id`, and `authorization` are
+  `not_implemented`.
+- MCP tool input is the flat OpenAI format only: `server_url` at top
+  level, plus `allowed_tools`, `require_approval` (only `never`), and
+  `server_description`. The nested `transport: {...}` shape is removed
+  and returns `unknown_field`. Stored agents and sessions with the
+  nested shape must be recreated; using them fails with a clear error.
+- stdio MCP is removed. `transport: {type: "stdio"}` tools are no
+  longer accepted, and `stdio_on_host` is gone from the isolation
+  plugin interface.
+- A slash-command input (for example `/mcp`) that Pi handles as a
+  command ends the turn with an error instead of hanging.
+- New opt-in `apipi.codemode` (`off` | `on` | `only`, default `off`).
+- Pi starts with an explicit extension list and `PI_OFFLINE=1`.
+  Workspace `.pi/` project resources are never loaded.
+
 ## [0.12.1] - 2026-09-30
 
 - The official image publish is x86_64 `default` and `browser` only.

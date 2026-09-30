@@ -120,7 +120,7 @@ _STDIO = {
 _HTTP = {
     "type": "mcp",
     "server_label": "search",
-    "transport": {"type": "http", "server_url": "https://mcp.example/mcp"},
+    "server_url": "https://mcp.example/mcp",
 }
 _FN = {"type": "function", "name": "echo", "parameters": {"type": "object"}}
 
@@ -144,7 +144,7 @@ async def test_chat_rejects_stdio_mcp(client: AsyncClient) -> None:
         json={"agent": {"name": "bot", "model": "test", "tools": [_STDIO]}},
     )
     assert created.status_code == 400
-    assert created.json()["error"]["code"] == "chat_tool"
+    assert created.json()["error"]["code"] == "unknown_field"
 
 
 async def test_chat_rejects_stdio_on_saved_agent(client: AsyncClient) -> None:
@@ -154,14 +154,8 @@ async def test_chat_rejects_stdio_on_saved_agent(client: AsyncClient) -> None:
         headers=_auth(token),
         json={"name": "bot", "model": "test", "tools": [_STDIO]},
     )
-    assert agent.status_code == 200
-    created = await client.post(
-        "/v1/chat/sessions",
-        headers=_auth(token),
-        json={"agent_id": agent.json()["id"]},
-    )
-    assert created.status_code == 400
-    assert created.json()["error"]["code"] == "chat_tool"
+    assert agent.status_code == 400
+    assert agent.json()["error"]["code"] == "unknown_field"
 
 
 async def test_chat_profile_agent_rejects_stdio(client: AsyncClient) -> None:
@@ -177,7 +171,7 @@ async def test_chat_profile_agent_rejects_stdio(client: AsyncClient) -> None:
         },
     )
     assert agent.status_code == 400
-    assert agent.json()["error"]["code"] == "chat_tool"
+    assert agent.json()["error"]["code"] == "unknown_field"
     ok = await client.post(
         "/v1/agents",
         headers=_auth(token),
@@ -195,4 +189,4 @@ async def test_chat_profile_agent_rejects_stdio(client: AsyncClient) -> None:
         json={"tools": [_STDIO]},
     )
     assert patched.status_code == 400
-    assert patched.json()["error"]["code"] == "chat_tool"
+    assert patched.json()["error"]["code"] == "unknown_field"

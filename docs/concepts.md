@@ -15,7 +15,7 @@ runs, and where files run.
            |
            |  in-process, or a worker lease
            v
-      Pi  (+ stdio MCP)           none | microvm
+      Pi  (+ MCP)           none | microvm
            |
            +-- local files        next to Pi (/workspace in a guest)
            +-- or remote env      self_hosted runner
@@ -38,7 +38,7 @@ Two knobs:
 
 | Knob | What it controls |
 | --- | --- |
-| **Run mode** | Where Pi and stdio MCP run (`APIPI_RUN_MODE`) |
+| **Run mode** | Where Pi and MCP run (`APIPI_RUN_MODE`) |
 | **Environment** | Where file and shell tools run (`environment.type`) |
 
 They combine. `self_hosted` does not replace a microVM around Pi. The

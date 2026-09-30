@@ -190,6 +190,33 @@ def test_pi_command_args_include_extension(tmp_path: Path) -> None:
     )
 
 
+def test_pi_command_args_use_explicit_extensions(tmp_path: Path) -> None:
+    from apipi.mcp.http import McpHttpServer
+
+    args = pi_command_args(_settings(tmp_path), tools=True)
+    assert "--no-extensions" in args
+    assert "builtin:mcp" not in args
+    assert "builtin:codemode" not in args
+    mcp = [McpHttpServer(server_label="docs", server_url="https://x/mcp", headers={})]
+    with_mcp = pi_command_args(_settings(tmp_path), tools=True, mcp_http=mcp)
+    assert with_mcp.count("--extension") == 1
+    assert with_mcp[with_mcp.index("--extension") + 1] == "builtin:mcp"
+    with_code = pi_command_args(_settings(tmp_path), tools=True, codemode="on")
+    assert "--tools" in with_code
+    assert with_code[with_code.index("--tools") + 1] == "read,bash,edit,write,codemode"
+    assert "builtin:codemode" in with_code
+    assert "builtin:llama.cpp" not in with_code
+    assert "builtin:tool-search" not in with_code
+    inert = pi_command_args(_settings(tmp_path), tools=False, codemode="on")
+    assert "--tools" not in inert
+    assert "builtin:codemode" not in inert
+
+
+def test_pi_env_sets_offline(tmp_path: Path) -> None:
+    env = pi_env(_settings(tmp_path))
+    assert env["PI_OFFLINE"] == "1"
+
+
 def test_pi_env_uses_request_key_not_openai_api_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

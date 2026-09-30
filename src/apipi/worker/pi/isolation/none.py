@@ -6,7 +6,6 @@ from pathlib import Path
 
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
-from apipi.mcp.stdio import McpStdioServer
 from apipi.worker.pi.dirs import PI_SESSION_REL, pi_session_file
 from apipi.worker.pi.extension import host_mcp_extension
 from apipi.worker.pi.proc import PiProc, pi_command_args, pi_env
@@ -29,7 +28,6 @@ async def _log_stderr(stream: asyncio.StreamReader | None) -> None:
 class NoneIsolation:
     name = "none"
     needs_probe = False
-    stdio_on_host = True
     warn_not_production = True
 
     def require(self, settings: Settings | None) -> None:
@@ -45,7 +43,6 @@ class NoneIsolation:
         cwd: str | None,
         tools: bool,
         mcp_http: list[McpHttpServer] | None = None,
-        mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
         model: str | None = None,
         instructions: str | None = None,
@@ -56,6 +53,7 @@ class NoneIsolation:
         thinking: str | None = None,
         system_prompt: str | None = None,
         system_prompt_set: bool = False,
+        codemode: str = "off",
         env_type: str | None = None,
     ) -> PiProc:
         del mem_mib, image
@@ -81,17 +79,23 @@ class NoneIsolation:
 
         level = thinking if thinking is not None else settings.pi_thinking
         prompt = system_prompt if system_prompt_set else process_system_prompt(settings)
+        code = codemode if codemode in ("on", "only") else "off"
+        if codemode not in ("off", "on", "only"):
+            code = "off"
+        if code != "off" and not tools:
+            log.debug("codemode is inert without tools")
+            code = "off"
         args = pi_command_args(
             settings,
             tools=tools,
             mcp_http=mcp_http,
-            mcp_stdio=mcp_stdio,
             skill_dirs=skill_dirs,
             model=model,
             instructions=instructions,
             session_file=session_file,
             extension=host_mcp_extension(settings, cwd),
             thinking=level,
+            codemode=code,
         )
         broker = await start_broker(
             settings,
@@ -104,7 +108,6 @@ class NoneIsolation:
             env = pi_env(
                 settings,
                 mcp_http,
-                mcp_stdio,
                 api_key=api_key,
                 broker=broker,
                 extra_env=extra_env,
@@ -123,6 +126,7 @@ class NoneIsolation:
                 thinking=level,
                 system_prompt=prompt,
                 env_type=env_type,
+                codemode=code,
             )
             env["PI_CODING_AGENT_DIR"] = str(agent_dir)
             process = await asyncio.create_subprocess_exec(

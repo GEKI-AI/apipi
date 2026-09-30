@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-FIXTURE_PI = "0.85.1"
+FIXTURE_PI = "0.99.1"
 
 _OVERFLOW = (
     re.compile(r"prompt is too long", re.I),

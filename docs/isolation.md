@@ -1,6 +1,6 @@
 # Isolation
 
-Isolation is where Pi (and stdio MCP) run. It is server config
+Isolation is where Pi (and MCP) run. It is server config
 (`APIPI_RUN_MODE`), not an OpenAI field. It is independent of
 [environment](environments.md), which is where file and shell tools
 run. A remote `self_hosted` computer does not replace Pi isolation.
@@ -37,7 +37,7 @@ fall back to `none`. `host` and `jail` are not valid.
 
 ## What lives in the guest
 
-In `microvm`, one guest holds Pi, stdio MCP, and the local computer
+In `microvm`, one guest holds Pi, MCP, and the local computer
 (`environment.openai_hosted` or the `hosted` alias). They share
 `/workspace`. The gateway, Postgres, and tenant secrets stay on the
 host. The model key and HTTP MCP bearers are injected by a per-session
@@ -56,7 +56,7 @@ or other worker secrets.
            v
      Firecracker guest
         Pi --mode rpc
-        stdio MCP
+        MCP
         /workspace     <- openai_hosted files
 ```
 

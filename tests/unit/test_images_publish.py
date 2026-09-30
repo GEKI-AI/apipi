@@ -82,7 +82,9 @@ def test_package_image_writes_digest(tmp_path: Path) -> None:
     assert len(manifests) == 1
     text = manifests[0].read_text()
     assert '"schema": 2' in text
-    assert "0.85.1-" in text
+    from apipi.worker.pi.version import PINNED_PI
+
+    assert f"{PINNED_PI}-" in text
     zst = next(out.glob("*.ext4.zst"))
     assert sha256_file(zst)
 

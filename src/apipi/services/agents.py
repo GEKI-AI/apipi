@@ -1,3 +1,4 @@
+import re
 import uuid
 from typing import Annotated, Any, Literal, Self
 
@@ -39,6 +40,8 @@ from apipi.worker.pi.settings_json import (
 
 _UNIMPLEMENTED = ("multi_agent", "tool_search", "programmatic_tool_calling")
 
+_SERVER_LABEL = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 class FunctionTool(StrictModel):
     type: Literal["function"]
@@ -47,28 +50,30 @@ class FunctionTool(StrictModel):
     parameters: dict[str, Any] | None = None
 
 
-class McpHttpTransport(StrictModel):
-    type: Literal["http"]
-    server_url: str
-
-
-class McpStdioTransport(StrictModel):
-    type: Literal["stdio"]
-    command: str
-    args: list[str] | None = None
-    cwd: str | None = None
-
-
 class McpTool(StrictModel):
     type: Literal["mcp"]
     server_label: str
-    transport: Annotated[
-        McpHttpTransport | McpStdioTransport, Field(discriminator="type")
-    ]
+    server_url: str
     headers: dict[str, str] | None = None
+    allowed_tools: list[str] | dict[str, Any] | None = None
+    require_approval: str | None = None
+    server_description: str | None = None
     required: bool | None = None
     credential_id: str | None = None
     connection_origin: Literal["service", "environment"] | None = None
+    connector_id: str | None = None
+    authorization: str | None = None
+
+    @model_validator(mode="after")
+    def connector_rejected(self) -> Self:
+        for field in ("connector_id", "authorization"):
+            if getattr(self, field) is not None:
+                raise PydanticCustomError(
+                    "not_implemented",
+                    "{field} is not implemented",
+                    {"field": field},
+                )
+        return self
 
     @model_validator(mode="after")
     def origin_supported(self) -> Self:
@@ -79,6 +84,58 @@ class McpTool(StrictModel):
                 {"field": "connection_origin"},
             )
         return self
+
+    @model_validator(mode="after")
+    def approval_supported(self) -> Self:
+        if self.require_approval not in (None, "never"):
+            raise PydanticCustomError(
+                "not_implemented",
+                "{field} is not implemented",
+                {"field": "require_approval"},
+            )
+        return self
+
+    @model_validator(mode="after")
+    def label_valid(self) -> Self:
+        if not _SERVER_LABEL.fullmatch(self.server_label):
+            raise PydanticCustomError(
+                "invalid_value",
+                "{field} is invalid",
+                {"field": "server_label"},
+            )
+        return self
+
+    @model_validator(mode="after")
+    def tools_supported(self) -> Self:
+        allowed = self.allowed_tools
+        if allowed is None:
+            return self
+        if isinstance(allowed, list):
+            if all(isinstance(item, str) and item for item in allowed):
+                return self
+            raise PydanticCustomError(
+                "invalid_value",
+                "{field} is invalid",
+                {"field": "allowed_tools"},
+            )
+        if isinstance(allowed, dict):
+            names = allowed.get("tool_names")
+            if (
+                set(allowed) <= {"tool_names"}
+                and isinstance(names, list)
+                and all(isinstance(item, str) and item for item in names)
+            ):
+                return self
+            raise PydanticCustomError(
+                "not_implemented",
+                "{field} is not implemented",
+                {"field": "allowed_tools"},
+            )
+        raise PydanticCustomError(
+            "invalid_value",
+            "{field} is invalid",
+            {"field": "allowed_tools"},
+        )
 
 
 AgentTool = Annotated[FunctionTool | McpTool, Field(discriminator="type")]

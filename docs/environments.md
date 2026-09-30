@@ -379,8 +379,8 @@ session that inherits it fails with `400` and names the agent and the
 skill id. Those zips unpack under `.agents/skills/` in the session
 workspace. See [tools](tools.md).
 
-Stdio MCP follows Pi, not the remote runner. The guest browser is a
-skill, not stdio MCP.
+follows Pi, not the remote runner. The guest browser is a
+skill, not MCP.
 HTTP MCP is reached from the gateway and handed to Pi through the host
 credential broker. Pi lists those tools from the broker URL. The guest
 does not receive the bearer.

@@ -1,9 +1,20 @@
 import json
 from asyncio.streams import StreamReader
 from asyncio.subprocess import Process
-from typing import cast
+from typing import Any, cast
 
 from apipi.worker.pi.proc import PiProc
+
+
+class _Stdin:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    def write(self, data: bytes) -> None:
+        self.sent.append(json.loads(data.decode()))
+
+    async def drain(self) -> None:
+        return None
 
 
 class _Stdout:
@@ -44,3 +55,85 @@ async def test_events_split_on_lf_only() -> None:
     proc = PiProc(cast(Process, inner), stdout=cast(StreamReader, _Stdout([blob])))
     events = [event async for event in proc._events()]
     assert events == [first, second]
+
+
+def _proc(lines: list[dict[str, Any]]) -> tuple[PiProc, _Stdin]:
+    blob = b"".join(json.dumps(item).encode() + b"\n" for item in lines)
+    inner = _Process()
+    stdin = _Stdin()
+    proc = PiProc(
+        cast(Process, inner),
+        stdin=cast(Any, stdin),
+        stdout=cast(StreamReader, _Stdout([blob])),
+    )
+    return proc, stdin
+
+
+async def test_prompt_started_waits_for_settled() -> None:
+    proc, stdin = _proc(
+        [
+            {
+                "type": "response",
+                "command": "prompt",
+                "success": True,
+                "data": {"disposition": "started"},
+            },
+            {"type": "agent_start"},
+            {"type": "agent_settled"},
+        ]
+    )
+    events = [event async for event in proc.prompt("hi")]
+    assert stdin.sent[0]["type"] == "prompt"
+    assert stdin.sent[0]["id"]
+    assert events == [{"type": "agent_start"}, {"type": "agent_settled"}]
+
+
+async def test_prompt_handled_ends_turn_with_error() -> None:
+    proc, _stdin = _proc(
+        [
+            {
+                "type": "response",
+                "command": "prompt",
+                "success": True,
+                "data": {"disposition": "handled"},
+            },
+        ]
+    )
+    events = [event async for event in proc.prompt("/mcp")]
+    assert events[0]["type"] == "agent_end"
+    assert "input_handled_by_command" in events[0]["messages"][0]["errorMessage"]
+    assert events[1] == {"type": "agent_settled"}
+
+
+async def test_prompt_rejected_ends_turn_with_error() -> None:
+    proc, _stdin = _proc(
+        [
+            {
+                "type": "response",
+                "command": "prompt",
+                "success": False,
+                "error": "bad prompt",
+            },
+        ]
+    )
+    events = [event async for event in proc.prompt("hi")]
+    assert events[0]["type"] == "agent_end"
+    assert "bad prompt" in events[0]["messages"][0]["errorMessage"]
+    assert events[1] == {"type": "agent_settled"}
+
+
+async def test_prompt_queued_ends_turn_with_error() -> None:
+    proc, _stdin = _proc(
+        [
+            {
+                "type": "response",
+                "command": "prompt",
+                "success": True,
+                "data": {"disposition": "queued"},
+            },
+        ]
+    )
+    events = [event async for event in proc.prompt("hi")]
+    assert events[0]["type"] == "agent_end"
+    assert "pi_queued_unexpected" in events[0]["messages"][0]["errorMessage"]
+    assert events[1] == {"type": "agent_settled"}

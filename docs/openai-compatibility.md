@@ -46,8 +46,7 @@ follow-up, cancel, and delete. `examples/sessions/openai_sdk.py` and
 You can:
 
 - Create, list, get, update, and delete agents. Fields are `name`,
-  `model`, `instructions`, `metadata`, and `tools` (function, MCP HTTP,
-  MCP stdio).
+  `model`, `instructions`, `metadata`, and `tools` (function, MCP).
 - Create a session with `agent` or `agent_id`, `environment`, `input`,
   `metadata`, and `stream`. A non-empty `input` starts the first turn.
 - Stream with `GET /v1/agents/sessions/{id}/events?stream=true` and
@@ -151,8 +150,11 @@ New extension fields are grouped. Older flat fields stay flat.
 | `session_defaults` | ApiPi extension. Environment and `vault_ids` inherited by later sessions. |
 | `idle_ttl` | ApiPi extension. Duration (`30m`, `1h`) or `0` to turn idle off. Stock SDKs can set `metadata["apipi.idle_ttl"]` instead. |
 | `tools` type `function` | Same API |
-| `tools` type `mcp` with nested `transport` (`http` or `stdio`) | Same API |
-| Top-level MCP `server_url` / `command` / `args` | Error (`unknown_field`) |
+| `tools` type `mcp` (flat OpenAI shape with `server_url`) | Same API |
+| Nested MCP `transport` object | Error (`unknown_field`) |
+| `connector_id`, `authorization` | Error (`not_implemented`) |
+| `require_approval` other than `never` | Error (`not_implemented`) |
+| stdio MCP | Removed |
 | `service_tier` `null` or `auto` | Ignored. ApiPi has no tiers. Any other value is `not_implemented`. |
 | `multi_agent`, `tool_search`, `programmatic_tool_calling` | Error (`not_implemented`) |
 | First-party `web_search` | Error; use MCP (example: Tavily) |

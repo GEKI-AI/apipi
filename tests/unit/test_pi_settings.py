@@ -39,6 +39,7 @@ def test_merge_keeps_unknown_keys_and_disables_compaction(tmp_path: Path) -> Non
     )
     assert payload["compaction"] == {"enabled": False, "reserveTokens": 8192}
     assert payload["defaultThinkingLevel"] == "high"
+    assert payload["defaultProjectTrust"] == "never"
     assert payload["httpIdleTimeoutMs"] == 120000
     assert payload["retry"]["enabled"] is True
     assert payload["retry"]["maxRetries"] == 3
@@ -174,6 +175,33 @@ def test_invalid_thinking_rejected() -> None:
     assert exc.value.status_code == 400
     with pytest.raises(ApiError):
         validate_pi_metadata({"apipi.system_prompt": 1})
+
+
+def test_codemode_validates_and_resolves() -> None:
+    from apipi.worker.pi.settings_json import (
+        codemode_from_metadata,
+        resolve_codemode,
+    )
+
+    assert codemode_from_metadata(None) is None
+    assert codemode_from_metadata({}) is None
+    assert codemode_from_metadata({"apipi.codemode": "on"}) == "on"
+    assert codemode_from_metadata({"apipi.codemode": "only"}) == "only"
+    assert (
+        resolve_codemode({"apipi.codemode": "on"}, {"apipi.codemode": "only"}) == "on"
+    )
+    assert resolve_codemode({}, {"apipi.codemode": "only"}) == "only"
+    assert resolve_codemode({}, {}) == "off"
+    validate_pi_metadata({"apipi.codemode": "off"})
+    with pytest.raises(ApiError) as exc:
+        validate_pi_metadata({"apipi.codemode": "sometimes"})
+    assert exc.value.message == "codemode must be off, on, or only"
+
+
+def test_settings_payload_writes_codemode() -> None:
+    payload = settings_payload(_settings(), thinking="off", codemode="on")
+    assert payload["codemode"] == {"mode": "on"}
+    assert "codemode" not in settings_payload(_settings(), thinking="off")
 
 
 def test_settings_payload_writes_retry_and_timeout() -> None:

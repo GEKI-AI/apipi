@@ -11,7 +11,6 @@ from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing, inject_traceparent
-from apipi.mcp.stdio import McpStdioServer
 from apipi.services.runtime import (
     EventHub,
     continue_turn,
@@ -42,18 +41,12 @@ log = logging.getLogger("apipi.worker")
 
 
 class Execution(Protocol):
-    stdio_on_host: bool
-
     def capacity_code(
         self,
         session_id: uuid.UUID,
         tenant_id: uuid.UUID,
         session_mem_mib: int | None = None,
     ) -> str | None: ...
-
-    def put_stdio(
-        self, session_id: uuid.UUID, servers: list[McpStdioServer]
-    ) -> None: ...
 
     async def run_turn(
         self,
@@ -64,7 +57,6 @@ class Execution(Protocol):
         images: list[dict[str, str]] | None = None,
         parts: list[dict[str, str]] | None = None,
         mcp_http: list[Any] | None = None,
-        mcp_stdio: list[Any] | None = None,
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
@@ -82,7 +74,6 @@ class Execution(Protocol):
         session_id: uuid.UUID,
         *,
         mcp_http: list[Any] | None = None,
-        mcp_stdio: list[Any] | None = None,
     ) -> None: ...
 
     async def continue_turn(
@@ -96,7 +87,6 @@ class Execution(Protocol):
         output: str | None,
         error: str | None,
         mcp_http: list[Any] | None = None,
-        mcp_stdio: list[Any] | None = None,
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
@@ -158,10 +148,6 @@ class LocalExecution:
         if pool.on_transition is None:
             pool.on_transition = self._sandbox_transition
 
-    @property
-    def stdio_on_host(self) -> bool:
-        return self.isolation.stdio_on_host
-
     def attach_store(self, store: Store) -> None:
         self.store = store
 
@@ -174,9 +160,6 @@ class LocalExecution:
         return self.pool.capacity_code(
             session_id, tenant_id, session_mem_mib=session_mem_mib
         )
-
-    def put_stdio(self, session_id: uuid.UUID, servers: list[McpStdioServer]) -> None:
-        self.pool.put_stdio(session_id, servers)
 
     def require(self) -> None:
         self.isolation.require(self.settings)
@@ -193,7 +176,6 @@ class LocalExecution:
         images: list[dict[str, str]] | None = None,
         parts: list[dict[str, str]] | None = None,
         mcp_http: list[Any] | None = None,
-        mcp_stdio: list[Any] | None = None,
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
@@ -212,7 +194,6 @@ class LocalExecution:
             images=images,
             parts=parts,
             mcp_http=mcp_http,
-            mcp_stdio=mcp_stdio,
             request_id=request_id,
             metrics=self.metrics,
             tracing=self.tracing,
@@ -239,7 +220,6 @@ class LocalExecution:
         output: str | None,
         error: str | None,
         mcp_http: list[Any] | None = None,
-        mcp_stdio: list[Any] | None = None,
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
@@ -260,7 +240,6 @@ class LocalExecution:
             output=output,
             error=error,
             mcp_http=mcp_http,
-            mcp_stdio=mcp_stdio,
             request_id=request_id,
             metrics=self.metrics,
             tracing=self.tracing,
@@ -443,7 +422,6 @@ class LocalExecution:
         session_id: uuid.UUID,
         *,
         mcp_http: list[Any] | None = None,
-        mcp_stdio: list[Any] | None = None,
     ) -> None:
         store = self.store
         if store is None:
@@ -461,7 +439,6 @@ class LocalExecution:
                 tenant_id,
                 session_id,
                 mcp_http=mcp_http,
-                mcp_stdio=mcp_stdio,
             )
         except (SetupError, ApiError) as exc:
             code = exc.code if isinstance(exc, ApiError) and exc.code else None
@@ -484,9 +461,6 @@ class LocalExecution:
             return
         if kwargs is None:
             return
-        stdio = kwargs.get("mcp_stdio")
-        if isinstance(stdio, list) and stdio:
-            self.put_stdio(session_id, stdio)
         try:
             await self.pool.get(session_id, **kwargs)
         except CapacityError as exc:
@@ -580,8 +554,6 @@ def worker_observability(
 
 
 class RemoteExecution:
-    stdio_on_host = False
-
     def __init__(
         self,
         settings: Settings,
@@ -608,9 +580,6 @@ class RemoteExecution:
         if self.workers.live() == 0:
             return "capacity"
         return None
-
-    def put_stdio(self, session_id: uuid.UUID, servers: list[McpStdioServer]) -> None:
-        del session_id, servers
 
     def require(self) -> None:
         return None
@@ -674,14 +643,13 @@ class RemoteExecution:
         images: list[dict[str, str]] | None = None,
         parts: list[dict[str, str]] | None = None,
         mcp_http: list[Any] | None = None,
-        mcp_stdio: list[Any] | None = None,
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
         org_id: str | None = None,
     ) -> None:
-        del mcp_http, mcp_stdio
+        del mcp_http
         store = self.store
         assert store is not None
         sent = await self.workers.command(
@@ -730,14 +698,13 @@ class RemoteExecution:
         output: str | None,
         error: str | None,
         mcp_http: list[Any] | None = None,
-        mcp_stdio: list[Any] | None = None,
         request_id: str | None = None,
         api_key: str | None = None,
         key_id: str | None = None,
         user_id: str | None = None,
         org_id: str | None = None,
     ) -> None:
-        del mcp_http, mcp_stdio
+        del mcp_http
         store = self.store
         assert store is not None
         sent = await self.workers.command(
@@ -880,9 +847,8 @@ class RemoteExecution:
         session_id: uuid.UUID,
         *,
         mcp_http: list[Any] | None = None,
-        mcp_stdio: list[Any] | None = None,
     ) -> None:
-        del mcp_http, mcp_stdio
+        del mcp_http
         store = self.store
         if store is None:
             return

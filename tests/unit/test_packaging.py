@@ -39,4 +39,5 @@ def test_alembic_revisions_chain() -> None:
         "0017_upstream_attempts.py",
         "0018_sandbox_status.py",
         "0019_agent_versions.py",
+        "0020_mcp_list_tools.py",
     ]

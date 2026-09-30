@@ -204,7 +204,7 @@ async def test_chat_rejects_computer_and_bash_tools(client: AsyncClient) -> None
         },
     )
     assert stdio.status_code == 400
-    assert stdio.json()["error"]["code"] == "chat_tool"
+    assert stdio.json()["error"]["code"] == "unknown_field"
 
 
 async def test_chat_create_failed_turn_is_502(settings: Settings, store: Store) -> None:

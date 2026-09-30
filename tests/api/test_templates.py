@@ -67,10 +67,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
                 {
                     "type": "mcp",
                     "server_label": "search",
-                    "transport": {
-                        "type": "http",
-                        "server_url": "https://mcp.example.com/mcp",
-                    },
+                    "server_url": "https://mcp.example.com/mcp",
                     "headers": {"Authorization": "secret-token"},
                 },
             ],

@@ -16,13 +16,11 @@ from apipi.config import (
     require_run_mode,
 )
 from apipi.mcp.http import McpHttpServer
-from apipi.mcp.stdio import McpStdioServer
 from apipi.worker.pi.artifacts import unpack_workspace_tar
 from apipi.worker.pi.guest import (
     RNDADDENTROPY,
     _pi_args,
     _seed_rng,
-    _start_mcp,
     workspace_tar_bytes,
 )
 from apipi.worker.pi.guest import main as guest_main
@@ -399,8 +397,7 @@ def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
         )
         assert any(name.endswith("guest.py") for name in names)
         assert ".pi/agent/extensions/apipi-mcp.ts" in names
-        assert ".pi/agent/extensions/mcp_client.mjs" in names
-        assert ".pi/agent/extensions/mcp_http.mjs" in names
+        assert ".pi/agent/extensions/apipi.ts" in names
         env = tar.extractfile(".apipi/env")
         assert env is not None
         text = env.read().decode()
@@ -680,11 +677,9 @@ def test_guest_env_drops_worker_secrets(
             headers={"Authorization": "Bearer mcp-secret"},
         )
     ]
-    stdio = [McpStdioServer(server_label="local", command="npx", args=["-y", "mcp"])]
     env = guest_env(
         _settings(tmp_path),
         mcp,
-        stdio,
         api_key="real-key",
         broker=_Broker(),
         extra_env={"REPORT": "yes", "OPENAI_API_KEY": "from-session"},
@@ -708,7 +703,6 @@ def test_guest_env_drops_worker_secrets(
     assert env["OPENAI_BASE_URL"] == "http://172.16.0.1:1/tok/v1"
     assert env["APIPI_MCP_0_URL"] == "http://172.16.0.1:1/tok/mcp/0"
     assert "APIPI_MCP_0_AUTHORIZATION" not in env
-    assert env["APIPI_MCP_STDIO_0_COMMAND"] == "npx"
     assert env["REPORT"] == "yes"
     assert "APIPI_WORKER_TOKEN" not in env
     assert "APIPI_API_URL" not in env
@@ -1029,53 +1023,6 @@ async def test_start_microvm_jailer_permission(
     assert "root" in text
 
 
-async def test_spawn_microvm_stdio_stays_in_guest(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _images(tmp_path)
-    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
-    monkeypatch.setattr("apipi.worker.pi.microvm.setup_tap", lambda *_a, **_k: None)
-    monkeypatch.setattr("apipi.worker.pi.microvm.teardown_tap", lambda *_a, **_k: None)
-    captured: dict[str, Any] = {}
-
-    async def fake_exec(*args: str, **_kwargs: Any) -> _Process:
-        captured["args"] = args
-        return _Process()
-
-    async def fake_connect(*_args: object, **_kwargs: object) -> tuple[object, _Writer]:
-        reader = asyncio.StreamReader()
-        reader.feed_eof()
-        return reader, _Writer()
-
-    monkeypatch.setattr(
-        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
-    )
-    monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", fake_connect)
-    stdio = [
-        McpStdioServer(
-            server_label="local", command="npx", args=["-y", "mcp"], process=None
-        )
-    ]
-    await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True, mcp_stdio=stdio)
-    args = list(captured["args"])
-    assert args[0] == "/usr/bin/jailer"
-    assert "npx" not in args
-
-
-def test_workspace_image_shell_marker(tmp_path: Path) -> None:
-    dest = tmp_path / "workspace.tar"
-    write_workspace_image(
-        dest,
-        cwd=None,
-        env={},
-        pi_args=["pi", "--mode", "rpc", "--no-session"],
-        shell=True,
-    )
-    with tarfile.open(dest, mode="r") as tar:
-        assert ".apipi/shell" in tar.getnames()
-
-
 def test_guest_shell_execs_sh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     home = tmp_path / "workspace"
     home.mkdir()
@@ -1202,43 +1149,6 @@ async def test_run_microvm_shell_waits_and_cleans(
 async def test_run_microvm_shell_missing_workspace(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="--workspace must be a directory"):
         await run_microvm_shell(_settings(tmp_path), cwd=str(tmp_path / "missing"))
-
-
-def test_guest_starts_mcp_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    started: list[list[str]] = []
-
-    class _Alive:
-        def poll(self) -> None:
-            return None
-
-    def fake_popen(cmd: list[str], **_kwargs: Any) -> _Alive:
-        started.append(cmd)
-        return _Alive()
-
-    monkeypatch.setattr("apipi.worker.pi.guest.subprocess.Popen", fake_popen)
-    monkeypatch.setattr("apipi.worker.pi.guest.time.sleep", lambda _seconds: None)
-    monkeypatch.setenv("APIPI_MCP_STDIO", "local")
-    monkeypatch.setenv("APIPI_MCP_STDIO_0_COMMAND", "npx")
-    monkeypatch.setenv("APIPI_MCP_STDIO_0_ARGS", "-y\x1fmcp")
-    _start_mcp()
-    assert started == [["npx", "-y", "mcp"]]
-
-
-def test_guest_mcp_fails_when_process_exits(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _Dead:
-        def poll(self) -> int:
-            return 1
-
-    monkeypatch.setattr(
-        "apipi.worker.pi.guest.subprocess.Popen", lambda *_args, **_kwargs: _Dead()
-    )
-    monkeypatch.setattr("apipi.worker.pi.guest.time.sleep", lambda _seconds: None)
-    monkeypatch.setenv("APIPI_MCP_STDIO", "playwright")
-    monkeypatch.setenv("APIPI_MCP_STDIO_0_COMMAND", "npx")
-    with pytest.raises(RuntimeError, match="mcp playwright failed"):
-        _start_mcp()
 
 
 def test_guest_pi_args_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
