@@ -1,6 +1,8 @@
+import asyncio
 import contextlib
 import importlib
 import inspect
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -24,6 +26,7 @@ _bearer = HTTPBearer(auto_error=False)
 _MISS = object()
 
 Authenticate = Callable[..., object]
+Authorize = Callable[..., object]
 
 
 @dataclass(frozen=True)
@@ -58,12 +61,34 @@ UNAUTHORIZED = AuthReject(
 )
 
 
+@dataclass(frozen=True)
+class AuthFilter:
+    ids: frozenset[str] | None = None
+
+
+@dataclass(frozen=True)
+class AuthContext:
+    identity: AuthIdentity
+    request: AuthRequest
+
+
 class AuthCache:
-    def __init__(self, ttl: timedelta) -> None:
+    def __init__(self, ttl: timedelta, max_entries: int = 10000) -> None:
         self._ttl = ttl
-        self._entries: dict[str, tuple[float, object]] = {}
+        self._max = max(0, max_entries)
+        self._entries: OrderedDict[str, tuple[float, object]] = OrderedDict()
+        self.evictions = 0
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    @property
+    def max_entries(self) -> int:
+        return self._max
 
     def get(self, key_hash: str) -> object:
+        if self._max == 0:
+            return _MISS
         item = self._entries.get(key_hash)
         if item is None:
             return _MISS
@@ -71,10 +96,48 @@ class AuthCache:
         if monotonic() >= expires_at:
             del self._entries[key_hash]
             return _MISS
+        self._entries.move_to_end(key_hash)
         return value
 
     def put(self, key_hash: str, value: object) -> None:
+        if self._max == 0:
+            return
+        if key_hash in self._entries:
+            del self._entries[key_hash]
         self._entries[key_hash] = (monotonic() + self._ttl.total_seconds(), value)
+        while len(self._entries) > self._max:
+            self._entries.popitem(last=False)
+            self.evictions += 1
+
+    def invalidate(self, key_hash: str) -> bool:
+        return self._entries.pop(key_hash, None) is not None
+
+    def invalidate_where(self, predicate: Callable[[AuthIdentity], bool]) -> int:
+        doomed = [
+            key
+            for key, (_, value) in self._entries.items()
+            if isinstance(value, AuthIdentity)
+            and self._fresh(value, key)
+            and _safe_predicate(predicate, value)
+        ]
+        for key in doomed:
+            self._entries.pop(key, None)
+        return len(doomed)
+
+    def _fresh(self, _value: object, key: str) -> bool:
+        item = self._entries.get(key)
+        if item is None:
+            return False
+        expires_at, _ = item
+        if monotonic() >= expires_at:
+            del self._entries[key]
+            return False
+        return True
+
+    def clear(self) -> int:
+        count = len(self._entries)
+        self._entries.clear()
+        return count
 
 
 def raise_auth(reject: AuthReject) -> NoReturn:
@@ -101,6 +164,42 @@ def tenant_from_key(key: str) -> UUID:
 def authenticate(bearer: str) -> AuthIdentity:
     key_id = hash_token(bearer)
     return AuthIdentity(key_id=key_id, tenant_id=tenant_from_key(bearer))
+
+
+def _safe_predicate(
+    predicate: Callable[[AuthIdentity], bool], value: AuthIdentity
+) -> bool:
+    try:
+        return bool(predicate(value))
+    except Exception:
+        return False
+
+
+def load_authorize(path: str | None) -> Authorize | None:
+    if path is None or path == "":
+        return None
+    if ":" not in path:
+        raise ConfigError("APIPI_AUTHORIZE must be package.mod:func")
+    module_name, func_name = path.rsplit(":", 1)
+    if not module_name or not func_name:
+        raise ConfigError("APIPI_AUTHORIZE must be package.mod:func")
+    try:
+        module = importlib.import_module(module_name)
+        fn = getattr(module, func_name)
+    except (ImportError, AttributeError) as exc:
+        raise ConfigError("APIPI_AUTHORIZE must be package.mod:func") from exc
+    if not callable(fn):
+        raise ConfigError("APIPI_AUTHORIZE must be package.mod:func")
+    return fn
+
+
+async def _call_off_loop(fn: Callable[..., object], *args: object) -> object:
+    if inspect.iscoroutinefunction(fn):
+        return await fn(*args)
+    result = await asyncio.to_thread(fn, *args)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 def load_authenticate(path: str | None) -> Authenticate:
@@ -161,6 +260,14 @@ def _takes_context(fn: Callable[..., object]) -> bool:
     return len(positional) >= 2
 
 
+async def _invoke_off_loop(
+    fn: Callable[..., object], token: str, ctx: AuthRequest
+) -> object:
+    if _takes_context(fn):
+        return await _call_off_loop(fn, token, ctx)
+    return await _call_off_loop(fn, token)
+
+
 def invoke_authenticate(
     fn: Callable[..., object], token: str, ctx: AuthRequest
 ) -> object:
@@ -169,14 +276,17 @@ def invoke_authenticate(
     return fn(token)
 
 
-def _plugin_cache_key(
+async def _plugin_cache_key(
     fn: Callable[..., object], token: str, ctx: AuthRequest
 ) -> str | None:
     cache_fn = getattr(fn, "cache_key", None)
     if not callable(cache_fn):
         return None
     try:
-        raw = invoke_authenticate(cache_fn, token, ctx)
+        if _takes_context(cache_fn):
+            raw = await _call_off_loop(cache_fn, token, ctx)
+        else:
+            raw = await _call_off_loop(cache_fn, token)
     except Exception:
         return None
     if isinstance(raw, str) and raw.strip():
@@ -184,8 +294,10 @@ def _plugin_cache_key(
     return None
 
 
-def resolve_cache_key(fn: Callable[..., object], token: str, ctx: AuthRequest) -> str:
-    explicit = _plugin_cache_key(fn, token, ctx)
+async def resolve_cache_key(
+    fn: Callable[..., object], token: str, ctx: AuthRequest
+) -> str:
+    explicit = await _plugin_cache_key(fn, token, ctx)
     if explicit is not None:
         return hash_token(explicit)
     return hash_token(token)
@@ -280,6 +392,137 @@ def stored_cache_key(parsed: AuthIdentity | AuthReject, fallback: str) -> str:
     return fallback
 
 
+_flights: dict[str, asyncio.Task[object]] = {}
+_flight_lock = asyncio.Lock()
+
+
+async def _authenticate_single_flight(
+    fn: Authenticate, token: str, ctx: AuthRequest, cache: AuthCache
+) -> AuthIdentity | AuthReject:
+    key_hash = await resolve_cache_key(fn, token, ctx)
+    cached = cache.get(key_hash)
+    if isinstance(cached, (AuthIdentity, AuthReject)):
+        return cached
+    async with _flight_lock:
+        existing = _flights.get(key_hash)
+        if existing is not None:
+            task = existing
+        else:
+            task = asyncio.ensure_future(_run_auth(fn, token, ctx, cache, key_hash))
+            _flights[key_hash] = task
+    try:
+        result = await task
+        assert isinstance(result, (AuthIdentity, AuthReject))
+        return result
+    finally:
+        async with _flight_lock:
+            if _flights.get(key_hash) is task:
+                _flights.pop(key_hash, None)
+
+
+async def _run_auth(
+    fn: Authenticate, token: str, ctx: AuthRequest, cache: AuthCache, key_hash: str
+) -> AuthIdentity | AuthReject:
+    try:
+        parsed = auth_from_result(await _invoke_off_loop(fn, token, ctx))
+    except Exception as exc:
+        raise ApiError(
+            "invalid_request",
+            "Invalid bearer token",
+            code="unauthorized",
+            status_code=401,
+        ) from exc
+    store_key = stored_cache_key(parsed, key_hash)
+    if isinstance(parsed, AuthReject):
+        if _cache_reject(parsed):
+            cache.put(store_key, parsed)
+        return parsed
+    cache.put(store_key, parsed)
+    return parsed
+
+
+def identity_of(request: Request) -> AuthIdentity | None:
+    tenant_id = getattr(request.state, "tenant_id", None)
+    key_id = getattr(request.state, "key_id", None)
+    if tenant_id is None or key_id is None:
+        return None
+    user_id = getattr(request.state, "user_id", None)
+    org_id = getattr(request.state, "org_id", None)
+    return AuthIdentity(
+        key_id=str(key_id),
+        tenant_id=tenant_id if isinstance(tenant_id, UUID) else UUID(str(tenant_id)),
+        user_id=str(user_id) if user_id else None,
+        org_id=str(org_id) if org_id else None,
+    )
+
+
+async def check_authorize(
+    request: Request,
+    *,
+    action: str,
+    resource_type: str,
+    resource_id: str | None,
+) -> AuthFilter | None:
+    authorize = getattr(request.app.state, "authorize", None)
+    if authorize is None:
+        return None
+    identity = identity_of(request)
+    if identity is None:
+        return None
+    ctx = auth_request_of(request)
+    try:
+        if _takes_authorize_context(authorize):
+            raw = await _call_off_loop(
+                authorize, identity, action, resource_type, resource_id, ctx
+            )
+        else:
+            raw = await _call_off_loop(
+                authorize, identity, action, resource_type, resource_id
+            )
+    except ApiError:
+        raise
+    except Exception as exc:
+        raise ApiError(
+            "invalid_request", "Forbidden", code="forbidden", status_code=403
+        ) from exc
+    if raw is None:
+        return None
+    if isinstance(raw, AuthReject):
+        raise_auth(raw)
+    if isinstance(raw, AuthFilter):
+        if not action.endswith(".list"):
+            raise ApiError(
+                "invalid_request", "Forbidden", code="forbidden", status_code=403
+            )
+        return raw
+    if isinstance(raw, dict) and "ids" in raw:
+        ids = raw.get("ids")
+        parsed = frozenset(str(i) for i in ids) if isinstance(ids, list) else None
+        return AuthFilter(ids=parsed)
+    return None
+
+
+def _takes_authorize_context(fn: Callable[..., object]) -> bool:
+    try:
+        params = list(inspect.signature(fn).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    positional = [
+        p
+        for p in params
+        if p.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    return len(positional) >= 5
+
+
+def forbidden() -> NoReturn:
+    raise ApiError("invalid_request", "Forbidden", code="forbidden", status_code=403)
+
+
 async def require_tenant(
     creds: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     request: Request,
@@ -289,30 +532,11 @@ async def require_tenant(
     token = creds.credentials
     ctx = auth_request_of(request)
     fn: Authenticate = request.app.state.authenticate
-    key_hash = resolve_cache_key(fn, token, ctx)
     cache: AuthCache = request.app.state.auth_cache
-    cached = cache.get(key_hash)
-    if isinstance(cached, AuthReject):
-        raise_auth(cached)
-    if isinstance(cached, AuthIdentity):
-        identity = cached
-    else:
-        try:
-            parsed = auth_from_result(invoke_authenticate(fn, token, ctx))
-        except Exception as exc:
-            raise ApiError(
-                "invalid_request",
-                "Invalid bearer token",
-                code="unauthorized",
-                status_code=401,
-            ) from exc
-        store_key = stored_cache_key(parsed, key_hash)
-        if isinstance(parsed, AuthReject):
-            if _cache_reject(parsed):
-                cache.put(store_key, parsed)
-            raise_auth(parsed)
-        cache.put(store_key, parsed)
-        identity = parsed
+    parsed = await _authenticate_single_flight(fn, token, ctx, cache)
+    if isinstance(parsed, AuthReject):
+        raise_auth(parsed)
+    identity = parsed
     request.state.tenant_id = identity.tenant_id
     request.state.key_id = identity.key_id
     request.state.user_id = identity.user_id

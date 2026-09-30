@@ -3,7 +3,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
-from apipi.gateway.auth import require_tenant
+from apipi.gateway.auth import check_authorize, require_tenant
 from apipi.services.vaults import CredentialUpdate, CredentialWrite, VaultWrite
 from apipi.store.models import Tenant
 
@@ -20,6 +20,9 @@ async def create_saved_vault(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    await check_authorize(
+        request, action="vault.write", resource_type="vault", resource_id=None
+    )
     return await _vaults(request).create(tenant.id, body)
 
 
@@ -28,7 +31,15 @@ async def list_saved_vaults(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _vaults(request).list(tenant.id)
+    filt = await check_authorize(
+        request, action="vault.list", resource_type="vault", resource_id=None
+    )
+    payload = await _vaults(request).list(tenant.id)
+    if filt is not None and filt.ids is not None:
+        items = payload.get("vaults", [])
+        payload = dict(payload)
+        payload["vaults"] = [v for v in items if str(v.get("id")) in filt.ids]
+    return payload
 
 
 @router.get("/v1/agents/vaults/{vault_id}")
@@ -37,6 +48,16 @@ async def read_saved_vault(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_vault as _gv
+
+        if await _gv(_db, tenant.id, vault_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="vault.read", resource_type="vault", resource_id=str(vault_id)
+    )
     return await _vaults(request).get(tenant.id, vault_id)
 
 
@@ -47,6 +68,16 @@ async def update_saved_vault(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_vault as _gv
+
+        if await _gv(_db, tenant.id, vault_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="vault.write", resource_type="vault", resource_id=str(vault_id)
+    )
     return await _vaults(request).update(tenant.id, vault_id, body)
 
 
@@ -56,6 +87,16 @@ async def delete_saved_vault(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_vault as _gv
+
+        if await _gv(_db, tenant.id, vault_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="vault.write", resource_type="vault", resource_id=str(vault_id)
+    )
     return await _vaults(request).delete(tenant.id, vault_id)
 
 
@@ -66,6 +107,16 @@ async def create_saved_credential(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_vault as _gv
+
+        if await _gv(_db, tenant.id, vault_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="vault.write", resource_type="vault", resource_id=str(vault_id)
+    )
     return await _vaults(request).create_credential(tenant.id, vault_id, body)
 
 
@@ -75,6 +126,16 @@ async def list_saved_credentials(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_vault as _gv
+
+        if await _gv(_db, tenant.id, vault_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="vault.read", resource_type="vault", resource_id=str(vault_id)
+    )
     return await _vaults(request).list_credentials(tenant.id, vault_id)
 
 
@@ -85,6 +146,16 @@ async def read_saved_credential(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_vault as _gv
+
+        if await _gv(_db, tenant.id, vault_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="vault.read", resource_type="vault", resource_id=str(vault_id)
+    )
     return await _vaults(request).get_credential(tenant.id, vault_id, credential_id)
 
 
@@ -96,6 +167,16 @@ async def update_saved_credential(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_vault as _gv
+
+        if await _gv(_db, tenant.id, vault_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="vault.write", resource_type="vault", resource_id=str(vault_id)
+    )
     return await _vaults(request).update_credential(
         tenant.id, vault_id, credential_id, body
     )
@@ -108,4 +189,14 @@ async def delete_saved_credential(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_vault as _gv
+
+        if await _gv(_db, tenant.id, vault_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="vault.write", resource_type="vault", resource_id=str(vault_id)
+    )
     return await _vaults(request).delete_credential(tenant.id, vault_id, credential_id)

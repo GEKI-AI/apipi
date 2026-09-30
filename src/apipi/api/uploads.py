@@ -3,7 +3,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
-from apipi.gateway.auth import require_tenant
+from apipi.gateway.auth import check_authorize, require_tenant
 from apipi.gateway.schemas import StrictModel
 from apipi.store.models import Tenant
 
@@ -32,6 +32,9 @@ async def create_upload(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    await check_authorize(
+        request, action="file.write", resource_type="file", resource_id=None
+    )
     return await _uploads(request).create(
         tenant.id,
         purpose=body.purpose,
@@ -49,5 +52,8 @@ async def complete_upload(
     tenant: Annotated[Tenant, Depends(require_tenant)],
     body: UploadComplete | None = None,
 ) -> dict[str, Any]:
+    await check_authorize(
+        request, action="file.write", resource_type="file", resource_id=None
+    )
     purpose = body.file_purpose if body is not None else None
     return await _uploads(request).complete(tenant.id, upload_id, file_purpose=purpose)

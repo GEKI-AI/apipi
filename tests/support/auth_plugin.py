@@ -51,3 +51,18 @@ def quota(bearer: str) -> dict[str, object]:
 def boom(bearer: str) -> None:
     calls.append(bearer)
     raise RuntimeError("plugin failed")
+
+
+async def async_accept(bearer: str) -> dict[str, str]:
+    calls.append(bearer)
+    return {"key_id": "plugin", "tenant_id": str(TENANT)}
+
+
+def slow_block(bearer: str) -> dict[str, object]:
+    calls.append(bearer)
+    return {"key_id": "plugin", "tenant_id": str(TENANT)}
+
+
+def scoped(bearer: str) -> dict[str, object]:
+    calls.append(bearer)
+    return {"key_id": "plugin", "tenant_id": str(TENANT)}

@@ -106,6 +106,7 @@ yours.
 | `GET …/turns`, `GET …/items`, `GET/DELETE …/artifacts` | Same API |
 | `GET /v1/apipi/usage` | ApiPi route (tokens and turn counts). `/v1/usage` is a deprecated alias. |
 | `/v1/apipi/templates`, `/v1/apipi/uploads`, `/v1/apipi/chat/sessions` | ApiPi routes. The `/v1/templates`, `/v1/uploads`, and `/v1/chat/sessions` paths are deprecated aliases. |
+| `POST /v1/apipi/auth/invalidate` | ApiPi route (drop cached auth identities for the caller's tenant). |
 | `WS /v1/environments/{environment_id}` | Same shape, different backend (ApiPi runner protocol) |
 | `GET /health`, `GET /metrics` | ApiPi operator routes |
 | `POST/GET/DELETE /v1/files`, `GET /v1/files/{id}/content` | Same API (purpose `user_data` or `assistants`; max `APIPI_MAX_FILE_BYTES`) |

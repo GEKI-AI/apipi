@@ -77,6 +77,8 @@ hosted files and skills).
 | `APIPI_API_ONLY` | `api_only` | off | Control plane only. Turns lease a worker. `apipi serve --api-only` sets this. |
 | `APIPI_ENV_NONE_PLACEMENT` | `[placement].env_none` | `chat` | Where Agents sessions with `environment.type=none` run on a mixed fleet: `chat` (chat workers), `microvm` (legacy computer workers), or `reject` (`400` code `placement`). Session metadata `apipi.session_kind=chat` always uses chat workers. Computer environments always use `microvm`. See [chat fleets](chat.md) and [workers](workers.md). |
 | `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache success and `401` rejects by SHA-256 of the bearer, never the raw key. `429` rejects are not cached. |
+| `APIPI_AUTH_CACHE_MAX` | `auth_cache_max` | `10000` | Maximum auth cache entries with LRU eviction. `0` disables caching so every request calls the plugin. The tenant lookup memo uses the same bound. |
+| `APIPI_AUTHORIZE` | `authorize` | unset (allow all) | Import path `package.mod:func` for the optional authorization hook. See [auth](auth.md). |
 | `APIPI_SESSIONS_DIR` | `sessions_dir` | `.apipi/sessions` under cwd | Root for local session directories (`openai_hosted`). Must be writable by the gateway user. Local artifacts live under `.artifacts` there. A leftover root-owned tree fails harvest with code `artifact_store`. |
 | `APIPI_DB_POOL_SIZE` | `db_pool_size` | `5` | SQLAlchemy pool size. |
 | `APIPI_MAX_REQUEST_BYTES` | `max_request_bytes` | `1MiB` | Reject larger request bodies with `413` and code `payload_too_large`. |

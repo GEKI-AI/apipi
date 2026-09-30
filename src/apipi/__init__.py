@@ -9,7 +9,9 @@ from apipi.config import Settings, extend_settings
 from apipi.gateway import Gateway, create_app
 from apipi.gateway.auth import (
     Authenticate,
+    AuthFilter,
     AuthIdentity,
+    Authorize,
     AuthReject,
     AuthRequest,
     tenant_from_key,
@@ -21,10 +23,12 @@ from apipi.store.engine import Store
 
 __all__ = [
     "AgentWrite",
+    "AuthFilter",
     "AuthIdentity",
     "AuthReject",
     "AuthRequest",
     "Authenticate",
+    "Authorize",
     "EventHub",
     "Gateway",
     "SessionService",

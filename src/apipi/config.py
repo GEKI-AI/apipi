@@ -550,6 +550,15 @@ class Settings(BaseSettings):
         default=timedelta(seconds=30),
         validation_alias=AliasChoices("APIPI_AUTH_CACHE_TTL", "auth_cache_ttl"),
     )
+    auth_cache_max: int = Field(
+        default=10000,
+        ge=0,
+        validation_alias=AliasChoices("APIPI_AUTH_CACHE_MAX", "auth_cache_max"),
+    )
+    authorize: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_AUTHORIZE", "authorize"),
+    )
     pi_command: str = Field(
         default="pi",
         validation_alias=AliasChoices("APIPI_PI_COMMAND", "pi_command"),

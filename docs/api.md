@@ -92,6 +92,12 @@ still work and are deprecated: `/v1/templates`, `/v1/uploads`,
 `/v1/agents/sessions/{id}/export`, and artifact `download`. A hit on
 an old path is logged once per process.
 
+`POST /v1/apipi/auth/invalidate` drops cached auth identities for
+the caller's tenant. The body filters are optional and combined with
+AND: `{"key_id", "user_id"?, "org_id"?}`. An empty body means every
+cached identity of the caller's tenant. The response is
+`{"invalidated": <count>}`. See [auth](auth.md).
+
 A template is a stored zip of one agent's configuration. It is
 tenant-scoped. Creating an agent from a template always creates a new
 agent. It does not update an existing agent, and deleting the template
