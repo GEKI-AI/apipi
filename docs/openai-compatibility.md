@@ -122,6 +122,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | Kind | Name | Notes |
 | --- | --- | --- |
 | Field | `idle_ttl` | Agent and session. Flat. |
+| Field | `revision` | Agent response, read-only. `1` on create, plus one per update and restore. |
 | Field | `user_id`, `org_id` | Session response. Flat. |
 | Field | `session_defaults` | Agent. |
 | Field | `environment.sandbox_size` | `S` / `M` / `L`. Alias of OpenAI `container_size`. |

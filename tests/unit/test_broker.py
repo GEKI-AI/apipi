@@ -68,6 +68,149 @@ async def test_broker_injects_model_key_and_strips_guest_auth(
         server.shutdown()
 
 
+async def test_broker_stamps_attribution_and_strips_forged(
+    tmp_path: Path,
+) -> None:
+    seen: dict[str, str] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            for name in (
+                "x-apipi-session-id",
+                "x-apipi-turn-id",
+                "x-apipi-agent-id",
+                "x-apipi-agent-revision",
+            ):
+                seen[name] = self.headers.get(name, "")
+            seen["authorization"] = self.headers.get("Authorization", "")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    settings = _settings(tmp_path, f"http://127.0.0.1:{port}/v1")
+    broker = await start_broker(
+        settings,
+        api_key="from-request",
+        mcp_http=None,
+        host="127.0.0.1",
+        port=0,
+    )
+    try:
+        broker.set_context("sess-1", "agent-9")
+        broker.set_turn("turn-7", 4)
+        async with AsyncClient(base_url=broker.openai_base_url) as client:
+            response = await client.post(
+                "/chat/completions",
+                headers={
+                    "Authorization": "Bearer guest-dummy",
+                    "x-apipi-session-id": "forged",
+                    "X-Apipi-Turn-Id": "forged",
+                },
+                json={"model": "test"},
+            )
+        assert response.status_code == 200
+        assert seen["x-apipi-session-id"] == "sess-1"
+        assert seen["x-apipi-turn-id"] == "turn-7"
+        assert seen["x-apipi-agent-id"] == "agent-9"
+        assert seen["x-apipi-agent-revision"] == "4"
+        assert seen["authorization"] == "Bearer from-request"
+        broker.clear_turn()
+        async with AsyncClient(base_url=broker.openai_base_url) as client:
+            await client.post("/chat/completions", json={"model": "test"})
+        assert seen["x-apipi-turn-id"] == ""
+        assert seen["x-apipi-session-id"] == "sess-1"
+    finally:
+        await broker.stop()
+        server.shutdown()
+
+
+async def test_broker_attribution_toggle_still_strips(tmp_path: Path) -> None:
+    seen: dict[str, str] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            seen["session"] = self.headers.get("x-apipi-session-id", "")
+            seen["other"] = self.headers.get("x-other", "")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    settings = _settings(tmp_path, f"http://127.0.0.1:{port}/v1")
+    broker = await start_broker(
+        settings,
+        api_key="k",
+        mcp_http=None,
+        host="127.0.0.1",
+        port=0,
+    )
+    try:
+        broker.attribution = False
+        broker.set_context("sess-1", "agent-1")
+        broker.set_turn("turn-1", 2)
+        async with AsyncClient(base_url=broker.openai_base_url) as client:
+            await client.post(
+                "/chat/completions",
+                headers={"x-apipi-session-id": "forged", "x-other": "kept"},
+                json={},
+            )
+        assert seen["session"] == ""
+        assert seen["other"] == "kept"
+    finally:
+        await broker.stop()
+        server.shutdown()
+
+
+async def test_broker_omits_agent_headers_for_inline(tmp_path: Path) -> None:
+    seen: dict[str, str] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            seen["agent"] = self.headers.get("x-apipi-agent-id", "")
+            seen["revision"] = self.headers.get("x-apipi-agent-revision", "")
+            seen["turn"] = self.headers.get("x-apipi-turn-id", "")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    settings = _settings(tmp_path, f"http://127.0.0.1:{port}/v1")
+    broker = await start_broker(
+        settings, api_key="k", mcp_http=None, host="127.0.0.1", port=0
+    )
+    try:
+        broker.set_context("sess-1", None)
+        broker.set_turn("turn-1", None)
+        async with AsyncClient(base_url=broker.openai_base_url) as client:
+            await client.post("/chat/completions", json={})
+        assert seen["turn"] == "turn-1"
+        assert seen["agent"] == ""
+        assert seen["revision"] == ""
+    finally:
+        await broker.stop()
+        server.shutdown()
+
+
 async def test_broker_injects_mcp_header(tmp_path: Path) -> None:
     seen: dict[str, str] = {}
 

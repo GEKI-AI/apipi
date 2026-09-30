@@ -73,6 +73,9 @@ class Agent(Base):
     version_seq: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
 
 
 class AgentVersion(Base):

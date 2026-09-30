@@ -64,6 +64,7 @@ async def test_agent_crud(client: AsyncClient) -> None:
         "tools",
         "session_defaults",
         "reasoning",
+        "revision",
         "created_at",
         "updated_at",
     }

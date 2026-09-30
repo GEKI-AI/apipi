@@ -63,6 +63,11 @@ class PiHarness:
         raw_org = _kwargs.get("org_id")
         raw_codemode = _kwargs.get("codemode")
         codemode = raw_codemode if isinstance(raw_codemode, str) else "off"
+        raw_turn = _kwargs.get("turn_id")
+        turn_id = str(raw_turn) if raw_turn else None
+        raw_revision = _kwargs.get("agent_revision")
+        agent_revision = raw_revision if isinstance(raw_revision, int) else None
+        agent_id = str(raw_agent) if raw_agent else None
         proc = await self.pool.get(
             session_id,
             cwd=cwd,
@@ -84,10 +89,18 @@ class PiHarness:
             codemode=codemode,
             idle_ttl=idle_ttl,
             idle_ttl_set=idle_ttl_set,
-            agent_id=str(raw_agent) if raw_agent else None,
+            agent_id=agent_id,
             user_id=raw_user if isinstance(raw_user, str) else None,
             org_id=raw_org if isinstance(raw_org, str) else None,
         )
+        broker = getattr(proc, "broker", None)
+        if broker is not None:
+            set_context = getattr(broker, "set_context", None)
+            if callable(set_context):
+                set_context(str(session_id), agent_id)
+            set_turn = getattr(broker, "set_turn", None)
+            if callable(set_turn):
+                set_turn(turn_id, agent_revision)
         settled = False
         thinking = ThinkingTracker()
         abort = _kwargs.get("abort")
@@ -107,13 +120,19 @@ class PiHarness:
                 },
             )
         stream = proc.prompt(text, images=images) if images else proc.prompt(text)
-        async for event in stream:
-            if event.get("type") == "agent_settled":
-                settled = True
-            for public in map_pi_event(event):
-                yield public
-            for public in thinking.feed(event):
-                yield public
+        try:
+            async for event in stream:
+                if event.get("type") == "agent_settled":
+                    settled = True
+                for public in map_pi_event(event):
+                    yield public
+                for public in thinking.feed(event):
+                    yield public
+        finally:
+            if broker is not None:
+                clear_turn = getattr(broker, "clear_turn", None)
+                if callable(clear_turn):
+                    clear_turn()
         if not settled:
             if getattr(abort, "is_set", lambda: False)():
                 self.pool.touch(session_id)

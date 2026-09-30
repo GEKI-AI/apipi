@@ -116,6 +116,7 @@ async def update_agent(
     if "session_defaults" in changes:
         agent.session_defaults = changes["session_defaults"]
     agent.updated_at = utc_now()
+    agent.revision = (agent.revision or 0) + 1
     await db.flush()
     return agent
 
