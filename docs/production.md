@@ -111,8 +111,9 @@ chain, the same chain as the artifact store. Never put those keys in
 TOML. The artifact and session store keep using `APIPI_S3_*` and are
 not affected by the image settings.
 
-The official Images workflow can publish `default` and `browser` as
-GitHub release assets.
+The official Images workflow publishes x86_64 `default` and `browser`
+as GitHub release assets. It does not publish `work` or aarch64.
+Build those locally if a worker needs them.
 
 ## Scale-out
 

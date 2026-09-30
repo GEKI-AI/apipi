@@ -17,16 +17,8 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-latest
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
+    name: Build x86_64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -38,15 +30,12 @@ jobs:
       - name: Sync
         run: uv sync --locked
       - name: Build default
-        run: uv run apipi images build default --out image-out --arch ${{ matrix.arch }}
+        run: uv run apipi images build default --out image-out --arch x86_64
       - name: Build browser
-        if: matrix.arch == 'x86_64'
-        run: uv run apipi images build browser --out image-out --arch ${{ matrix.arch }}
-      - name: Build work
-        run: uv run apipi images build work --out image-out --arch ${{ matrix.arch }}
+        run: uv run apipi images build browser --out image-out --arch x86_64
       - uses: actions/upload-artifact@v4
         with:
-          name: images-${{ matrix.arch }}
+          name: images-x86_64
           path: image-out/*
 
   release:

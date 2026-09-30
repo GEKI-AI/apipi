@@ -62,7 +62,8 @@ A local x86_64 `default` build used about 1.1 GiB of the 2048 MiB
 filesystem. Node under `/usr/local` was about 636 MiB. A local
 `browser` build used about 1.7 GiB of the 4096 MiB filesystem, so
 both sizes still fit. `work` was not measured. The estimate is that
-3072 MiB still fits. Confirm on the next image publish.
+3072 MiB still fits. The GitHub Images workflow does not build `work`
+or aarch64. Confirm `work` on a local build.
 
 The script needs `curl`, `tar`, `xz`, `mkfs.ext4`, `mount`, and root
 (or `sudo`) for the loop mount and chroot. It bootstraps
