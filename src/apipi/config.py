@@ -120,9 +120,7 @@ _SANDBOX_TTL_TOML = {
     "openai_hosted": "workspace_ttl",
     "self_hosted": "sandbox_ttl_self_hosted",
 }
-_SANDBOX_BROWSER_TOML = {
-    "auto_playwright": "sandbox_auto_playwright",
-}
+_REMOVED_BROWSER_KEYS = frozenset({"auto_playwright", "playwright_mcp"})
 _PLACEMENT_TOML = {
     "env_none": "env_none_placement",
 }
@@ -762,12 +760,6 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("APIPI_SANDBOX_L_MEM_MIB", "sandbox_l_mem_mib"),
     )
-    sandbox_auto_playwright: bool = Field(
-        default=True,
-        validation_alias=AliasChoices(
-            "APIPI_SANDBOX_AUTO_PLAYWRIGHT", "sandbox_auto_playwright"
-        ),
-    )
     sandbox_eager_boot: Annotated[bool, BeforeValidator(parse_on_off)] = Field(
         default=False,
         validation_alias=AliasChoices("APIPI_SANDBOX_EAGER_BOOT", "sandbox_eager_boot"),
@@ -1123,10 +1115,11 @@ def _flatten_sandbox(table: dict[str, Any]) -> dict[str, Any]:
             )
         elif key == "browser":
             browser = dict(_require_table(value, "[sandbox.browser]"))
-            if "playwright_mcp" in browser:
-                _log.warning("playwright_mcp was removed and is ignored")
-                browser.pop("playwright_mcp")
-            out.update(_map_table(browser, _SANDBOX_BROWSER_TOML, "sandbox.browser"))
+            for name in sorted(browser):
+                if name in _REMOVED_BROWSER_KEYS:
+                    _log.warning("%s was removed and is ignored", name)
+                else:
+                    _log.warning("unknown [sandbox.browser] key %s is ignored", name)
         elif key in _SANDBOX_TOML:
             if isinstance(value, dict):
                 raise ConfigError(f"unknown setting: sandbox.{key}")
@@ -1186,7 +1179,14 @@ class _ExtendSettings(Settings):
         return (init_settings,)
 
 
+def _warn_removed_browser_env() -> None:
+    raw = os.environ.get("APIPI_SANDBOX_AUTO_PLAYWRIGHT")
+    if raw:
+        _log.warning("APIPI_SANDBOX_AUTO_PLAYWRIGHT was removed and is ignored")
+
+
 def load_settings(*, config_path: str | None = None) -> Settings:
+    _warn_removed_browser_env()
     path = resolve_config_path(config_path)
     values = _toml_values(path) if path is not None else {}
     env_file = Path(".env") if Path(".env").is_file() else None
@@ -1343,8 +1343,6 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_SANDBOX_M_MEM_MIB must be at least 1"
         if "sandbox_l_mem_mib" in loc or "APIPI_SANDBOX_L_MEM_MIB" in loc:
             return "APIPI_SANDBOX_L_MEM_MIB must be at least 1"
-        if "sandbox_auto_playwright" in loc or "APIPI_SANDBOX_AUTO_PLAYWRIGHT" in loc:
-            return "APIPI_SANDBOX_AUTO_PLAYWRIGHT must be on or off"
         if "sandbox_eager_boot" in loc or "APIPI_SANDBOX_EAGER_BOOT" in loc:
             return "APIPI_SANDBOX_EAGER_BOOT must be on or off"
         if "sandbox_l_vcpus" in loc or "APIPI_SANDBOX_L_VCPUS" in loc:

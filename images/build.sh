@@ -23,6 +23,7 @@ Usage: $0 <image-id|path-to-image-dir> [OUT_DIR]
 
 Writes rootfs.ext4 for default, rootfs-browser.ext4 for browser, and
 rootfs-<id>.ext4 for any other id. Also downloads vmlinux into OUT_DIR.
+The guest is Debian trixie slim. There is no Alpine path.
 EOF
 }
 
@@ -53,19 +54,15 @@ else
 fi
 
 OV_SIZE=${SIZE_MIB-}
-OV_ALPINE=${ALPINE_VER-}
 OV_PIN=${PINNED_PI-}
 # shellcheck disable=SC1091
 source "$RECIPE/image.env"
 if [[ -n "$OV_SIZE" ]]; then
   SIZE_MIB=$OV_SIZE
 fi
-if [[ -n "$OV_ALPINE" ]]; then
-  ALPINE_VER=$OV_ALPINE
-fi
 PIN=${OV_PIN-}
-ALPINE_VER=${ALPINE_VER:-3.21.3}
 PACKAGES=${PACKAGES-}
+ARCHS=${ARCHS:-"x86_64 aarch64"}
 IMAGE_ID=${IMAGE_ID:-$(basename "$RECIPE")}
 SIZE_MIB=${SIZE_MIB:-2048}
 
@@ -80,7 +77,7 @@ if [[ ! -f "$GUEST_SH" ]]; then
 fi
 
 pin_string() {
-  sed -n "/^$1 = /,/^[^ ]/p" "$VERSION_PY" | sed -n 's/.*"\([0-9A-Za-z.]*\)".*/\1/p' | head -1
+  sed -n "/^$1 = /,/^[^ ]/p" "$VERSION_PY" | sed -n 's/.*"\([^"]*\)".*/\1/p' | head -1
 }
 
 if [[ -z "$PIN" && -f "$VERSION_PY" ]]; then
@@ -95,16 +92,55 @@ if [[ -z "$UV_VER" ]]; then
   echo "could not read PINNED_UV" >&2
   exit 1
 fi
+DEBIAN_DIGEST=$(pin_string PINNED_DEBIAN_DIGEST)
+if [[ -z "$DEBIAN_DIGEST" ]]; then
+  echo "could not read PINNED_DEBIAN_DIGEST" >&2
+  exit 1
+fi
+NODE_VER=$(pin_string PINNED_NODE)
+if [[ -z "$NODE_VER" ]]; then
+  echo "could not read PINNED_NODE" >&2
+  exit 1
+fi
 
 ARCH=$(uname -m)
 case "$ARCH" in
-  x86_64) ALPINE_ARCH=x86_64 ;;
-  aarch64) ALPINE_ARCH=aarch64 ;;
+  x86_64)
+    DEB_ARCH=amd64
+    PLATFORM=linux/amd64
+    NODE_ARCH=x64
+    NODE_SHA=$(pin_string PINNED_NODE_SHA256_X86_64)
+    UV_SHA=$(pin_string PINNED_UV_SHA256_X86_64)
+    ;;
+  aarch64)
+    DEB_ARCH=arm64
+    PLATFORM=linux/arm64
+    NODE_ARCH=arm64
+    NODE_SHA=$(pin_string PINNED_NODE_SHA256_AARCH64)
+    UV_SHA=$(pin_string PINNED_UV_SHA256_AARCH64)
+    ;;
   *)
     echo "unsupported arch: $ARCH" >&2
     exit 1
     ;;
 esac
+
+case " ${ARCHS} " in
+  *" ${ARCH} "*) ;;
+  *)
+    echo "image ${IMAGE_ID} is not built for ${ARCH}" >&2
+    exit 1
+    ;;
+esac
+
+if [[ -z "$NODE_SHA" ]]; then
+  echo "could not read node sha256 for $ARCH" >&2
+  exit 1
+fi
+if [[ -z "$UV_SHA" ]]; then
+  echo "could not read uv sha256 for $ARCH" >&2
+  exit 1
+fi
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -119,6 +155,7 @@ need sha256sum
 need mkfs.ext4
 need mount
 need umount
+need xz
 
 as_root() {
   if [[ "${EUID}" -eq 0 ]]; then
@@ -144,25 +181,41 @@ cleanup() {
     as_root umount "$MNT/dev" 2>/dev/null || true
     as_root umount "$MNT" 2>/dev/null || true
   fi
+  if [[ -n "${DOCKER_CID:-}" ]]; then
+    docker rm "$DOCKER_CID" >/dev/null 2>&1 || true
+  fi
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
 
-ALPINE_TAR="${WORKDIR}/alpine.tar.gz"
 MNT="${WORKDIR}/mnt"
 IMG="${WORKDIR}/rootfs.ext4"
-ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/releases/${ALPINE_ARCH}/alpine-minirootfs-${ALPINE_VER}-${ALPINE_ARCH}.tar.gz"
 # shellcheck disable=SC1091
 source "$(dirname "$0")/kernel.env"
 KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/${KERNEL_BUILD}/${ARCH}/vmlinux-${KERNEL_VERSION}"
 
-curl -fsSL "$ALPINE_URL" -o "$ALPINE_TAR"
 truncate -s "${SIZE_MIB}M" "$IMG"
 mkfs.ext4 -F -q "$IMG"
 mkdir -p "$MNT"
 as_root mount -o loop "$IMG" "$MNT"
-as_root tar -xzf "$ALPINE_TAR" -C "$MNT"
-as_root mkdir -p "$MNT/proc" "$MNT/sys" "$MNT/dev" "$MNT/sbin" "$MNT/workspace" "$MNT/tmp"
+
+bootstrap_debian() {
+  local image="debian:trixie-slim@${DEBIAN_DIGEST}"
+  if command -v docker >/dev/null 2>&1; then
+    DOCKER_CID=$(docker create --platform "$PLATFORM" "$image")
+    docker export "$DOCKER_CID" | as_root tar -xf - -C "$MNT"
+    docker rm "$DOCKER_CID" >/dev/null
+    DOCKER_CID=""
+    return 0
+  fi
+  echo "docker is unavailable; falling back to debootstrap without the digest pin" >&2
+  need debootstrap
+  as_root debootstrap --variant=minbase --arch="$DEB_ARCH" trixie "$MNT" \
+    http://deb.debian.org/debian
+}
+
+bootstrap_debian
+as_root mkdir -p "$MNT/proc" "$MNT/sys" "$MNT/dev" "$MNT/sbin" "$MNT/workspace" "$MNT/tmp" "$MNT/usr/local"
 as_root mount -t proc proc "$MNT/proc"
 as_root mount -t sysfs sysfs "$MNT/sys"
 as_root mount --bind /dev "$MNT/dev"
@@ -171,30 +224,46 @@ if [[ -f /etc/resolv.conf ]]; then
 fi
 as_root cp "$GUEST_SH" "$MNT/sbin/apipi-guest"
 as_root chmod 755 "$MNT/sbin/apipi-guest"
+
+NODE_NAME="node-${NODE_VER}-linux-${NODE_ARCH}"
+NODE_URL="https://nodejs.org/dist/${NODE_VER}/${NODE_NAME}.tar.xz"
+curl -fsSL "$NODE_URL" -o "${WORKDIR}/node.tar.xz"
+echo "${NODE_SHA}  ${WORKDIR}/node.tar.xz" | sha256sum -c -
+mkdir -p "${WORKDIR}/node"
+tar -xJf "${WORKDIR}/node.tar.xz" -C "${WORKDIR}/node" --strip-components=1
+rm -rf "${WORKDIR}/node/include" "${WORKDIR}/node/share/doc" "${WORKDIR}/node/share/man"
+as_root cp -a "${WORKDIR}/node/." "$MNT/usr/local/"
+
 SETUP=""
 if [[ -f "$RECIPE/setup.sh" ]]; then
   as_root cp "$RECIPE/setup.sh" "$MNT/tmp/apipi-image-setup.sh"
   as_root chmod 755 "$MNT/tmp/apipi-image-setup.sh"
   SETUP="/tmp/apipi-image-setup.sh"
 fi
+if [[ "$IMAGE_ID" == browser ]]; then
+  as_root tee "$MNT/tmp/apipi-pins.env" >/dev/null <<EOF
+PINNED_AGENT_BROWSER=$(pin_string PINNED_AGENT_BROWSER)
+PINNED_AGENT_BROWSER_SHA256=$(pin_string PINNED_AGENT_BROWSER_SHA256_X86_64)
+PINNED_CHROME=$(pin_string PINNED_CHROME_HEADLESS_SHELL)
+PINNED_CHROME_SHA256=$(pin_string PINNED_CHROME_HEADLESS_SHELL_SHA256_X86_64)
+EOF
+fi
+
 as_root chroot "$MNT" /bin/sh -c "
   set -e
-  echo https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER%.*}/community >> /etc/apk/repositories
-  apk add --no-cache nodejs npm python3 py3-pip iproute2 socat curl git ${PACKAGES}
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv curl git iproute2 socat ca-certificates tar ripgrep ${PACKAGES}
+  apt-get clean
+  rm -rf /var/lib/apt/lists/*
   npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PIN}
   if [ -n '${SETUP}' ]; then
     /bin/sh '${SETUP}'
     rm -f '${SETUP}'
   fi
 "
-case "$ARCH" in
-  x86_64) UV_SHA=$(pin_string PINNED_UV_SHA256_X86_64) ;;
-  aarch64) UV_SHA=$(pin_string PINNED_UV_SHA256_AARCH64) ;;
-esac
-if [[ -z "$UV_SHA" ]]; then
-  echo "could not read uv sha256 for $ARCH" >&2
-  exit 1
-fi
+
 UV_NAME="uv-${ARCH}-unknown-linux-musl"
 UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VER}/${UV_NAME}.tar.gz"
 curl -fsSL "$UV_URL" -o "${WORKDIR}/uv.tar.gz"
@@ -210,9 +279,16 @@ break-system-packages = true
 EOF
 as_root chroot "$MNT" /bin/sh -c '
   set -e
+  node --version
+  python3 --version
   pip --version
   uv --version
   uvx --version
+  rg --version
+  git --version
+  curl --version
+  socat -V >/dev/null
+  ip -V
   HOME=/tmp/pip-user pip install --user six
   HOME=/tmp/pip-user python3 -c "import six"
   rm -rf /tmp/pip-user

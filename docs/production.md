@@ -31,8 +31,8 @@ never switches to another mode on its own.
 Size the box from **live** sessions, not from Postgres row counts.
 Each live session is one Pi process or Firecracker guest. Guest RAM is
 the real cost (`APIPI_MICROVM_MEM_MIB`, default 512). Firecracker VMM
-overhead is small (~5 MiB per guest). Pi alone is modest. Playwright
-or Chromium inside the guest needs hundreds of MiB extra, so raise
+overhead is small (~5 MiB per guest). Pi alone is modest. Chrome
+inside the browser image needs hundreds of MiB extra, so raise
 guest RAM rather than packing more 512 MiB guests.
 
 Leave disk for `APIPI_SESSIONS_DIR`: each `openai_hosted` directory is
@@ -156,8 +156,8 @@ container.
 | Default 32 live | 32 × 512 MiB ≈ **16 GiB** guests plus ~0.2 GiB VMM. Fits easily. |
 | Starting cap | **`max_sessions=48`** (24 GiB guests) or keep **32**. Raise after you watch host RSS and `429` `capacity`. The RAM cap still applies. |
 | Ceiling | 57344 / 512 ≈ **112** live at 512 MiB. That is the wall, not a starting point. |
-| Playwright / Chromium | Use sandbox size **`L`** so the guest gets the **browser** rootfs, about **2 GiB** RAM, **2 vCPUs**, and Playwright MCP against system Chromium when auto-inject is on. Then about **24–28** live `L` guests in a 56 GiB budget. `S` (512 MiB, 1 vCPU) is for Pi and light tools. |
-| CPU | 48 × 1 vCPU on 12 cores is normal for `S` and `M` while turns wait on the model URL. Size `L` defaults to 2 vCPUs (`APIPI_SANDBOX_L_VCPUS`). Keep `APIPI_MICROVM_VCPUS=1` for `S` and `M` unless that computer is CPU-heavy. |
+| Browser | Use sandbox size **`M`** or **`L`** with image `browser`. `M` is 1 GiB and `L` is 2 GiB. Both get at least 2 vCPUs. The guest runs agent-browser and chrome-headless-shell, not Playwright MCP. About **24–28** live `L` guests fit in a 56 GiB budget. `S` (512 MiB, 1 vCPU) is for Pi and light tools. The browser image is x86_64 only. |
+| CPU | 48 × 1 vCPU on 12 cores is normal for `S` and non-browser `M` while turns wait on the model URL. Size `L` defaults to 2 vCPUs (`APIPI_SANDBOX_L_VCPUS`). Browser guests, including size `M`, also get at least 2. Keep `APIPI_MICROVM_VCPUS=1` for `S` and non-browser `M` unless that computer is CPU-heavy. |
 | Disk | Hosted workspaces last until sandbox TTL (default 1 hour), capped at 1 GiB each. Local artifacts 512 MiB per session unless S3. Worst case is cap × live-and-idle directories, not typical use. |
 | NIC | Each guest TAP is 50 Mbit. 48 guests all saturated ≈ 2.4 Gbit. That is the ceiling, not the plan. |
 
@@ -212,7 +212,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_RUN_MODE` | Set `microvm` for Firecracker production isolation. Nested TOML is `[sandbox].backend`. See [configuration](config.md#sandbox). |
 | `APIPI_MAX_SESSIONS` | Live Pi on this node. Hard cap (`429` `capacity`). |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | Live Pi for one tenant (`429` `capacity_tenant`). |
-| `APIPI_MICROVM_MEM_MIB` / `APIPI_MICROVM_VCPUS` / `APIPI_SANDBOX_L_VCPUS` | Guest RAM and vCPUs. Raise RAM for Playwright. `S` and `M` stay at 1 vCPU. `L` defaults to 2. |
+| `APIPI_MICROVM_MEM_MIB` / `APIPI_MICROVM_VCPUS` / `APIPI_SANDBOX_L_VCPUS` | Guest RAM and vCPUs. Raise RAM for the browser image. `S` and non-browser `M` stay at 1 vCPU. `L` defaults to 2. Browser guests get at least 2 even on `M`. |
 | `APIPI_IDLE_TTL` | Kill idle Pi for `none` and `self_hosted` (default 15 minutes) and free a live slot. Hosted computers use sandbox TTL. |
 | `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | Stop hosted Pi and delete the workspace (default 1 hour). |
 | `APIPI_TURN_TIMEOUT` | Cancel a stuck turn (default 10 minutes). |

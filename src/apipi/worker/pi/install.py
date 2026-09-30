@@ -126,6 +126,21 @@ def read_image_env(path: Path) -> dict[str, str]:
     return values
 
 
+def recipe_env(image_id: str) -> dict[str, str]:
+    try:
+        return read_image_env(images_root() / image_id / "image.env")
+    except (OSError, ConfigError):
+        return {}
+
+
+def recipe_archs(image_id: str) -> frozenset[str]:
+    raw = recipe_env(image_id).get("ARCHS", "")
+    parts = [part for part in raw.split() if part]
+    if not parts:
+        return frozenset({"x86_64", "aarch64"})
+    return frozenset(parts)
+
+
 def recipe_ids() -> list[str]:
     root = images_root()
     found: list[str] = []
@@ -438,7 +453,11 @@ def resolve_install_targets(
         if want_microvm and image is None and tty:
             picked = _read_choice(
                 "MicroVM image flavor?",
-                {"1": "default", "2": "browser", "3": "work"},
+                {
+                    "1": "default (Debian guest)",
+                    "2": "browser (x86_64, agent-browser)",
+                    "3": "work (documents)",
+                },
                 "1",
                 inp,
                 out,
@@ -463,7 +482,11 @@ def resolve_install_targets(
     if want_microvm and image is None:
         flavor_pick = _read_choice(
             "MicroVM image flavor?",
-            {"1": "default", "2": "browser", "3": "work"},
+            {
+                "1": "default (Debian guest)",
+                "2": "browser (x86_64, agent-browser)",
+                "3": "work (documents)",
+            },
             "1",
             inp,
             out,

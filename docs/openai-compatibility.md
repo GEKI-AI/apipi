@@ -156,7 +156,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | `service_tier` `null` or `auto` | Ignored. ApiPi has no tiers. Any other value is `not_implemented`. |
 | `multi_agent`, `tool_search`, `programmatic_tool_calling` | Error (`not_implemented`) |
 | First-party `web_search` | Error; use MCP (example: Tavily) |
-| First-party browser | Error; use MCP (example: Playwright) |
+| First-party browser | Error; use the `browser` guest image and the built-in `browser` skill |
 | Unknown JSON keys | Error (`unknown_field`) |
 
 ## Environment fields

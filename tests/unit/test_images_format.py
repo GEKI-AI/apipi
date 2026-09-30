@@ -24,9 +24,9 @@ def _manifest(**overrides: object) -> dict[str, object]:
     guest = sha256_bytes(b"guest")
     recipe = sha256_bytes(b"recipe")
     body: dict[str, object] = {
-        "schema": 1,
+        "schema": 2,
         "id": "browser",
-        "version": image_version("0.85.1", "3.21.3", guest, recipe),
+        "version": image_version("0.85.1", "sha256:base", "v24.21.0", guest, recipe),
         "arch": "x86_64",
         "rootfs": {
             "path": "browser-0.85.1-aaaaaaaa-x86_64.ext4.zst",
@@ -37,7 +37,8 @@ def _manifest(**overrides: object) -> dict[str, object]:
             "compressed_size": 100,
         },
         "kernel": {"version": "abc123abc123", "sha256": sha256_bytes(b"vmlinux")},
-        "alpine_version": "3.21.3",
+        "base": "sha256:base",
+        "node_version": "v24.21.0",
         "pi_version": "0.85.1",
         "guest_sh_sha256": guest,
         "recipe_sha256": recipe,
@@ -55,14 +56,14 @@ def test_manifest_round_trip() -> None:
     again = load_manifest(dump_manifest(loaded))
     assert again.id == "browser"
     assert again.min_size == "M"
-    assert again.schema_version == 1
+    assert again.schema_version == 2
     assert again.rootfs.sha256 == sha256_bytes(b"ext4")
 
 
 def test_unknown_schema_fails() -> None:
     raw = _manifest()
-    raw["schema"] = 2
-    with pytest.raises(ImageFormatError, match="unknown image manifest schema 2"):
+    raw["schema"] = 1
+    with pytest.raises(ImageFormatError, match="unknown image manifest schema 1"):
         load_manifest(raw)
 
 
@@ -78,13 +79,17 @@ def test_bad_sha256_fails() -> None:
 def test_version_changes_when_inputs_change() -> None:
     guest = sha256_bytes(b"guest")
     recipe = sha256_bytes(b"recipe")
-    first = image_version("0.85.1", "3.21.3", guest, recipe)
-    changed_guest = image_version("0.85.1", "3.21.3", sha256_bytes(b"other"), recipe)
-    changed_recipe = image_version("0.85.1", "3.21.3", guest, sha256_bytes(b"other"))
-    changed_alpine = image_version("0.85.1", "3.22.0", guest, recipe)
+    first = image_version("0.85.1", "sha256:base", "v24.21.0", guest, recipe)
+    changed_guest = image_version(
+        "0.85.1", "sha256:base", "v24.21.0", sha256_bytes(b"other"), recipe
+    )
+    changed_recipe = image_version(
+        "0.85.1", "sha256:base", "v24.21.0", guest, sha256_bytes(b"other")
+    )
+    changed_base = image_version("0.85.1", "sha256:other", "v24.21.0", guest, recipe)
     assert first != changed_guest
     assert first != changed_recipe
-    assert first != changed_alpine
+    assert first != changed_base
     assert first.startswith("0.85.1-")
     assert len(first.split("-", 1)[1]) == 8
 
@@ -126,13 +131,13 @@ def test_index_requires_one_latest() -> None:
         "manifest": "default-0.85.1-aaaaaaaa-x86_64.json",
         "latest": True,
     }
-    index = load_index({"schema": 1, "kernels": [], "images": [entry]})
+    index = load_index({"schema": 2, "kernels": [], "images": [entry]})
     assert index.images[0].latest
-    bad = {"schema": 1, "kernels": [], "images": [entry, {**entry, "latest": True}]}
+    bad = {"schema": 2, "kernels": [], "images": [entry, {**entry, "latest": True}]}
     with pytest.raises(ImageFormatError, match="exactly one latest"):
         load_index(bad)
     dumped = json.loads(dump_index(index))
-    assert dumped["schema"] == 1
+    assert dumped["schema"] == 2
 
 
 def test_local_layout(tmp_path: Path) -> None:
@@ -151,5 +156,5 @@ def test_local_layout(tmp_path: Path) -> None:
 
 
 def test_empty_index_round_trip() -> None:
-    index = ImageIndex(schema_version=1, kernels=[], images=[])
+    index = ImageIndex(schema_version=2, kernels=[], images=[])
     assert load_index(dump_index(index)).images == []

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from apipi.env.setup import (
-    ALPINE_HOSTS,
+    DEBIAN_HOSTS,
     NPM_HOSTS,
     PYPI_HOSTS,
     Packages,
@@ -62,7 +62,7 @@ def test_needs_setup() -> None:
 def test_package_egress_hosts_by_kind() -> None:
     assert package_egress_hosts({"packages": {"python": ["rich"]}}) == PYPI_HOSTS
     assert package_egress_hosts({"packages": {"npm": ["typescript"]}}) == NPM_HOSTS
-    assert package_egress_hosts({"packages": {"system": ["git"]}}) == ALPINE_HOSTS
+    assert package_egress_hosts({"packages": {"system": ["git"]}}) == DEBIAN_HOSTS
     assert package_egress_hosts({}) == ()
 
 
@@ -93,6 +93,7 @@ def test_render_setup_script_installs_and_commands(tmp_path: Path) -> None:
     assert 'uv pip install --python "$VENV/bin/python"' in script
     assert "pandas==2.2.3" in script
     assert "apk add --no-cache py3-pip" not in script
+    assert "apt-get install" not in script
     assert 'npm install -g --prefix "$NPM_PREFIX"' in script
     assert "typescript" in script
     assert "mkdir -p reports" in script
@@ -316,7 +317,8 @@ def test_microvm_rejects_system_packages(tmp_path: Path) -> None:
         provision_hosted(environment, run_mode="microvm")
     assert not (workspace / ".apipi" / "setup.sh").exists()
     script = render_setup_script(workspace, Packages(system=("git",)), ())
-    assert "apk add --no-cache" in script
+    assert "apt-get update" in script
+    assert "apt-get install -y --no-install-recommends git" in script
 
 
 def test_prepend_workspace_path(tmp_path: Path) -> None:

@@ -11,9 +11,6 @@ SANDBOX_SIZE_HELP = "sandbox_size must be S, M, or L"
 SANDBOX_IMAGE_HELP = "sandbox_image must match ^[a-z0-9][a-z0-9-]{0,31}$"
 IMAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 _SIZE_RANK = {"S": 0, "M": 1, "L": 2}
-PLAYWRIGHT_LABEL = "playwright"
-PLAYWRIGHT_CHROMIUM = "/usr/bin/chromium-browser"
-PLAYWRIGHT_MCP_CLI = "/opt/apipi/playwright-mcp/node_modules/@playwright/mcp/cli.js"
 
 
 def parse_sandbox_size(value: object) -> str | None:
@@ -175,116 +172,36 @@ def mem_mib_for_size(settings: Settings, size: str | None) -> int:
     return settings.sandbox_mem_mib(size if size is not None else "S")
 
 
-PLAYWRIGHT_CONFIG_GUEST = "/workspace/.apipi/playwright.json"
-PLAYWRIGHT_NAVIGATION_MS = 30_000
-CHROMIUM_LAUNCH_ARGS = (
-    "--no-first-run",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-sync",
-    "--disable-domain-reliability",
-    "--disable-features=Translate,OptimizationHints,MediaRouter",
-)
+def min_vcpus_for_image(image_id: str | None, settings: Settings | None = None) -> int:
+    if not image_id:
+        return 1
+    if settings is not None:
+        from apipi.worker.pi.image_pull import configured_images_dir
+        from apipi.worker.pi.images import read_current
 
+        root = configured_images_dir(settings)
+        version = read_current(root, image_id)
+        if version is not None:
+            path = root / image_id / version / "manifest.json"
+            if path.is_file():
+                import json
 
-def playwright_config() -> dict[str, Any]:
-    return {
-        "browser": {"launchOptions": {"args": list(CHROMIUM_LAUNCH_ARGS)}},
-        "timeouts": {"navigation": PLAYWRIGHT_NAVIGATION_MS},
-    }
+                try:
+                    data = json.loads(path.read_text())
+                except (OSError, json.JSONDecodeError):
+                    data = None
+                if isinstance(data, dict):
+                    raw = data.get("min_vcpus")
+                    if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 1:
+                        return raw
+    from apipi.worker.pi.install import recipe_env
 
-
-def playwright_tool(_settings: Settings) -> dict[str, Any]:
-    return {
-        "type": "mcp",
-        "server_label": PLAYWRIGHT_LABEL,
-        "transport": {
-            "type": "stdio",
-            "command": "node",
-            "args": [
-                PLAYWRIGHT_MCP_CLI,
-                "--headless",
-                "--isolated",
-                "--no-sandbox",
-                "--output-dir=/workspace/outputs",
-                f"--executable-path={PLAYWRIGHT_CHROMIUM}",
-                f"--config={PLAYWRIGHT_CONFIG_GUEST}",
-                f"--timeout-navigation={PLAYWRIGHT_NAVIGATION_MS}",
-            ],
-        },
-    }
-
-
-def _tool_blob(tool: dict[str, Any]) -> str:
-    transport = tool.get("transport")
-    if isinstance(transport, dict):
-        command = transport.get("command")
-        raw_args = transport.get("args")
-    else:
-        command = None
-        raw_args = None
-    args = [str(item) for item in raw_args] if isinstance(raw_args, list) else []
-    parts = [str(command)] if command is not None else []
-    parts.extend(args)
-    return " ".join(parts)
-
-
-def has_playwright(tools: list[Any] | None) -> bool:
-    if not tools:
-        return False
-    for tool in tools:
-        if not isinstance(tool, dict) or tool.get("type") != "mcp":
-            continue
-        label = tool.get("server_label")
-        if isinstance(label, str) and label.lower() == PLAYWRIGHT_LABEL:
-            return True
-        if "playwright/mcp" in _tool_blob(tool):
-            return True
-    return False
-
-
-def playwright_attached(stdio: list[Any] | None) -> bool:
-    if not stdio:
-        return False
-    for server in stdio:
-        if isinstance(server, dict):
-            label = server.get("server_label")
-            args = server.get("args")
-        else:
-            label = getattr(server, "server_label", None)
-            args = getattr(server, "args", None)
-        if isinstance(label, str) and label.lower() == PLAYWRIGHT_LABEL:
-            return True
-        blob = " ".join(str(item) for item in args) if isinstance(args, list) else ""
-        if "playwright/mcp" in blob:
-            return True
-    return False
-
-
-def should_inject_playwright(
-    settings: Settings, size: str, image: str | None = None
-) -> bool:
-    selected = image if image is not None else image_for_size(size)
-    return (
-        selected == "browser"
-        and settings.sandbox_auto_playwright
-        and settings.run_mode == "microvm"
-    )
-
-
-def merge_playwright(
-    tools: list[Any] | None,
-    *,
-    size: str,
-    settings: Settings,
-    image: str | None = None,
-) -> list[Any]:
-    out = list(tools) if tools else []
-    if not should_inject_playwright(settings, size, image):
-        return out
-    if has_playwright(out):
-        return out
-    return [*out, playwright_tool(settings)]
+    raw_text = recipe_env(image_id).get("MIN_VCPUS", "")
+    if raw_text.isdigit() and int(raw_text) >= 1:
+        return int(raw_text)
+    if image_id == "browser":
+        return 2
+    return 1
 
 
 def validate_sandbox_metadata(

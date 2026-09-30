@@ -42,7 +42,7 @@ from apipi.store.migrate import migrate
 from apipi.worker.pi.image_check import (
     image_check_needs_sudo,
     reexec_image_check,
-    run_browser_check,
+    run_image_check,
 )
 from apipi.worker.pi.image_ops import build_image, publish_images
 from apipi.worker.pi.image_pull import list_images, pull_images
@@ -205,8 +205,8 @@ def _images_command(args: argparse.Namespace) -> int:
 
 
 def _images_check(args: argparse.Namespace) -> int:
-    if args.id != "browser":
-        raise ConfigError("apipi images check supports the browser image only")
+    if args.id not in {"default", "browser", "work"}:
+        raise ConfigError("apipi images check supports default, browser, and work")
     extra: list[str] = [args.id]
     if args.config is not None:
         extra.extend(["--config", args.config])
@@ -219,7 +219,7 @@ def _images_check(args: argparse.Namespace) -> int:
         return 0
     settings = load_settings(config_path=args.config)
     configure_logging(level=settings.log_level, format=settings.log_format)
-    run_browser_check(settings, rootfs=args.rootfs, boot=args.boot)
+    run_image_check(settings, args.id, rootfs=args.rootfs, boot=args.boot)
     return 0
 
 
@@ -405,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
         "--image",
         choices=("default", "browser", "work"),
         default=None,
-        help="Rootfs flavor (default: APIPI_MICROVM_IMAGE)",
+        help="Rootfs flavor (default: APIPI_MICROVM_IMAGE). browser is x86_64 only.",
     )
     shell_parser.add_argument(
         "--workspace",
@@ -439,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     check_parser = images_sub.add_parser(
         "check", help="Check a built guest image on this machine"
     )
-    check_parser.add_argument("id", help="Recipe id (browser)")
+    check_parser.add_argument("id", help="Recipe id")
     check_parser.add_argument("--config", default=None, help="TOML config file")
     check_parser.add_argument(
         "--rootfs", default=None, help="rootfs-browser.ext4 to check"

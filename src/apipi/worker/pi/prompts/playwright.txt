@@ -1,1 +1,0 @@
-Drive the browser only through these MCP tools. Save a screenshot under outputs/ only when the user asked for it or you are explicitly sharing it. Do not npm install playwright or download browsers.

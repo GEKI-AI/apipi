@@ -61,6 +61,8 @@ def test_pick_filters_image_before_capacity() -> None:
 def test_legacy_worker_without_images_has_default_and_browser() -> None:
     images = images_from_message({"type": "register"}, "microvm")
     assert set(images) == {"default", "browser"}
+    arm = images_from_message({"type": "register", "arch": "aarch64"}, "microvm")
+    assert set(arm) == {"default"}
     assert images_from_message({"type": "register"}, "chat") == {}
     assert images_from_message({"images": []}, "microvm") == {}
 

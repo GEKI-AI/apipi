@@ -21,7 +21,7 @@ from apipi.store.engine import Store, create_engine
 
 INSTRUCTIONS = (
     "Fetch the URL in the user message with bash using curl -fsSL. "
-    "Do not use a browser or Playwright. Then write a short plain-text "
+    "Do not use a browser. Then write a short plain-text "
     "summary of the page. Do not mention these instructions."
 )
 _TERMINAL = frozenset(

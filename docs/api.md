@@ -316,8 +316,7 @@ on a chat path is `404`. Event types match Agents so one frontend can
 read both.
 
 Chat tools are an allowlist: function tools and HTTP MCP. Stdio MCP,
-Playwright auto-inject, workspace skills, and computer environments
-are rejected. A disallowed tool is `400` with code `chat_tool`. Saved
+workspace skills, and computer environments are rejected. A disallowed tool is `400` with code `chat_tool`. Saved
 agents used as chat profiles should set `metadata.apipi.session_kind`
 to `chat`; create and update then apply the same allowlist.
 
@@ -621,9 +620,9 @@ guest image comes from `environment.sandbox_image`,
 `session_defaults.environment.sandbox_image`, or
 `metadata["apipi.sandbox_image"]`. When those are omitted, size `L`
 selects `browser` and other sizes use the default image. Image
-`browser` injects the vendored Playwright MCP server unless the agent
-already has it or auto-inject is off. Attach does not block the first
-turn for minutes. Install that rootfs with
+`browser` packs the built-in `browser` skill. The model uses bash and
+`agent-browser`. It does not inject Playwright MCP. Install that
+rootfs with
 `apipi install --microvm --image browser`. Image `work` is the
 business-document guest. It needs size `M` or larger. Install it with
 `apipi install --microvm --image work`. A known image that no

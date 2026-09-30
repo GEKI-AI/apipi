@@ -347,7 +347,7 @@ Firecracker.
 | `APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS` | `[pi].compaction_keep_recent_tokens` | unset (Pi default 20000) | `compaction.keepRecentTokens` in Pi `settings.json`. Recent tokens kept out of the summary. Unset leaves Pi's default. |
 | `APIPI_PI_THINKING` | `[pi].thinking` | `off` | Process default thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. A session or agent may override it. |
 | `APIPI_PI_MEM_MIB` | `[pi].mem_mib` | unset | Soft ceiling for one host Pi (`none` / `chat`) in MiB. Unset is off. Sets Node `NODE_OPTIONS=--max-old-space-size` and kills the process group when RSS goes over the limit (`apipi_pi_kill_total` reason `memory`). A turn in progress fails with `pi_memory`. Not a microVM hard cap. |
-| `APIPI_PI_SYSTEM_PROMPT` | `[pi].system_prompt` | unset | Replaces Pi's harness default system prompt. Unset or empty keeps Pi's default. This does not replace the platform prompt, agent instructions, context files, or skills. It does drop Pi's tool list and all tool guidelines, including MCP and Playwright guidance. The tools stay callable. |
+| `APIPI_PI_SYSTEM_PROMPT` | `[pi].system_prompt` | unset | Replaces Pi's harness default system prompt. Unset or empty keeps Pi's default. This does not replace the platform prompt, agent instructions, context files, or skills. It does drop Pi's tool list and all tool guidelines, including MCP guidance. The tools stay callable. |
 | `APIPI_PLATFORM_NAME` | `[pi].platform_name` | `ApiPi` | Name in the identity line and in `${platform_name}`. Does not replace Pi. |
 | `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | file in `src/apipi/worker/pi/prompts/` | Main platform prompt for every environment type that has no per-type override. Unset keeps the shipped file. Set to `""` to disable the main block. A non-empty value replaces the file entirely. Per-type settings such as `APIPI_PLATFORM_PROMPT_HOSTED` win for that type. Each fragment also has a `*_FILE` variant. Set the text or the file, not both. |
 | `APIPI_PLATFORM_PROMPT_ADDITIONAL` | `[pi].platform_prompt_additional` | empty | Optional extra platform text appended after the main block. Does not replace the main prompt. |
@@ -438,9 +438,8 @@ The gateway always composes the appended blocks before
 metadata, then `[pi].system_prompt`); then the main platform prompt;
 then additional platform text; then, only for a hosted microvm
 computer, a size line and an optional network line. Then
-`agent.instructions`. The gateway does not add Playwright text from
-the injected tool list. Those names appear only after the guest
-attach succeeds, inside the Pi extension. Skills, capability
+`agent.instructions`. The browser skill text is part of the
+capability block when the image is `browser`. Skills, capability
 directories, packages, and setup commands are unchanged. Empty main
 (`platform_prompt = ""`) drops only the main block; additional and
 agent instructions still apply. An empty `system_prompt` keeps Pi's
@@ -489,11 +488,10 @@ browser.
 | Self-hosted main prompt | `self_hosted` and not chat. Names the runner's files and `outputs/`. Does not mention `/workspace` or a sandbox wipe. |
 | Operator main prompt | `APIPI_PLATFORM_PROMPT` is set. Replaces the built-in main block. `""` drops it. |
 | Additional platform text | `APIPI_PLATFORM_PROMPT_ADDITIONAL` is non-empty. Always, after the main block. |
-| Size | Hosted microvm only. `Sandbox size is L (2048 MiB).` RAM comes from the size setting, not a hardcoded "2 GiB". No image name and no Chromium claim. |
+| Size | Hosted microvm only, and only when the size fragment is overridden. The built-in capability line names the image, RAM, and vCPUs. It does not claim a browser unless the image is `browser`. |
 | Network | Hosted microvm only, and only when `network.access` is `enabled` or `restricted`. Omitted when unset or `disabled`. |
-| Playwright tool guidelines | Only after that server's tools register in the guest. The text is `playwright.txt`, written into the Pi agent directory at spawn. One long guideline per server, not once per tool. A screenshot goes under `outputs/` only when it is being shared. The Chromium sentence is `chromium.txt`, included only when that server's args name `/usr/bin/chromium-browser`. Not present when a replacement system prompt is set. |
-| Bash install block | Blocks `npm install playwright` and `playwright install` only after Playwright tools have registered. Otherwise the command is allowed. The reason is `bash-install.txt`. This is a tool-call hook, not prompt text, so a replacement system prompt does not remove it. |
-| `system_prompt` / skills | Operator or caller owned. A replacement system prompt keeps the platform blocks, instructions, context files, and skills. It removes Pi's tool list and all tool guidelines, including the MCP and Playwright rows above. |
+| Browser capability | Hosted microvm only, and only when the image is `browser`. The text is `browser.txt`. It tells the model to use the `browser` skill. Override with `APIPI_PLATFORM_BROWSER` or `APIPI_PLATFORM_BROWSER_FILE`. |
+| `system_prompt` / skills | Operator or caller owned. A replacement system prompt keeps the platform blocks, instructions, context files, and skills. It removes Pi's tool list and MCP tool guidelines. |
 
 ```toml
 [pi]
@@ -569,8 +567,8 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | `APIPI_SANDBOX_IMAGES` | `[sandbox].images` | unset (every id in the index) | Image ids this host pulls and serves. |
 | `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser` \| `work`. Used by `apipi install` and `apipi microvm shell`. Live session guests follow `sandbox_image`, not this process-wide setting. When the image is omitted, size `L` selects `browser` and other sizes use the default image. Explicit `kernel` / `rootfs` / `rootfs_browser` override the images dir for `default` and `browser` only. Other ids, including `work`, come from the images dir. Resolution is explicit path, then `<id>/current` in the images dir, then the legacy `~/.cache/apipi/microvm` files for `default` and `browser`. |
 | `APIPI_SANDBOX_DEFAULT_IMAGE` | `[sandbox].default_image` | `default` | Guest image when the session does not set `environment.sandbox_image` or `metadata["apipi.sandbox_image"]`, and the size is not `L`. `L` still selects `browser`. This is not `APIPI_MICROVM_IMAGE`, which only selects the image for `apipi install` and `apipi microvm shell`. |
-| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. Playwright MCP is injected when the image is `browser` unless you turn that off. Size `L` still selects that image when none is set. Install that rootfs with `apipi install --microvm --image browser`. |
-| `APIPI_SANDBOX_AUTO_PLAYWRIGHT` | `[sandbox.browser].auto_playwright` | on | When on, image `browser` on `microvm` injects the vendored Playwright MCP server (system Chromium). Off keeps that image and its RAM but does not attach browser tools. |
+| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. Size `L` still selects that image when none is set. Install that rootfs with `apipi install --microvm --image browser`. |
+| `APIPI_SANDBOX_AUTO_PLAYWRIGHT` | `[sandbox.browser]` | removed | Warned about and ignored. Playwright MCP is gone. The browser image packs the `browser` skill instead. |
 | `APIPI_SANDBOX_EAGER_BOOT` | `[sandbox].eager_boot` | off | When on, creating an `openai_hosted` session starts the computer before the first turn. Off keeps the default: boot on the first turn. A session or agent `metadata["apipi.sandbox_eager_boot"]` overrides this. `on` or `off`. |
 
 ```toml
@@ -581,9 +579,6 @@ rootfs = "/var/lib/apipi/rootfs.ext4"
 rootfs_browser = "/var/lib/apipi/rootfs-browser.ext4"
 image = "default"
 default_size = "S"
-
-[sandbox.browser]
-auto_playwright = true
 ```
 
 ```
@@ -735,9 +730,6 @@ egress_mbit = 50
 [sandbox.ttl]
 openai_hosted = "1h"
 self_hosted = "0"
-
-[sandbox.browser]
-auto_playwright = true
 
 [placement]
 env_none = "chat"

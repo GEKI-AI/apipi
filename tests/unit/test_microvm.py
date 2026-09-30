@@ -410,9 +410,7 @@ def test_workspace_image_has_env_and_session(tmp_path: Path) -> None:
         rnd = tar.extractfile(".apipi/random")
         assert rnd is not None
         assert len(rnd.read()) == 256
-        config = tar.extractfile(".apipi/playwright.json")
-        assert config is not None
-        assert b"disable-background-networking" in config.read()
+        assert ".apipi/playwright.json" not in names
     assert "OPENAI_API_KEY" in text
     assert "DATABASE_URL" not in text
     assert net.guest_ip in net_text

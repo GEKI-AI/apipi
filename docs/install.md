@@ -67,11 +67,12 @@ apipi install --pi --microvm
 ```
 
 `--image browser` is the durable way to install the browser rootfs.
-That image contains Alpine Chromium, Noto fonts, and a pinned
-Playwright MCP server. Auto-inject starts the vendored server. It does not run
-`npx` inside the guest. After upgrading ApiPi, run
-`apipi install --microvm --image browser` again so workers pick up
-that rootfs. `--image work` installs the business-document image.
+That image contains agent-browser, a pinned chrome-headless-shell,
+and Noto fonts. It is x86_64 only. The model uses bash and the
+built-in `browser` skill. It does not start Playwright MCP. After
+upgrading ApiPi, run `apipi install --microvm --image browser` again
+so workers pick up that rootfs. `--image work` installs the
+business-document image.
 It needs sandbox size `M` or larger. See [run modes](run-modes.md).
 
 `--microvm` pulls a prebuilt image when `APIPI_IMAGE_SOURCE` is set.

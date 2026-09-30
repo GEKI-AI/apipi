@@ -3,7 +3,7 @@ import json
 import tarfile
 
 from apipi.config import Settings
-from apipi.worker.pi.image_check import _ROOTFS_SCRIPT, parse_check_tar
+from apipi.worker.pi.image_check import _BASE_SCRIPT, parse_check_tar
 from apipi.worker.pi.microvm import guest_vcpus
 
 
@@ -18,7 +18,7 @@ def _tar(files: dict[str, bytes]) -> bytes:
 
 
 def test_rootfs_check_mounts_dev_before_mkdir() -> None:
-    script = _ROOTFS_SCRIPT
+    script = _BASE_SCRIPT
     dev_mount = script.index("mount -t devtmpfs devtmpfs")
     mkdir = script.index('mkdir -p "$mnt/dev/shm" "$mnt/dev/pts"')
     shm_mount = script.index(
@@ -28,21 +28,22 @@ def test_rootfs_check_mounts_dev_before_mkdir() -> None:
     assert 'mkdir -p "$mnt/dev" "$mnt/dev/shm"' not in script
 
 
-def test_parse_check_tar_reads_report_and_png() -> None:
-    report = {"tools": ["mcp_playwright_browser_navigate"], "error": None}
+def test_parse_check_tar_reads_browser_and_tools() -> None:
+    browser = {"snapshot": True, "error": None}
+    tools = {"tools": [], "skill": True, "playwright": False}
     blob = _tar(
         {
-            "outputs/mcp-check.json": (json.dumps(report) + "\n").encode(),
-            "outputs/check.png": b"png",
+            "outputs/browser-check.json": (json.dumps(browser) + "\n").encode(),
+            "outputs/image-check.json": (json.dumps(tools) + "\n").encode(),
         }
     )
-    found, png = parse_check_tar(blob)
-    assert found == report
-    assert png is True
+    found, listed = parse_check_tar(blob)
+    assert found == browser
+    assert listed == tools
 
 
 def test_parse_check_tar_empty() -> None:
-    assert parse_check_tar(b"") == (None, False)
+    assert parse_check_tar(b"") == (None, None)
 
 
 def test_guest_vcpus_l_defaults_to_two() -> None:
@@ -53,5 +54,6 @@ def test_guest_vcpus_l_defaults_to_two() -> None:
     assert guest_vcpus(settings, 512) == 1
     assert guest_vcpus(settings, 1024) == 1
     assert guest_vcpus(settings, 2048) == 2
+    assert guest_vcpus(settings, 1024, image="browser") == 2
     assert settings.sandbox_vcpus("S") == 1
     assert settings.sandbox_vcpus("L") == 2

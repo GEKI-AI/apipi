@@ -51,8 +51,8 @@ Do not document or send `environment.type=none` on the chat API.
 That field is an Agents API value. Chat clients talk to `/v1/chat`
 and omit environment.
 
-Chat tools are function tools and HTTP MCP only. Stdio MCP, Playwright
-auto-inject, workspace skills, and a computer are `400` with code
+Chat tools are function tools and HTTP MCP only. Stdio MCP,
+workspace skills, and a computer are `400` with code
 `chat_tool`. See [tools](tools.md). Host Pi still gets a private
 `models.json` pointed at the session broker when there is no workspace
 directory, so text-only turns can call the model. If a non-stream

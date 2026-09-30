@@ -421,13 +421,15 @@ def test_recipe_ids_list_shipped_images() -> None:
     assert default["PACKAGES"] == ""
     assert default["MIN_SIZE"] == "S"
     assert browser["SIZE_MIB"] == "4096"
-    assert "chromium" in browser["PACKAGES"].split()
+    assert "fonts-noto-cjk" in browser["PACKAGES"].split()
+    assert browser["ARCHS"] == "x86_64"
+    assert browser["MIN_VCPUS"] == "2"
     assert browser["MIN_SIZE"] == "M"
     work = read_image_env(require_recipe("work") / "image.env")
     assert work["IMAGE_ID"] == "work"
     assert work["SIZE_MIB"] == "3072"
     assert work["MIN_SIZE"] == "M"
-    assert "py3-pandas" in work["PACKAGES"].split()
+    assert "python3-pandas" in work["PACKAGES"].split()
     setup = (require_recipe("work") / "setup.sh").read_text()
     assert "python-docx==1.2.0" in setup
     assert "python-pptx==1.0.2" in setup
@@ -448,11 +450,15 @@ def test_build_script_custom_image_does_not_export_default_rootfs() -> None:
 
 def test_build_script_base_packages_include_curl_and_git() -> None:
     script = rootfs_script_path().read_text()
-    apk = next(line for line in script.splitlines() if "apk add --no-cache" in line)
-    packages = apk.split()
-    assert "curl" in packages
-    assert "git" in packages
-    assert "py3-pip" in packages
+    assert "apt-get install" in script
+    assert "python3-pip" in script
+    assert "ripgrep" in script
+    assert "curl" in script
+    assert "git" in script
+    assert "ALPINE_VER" not in script
+    assert "apk add" not in script
+    assert "PINNED_DEBIAN_DIGEST" in script
+    assert "PINNED_NODE" in script
     assert "PINNED_UV" in script
     assert "/etc/pip.conf" in script
     assert "UV_CACHE_DIR" not in script

@@ -107,8 +107,9 @@ choose another location. The files do not overwrite each other. The
 script needs `curl`, `tar`, `mkfs.ext4`, `mount`, and root (or `sudo`)
 for the loop mount and chroot.
 
-`default` installs Alpine, Node, the pinned Pi CLI, Python 3, `pip`,
-a pinned `uv`, `ip`, `socat`, `curl`, and `git`, and copies
+`default` installs Debian trixie slim, a pinned Node tarball, the
+pinned Pi CLI, Python 3.13, `pip`, a pinned `uv`, `ip`, `socat`,
+`curl`, `git`, and `ripgrep`, and copies
 `src/apipi/worker/pi/guest.sh` to `/sbin/apipi-guest`. The image sets
 `pip` to install into the user site. With `HOME=/workspace`,
 `pip install <pkg>` lands in `/workspace/.local` and is importable.
@@ -116,23 +117,22 @@ That uses guest RAM. `uv run --with <pkg> script.py` and
 `uv venv --system-site-packages /tmp/venv` also work. `uv pip install
 --system` does not, because the root filesystem is read-only.
 `work` is that image plus libraries for Excel, Word, PowerPoint, PDF,
-CSV, and charts. Compiled pieces come from Alpine (`pandas`,
+CSV, and charts. Compiled pieces come from Debian (`pandas`,
 `matplotlib`, `pillow`, `lxml`, and others). `python-docx`,
-`python-pptx`, and `fpdf2` are installed at build time because Alpine
-3.21 does not package them. The image is 3 GiB. Use sandbox size `M`
-or larger. It does not include LibreOffice or pandoc. Do not point
-`APIPI_MICROVM_ROOTFS` at `rootfs-work.ext4`. That replaces the default
-image. Use `sandbox_image=work` after `apipi images pull` or
+`python-pptx`, and `fpdf2` are installed at build time so the pins
+stay ahead of the distro packages. The image is 3 GiB. Use sandbox
+size `M` or larger. It does not include LibreOffice or pandoc. Do not
+point `APIPI_MICROVM_ROOTFS` at `rootfs-work.ext4`. That replaces the
+default image. Use `sandbox_image=work` after `apipi images pull` or
 `apipi install --microvm --image work`.
-`browser` is that image plus Alpine Chromium, Noto fonts (including
-CJK and emoji), font/NSS packages, and a pinned `@playwright/mcp`
-installed at `/opt/apipi/playwright-mcp`. Auto-inject starts that
-file with `node`. It does not download the server with `npx` on a
-cold guest. Playwright's own glibc browser builds do not run on this
-musl guest. The image is 4 GiB unless you set `SIZE_MIB`. Use sandbox
-size `L` (2 GiB guest RAM and 2 vCPUs by default) for browser guests.
-Rebuild after this change with `apipi install --microvm --image browser`.
-See [install](install.md) and [production sizing](production.md#sizing).
+`browser` is that image plus agent-browser, a pinned
+chrome-headless-shell, and Noto fonts (including CJK and emoji). It
+is x86_64 only. The model uses bash and the built-in `browser` skill.
+It does not install Playwright MCP. The image is 4 GiB unless you set
+`SIZE_MIB`. Browser guests get at least 2 vCPUs, including size `M`.
+Size `L` is 2 GiB of guest RAM. Rebuild after this change with
+`apipi install --microvm --image browser`. See [install](install.md)
+and [production sizing](production.md#sizing).
 
 Guest init (`/sbin/apipi-guest`, from `guest.sh`) mounts `/proc`,
 `/sys`, devtmpfs on `/dev`, tmpfs on `/dev/shm` (mode 1777), devpts
@@ -155,7 +155,8 @@ apipi install --microvm --image browser
 
 Prebuilt images use the store format in
 [ADR 0012](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0012-guest-image-store.md).
-A version names the Pi pin, Alpine version, `guest.sh`, and the recipe.
+A version names the Pi pin, the Debian base digest, the Node pin,
+`guest.sh`, and the recipe.
 The sha256 names the bytes.
 
 When `APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` (or the browser
@@ -173,8 +174,8 @@ still selects the image for `apipi install` and `apipi microvm shell`.
 To make every session browser-class without callers setting an image,
 set `[sandbox].default_size = "L"` (and size `worker_memory_mb` for ~2
 GiB guests) or set `[sandbox].default_image = "browser"` with a size of
-at least `M`. Image `browser` injects the vendored Playwright MCP
-server against system Chromium unless `auto_playwright` is off. Session
+at least `M`. Image `browser` packs the built-in `browser` skill and
+expects `agent-browser` in the guest. Session
 `packages` and `setup_commands` still run on whichever image that
 session booted.
 
@@ -266,7 +267,7 @@ Each TAP is rate-limited with
 To lock destinations, set `APIPI_MICROVM_EGRESS_ALLOWLIST=on`. Then the
 guest may reach only the model host, HTTP MCP hosts for that session,
 extra hosts in `APIPI_MICROVM_EGRESS_HOSTS`, package registries when
-`environment.packages` is set (PyPI, npm, Alpine), and DNS (`1.1.1.1`
+`environment.packages` is set (PyPI, npm, Debian), and DNS (`1.1.1.1`
 and `8.8.8.8`). Other TCP is rejected. See [config](config.md).
 
 This is the mode that protects the host from a hostile session. Guest

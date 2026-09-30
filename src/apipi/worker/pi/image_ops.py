@@ -32,12 +32,18 @@ from apipi.worker.pi.images import (
 from apipi.worker.pi.install import (
     images_root,
     read_image_env,
+    recipe_archs,
     rootfs_build_args,
     rootfs_output_name,
 )
-from apipi.worker.pi.version import PINNED_PI
+from apipi.worker.pi.version import (
+    PINNED_AGENT_BROWSER,
+    PINNED_CHROME_HEADLESS_SHELL,
+    PINNED_DEBIAN_DIGEST,
+    PINNED_NODE,
+    PINNED_PI,
+)
 
-ALPINE_DEFAULT = "3.21.3"
 HOST_ARCHS = frozenset({"x86_64", "aarch64"})
 
 
@@ -101,7 +107,6 @@ def package_image(
     kernel: Path,
     out_dir: Path,
     arch: str,
-    alpine_version: str = ALPINE_DEFAULT,
     pi_version: str = PINNED_PI,
     min_apipi_version: str | None = None,
 ) -> ImageManifest:
@@ -111,7 +116,17 @@ def package_image(
     guest = guest_sh_path()
     guest_digest = sha256_file(guest)
     recipe = recipe_sha256(images_root(), image_id)
-    version = image_version(pi_version, alpine_version, guest_digest, recipe)
+    agent_browser = PINNED_AGENT_BROWSER if image_id == "browser" else ""
+    chrome = PINNED_CHROME_HEADLESS_SHELL if image_id == "browser" else ""
+    version = image_version(
+        pi_version,
+        PINNED_DEBIAN_DIGEST,
+        PINNED_NODE,
+        guest_digest,
+        recipe,
+        agent_browser=agent_browser,
+        chrome=chrome,
+    )
     rootfs_digest = sha256_file(rootfs)
     kernel_digest = sha256_file(kernel)
     zst_name = artifact_name(image_id, version, arch)
@@ -122,6 +137,10 @@ def package_image(
     compress_file(kernel, kernel_zst)
     packages = [part for part in env.get("PACKAGES", "").split() if part]
     min_size = _min_size(env.get("MIN_SIZE", "S"), image_id)
+    raw_vcpus = env.get("MIN_VCPUS", "1") or "1"
+    if not raw_vcpus.isdigit() or int(raw_vcpus) < 1:
+        raise ConfigError(f"recipe {image_id} MIN_VCPUS must be an integer >= 1")
+    min_vcpus = int(raw_vcpus)
     machine = _arch(arch)
     manifest = ImageManifest(
         id=image_id,
@@ -136,12 +155,16 @@ def package_image(
             compressed_size=zst_path.stat().st_size,
         ),
         kernel=KernelRef(version=kernel_version(kernel_digest), sha256=kernel_digest),
-        alpine_version=alpine_version,
+        base=PINNED_DEBIAN_DIGEST,
+        node_version=PINNED_NODE,
         pi_version=pi_version,
         guest_sh_sha256=guest_digest,
         recipe_sha256=recipe,
         min_apipi_version=min_apipi_version or __version__,
         min_size=min_size,
+        min_vcpus=min_vcpus,
+        agent_browser=agent_browser,
+        chrome=chrome,
         packages=packages,
         created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
@@ -167,11 +190,14 @@ def build_image(
     arch: str | None = None,
 ) -> ImageManifest:
     machine = host_arch(arch)
+    allowed = recipe_archs(image_id)
+    if machine not in allowed:
+        raise ConfigError(f"image {image_id} is not built for {machine}")
     work = out_dir / ".work" / image_id
     work.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["PINNED_PI"] = PINNED_PI
-    alpine = env.get("ALPINE_VER", ALPINE_DEFAULT)
+    env.pop("ALPINE_VER", None)
     try:
         subprocess.run(rootfs_build_args(image_id, work), check=True, env=env)
     except subprocess.CalledProcessError as exc:
@@ -182,7 +208,6 @@ def build_image(
         kernel=work / "vmlinux",
         out_dir=out_dir,
         arch=machine,
-        alpine_version=alpine,
     )
 
 
@@ -190,7 +215,7 @@ def _load_store_index(
     store: FileImageStore | S3ImageStore | HttpImageStore,
 ) -> ImageIndex:
     if not store.exists("index.json"):
-        return ImageIndex(schema_version=1, kernels=[], images=[])
+        return ImageIndex(schema_version=2, kernels=[], images=[])
     try:
         return load_index(store.get("index.json"))
     except ImageFormatError as exc:

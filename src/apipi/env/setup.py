@@ -50,7 +50,7 @@ _RESERVED_ENV_PREFIXES = ("APIPI_", "CODEX_", "PI_")
 
 PYPI_HOSTS = ("pypi.org", "files.pythonhosted.org", "pypi.python.org")
 NPM_HOSTS = ("registry.npmjs.org", "registry.npmjs.com")
-ALPINE_HOSTS = ("dl-cdn.alpinelinux.org",)
+DEBIAN_HOSTS = ("deb.debian.org", "security.debian.org")
 
 _PKG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+=~:-]*$")
 _HOSTNAME = re.compile(
@@ -369,7 +369,7 @@ def package_egress_hosts(environment: dict[str, Any]) -> tuple[str, ...]:
     if packages.npm:
         groups.append(NPM_HOSTS)
     if packages.system:
-        groups.append(ALPINE_HOSTS)
+        groups.append(DEBIAN_HOSTS)
     for group in groups:
         for host in group:
             key = host.lower()
@@ -494,14 +494,13 @@ def render_setup_script(
         quoted = " ".join(shlex.quote(name) for name in packages.system)
         lines.extend(
             [
-                "if command -v apk >/dev/null 2>&1; then",
-                f"  apk add --no-cache {quoted}",
-                "elif command -v apt-get >/dev/null 2>&1; then",
-                f"  apt-get install -y {quoted}",
-                "else",
-                '  echo "system package install needs apk or apt-get" >&2',
+                "if ! command -v apt-get >/dev/null 2>&1; then",
+                '  echo "system package install needs apt-get" >&2',
                 "  exit 1",
                 "fi",
+                "export DEBIAN_FRONTEND=noninteractive",
+                "apt-get update",
+                f"apt-get install -y --no-install-recommends {quoted}",
             ]
         )
     if packages.npm:
