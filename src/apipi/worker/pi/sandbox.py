@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Any
 
@@ -11,6 +12,8 @@ SANDBOX_SIZE_HELP = "sandbox_size must be S, M, or L"
 SANDBOX_IMAGE_HELP = "sandbox_image must match ^[a-z0-9][a-z0-9-]{0,31}$"
 IMAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 _SIZE_RANK = {"S": 0, "M": 1, "L": 2}
+_warned_min_vcpus: set[str] = set()
+log = logging.getLogger("apipi.worker.pi")
 
 
 def parse_sandbox_size(value: object) -> str | None:
@@ -172,9 +175,7 @@ def mem_mib_for_size(settings: Settings, size: str | None) -> int:
     return settings.sandbox_mem_mib(size if size is not None else "S")
 
 
-def min_vcpus_for_image(image_id: str | None, settings: Settings | None = None) -> int:
-    if not image_id:
-        return 1
+def recommended_min_vcpus(image_id: str, settings: Settings | None = None) -> int:
     if settings is not None:
         from apipi.worker.pi.image_pull import configured_images_dir
         from apipi.worker.pi.images import read_current
@@ -202,6 +203,26 @@ def min_vcpus_for_image(image_id: str | None, settings: Settings | None = None) 
     if image_id == "browser":
         return 2
     return 1
+
+
+def min_vcpus_for_image(image_id: str | None, settings: Settings | None = None) -> int:
+    if not image_id:
+        return 1
+    recommended = recommended_min_vcpus(image_id, settings)
+    overrides = settings.sandbox_image_min_vcpus if settings is not None else {}
+    if image_id not in overrides:
+        return recommended
+    floor = overrides[image_id]
+    if floor < recommended and image_id not in _warned_min_vcpus:
+        _warned_min_vcpus.add(image_id)
+        log.warning(
+            "image %s: min vcpus %s is below the recommended %s "
+            "(APIPI_SANDBOX_IMAGE_MIN_VCPUS)",
+            image_id,
+            floor,
+            recommended,
+        )
+    return floor
 
 
 def validate_sandbox_metadata(

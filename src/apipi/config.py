@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import tomllib
 from datetime import timedelta
 from pathlib import Path
@@ -111,6 +112,7 @@ _SANDBOX_RESOURCES_TOML = {
     "m_mem_mib": "sandbox_m_mem_mib",
     "l_mem_mib": "sandbox_l_mem_mib",
     "l_vcpus": "sandbox_l_vcpus",
+    "image_min_vcpus": "sandbox_image_min_vcpus",
 }
 _SANDBOX_NETWORK_TOML = {
     "egress_allowlist": "microvm_egress_allowlist",
@@ -326,6 +328,29 @@ def parse_model_names(value: object) -> object:
     return value
 
 
+def parse_image_min_vcpus(value: object) -> object:
+    if value is None or value == "":
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("APIPI_SANDBOX_IMAGE_MIN_VCPUS must be JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError("APIPI_SANDBOX_IMAGE_MIN_VCPUS must be a table")
+    image_id = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+    out: dict[str, int] = {}
+    for key, raw in value.items():
+        if not isinstance(key, str) or image_id.fullmatch(key) is None:
+            raise ValueError("APIPI_SANDBOX_IMAGE_MIN_VCPUS keys must be image ids")
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+            raise ValueError(
+                "APIPI_SANDBOX_IMAGE_MIN_VCPUS values must be integers >= 1"
+            )
+        out[key] = raw
+    return out
+
+
 def parse_image_list(value: object) -> object:
     if value is None or value == "":
         return None
@@ -384,6 +409,7 @@ HostList = Annotated[str, BeforeValidator(parse_hosts)]
 InstanceId = Annotated[str | None, BeforeValidator(parse_instance_id)]
 MicrovmImageName = Annotated[MicrovmImage, BeforeValidator(parse_microvm_image)]
 ImageIdList = Annotated[list[str] | None, BeforeValidator(parse_image_list)]
+ImageMinVcpus = Annotated[dict[str, int], BeforeValidator(parse_image_min_vcpus)]
 ModelNameList = Annotated[list[str], BeforeValidator(parse_model_names)]
 SandboxSizeName = Annotated[SandboxSize, BeforeValidator(parse_sandbox_size_setting)]
 
@@ -776,6 +802,12 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("APIPI_SANDBOX_L_VCPUS", "sandbox_l_vcpus"),
     )
+    sandbox_image_min_vcpus: ImageMinVcpus = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices(
+            "APIPI_SANDBOX_IMAGE_MIN_VCPUS", "sandbox_image_min_vcpus"
+        ),
+    )
     microvm_vcpus: int = Field(
         default=1,
         ge=1,
@@ -1083,11 +1115,15 @@ def _require_table(value: object, name: str) -> dict[str, Any]:
 
 
 def _map_table(
-    table: dict[str, Any], mapping: dict[str, str], prefix: str
+    table: dict[str, Any],
+    mapping: dict[str, str],
+    prefix: str,
+    *,
+    tables: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in table.items():
-        if key not in mapping or isinstance(value, dict):
+        if key not in mapping or (isinstance(value, dict) and key not in tables):
             raise ConfigError(f"unknown setting: {prefix}.{key}")
         out[mapping[key]] = value
     return out
@@ -1102,6 +1138,7 @@ def _flatten_sandbox(table: dict[str, Any]) -> dict[str, Any]:
                     _require_table(value, "[sandbox.resources]"),
                     _SANDBOX_RESOURCES_TOML,
                     "sandbox.resources",
+                    tables=frozenset({"image_min_vcpus"}),
                 )
             )
         elif key == "network":
@@ -1356,6 +1393,11 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_SANDBOX_L_VCPUS must be at least 1"
         if "microvm_vcpus" in loc:
             return "APIPI_MICROVM_VCPUS must be at least 1"
+        if "sandbox_image_min_vcpus" in loc or "APIPI_SANDBOX_IMAGE_MIN_VCPUS" in loc:
+            return (
+                "APIPI_SANDBOX_IMAGE_MIN_VCPUS must be a JSON object of image id "
+                "to integer >= 1"
+            )
         if "microvm_egress_allowlist" in loc or "APIPI_MICROVM_EGRESS_ALLOWLIST" in loc:
             return "APIPI_MICROVM_EGRESS_ALLOWLIST must be on or off"
         if "microvm_egress_mbit" in loc or "APIPI_MICROVM_EGRESS_MBIT" in loc:

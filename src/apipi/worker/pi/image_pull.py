@@ -307,6 +307,7 @@ def list_images(
 
 def available_images(settings: Settings) -> list[LocalImage]:
     from apipi.worker.pi.microvm import default_rootfs_browser_path, default_rootfs_path
+    from apipi.worker.pi.sandbox import min_vcpus_for_image
 
     found = local_images(configured_images_dir(settings))
     ids = {item.id for item in found}
@@ -324,9 +325,11 @@ def available_images(settings: Settings) -> list[LocalImage]:
                 arch=_host_arch(),
                 digest="legacy",
                 min_size="M" if image_id == "browser" else "S",
-                min_vcpus=2 if image_id == "browser" else 1,
+                min_vcpus=min_vcpus_for_image(image_id, settings),
                 rootfs=path,
                 manifest_path=path,
             )
         )
+    for item in found:
+        item.min_vcpus = min_vcpus_for_image(item.id, settings)
     return found

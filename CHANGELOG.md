@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signed by the tag. The 0.12.0 store was signed from `main`.
 - A release that does not change image inputs reuses the previous
   store and signs it for the new tag. It does not rebuild the guest.
+- `APIPI_SANDBOX_IMAGE_MIN_VCPUS` overrides the per-image vCPU floor.
+  Unset still uses the recipe or manifest value. A value below the
+  recommended floor logs a warning.
 
 ## [0.12.0] - 2026-09-30
 
