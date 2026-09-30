@@ -144,6 +144,10 @@ An explicit missing version fails. A defaulted missing version can use
 
 `apipi images verify --no-signature` checks `SHA256SUMS` and the digest
 chain without Sigstore. Signature checks need `uv sync --extra images`.
+`--signer-identity` is an exact Sigstore identity, not a pattern. Use
+it only when the store was not signed by the release tag.
+`--signer-issuer` overrides the GitHub Actions issuer. A non-default
+value prints a warning.
 
 ## Custom images
 
@@ -188,8 +192,24 @@ with that source. See [production](production.md).
 
 The Images workflow builds the official x86_64 `default` and `browser`
 images and attaches them to a GitHub release. It does not build `work`
-or aarch64. Build those locally if you need them. After that workflow
-runs, the release asset URL is an `https://` image source.
+or aarch64. Build those locally if you need them. It runs only on a
+`v*` tag. A re-run must use that tag (`gh workflow run images.yml
+--ref v0.12.1`), not `main`. Dispatching on a branch fails before it
+builds. After that workflow runs, the release asset URL is an `https://`
+image source.
+
+A later release reuses that store when the image inputs are unchanged.
+It copies the rootfs and kernel blobs, writes a new index for the new
+version, and signs `SHA256SUMS` with the new tag. It does not rebuild
+the guest. A recipe, pin, or `guest.sh` change still builds.
+
+The 0.12.0 store, if present, was signed by a manual run on `main`.
+`apipi images verify` and `apipi images mirror` expect the tag identity,
+so that store fails those commands. Use `--no-signature`, or
+`--signer-identity
+https://github.com/GEKI-AI/apipi/.github/workflows/images.yml@refs/heads/main`.
+Prefer 0.12.1, whose store is signed by the tag. `apipi images pull`
+checks sha256 only and is not affected.
 
 ## From a git checkout
 

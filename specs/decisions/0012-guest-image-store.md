@@ -35,7 +35,9 @@ no `latest`, and `manifest_sha256`. Schema `1` is the old flat store.
 It is still read, with a deprecation warning. The official store is
 the GitHub release at
 `https://github.com/GEKI-AI/apipi/releases/download/v<version>/`.
-Signing is a Sigstore bundle over `SHA256SUMS`. An OCI registry was
+Signing is a Sigstore bundle over `SHA256SUMS`. The identity is the
+Images workflow on the release tag. A later tag may copy those blobs
+and sign a new prefix when the image inputs match. An OCI registry was
 considered and not used, because this layout stays on the existing
 HTTPS, S3, and file client.
 

@@ -239,6 +239,8 @@ def _images_mirror(args: argparse.Namespace) -> int:
         version=args.version,
         no_signature=args.no_signature,
         dry_run=args.dry_run,
+        signer_identity=args.signer_identity,
+        signer_issuer=args.signer_issuer,
     ):
         print(line)
     return 0
@@ -255,6 +257,8 @@ def _images_verify(args: argparse.Namespace) -> int:
         version=args.version,
         local=args.local,
         no_signature=args.no_signature,
+        signer_identity=args.signer_identity,
+        signer_issuer=args.signer_issuer,
     )
     print("image store verify ok")
     return 0
@@ -492,6 +496,12 @@ def main(argv: list[str] | None = None) -> int:
     mirror_parser.add_argument("--version", default=None)
     mirror_parser.add_argument("--no-signature", action="store_true")
     mirror_parser.add_argument("--dry-run", action="store_true")
+    mirror_parser.add_argument(
+        "--signer-identity",
+        default=None,
+        help="Exact Sigstore identity. Defaults to the release-tag workflow.",
+    )
+    mirror_parser.add_argument("--signer-issuer", default=None)
     verify_parser = images_sub.add_parser(
         "verify", help="Check a store or the local images"
     )
@@ -500,6 +510,12 @@ def main(argv: list[str] | None = None) -> int:
     verify_parser.add_argument("--version", default=None)
     verify_parser.add_argument("--local", action="store_true")
     verify_parser.add_argument("--no-signature", action="store_true")
+    verify_parser.add_argument(
+        "--signer-identity",
+        default=None,
+        help="Exact Sigstore identity. Defaults to the release-tag workflow.",
+    )
+    verify_parser.add_argument("--signer-issuer", default=None)
     check_parser = images_sub.add_parser(
         "check", help="Check a built guest image on this machine"
     )
