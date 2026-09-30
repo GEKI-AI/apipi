@@ -261,7 +261,7 @@ longer than `--drain-timeout`. A timeout exits 1; systemd then SIGKILLs
 the cgroup (`KillMode=control-group`). Keep API health successful while
 a turn is in flight. A live session stays on the node that owns it.
 
-Host workers (`none` / `chat`) stamp Pi and host stdio MCP with
+Host workers (`none` / `chat`) stamp Pi and host MCP with
 `APIPI_WORKER_PID`. After a crash, the next `apipi worker` or combined
 `apipi serve` start reaps processes whose stamped parent is dead. It
 does not kill another live worker's Pi, and it does not match on the

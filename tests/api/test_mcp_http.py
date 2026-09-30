@@ -37,7 +37,7 @@ async def _agent_with_mcp(
     tool: dict[str, object] = {
         "type": "mcp",
         "server_label": "mock",
-        "transport": {"type": "http", "server_url": url},
+        "server_url": url,
     }
     if headers is not None:
         tool["headers"] = headers

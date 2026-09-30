@@ -67,6 +67,15 @@ def main() -> None:
         _save_history(session, history)
         Path("keep.txt").write_text(text, encoding="utf-8")
         reply = " ".join(history)
+        response: dict[str, object] = {
+            "type": "response",
+            "command": "prompt",
+            "success": True,
+            "data": {"disposition": "started"},
+        }
+        if isinstance(command.get("id"), str):
+            response["id"] = command["id"]
+        sys.stdout.write(json.dumps(response) + "\n")
         events = [
             {"type": "agent_start"},
             {"type": "turn_start"},
@@ -88,10 +97,6 @@ def main() -> None:
         ]
         for event in events:
             sys.stdout.write(json.dumps(event) + "\n")
-        sys.stdout.write(
-            json.dumps({"type": "response", "command": "prompt", "success": True})
-            + "\n"
-        )
         sys.stdout.flush()
 
 

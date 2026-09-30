@@ -25,7 +25,6 @@ from apipi.mcp.http import (
     apply_vault_headers,
     connect_mcp_http_tools,
 )
-from apipi.mcp.stdio import start_mcp_stdio_tools, stop_mcp_stdio
 from apipi.services.agents import AgentWrite
 from apipi.services.chat_tools import is_chat_profile, reject_disallowed_chat_tools
 from apipi.services.failures import error_extra
@@ -295,7 +294,6 @@ class SessionService:
         skill_store: SkillService,
         tracing: Tracing | None,
         mcp_http: dict[uuid.UUID, Any],
-        mcp_stdio: dict[uuid.UUID, Any],
     ) -> None:
         self.settings = settings
         self.store = store
@@ -307,7 +305,6 @@ class SessionService:
         self.skill_store = skill_store
         self.tracing = tracing
         self.mcp_http = mcp_http
-        self.mcp_stdio = mcp_stdio
         self._turn_tasks: set[asyncio.Task[None]] = set()
 
     async def cancel_turns(self) -> None:
@@ -665,10 +662,6 @@ class SessionService:
                     connected = apply_vault_headers(
                         connected, _plain_vault_creds(self.settings, creds)
                     )
-                stdio = await start_mcp_stdio_tools(
-                    raw_tools,
-                    on_host=self.execution.stdio_on_host,
-                )
             except McpConnectError as exc:
                 async with self.store.session() as db:
                     await fail_session(
@@ -680,8 +673,6 @@ class SessionService:
                     set_span(self.tracing, status="failed")
                     return session_body(row)
             self.mcp_http[session_id] = connected
-            self.mcp_stdio[session_id] = stdio
-            self.execution.put_stdio(session_id, stdio)
             text = turn_content.text
             if text or turn_content.images:
                 require_model(model)
@@ -699,7 +690,6 @@ class SessionService:
                         images=[image.rpc() for image in turn_content.images],
                         parts=turn_content.wire_parts(),
                         mcp_http=connected,
-                        mcp_stdio=stdio,
                         request_id=request_id,
                         api_key=api_key,
                         key_id=key_id or None,
@@ -718,7 +708,6 @@ class SessionService:
                                 images=[image.rpc() for image in turn_content.images],
                                 parts=turn_content.wire_parts(),
                                 mcp_http=connected,
-                                mcp_stdio=stdio,
                                 request_id=request_id,
                                 api_key=api_key,
                                 key_id=key_id or None,
@@ -785,7 +774,6 @@ class SessionService:
                         tenant_id,
                         session_id,
                         mcp_http=self.mcp_http.get(session_id),
-                        mcp_stdio=self.mcp_stdio.get(session_id),
                     )
                 )
                 self._turn_tasks.add(task)
@@ -942,9 +930,6 @@ class SessionService:
             if not deleted:
                 not_found()
         self.mcp_http.pop(session_id, None)
-        stdio = self.mcp_stdio.pop(session_id, None)
-        if stdio:
-            await stop_mcp_stdio(stdio)
         return {"id": str(session_id), "deleted": True}
 
     async def post_event(
@@ -1042,7 +1027,6 @@ class SessionService:
                     output=output,
                     error=error,
                     mcp_http=self.mcp_http.get(session_id),
-                    mcp_stdio=self.mcp_stdio.get(session_id),
                     request_id=request_id,
                     api_key=api_key,
                     key_id=key_id,
@@ -1070,7 +1054,6 @@ class SessionService:
                     images=[image.rpc() for image in parsed.images],
                     parts=parsed.wire_parts(),
                     mcp_http=self.mcp_http.get(session_id),
-                    mcp_stdio=self.mcp_stdio.get(session_id),
                     request_id=request_id,
                     api_key=api_key,
                     key_id=key_id,

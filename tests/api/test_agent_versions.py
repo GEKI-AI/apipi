@@ -225,10 +225,7 @@ async def test_restore_missing_credential_changes_nothing(client: AsyncClient) -
                 {
                     "type": "mcp",
                     "server_label": "box",
-                    "transport": {
-                        "type": "http",
-                        "server_url": "https://mcp.example.com/mcp",
-                    },
+                    "server_url": "https://mcp.example.com/mcp",
                     "credential_id": cred.json()["id"],
                 }
             ],

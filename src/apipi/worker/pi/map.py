@@ -15,10 +15,41 @@ RETRYING = "agent.session.turn.retrying"
 RETRY_COMPLETED = "agent.session.turn.retry.completed"
 
 
-def _tool_item_type(name: object) -> str:
-    if isinstance(name, str) and name.lower().startswith("mcp"):
-        return "mcp_call"
+def _tool_details(event: dict[str, Any]) -> dict[str, Any]:
+    details = event.get("details")
+    if isinstance(details, dict):
+        return details
+    result = event.get("result")
+    if isinstance(result, dict):
+        nested = result.get("details")
+        if isinstance(nested, dict):
+            return nested
+    return {}
+
+
+def _tool_item_type(name: object, details: dict[str, Any] | None = None) -> str:
+    if details:
+        server = details.get("server")
+        if isinstance(server, str) and server:
+            return "mcp_call"
+    if isinstance(name, str):
+        lowered = name.lower()
+        if lowered.startswith("mcp__") or lowered.startswith("mcp_"):
+            return "mcp_call"
     return "command_execution"
+
+
+def _tool_names(
+    event: dict[str, Any], details: dict[str, Any]
+) -> tuple[str, str | None]:
+    server = details.get("server")
+    tool = details.get("tool")
+    name = event.get("toolName")
+    if isinstance(server, str) and server and isinstance(tool, str) and tool:
+        return tool, server
+    if isinstance(name, str):
+        return name, None
+    return "", None
 
 
 def _host_error(raw: object) -> list[tuple[str, dict[str, Any]]]:
@@ -67,30 +98,61 @@ def map_pi_event(event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     if kind == "compaction_end":
         return [(COMPACTION_COMPLETED, _compaction_end(event))]
     if kind == "tool_execution_start":
+        details = _tool_details(event)
+        parent = event.get("parentToolCallId")
         call_id = event.get("toolCallId")
-        name = event.get("toolName")
-        item_type = _tool_item_type(name)
+        name, server_label = _tool_names(event, details)
+        item_type = _tool_item_type(name, details)
+        data: dict[str, Any] = {
+            "item_type": item_type,
+            "call_id": call_id,
+            "name": name,
+        }
+        if server_label is not None:
+            data["server_label"] = server_label
+        if isinstance(parent, str) and parent:
+            data["parent_call_id"] = parent
+            return [("agent.session.turn.item.nested", data)]
+        return [("agent.session.turn.item.added", data)]
+    if kind == "tool_execution_end":
+        details = _tool_details(event)
+        parent = event.get("parentToolCallId")
+        call_id = event.get("toolCallId")
+        name, server_label = _tool_names(event, details)
+        data = {
+            "item_type": _tool_item_type(name, details),
+            "call_id": call_id,
+            "is_error": bool(event.get("isError")),
+        }
+        if server_label is not None:
+            data["server_label"] = server_label
+            data["name"] = name
+        if isinstance(parent, str) and parent:
+            data["parent_call_id"] = parent
+            return [("agent.session.turn.item.nested", data)]
+        return [("agent.session.turn.item.done", data)]
+    if kind == "tool_execution_update":
+        details = _tool_details(event)
+        if not details:
+            return []
+        call_id = event.get("toolCallId")
+        name, server_label = _tool_names(event, details)
+        if server_label is None:
+            return []
+        data = {
+            "item_type": _tool_item_type(name, details),
+            "call_id": call_id,
+            "name": name,
+            "server_label": server_label,
+        }
+        parent = event.get("parentToolCallId")
+        if isinstance(parent, str) and parent:
+            data["parent_call_id"] = parent
+            return [("agent.session.turn.item.nested", data)]
         return [
             (
                 "agent.session.turn.item.added",
-                {
-                    "item_type": item_type,
-                    "call_id": call_id,
-                    "name": name,
-                },
-            )
-        ]
-    if kind == "tool_execution_end":
-        call_id = event.get("toolCallId")
-        name = event.get("toolName")
-        return [
-            (
-                "agent.session.turn.item.done",
-                {
-                    "item_type": _tool_item_type(name),
-                    "call_id": call_id,
-                    "is_error": bool(event.get("isError")),
-                },
+                data,
             )
         ]
     return []

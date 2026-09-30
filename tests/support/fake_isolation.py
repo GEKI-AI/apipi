@@ -1,6 +1,5 @@
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
-from apipi.mcp.stdio import McpStdioServer
 from apipi.worker.pi.isolation.none import NoneIsolation
 from apipi.worker.pi.proc import PiProc
 
@@ -8,7 +7,6 @@ from apipi.worker.pi.proc import PiProc
 class FakeIsolation:
     name = "fake"
     needs_probe = True
-    stdio_on_host = True
     warn_not_production = True
     required = False
     probed = False
@@ -32,7 +30,6 @@ class FakeIsolation:
         cwd: str | None,
         tools: bool,
         mcp_http: list[McpHttpServer] | None = None,
-        mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
         model: str | None = None,
         instructions: str | None = None,
@@ -51,7 +48,6 @@ class FakeIsolation:
             cwd=cwd,
             tools=tools,
             mcp_http=mcp_http,
-            mcp_stdio=mcp_stdio,
             skill_dirs=skill_dirs,
             model=model,
             instructions=instructions,

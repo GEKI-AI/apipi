@@ -1107,7 +1107,6 @@ async def run_worker(
 ) -> int:
     from apipi.store.engine import Store, create_engine
     from apipi.worker.execution import local_execution, worker_observability
-    from apipi.worker.pi.orphan import sweep_host_orphans
 
     token = settings.worker_token
     if token is None or token == "":
@@ -1118,8 +1117,6 @@ async def run_worker(
     store = Store(create_engine(settings.database_url, pool_size=settings.db_pool_size))
     metrics, tracing = worker_observability(settings)
     execution = local_execution(settings, store=store, metrics=metrics, tracing=tracing)
-    if execution.stdio_on_host:
-        await sweep_host_orphans()
     tasks: set[asyncio.Task[None]] = set()
     if metrics is not None:
         from apipi.worker.scrape import serve_metrics

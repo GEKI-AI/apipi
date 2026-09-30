@@ -5,7 +5,6 @@ from typing import Any
 
 from apipi.env.computer import Computer
 from apipi.mcp.http import McpHttpServer
-from apipi.mcp.stdio import McpStdioServer
 from apipi.services.failures import failure_for, pi_payload
 from apipi.worker.pi.map import ThinkingTracker, map_pi_event
 from apipi.worker.pi.pool import PiPool
@@ -23,7 +22,6 @@ class PiHarness:
         cwd: str | None = None,
         tools: bool = True,
         mcp_http: list[McpHttpServer] | None = None,
-        mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
         computer: Computer | None = None,
         tenant_id: uuid.UUID | None = None,
@@ -63,12 +61,13 @@ class PiHarness:
         raw_agent = _kwargs.get("agent_id")
         raw_user = _kwargs.get("user_id")
         raw_org = _kwargs.get("org_id")
+        raw_codemode = _kwargs.get("codemode")
+        codemode = raw_codemode if isinstance(raw_codemode, str) else "off"
         proc = await self.pool.get(
             session_id,
             cwd=cwd,
             tools=False if computer is not None else tools,
             mcp_http=mcp_http,
-            mcp_stdio=mcp_stdio,
             skill_dirs=skill_dirs,
             tenant_id=tenant_id,
             model=model if isinstance(model, str) else None,
@@ -82,6 +81,7 @@ class PiHarness:
             thinking=thinking,
             system_prompt=system_prompt,
             system_prompt_set=system_prompt_set,
+            codemode=codemode,
             idle_ttl=idle_ttl,
             idle_ttl_set=idle_ttl_set,
             agent_id=str(raw_agent) if raw_agent else None,
@@ -93,6 +93,19 @@ class PiHarness:
         abort = _kwargs.get("abort")
         raw_images = _kwargs.get("images")
         images = raw_images if isinstance(raw_images, list) and raw_images else None
+        for server in mcp_http or []:
+            tool_list = [
+                {"name": tool.name, "description": tool.description}
+                for tool in getattr(server, "tools", ())
+            ]
+            yield (
+                "agent.session.turn.item.added",
+                {
+                    "item_type": "mcp_list_tools",
+                    "server_label": server.server_label,
+                    "tools": tool_list,
+                },
+            )
         stream = proc.prompt(text, images=images) if images else proc.prompt(text)
         async for event in stream:
             if event.get("type") == "agent_settled":

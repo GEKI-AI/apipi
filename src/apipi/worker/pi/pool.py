@@ -11,7 +11,6 @@ from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing, start_span
 from apipi.mcp.http import McpHttpServer
-from apipi.mcp.stdio import McpStdioServer, stop_mcp_stdio
 from apipi.services.lifecycle_export import LifecycleEmitter, utc_ts
 from apipi.worker.pi.proc import PiProc, spawn_pi
 from apipi.worker.pi.sandbox import size_for_mem
@@ -56,12 +55,12 @@ class PiPool:
         self.metrics = metrics
         self._procs: dict[uuid.UUID, PiProc] = {}
         self._tenants: dict[uuid.UUID, uuid.UUID] = {}
-        self._stdio: dict[uuid.UUID, list[McpStdioServer]] = {}
         self._last: dict[uuid.UUID, float] = {}
         self._spawn_tools: dict[uuid.UUID, bool] = {}
         self._models: dict[uuid.UUID, str | None] = {}
         self._instructions: dict[uuid.UUID, str | None] = {}
         self._thinking: dict[uuid.UUID, str] = {}
+        self._codemodes: dict[uuid.UUID, str] = {}
         self._system_prompts: dict[uuid.UUID, str | None] = {}
         self._ttls: dict[uuid.UUID, float | None] = {}
         self._key_ids: dict[uuid.UUID, str | None] = {}
@@ -85,7 +84,6 @@ class PiPool:
         cwd: str | None,
         tools: bool,
         mcp_http: list[McpHttpServer] | None = None,
-        mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
         tenant_id: uuid.UUID | None = None,
         model: str | None = None,
@@ -99,6 +97,7 @@ class PiPool:
         thinking: str | None = None,
         system_prompt: str | None = None,
         system_prompt_set: bool = False,
+        codemode: str = "off",
         idle_ttl: timedelta | None = None,
         idle_ttl_set: bool = False,
         agent_id: str | None = None,
@@ -134,6 +133,7 @@ class PiPool:
                             level=level,
                             prompt=prompt,
                             key_id=key_id,
+                            codemode=codemode,
                         )
                     ):
                         await self.kill(session_id, reason="respawn")
@@ -193,7 +193,6 @@ class PiPool:
                     cwd=cwd,
                     tools=tools,
                     mcp_http=mcp_http,
-                    mcp_stdio=mcp_stdio,
                     skill_dirs=skill_dirs,
                     model=model,
                     instructions=instructions,
@@ -204,6 +203,7 @@ class PiPool:
                     thinking=level,
                     system_prompt=prompt,
                     system_prompt_set=True,
+                    codemode=codemode,
                     env_type=env_type,
                 )
         except Exception as exc:
@@ -225,6 +225,7 @@ class PiPool:
                 level=level,
                 prompt=prompt,
                 key_id=key_id,
+                codemode=codemode,
                 env_type=env_type,
                 session_mem=session_mem,
                 size=size,
@@ -270,11 +271,13 @@ class PiPool:
         level: str,
         prompt: str | None,
         key_id: str | None,
+        codemode: str = "off",
     ) -> bool:
         same = self._spawn_tools.get(session_id) == tools
         same = same and self._models.get(session_id) == model
         same = same and self._instructions.get(session_id) == instructions
         same = same and self._thinking.get(session_id) == level
+        same = same and self._codemodes.get(session_id, "off") == codemode
         same = same and self._system_prompts.get(session_id) == prompt
         return same and self._key_ids.get(session_id) == key_id
 
@@ -356,6 +359,7 @@ class PiPool:
         level: str,
         prompt: str | None,
         key_id: str | None,
+        codemode: str,
         env_type: str | None,
         session_mem: int,
         size: str,
@@ -372,6 +376,7 @@ class PiPool:
         self._models[session_id] = model
         self._instructions[session_id] = instructions
         self._thinking[session_id] = level
+        self._codemodes[session_id] = codemode
         self._system_prompts[session_id] = prompt
         self._key_ids[session_id] = key_id
         self._env_types[session_id] = env_type
@@ -472,9 +477,6 @@ class PiPool:
     def touch(self, session_id: uuid.UUID) -> None:
         self._last[session_id] = time.monotonic()
 
-    def put_stdio(self, session_id: uuid.UUID, servers: list[McpStdioServer]) -> None:
-        self._stdio[session_id] = servers
-
     def sandbox_seen_ids(self) -> list[uuid.UUID]:
         live = [sid for sid, proc in self._procs.items() if proc.alive]
         return list({*live, *self._booting})
@@ -503,6 +505,7 @@ class PiPool:
         self._models.pop(session_id, None)
         self._instructions.pop(session_id, None)
         self._thinking.pop(session_id, None)
+        self._codemodes.pop(session_id, None)
         self._system_prompts.pop(session_id, None)
         self._ttls.pop(session_id, None)
         self._key_ids.pop(session_id, None)
@@ -511,7 +514,6 @@ class PiPool:
         self._tenants.pop(session_id, None)
         size = self._sizes.pop(session_id, "S")
         born = self._born.pop(session_id, None)
-        stdio = self._stdio.pop(session_id, None)
         self._booting.discard(session_id)
         if live is not None:
             self._emit_stop(live, reason=reason, born=born)
@@ -540,8 +542,6 @@ class PiPool:
         if proc is not None:
             proc.stop_reason = reason
             await proc.terminate()
-        if stdio:
-            await stop_mcp_stdio(stdio)
 
     def _observe_boot(self, size: str, result: str, seconds: float) -> None:
         if self.metrics is None:
@@ -561,7 +561,7 @@ class PiPool:
     def _host_backend(self) -> bool:
         from apipi.worker.pi.isolation import load_isolation
 
-        return load_isolation(self.settings.run_mode).stdio_on_host
+        return load_isolation(self.settings.run_mode).name in {"none", "chat"}
 
     def refresh_metrics(self) -> None:
         if self.metrics is None:

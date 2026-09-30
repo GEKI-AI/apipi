@@ -2,14 +2,12 @@ from typing import Protocol
 
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
-from apipi.mcp.stdio import McpStdioServer
 from apipi.worker.pi.proc import PiProc
 
 
 class Isolation(Protocol):
     name: str
     needs_probe: bool
-    stdio_on_host: bool
     warn_not_production: bool
 
     def require(self, settings: Settings | None) -> None: ...
@@ -23,7 +21,6 @@ class Isolation(Protocol):
         cwd: str | None,
         tools: bool,
         mcp_http: list[McpHttpServer] | None = None,
-        mcp_stdio: list[McpStdioServer] | None = None,
         skill_dirs: list[str] | None = None,
         model: str | None = None,
         instructions: str | None = None,
@@ -34,5 +31,6 @@ class Isolation(Protocol):
         thinking: str | None = None,
         system_prompt: str | None = None,
         system_prompt_set: bool = False,
+        codemode: str = "off",
         env_type: str | None = None,
     ) -> PiProc: ...

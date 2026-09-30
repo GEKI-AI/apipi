@@ -1,6 +1,6 @@
 # Run modes
 
-Run mode is where Pi and stdio MCP run (`APIPI_RUN_MODE`). Environment
+Run mode is where Pi and MCP run (`APIPI_RUN_MODE`). Environment
 is a separate choice: where file and shell tools run. A remote runner
 leaves Pi isolation in place. The gateway always stays on the host.
 Why the modes exist, and what a microVM contains, is in
@@ -52,7 +52,7 @@ microVM inside a container is a lab setup.
 ## What to install
 
 Every mode needs Python 3.13, [uv](https://docs.astral.sh/uv/),
-the store, the Pi CLI (`pi --mode rpc`) on `PATH` at version 0.85.1, and
+the store, the Pi CLI (`pi --mode rpc`) on `PATH` at version 0.99.1, and
 `OPENAI_BASE_URL`. `apipi serve` exits if those are missing. See
 [install](install.md). The extra OS packages differ by mode.
 
@@ -227,8 +227,8 @@ with `artifacts/`. Those remain readable. New publishes use
 Pi is a child of `apipi serve` or `apipi worker`. There is no namespace,
 cgroup, or guest. Host Pi (`none` and `chat`) starts in its own process
 group. Idle reap, session end, and process shutdown send SIGTERM then
-SIGKILL to that group so stdio MCP children started by Pi do not linger.
-Gateway-owned stdio MCP is a sibling of Pi and is stopped separately.
+SIGKILL to that group so MCP children started by Pi do not linger.
+Gateway-owned MCP is a sibling of Pi and is stopped separately.
 `APIPI_PI_MEM_MIB` is an optional soft ceiling for one host Pi (Node
 heap plus RSS kill). It is not a cgroup. Use this when a microvm
 cannot run. Use `microvm` in production. The process logs a warning.
@@ -326,7 +326,7 @@ APIPI_RUN_MODE=package.mod:Class
 ```
 
 The attribute must be a class, a zero-argument factory, or an instance.
-It needs `name`, `needs_probe`, `stdio_on_host`,
+It needs `name`, `needs_probe`,
 `warn_not_production`, `require`, `probe`, and `spawn`. `spawn` starts
 Pi and returns the RPC process. If `needs_probe` is true, startup
 launches a throwaway sandbox before HTTP listen, the same way
@@ -335,9 +335,7 @@ launches a throwaway sandbox before HTTP listen, the same way
 for a custom backend.
 
 `name` is what usage events store as `run_mode`. Pick a short stable
-string. `stdio_on_host` controls whether stdio MCP is started next to
-the gateway (`none` does this) or inside the sandbox with Pi
-(`microvm` does this).
+string.
 
 A small wrapper around `none` is `examples/isolation.py`. Put your
 module on `PYTHONPATH`.

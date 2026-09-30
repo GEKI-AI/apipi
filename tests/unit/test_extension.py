@@ -2,8 +2,11 @@ from pathlib import Path
 
 from apipi.config import Settings
 from apipi.worker.pi.extension import (
+    APIPI_EXTENSION_REL,
+    GUEST_APIPI_EXTENSION,
     GUEST_MCP_EXTENSION,
     MCP_EXTENSION_REL,
+    apipi_extension_source,
     host_mcp_extension,
     mcp_extension_source,
 )
@@ -12,25 +15,26 @@ from apipi.worker.pi.version import PINNED_AGENT_BROWSER
 
 def test_mcp_extension_source_is_pi_module() -> None:
     text = mcp_extension_source().decode()
-    assert "attachStdio" in text
-    assert "APIPI_MCP_STDIO" in text
-    assert "mcp_client.mjs" in text
-    assert "mcp_http.mjs" in text
+    assert "registerMcpServer" in text
     assert "APIPI_MCP_SERVERS" in text
-    assert "bash-install.txt" not in text
-    assert "tools/call" in text
-    assert "failed after" in text
-    assert "Do not install Playwright" not in text
-    assert "Save screenshots" not in text
-    assert "Today is" not in text
-    assert "playwrightTools" not in text
     assert "APIPI_IMAGE_CHECK" in text
-    assert "waitForSpawn" not in text
-    assert "Content-Length" not in text
-    assert "ATTACH_TIMEOUT_MS = 15_000" in text
-    assert "npm_config_cache" in text
+    assert "attachStdio" not in text
+    assert "APIPI_MCP_STDIO" not in text
+    assert "mcp_client.mjs" not in text
+    assert "mcp_http.mjs" not in text
+    assert "tools/call" not in text
     assert MCP_EXTENSION_REL.endswith("apipi-mcp.ts")
     assert GUEST_MCP_EXTENSION.endswith("apipi-mcp.ts")
+
+
+def test_apipi_extension_holds_identity() -> None:
+    text = apipi_extension_source().decode()
+    assert "before_agent_start" in text
+    assert "identity.txt" in text
+    assert "DEFAULT_BASH_TIMEOUT_SEC" in text
+    assert "registerMcpServer" not in text
+    assert APIPI_EXTENSION_REL.endswith("apipi.ts")
+    assert GUEST_APIPI_EXTENSION.endswith("apipi.ts")
 
 
 def test_host_mcp_extension_writes_file(tmp_path: Path) -> None:
@@ -41,12 +45,11 @@ def test_host_mcp_extension_writes_file(tmp_path: Path) -> None:
     )
     cwd = tmp_path / "session"
     cwd.mkdir()
-    path = Path(host_mcp_extension(settings, str(cwd)))
-    assert path.is_file()
-    assert path.name == "apipi-mcp.ts"
-    assert "session_start" in path.read_text()
-    assert (path.parent / "mcp_client.mjs").is_file()
-    assert (path.parent / "mcp_http.mjs").is_file()
+    paths = [Path(item) for item in host_mcp_extension(settings, str(cwd))]
+    assert [item.name for item in paths] == ["apipi.ts", "apipi-mcp.ts"]
+    assert all(item.is_file() for item in paths)
+    assert "registerMcpServer" in paths[1].read_text()
+    assert "before_agent_start" in paths[0].read_text()
 
 
 def test_browser_recipe_pins_agent_browser() -> None:

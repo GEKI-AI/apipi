@@ -342,7 +342,7 @@ Firecracker.
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
 | `APIPI_PI_COMMAND` | `[pi].command` | `pi` | Pi binary used as `pi --mode rpc`. |
-| `APIPI_PI_AUTO_COMPACT` | `[pi].auto_compact` | on | When off, ApiPi writes `compaction.enabled` false in Pi `settings.json`. Pi 0.85.1 does not accept `--no-auto-compact`, so that flag is not passed. |
+| `APIPI_PI_AUTO_COMPACT` | `[pi].auto_compact` | on | When off, ApiPi writes `compaction.enabled` false in Pi `settings.json`. Pi 0.99.1 does not accept `--no-auto-compact`, so that flag is not passed. |
 | `APIPI_PI_COMPACTION_RESERVE_TOKENS` | `[pi].compaction_reserve_tokens` | unset (Pi default 16384) | `compaction.reserveTokens` in Pi `settings.json`. Tokens reserved for the model reply. Unset leaves Pi's default. |
 | `APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS` | `[pi].compaction_keep_recent_tokens` | unset (Pi default 20000) | `compaction.keepRecentTokens` in Pi `settings.json`. Recent tokens kept out of the summary. Unset leaves Pi's default. |
 | `APIPI_PI_THINKING` | `[pi].thinking` | `off` | Process default thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. A session or agent may override it. |
@@ -358,6 +358,16 @@ Firecracker.
 | `APIPI_MODEL_TIMEOUT_MS` | `[pi].model_timeout_ms` | `120000` | Pi `httpIdleTimeoutMs` and `retry.provider.timeoutMs`. Idle timeout for a hung call. Must be at least 1. `0` is not allowed. |
 | `APIPI_MODEL_PROVIDER_RETRIES` | `[pi].model_provider_retries` | `0` | Pi `retry.provider.maxRetries`. Silent HTTP retries. Default `0` so they do not multiply session retries. |
 | `APIPI_MODEL_RETRY_AFTER_MAX_MS` | `[pi].model_retry_after_max_ms` | `30000` | Pi `retry.provider.maxRetryDelayMs`. A `Retry-After` above this fails that provider retry. Session retry may still run. |
+
+Pi starts with `--no-extensions` plus an explicit list: the ApiPi
+extensions, then `builtin:mcp` when the session has MCP servers, then
+`builtin:codemode` when codemode is on. `builtin:llama.cpp` and
+`builtin:tool-search` are never loaded. The Pi process runs with
+`PI_OFFLINE=1`, and `settings.json` sets `defaultProjectTrust` to
+`never`, so workspace `.pi/` project resources are never loaded.
+`apipi.codemode` (`off`, `on`, `only`, default `off`) on the agent or
+session enables the codemode script tool. The session value overrides
+the agent. It is inert without tools.
 
 Thinking stays off until the resolved level is not `off`. ApiPi then
 passes `--thinking` to Pi, writes `defaultThinkingLevel` in
@@ -401,7 +411,7 @@ count. The full thinking text is not a public event. See
 
 Compaction and the system prompt are written into the session Pi agent
 directory before Pi starts (`settings.json` and, when set, `SYSTEM.md`).
-That directory is `PI_CODING_AGENT_DIR`. Pi 0.85.1 reads global settings
+That directory is `PI_CODING_AGENT_DIR`. Pi 0.99.1 reads global settings
 and `SYSTEM.md` from there. Project `.pi/settings.json` and
 `.pi/SYSTEM.md` are not used, because RPC does not trust the workspace.
 `compaction.enabled` follows `[pi].auto_compact`. Thresholds are written
@@ -414,7 +424,7 @@ defaults. `retry.enabled`, `retry.maxRetries`, `retry.baseDelayMs`,
 `APIPI_MODEL_*` settings. They are process-wide. There is no per-agent
 override in this version.
 
-Pi 0.85.1 has no session-level backoff cap, so
+Pi 0.99.1 has no session-level backoff cap, so
 `APIPI_MODEL_BACKOFF_MAX_MS` limits the effective `retry.maxRetries`
 instead. It also has no status-based selection at that layer: retry
 matching is text. A `400` whose body mentions `timeout` or `502` can
@@ -511,7 +521,7 @@ platform_prompt_additional = "Always answer in German."
 
 ### Context files
 
-Pi 0.85.1 also loads context files into the prompt. This is a supported
+Pi 0.99.1 also loads context files into the prompt. This is a supported
 way to add instructions for one session. ApiPi does not write these
 files. A template, the caller, or the agent does.
 

@@ -36,7 +36,7 @@ agents until you create one.
 | `GET` | `/v1/agents/{agent_id}/export` |
 
 Fields: `id`, `name`, `model`, `instructions`, `idle_ttl`, `metadata`,
-`tools` (function, mcp HTTP, mcp stdio), `session_defaults`,
+`tools` (function, mcp), `session_defaults`,
 `created_at`, `updated_at`.
 `idle_ttl` is an ApiPi extension: a duration such as `30m` or `1h`,
 or `0` to turn the idle timer off. Omit it to keep the environment
@@ -315,8 +315,7 @@ An `environment` field is `400` with code
 on a chat path is `404`. Event types match Agents so one frontend can
 read both.
 
-Chat tools are an allowlist: function tools and HTTP MCP. Stdio MCP,
-workspace skills, and computer environments are rejected. A disallowed tool is `400` with code `chat_tool`. Saved
+Chat tools are an allowlist: function tools and MCP. workspace skills, and computer environments are rejected. A disallowed tool is `400` with code `chat_tool`. Saved
 agents used as chat profiles should set `metadata.apipi.session_kind`
 to `chat`; create and update then apply the same allowlist.
 
@@ -375,7 +374,7 @@ wins over the agent field. Stock clients can set
 `metadata` is a JSON object. Keys that start with `apipi.` are
 reserved. The gateway interprets `apipi.sandbox_size`,
 `apipi.sandbox_image`, `apipi.session_kind`, `apipi.thinking`,
-`apipi.system_prompt`, and `apipi.idle_ttl`. It
+`apipi.system_prompt`, `apipi.codemode`, and `apipi.idle_ttl`. It
 stores `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`
 and does not branch on them. There is no top-level `actor_type`
 field. See [reserved metadata](extending.md#reserved-metadata).
@@ -462,7 +461,7 @@ log line.
 | `agent.session.environment.failed` | Could not attach, or hosted setup failed. Hosted `data.sandbox.state` is `failed`. |
 
 Item types: `message`, `function_call`, `mcp_call`,
-`command_execution`. Thinking is not an item. `GET /items` does not
+`mcp_list_tools`, `command_execution`. Thinking is not an item. `GET /items` does not
 list it.
 
 `agent.session.turn.thinking.completed` carries `item_id`,

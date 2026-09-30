@@ -29,16 +29,14 @@ from apipi.env.setup import (
 )
 from apipi.gateway.logutil import log_event
 from apipi.mcp.http import McpHttpServer
-from apipi.mcp.stdio import McpStdioServer
 from apipi.worker.pi.dirs import PI_SESSION_REL, pi_session_file
 from apipi.worker.pi.extension import (
+    APIPI_EXTENSION_REL,
+    GUEST_APIPI_EXTENSION,
     GUEST_MCP_EXTENSION,
-    MCP_CLIENT_REL,
     MCP_EXTENSION_REL,
-    MCP_HTTP_REL,
-    mcp_client_source,
+    apipi_extension_source,
     mcp_extension_source,
-    mcp_http_source,
 )
 from apipi.worker.pi.model_host import pi_agent_dir
 from apipi.worker.pi.proc import PiProc, pi_command_args, pi_env
@@ -615,11 +613,9 @@ _GUEST_FILE_KEYS = frozenset(
         "NODE_OPTIONS",
         "APIPI_PINNED_PI",
         "APIPI_MCP_SERVERS",
-        "APIPI_MCP_STDIO",
     }
 )
-_MCP_HTTP_FIELDS = frozenset({"LABEL", "URL"})
-_MCP_STDIO_FIELDS = frozenset({"LABEL", "COMMAND", "ARGS", "CWD"})
+_MCP_HTTP_FIELDS = frozenset({"LABEL", "URL", "ALLOWED"})
 _EXTRA_NEVER = frozenset(
     {
         "OPENAI_API_KEY",
@@ -646,8 +642,6 @@ def _indexed_mcp_key(key: str, prefix: str, fields: frozenset[str]) -> bool:
 def _guest_file_key(key: str) -> bool:
     if key in _GUEST_FILE_KEYS:
         return True
-    if _indexed_mcp_key(key, "APIPI_MCP_STDIO_", _MCP_STDIO_FIELDS):
-        return True
     if _indexed_mcp_key(key, "APIPI_MCP_", _MCP_HTTP_FIELDS):
         return True
     if key.startswith(("APIPI_", "OPENAI_", "CODEX_", "PI_")):
@@ -664,7 +658,6 @@ def _take(dest: dict[str, str], src: dict[str, str], key: str) -> None:
 def guest_env(
     settings: Settings,
     mcp_http: list[McpHttpServer] | None = None,
-    mcp_stdio: list[McpStdioServer] | None = None,
     *,
     api_key: str | None = None,
     broker: object | None = None,
@@ -673,7 +666,6 @@ def guest_env(
     built = pi_env(
         settings,
         mcp_http,
-        mcp_stdio,
         api_key=api_key,
         broker=broker,
         extra_env=extra_env,
@@ -696,15 +688,7 @@ def guest_env(
         for index, _server in enumerate(mcp_http):
             _take(guest, built, f"APIPI_MCP_{index}_LABEL")
             _take(guest, built, f"APIPI_MCP_{index}_URL")
-    if mcp_stdio:
-        _take(guest, built, "APIPI_MCP_STDIO")
-        for index, server in enumerate(mcp_stdio):
-            prefix = f"APIPI_MCP_STDIO_{index}"
-            _take(guest, built, f"{prefix}_LABEL")
-            _take(guest, built, f"{prefix}_COMMAND")
-            _take(guest, built, f"{prefix}_ARGS")
-            if server.cwd:
-                _take(guest, built, f"{prefix}_CWD")
+            _take(guest, built, f"APIPI_MCP_{index}_ALLOWED")
     if extra_env:
         for key, value in extra_env.items():
             if key in guest or key in _EXTRA_NEVER or not _guest_file_key(key):
@@ -807,8 +791,7 @@ def write_workspace_image(
             _add_bytes(tar, ".pi/agent/settings.json", settings_json, mode=0o644)
         if system_md is not None:
             _add_bytes(tar, ".pi/agent/SYSTEM.md", system_md, mode=0o644)
-        _add_bytes(tar, MCP_CLIENT_REL, mcp_client_source(), mode=0o644)
-        _add_bytes(tar, MCP_HTTP_REL, mcp_http_source(), mode=0o644)
+        _add_bytes(tar, APIPI_EXTENSION_REL, apipi_extension_source(), mode=0o644)
         _add_bytes(tar, MCP_EXTENSION_REL, mcp_extension_source(), mode=0o644)
         _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
         if shell:
@@ -1381,7 +1364,6 @@ async def start_microvm(
     cwd: str | None,
     tools: bool,
     mcp_http: list[McpHttpServer] | None = None,
-    mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
     model: str | None = None,
     instructions: str | None = None,
@@ -1394,6 +1376,7 @@ async def start_microvm(
     thinking: str | None = None,
     system_prompt: str | None = None,
     system_prompt_set: bool = False,
+    codemode: str = "off",
     env_type: str | None = None,
 ) -> StartedMicrovm:
     require_microvm(settings)
@@ -1500,6 +1483,9 @@ async def start_microvm(
             pi_session_file(Path(cwd)).parent.mkdir(parents=True, exist_ok=True)
         level = thinking if thinking is not None else settings.pi_thinking
         prompt = system_prompt if system_prompt_set else process_system_prompt(settings)
+        code = codemode if codemode in ("on", "only") else "off"
+        if code != "off" and not tools:
+            code = "off"
         agent_dir = Path(cwd) / ".pi" / "agent" if cwd else None
         if agent_dir is not None:
             pi_settings = apply_pi_agent_files(
@@ -1508,9 +1494,10 @@ async def start_microvm(
                 thinking=level,
                 system_prompt=prompt,
                 env_type=env_type,
+                codemode=code,
             )
         else:
-            pi_settings = merged_settings(settings, thinking=level)
+            pi_settings = merged_settings(settings, thinking=level, codemode=code)
         system_md = None
         if prompt:
             body = prompt if prompt.endswith("\n") else prompt + "\n"
@@ -1521,7 +1508,6 @@ async def start_microvm(
             env=guest_env(
                 settings,
                 mcp_http,
-                mcp_stdio,
                 api_key=api_key,
                 broker=broker,
                 extra_env=extra_env,
@@ -1530,14 +1516,14 @@ async def start_microvm(
                 settings,
                 tools=tools,
                 mcp_http=mcp_http,
-                mcp_stdio=mcp_stdio,
                 skill_dirs=guest_skills,
                 extra_skill_dirs=browser_skills,
                 model=model,
                 instructions=instructions,
                 session_file=PI_SESSION_REL if cwd else None,
-                extension=GUEST_MCP_EXTENSION,
+                extension=[GUEST_APIPI_EXTENSION, GUEST_MCP_EXTENSION],
                 thinking=level,
+                codemode=code,
             ),
             net=net,
             extra_dirs=extra_dirs,
@@ -1610,7 +1596,6 @@ async def spawn_microvm_pi(
     cwd: str | None,
     tools: bool,
     mcp_http: list[McpHttpServer] | None = None,
-    mcp_stdio: list[McpStdioServer] | None = None,
     skill_dirs: list[str] | None = None,
     model: str | None = None,
     instructions: str | None = None,
@@ -1621,6 +1606,7 @@ async def spawn_microvm_pi(
     thinking: str | None = None,
     system_prompt: str | None = None,
     system_prompt_set: bool = False,
+    codemode: str = "off",
     env_type: str | None = None,
 ) -> PiProc:
     started = await start_microvm(
@@ -1628,7 +1614,6 @@ async def spawn_microvm_pi(
         cwd=cwd,
         tools=tools,
         mcp_http=mcp_http,
-        mcp_stdio=mcp_stdio,
         skill_dirs=skill_dirs,
         model=model,
         instructions=instructions,
@@ -1639,6 +1624,7 @@ async def spawn_microvm_pi(
         thinking=thinking,
         system_prompt=system_prompt,
         system_prompt_set=system_prompt_set,
+        codemode=codemode,
         env_type=env_type,
     )
     process = started.process

@@ -123,7 +123,6 @@ class Gateway:
         self.metrics = metrics
         self.tracing = tracing
         self.mcp_http: dict[uuid.UUID, Any] = {}
-        self.mcp_stdio: dict[uuid.UUID, Any] = {}
         self.files = FileService(store, objects, settings)
         self.skill_store = SkillService(store, objects, settings)
         self.uploads = UploadService(store, objects, settings)
@@ -138,7 +137,6 @@ class Gateway:
             skill_store=self.skill_store,
             tracing=tracing,
             mcp_http=self.mcp_http,
-            mcp_stdio=self.mcp_stdio,
         )
         self.agents = AgentService(store, settings)
         self.versions = AgentVersionService(store, settings)
@@ -292,7 +290,6 @@ class Gateway:
         app.state.tracing = self.tracing
         app.state.store = self.store
         app.state.mcp_http = self.mcp_http
-        app.state.mcp_stdio = self.mcp_stdio
         app.state.sessions = self.sessions
         app.state.authenticate = self.authenticate
         app.state.auth_cache = self._auth_cache
@@ -312,10 +309,6 @@ class Gateway:
         if vault_master_key_unset(self.settings.vault_master_key):
             log.warning(VAULT_MASTER_KEY_UNSET)
         self.execution.attach_store(self.store)
-        if self.execution.stdio_on_host:
-            from apipi.worker.pi.orphan import sweep_host_orphans
-
-            await sweep_host_orphans()
         emitter = getattr(self.pool, "lifecycle", None)
         if emitter is not None:
             emitter.start()

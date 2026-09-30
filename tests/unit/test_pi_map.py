@@ -13,7 +13,7 @@ from apipi.worker.pi.version import PINNED_PI
 
 
 def test_pinned_pi() -> None:
-    assert PINNED_PI == "0.85.1"
+    assert PINNED_PI == "0.99.1"
 
 
 def test_text_delta_is_public() -> None:
@@ -174,6 +174,45 @@ def test_mcp_tool_is_mcp_call() -> None:
     )
     assert mapped[0][1]["item_type"] == "mcp_call"
     assert mapped[0][0] in PUBLIC_EVENT_TYPES
+
+
+def test_mcp_details_give_original_names() -> None:
+    mapped = map_pi_event(
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "c1",
+            "toolName": "mcp__docs__a1b2c3d4",
+            "details": {"server": "docs", "tool": "search"},
+        }
+    )
+    assert mapped[0][1]["item_type"] == "mcp_call"
+    assert mapped[0][1]["server_label"] == "docs"
+    assert mapped[0][1]["name"] == "search"
+
+
+def test_nested_calls_are_not_top_level() -> None:
+    mapped = map_pi_event(
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "c2",
+            "toolName": "bash",
+            "parentToolCallId": "c1",
+        }
+    )
+    assert mapped[0][0] == "agent.session.turn.item.nested"
+    assert mapped[0][0] in PUBLIC_EVENT_TYPES
+    assert mapped[0][1]["parent_call_id"] == "c1"
+
+
+def test_codemode_is_command_execution() -> None:
+    mapped = map_pi_event(
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "c1",
+            "toolName": "codemode",
+        }
+    )
+    assert mapped[0][1]["item_type"] == "command_execution"
 
 
 def test_mapped_payload_has_no_pi_keys() -> None:

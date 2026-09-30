@@ -15,11 +15,31 @@ class McpConnectError(Exception):
 
 
 @dataclass(frozen=True)
+class McpToolDescription:
+    name: str
+    description: str | None = None
+
+
+@dataclass(frozen=True)
 class McpHttpServer:
     server_label: str
     server_url: str
     headers: dict[str, str]
     credential_id: str | None = None
+    allowed_tools: tuple[str, ...] = ()
+    tools: tuple[McpToolDescription, ...] = ()
+
+
+def allowed_tool_names(raw: Any) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, list):
+        return tuple(item for item in raw if isinstance(item, str) and item)
+    if isinstance(raw, dict):
+        names = raw.get("tool_names")
+        if isinstance(names, list):
+            return tuple(item for item in names if isinstance(item, str) and item)
+    return ()
 
 
 def mcp_http_tools(tools: list[Any] | None) -> list[McpHttpServer]:
@@ -29,10 +49,12 @@ def mcp_http_tools(tools: list[Any] | None) -> list[McpHttpServer]:
     for tool in tools:
         if not isinstance(tool, dict) or tool.get("type") != "mcp":
             continue
-        transport = tool.get("transport")
-        if not isinstance(transport, dict) or transport.get("type") != "http":
-            continue
-        url = transport.get("server_url")
+        if "transport" in tool:
+            raise McpConnectError(
+                "mcp tools use the flat OpenAI shape with top-level server_url; "
+                "nested transport was removed"
+            )
+        url = tool.get("server_url")
         label = tool.get("server_label")
         if not isinstance(url, str) or not url or not isinstance(label, str):
             continue
@@ -46,6 +68,7 @@ def mcp_http_tools(tools: list[Any] | None) -> list[McpHttpServer]:
                 server_url=url,
                 headers={str(key): str(value) for key, value in headers.items()},
                 credential_id=credential_id,
+                allowed_tools=allowed_tool_names(tool.get("allowed_tools")),
             )
         )
     return servers
@@ -97,12 +120,55 @@ async def connect_mcp_http(server: McpHttpServer) -> McpHttpServer:
         raise McpConnectError(f"mcp {server.server_label} failed") from exc
     if not isinstance(body, dict) or body.get("error") is not None:
         raise McpConnectError(f"mcp {server.server_label} failed")
+    tools = await _list_mcp_tools(server.server_url, headers)
     return McpHttpServer(
         server_label=server.server_label,
         server_url=server.server_url,
         headers=headers,
         credential_id=server.credential_id,
+        allowed_tools=server.allowed_tools,
+        tools=tools,
     )
+
+
+async def _list_mcp_tools(
+    url: str, headers: dict[str, str]
+) -> tuple[McpToolDescription, ...]:
+    payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                    **headers,
+                },
+            )
+            response.raise_for_status()
+            body = response.json()
+    except Exception:
+        return ()
+    result = body.get("result") if isinstance(body, dict) else None
+    items = result.get("tools") if isinstance(result, dict) else None
+    if not isinstance(items, list):
+        return ()
+    found: list[McpToolDescription] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        description = item.get("description")
+        found.append(
+            McpToolDescription(
+                name=name,
+                description=description if isinstance(description, str) else None,
+            )
+        )
+    return tuple(found)
 
 
 def _norm_url(url: str) -> str:
@@ -142,6 +208,8 @@ def apply_vault_headers(
                 server_url=server.server_url,
                 headers={"Authorization": f"Bearer {chosen.token}"},
                 credential_id=str(chosen.id),
+                allowed_tools=server.allowed_tools,
+                tools=server.tools,
             )
         )
     return applied

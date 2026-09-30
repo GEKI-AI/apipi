@@ -8,28 +8,35 @@ from apipi.mcp.http import (
 )
 
 
-def test_mcp_http_tools_skips_stdio_and_functions() -> None:
+def test_mcp_http_tools_skips_functions_and_reads_flat_shape() -> None:
     servers = mcp_http_tools(
         [
             {"type": "function", "name": "echo"},
             {
                 "type": "mcp",
-                "server_label": "local",
-                "transport": {"type": "stdio", "command": "npx"},
-            },
-            {
-                "type": "mcp",
                 "server_label": "tavily",
-                "transport": {
-                    "type": "http",
-                    "server_url": "https://mcp.tavily.com/mcp",
-                },
+                "server_url": "https://mcp.tavily.com/mcp",
                 "headers": {"Authorization": "Bearer ${TAVILY_API_KEY}"},
+                "allowed_tools": ["search"],
             },
         ]
     )
     assert len(servers) == 1
     assert servers[0].server_label == "tavily"
+    assert servers[0].allowed_tools == ("search",)
+
+
+def test_mcp_http_tools_rejects_nested_transport() -> None:
+    with pytest.raises(McpConnectError, match="flat OpenAI shape"):
+        mcp_http_tools(
+            [
+                {
+                    "type": "mcp",
+                    "server_label": "local",
+                    "transport": {"type": "stdio", "command": "npx"},
+                },
+            ]
+        )
 
 
 def test_expand_headers_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

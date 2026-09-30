@@ -8,7 +8,7 @@ the [OpenAI Agents API](https://developers.openai.com/api/docs/guides/agents-api
 Production sessions run in [Firecracker](https://firecracker-microvm.github.io/)
 microVMs on **workers** (or on combined `apipi serve` on one box). Each
 guest has its own kernel. The HTTP API stays outside the guest. Pi,
-stdio MCP, and a local session directory share the guest. How that
+MCP, and a local session directory share the guest. How that
 fits together is in [Concepts](concepts.md).
 
 [GEKI](https://geki.ai) also runs a managed ApiPi on European
@@ -29,7 +29,7 @@ Pi (OpenAI's field name for a folder on your machine).
 ## Quickstart
 
 You need Python 3.13 and a model host URL. Live turns also need the Pi
-CLI (`pi --mode rpc`) on `PATH`. The gateway pins Pi 0.85.1; `apipi
+CLI (`pi --mode rpc`) on `PATH`. The gateway pins Pi 0.99.1; `apipi
 install` can install that binary and, if you pick MicroVM, Firecracker
 plus a guest image.
 

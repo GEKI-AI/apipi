@@ -7,8 +7,7 @@ when the session has a computer (`openai_hosted` or a connected
 servers, and skills.
 
 `/v1/chat` sessions have no computer, so bash and file tools stay off.
-Chat allows function tools and HTTP MCP only. Stdio MCP and workspace
-skills are rejected with code `chat_tool`.
+Chat allows function tools and MCP only.
 See [Chat](api.md#chat).
 
 Copy-paste configs live in `examples/` at the repo root (Tavily).
@@ -24,61 +23,48 @@ OpenAI's Agents API. The gateway does not execute the function.
 
 ## MCP
 
-HTTP and stdio MCP use OpenAI's nested `transport` shape:
+MCP uses OpenAI's flat tool shape, served by Pi's built-in MCP client
+over streamable HTTP. There is no stdio MCP.
 
 ```json
 {
   "type": "mcp",
-  "server_label": "tavily",
-  "transport": {
-    "type": "http",
-    "server_url": "https://mcp.tavily.com/mcp"
-  },
-  "headers": {
-    "Authorization": "Bearer ${TAVILY_API_KEY}"
-  }
+  "server_label": "docs",
+  "server_url": "https://mcp.example.com/mcp",
+  "headers": {"X-Api-Key": "${DOCS_KEY}"},
+  "allowed_tools": ["search"],
+  "require_approval": "never",
+  "server_description": "Product docs search"
 }
 ```
 
-```json
-{
-  "type": "mcp",
-  "server_label": "playwright",
-  "transport": {
-    "type": "stdio",
-    "command": "npx",
-    "args": ["-y", "@playwright/mcp@0.0.82", "--headless"]
-  }
-}
-```
+`server_label` is required and must match `[A-Za-z0-9_-]`.
+`server_url` is required. `headers` entries with `${ENV}` expand on
+the host. `allowed_tools` is a list of tool names, or
+`{"tool_names": [...]}`. Other filter forms return `not_implemented`.
+`require_approval` accepts only `"never"` or an absent value; anything
+else returns `not_implemented`. `server_description` is accepted and
+shown to the model. `connector_id` and `authorization` return
+`not_implemented`. `credential_id` and `required` work as before. A
+nested `transport` object is an unknown field.
 
-Top-level `server_url`, `command`, or `args` on the tool are unknown
-fields. Unknown `transport.type` values return `400`. The gateway
-connects HTTP servers when the session is created, then hands them to
-Pi through a host credential broker. The Pi extension lists each
-server's tools from that broker URL and registers them as
-`mcp_<server_label>_<tool>`. The guest does not receive MCP bearers.
-A connect failure at session create fails the session. A later
-`initialize` or `tools/list` failure does not fail the turn. The
-worker logs `pi.extension_error` with the server label, the phase, and
-the error, and the turn continues without that server's tools.
+The gateway connects HTTP servers when the session is created, then
+hands them to Pi through a host credential broker. A thin Pi extension
+calls `pi.registerMcpServer()` with the broker URL, `direct` exposure,
+and the allowed tools. The guest does not receive MCP bearers. Model
+facing tool names are `mcp__<server>__<tool>`, sanitised and hashed
+when long. API output items still carry the original `server_label`
+and tool name. Each turn starts with one `mcp_list_tools` item per
+server. A connect failure at session create fails the session. A later
+server error does not fail the turn. The worker logs
+`pi.extension_error` with the server label, the phase, and the error,
+and the turn continues without that server's tools.
 
 Prefer a [vault](api.md#vaults) (`static_bearer` bound to
-`mcp_server_url`, attach `vault_ids` on the session). Tool `headers`
-with `${ENV}` still expand on the host. Stdio servers start next to
-Pi: on the host in `none` mode, and inside the same guest in
-`microvm` mode. Pi does not speak MCP by itself. ApiPi loads a Pi
-extension that starts each stdio server, lists its tools, and
-registers them on Pi as `mcp_<server_label>_<tool>`. Optional
-`transport.cwd` is the process working directory. Stdio credentials
-stay in environment variables, not in git. The extension writes
-newline-delimited JSON, which is the MCP stdio transport. A server
-that only accepts `Content-Length` frames will not attach. If a
-listed stdio server cannot start, the turn continues without that
-server's tools and the worker logs `pi.extension_error` with the
-server label, the phase (`spawn`, `initialize`, or `tools/list`),
-and the error. A bash call with no `timeout` is capped at 120 seconds
-so a stuck command cannot hold the turn until `APIPI_TURN_TIMEOUT`.
+`mcp_server_url`, attach `vault_ids` on the session).
+
+A bash call with no `timeout` is capped at 120 seconds so a stuck
+command cannot hold the turn until `APIPI_TURN_TIMEOUT`.
 
 Search goes through MCP.
 
@@ -102,6 +88,27 @@ not claim a browser from sandbox size alone.
 screenshots stay in `/workspace/.browser`. Copy a screenshot to
 `outputs/` only when the user asked for that file. A small client is
 `examples/sessions/browser_screenshot.py`.
+
+## Codemode
+
+Codemode is an opt-in script tool. Set `apipi.codemode` to `off`
+(default), `on`, or `only` on the agent or session. The session value
+overrides the agent. It is only effective when tools are enabled; on
+a computer-less session it is accepted but ignored.
+
+The model writes JavaScript that runs in a QuickJS sandbox inside the
+Pi process and can only call the other enabled tools, for example in
+parallel with `Promise.allSettled`. It adds no new capabilities or
+privileges; bash remains the boundary. In process run modes it runs on
+the host inside Pi, like the rest of Pi. `models.classify()` is
+unsupported and untested.
+
+The `codemode` call itself is one `command_execution` item. Tool calls
+made from scripts carry the parent call id and appear under the parent
+item as `nested_calls`, not as top-level items. Nested MCP calls still
+count in usage and in the turn log tallies. The outputs rules above
+apply to files written by scripts: only explicitly requested artefacts
+go to `/workspace/outputs`.
 
 ## Skills
 

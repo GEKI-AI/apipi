@@ -389,7 +389,8 @@ class Item(Base):
             ondelete="SET NULL",
         ),
         CheckConstraint(
-            "type IN ('message', 'function_call', 'mcp_call', 'command_execution')",
+            "type IN ('message', 'function_call', 'mcp_call', "
+            "'mcp_list_tools', 'command_execution')",
             name="items_type_check",
         ),
     )

@@ -27,7 +27,6 @@ def test_create_app_sets_local_execution(settings: Settings, store: Store) -> No
     assert execution.harness is harness
     assert execution.pool is app.state.pi_pool
     assert execution.isolation is app.state.isolation
-    assert execution.stdio_on_host is app.state.isolation.stdio_on_host
 
 
 def test_local_execution_capacity_uses_pool(settings: Settings) -> None:
