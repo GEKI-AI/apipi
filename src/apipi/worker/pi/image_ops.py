@@ -1,5 +1,7 @@
+import logging
 import os
 import subprocess
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -44,6 +46,7 @@ from apipi.worker.pi.version import (
     PINNED_PI,
 )
 
+log = logging.getLogger("apipi.worker.pi")
 HOST_ARCHS = frozenset({"x86_64", "aarch64"})
 
 
@@ -85,9 +88,18 @@ def guest_sh_path() -> Path:
     raise ConfigError("could not find guest.sh for the image build")
 
 
+def _compressor() -> zstandard.ZstdCompressor:
+    from apipi.worker.pi.image_catalog import ZSTD_WINDOW_LOG
+
+    params = zstandard.ZstdCompressionParameters.from_level(
+        19, window_log=ZSTD_WINDOW_LOG
+    )
+    return zstandard.ZstdCompressor(compression_params=params)
+
+
 def compress_file(source: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    compressor = zstandard.ZstdCompressor(level=19)
+    compressor = _compressor()
     with (
         source.open("rb") as raw,
         dest.open("wb") as out,
@@ -215,7 +227,7 @@ def _load_store_index(
     store: FileImageStore | S3ImageStore | HttpImageStore,
 ) -> ImageIndex:
     if not store.exists("index.json"):
-        return ImageIndex(schema_version=2, kernels=[], images=[])
+        return ImageIndex(schema_version=1, kernels=[], images=[])
     try:
         return load_index(store.get("index.json"))
     except ImageFormatError as exc:
@@ -335,7 +347,19 @@ def publish_images(
     ids: list[str] | None = None,
     force: bool = False,
     dry_run: bool = False,
+    store_version: str | None = None,
 ) -> list[str]:
+    if store_version:
+        if force:
+            raise ConfigError("push --force is refused for a versioned store prefix")
+        return publish_versioned(
+            store, source, version=store_version, ids=ids, dry_run=dry_run
+        )
+    warnings.warn(
+        "push without --store-version writes a deprecated schema 1 store",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     wanted = ids or []
     manifests = _newest_manifests(source, wanted)
     index = _load_store_index(store)
@@ -391,5 +415,90 @@ def publish_images(
     if changed:
         planned.append("index.json")
         if not dry_run:
+            index.schema_version = 1
             store.put_bytes("index.json", dump_index(index).encode())
+    return planned
+
+
+def publish_versioned(
+    store: FileImageStore | S3ImageStore | HttpImageStore,
+    source: Path,
+    *,
+    version: str,
+    ids: list[str] | None = None,
+    dry_run: bool = False,
+    commit: str = "",
+) -> list[str]:
+    from apipi.worker.pi.image_catalog import (
+        checksum_lines,
+        normalize_version,
+        parse_checksums,
+    )
+    from apipi.worker.pi.images import (
+        flat_artifact_name,
+        flat_manifest_name,
+        sha256_bytes,
+    )
+
+    if store.exists("index.json") and store.exists("SHA256SUMS"):
+        raise ConfigError(
+            f"store version {normalize_version(version)} already has index.json"
+        )
+    manifests = _newest_manifests(source, ids or [])
+    files: dict[str, bytes] = {}
+    images: list[ImageIndexEntry] = []
+    kernels: dict[str, KernelIndexEntry] = {}
+    for manifest in manifests:
+        built_name = manifest_name(manifest.id, manifest.version, manifest.arch)
+        zst = source / manifest.rootfs.path
+        man = source / built_name
+        if not zst.is_file() or not man.is_file():
+            raise ConfigError(f"build dir is missing {zst.name} or {man.name}")
+        meta_path = source / f"vmlinux-{manifest.arch}.json"
+        kernel = KernelIndexEntry.model_validate_json(meta_path.read_text())
+        flat_zst = flat_artifact_name(manifest.id, manifest.arch)
+        flat_man = flat_manifest_name(manifest.id, manifest.arch)
+        body = load_manifest(man.read_text())
+        body.rootfs.path = flat_zst
+        body.kernel.path = kernel.path
+        text = dump_manifest(body).encode()
+        files[flat_zst] = zst.read_bytes()
+        files[flat_man] = text
+        kernel_blob = source / kernel.path
+        if not kernel_blob.is_file():
+            raise ConfigError(f"build dir is missing {kernel.path}")
+        files[kernel.path] = kernel_blob.read_bytes()
+        images.append(
+            ImageIndexEntry(
+                id=manifest.id,
+                version=manifest.version,
+                arch=manifest.arch,
+                manifest=flat_man,
+                manifest_sha256=sha256_bytes(text),
+                kernel_version=kernel.version,
+            )
+        )
+        kernels[manifest.arch] = kernel
+    index = ImageIndex(
+        schema_version=2,
+        store_version=normalize_version(version),
+        apipi_version=__version__,
+        pi_version=manifests[0].pi_version if manifests else "",
+        source_commit=commit,
+        created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        kernels=list(kernels.values()),
+        images=images,
+    )
+    files["index.json"] = dump_index(index).encode()
+    sums = checksum_lines(files)
+    parse_checksums(sums)
+    planned = [*sorted(files), "SHA256SUMS"]
+    if dry_run:
+        return planned
+    for name, blob in files.items():
+        if name == "index.json":
+            continue
+        store.put_bytes(name, blob)
+    store.put_bytes("SHA256SUMS", sums.encode())
+    store.put_bytes("index.json", files["index.json"])
     return planned

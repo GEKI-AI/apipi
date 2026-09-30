@@ -279,6 +279,32 @@ def _images_dir_file(settings: Settings | None, image_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
+def kernel_for_image(settings: Settings | None, image_id: str) -> Path | None:
+    from apipi.worker.pi.image_pull import configured_images_dir
+    from apipi.worker.pi.images import local_kernel_path, read_current
+
+    root = configured_images_dir(settings)
+    version = read_current(root, image_id)
+    if version is None:
+        return None
+    manifest = root / image_id / version / "manifest.json"
+    if not manifest.is_file():
+        return None
+    try:
+        data = json.loads(manifest.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    kernel = data.get("kernel") if isinstance(data, dict) else None
+    kernel_version = kernel.get("version") if isinstance(kernel, dict) else None
+    arch = data.get("arch") if isinstance(data, dict) else None
+    if isinstance(kernel_version, str) and isinstance(arch, str):
+        versioned = root / "kernels" / arch / kernel_version / "vmlinux"
+        if versioned.is_file():
+            return versioned
+    path = local_kernel_path(root, os.uname().machine)
+    return path if path.is_file() else None
+
+
 def _images_dir_kernel(settings: Settings | None) -> Path | None:
     from apipi.worker.pi.image_pull import configured_images_dir
     from apipi.worker.pi.images import local_kernel_path
@@ -327,12 +353,13 @@ def microvm_images(
         kernel = os.environ.get("APIPI_MICROVM_KERNEL")
         default_rootfs = os.environ.get("APIPI_MICROVM_ROOTFS")
         browser_rootfs = os.environ.get("APIPI_MICROVM_ROOTFS_BROWSER")
+    selected = image if image is not None else microvm_image_name(settings)
     if kernel:
         kernel_path = _resolve_image_file(
             kernel, default_kernel_path(), "APIPI_MICROVM_KERNEL"
         )
     else:
-        pulled = _images_dir_kernel(settings)
+        pulled = kernel_for_image(settings, selected) or _images_dir_kernel(settings)
         kernel_path = (
             str(pulled)
             if pulled is not None
@@ -340,7 +367,6 @@ def microvm_images(
                 None, default_kernel_path(), "APIPI_MICROVM_KERNEL"
             )
         )
-    selected = image if image is not None else microvm_image_name(settings)
     explicit = browser_rootfs if selected == "browser" else None
     if selected == "default":
         explicit = default_rootfs

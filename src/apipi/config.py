@@ -97,6 +97,7 @@ _SANDBOX_TOML = {
     "default_size": "sandbox_default_size",
     "default_image": "sandbox_default_image",
     "image_source": "image_source",
+    "image_store_version": "image_store_version",
     "image_s3_endpoint": "image_s3_endpoint",
     "image_s3_region": "image_s3_region",
     "image_s3_addressing": "image_s3_addressing",
@@ -701,6 +702,12 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices(
             "APIPI_MICROVM_ROOTFS_BROWSER", "microvm_rootfs_browser"
+        ),
+    )
+    image_store_version: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "APIPI_IMAGE_STORE_VERSION", "image_store_version"
         ),
     )
     image_source: str | None = Field(

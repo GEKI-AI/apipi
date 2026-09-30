@@ -49,6 +49,29 @@ def version_less_equal(left: str, right: str) -> bool:
     return first <= second
 
 
+class RootfsPart(_Model):
+    path: str
+    size: int
+    sha256: str
+
+    @field_validator("path")
+    @classmethod
+    def path_relative(cls, value: str) -> str:
+        return _relative(value)
+
+    @field_validator("sha256")
+    @classmethod
+    def digest(cls, value: str) -> str:
+        return _sha256(value)
+
+    @field_validator("size")
+    @classmethod
+    def non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("size must be >= 0")
+        return value
+
+
 class RootfsArtifact(_Model):
     path: str
     compression: Literal["zstd"]
@@ -56,6 +79,7 @@ class RootfsArtifact(_Model):
     compressed_sha256: str
     size: int
     compressed_size: int
+    parts: list[RootfsPart] = Field(default_factory=list)
 
     @field_validator("path")
     @classmethod
@@ -78,6 +102,7 @@ class RootfsArtifact(_Model):
 class KernelRef(_Model):
     version: str
     sha256: str
+    path: str = ""
 
     @field_validator("sha256")
     @classmethod
@@ -131,6 +156,7 @@ class KernelIndexEntry(_Model):
     path: str
     sha256: str
     compressed_sha256: str
+    size: int = 0
 
     @field_validator("path")
     @classmethod
@@ -149,6 +175,8 @@ class ImageIndexEntry(_Model):
     arch: Literal["x86_64", "aarch64"]
     manifest: str
     latest: bool = False
+    manifest_sha256: str = ""
+    kernel_version: str = ""
 
     @field_validator("id")
     @classmethod
@@ -164,9 +192,14 @@ class ImageIndexEntry(_Model):
 
 
 class ImageIndex(_Model):
-    schema_version: Literal[2] = Field(default=2, alias="schema")
+    schema_version: Literal[1, 2] = Field(default=2, alias="schema")
     kernels: list[KernelIndexEntry]
     images: list[ImageIndexEntry]
+    store_version: str = ""
+    apipi_version: str = ""
+    pi_version: str = ""
+    source_commit: str = ""
+    created_at: str = ""
 
 
 class LocalImage:
@@ -276,8 +309,20 @@ def artifact_name(image_id: str, version: str, arch: str) -> str:
     return f"{image_id}-{version}-{arch}.ext4.zst"
 
 
+def flat_artifact_name(image_id: str, arch: str) -> str:
+    return f"{image_id}-{arch}.ext4.zst"
+
+
 def manifest_name(image_id: str, version: str, arch: str) -> str:
     return f"{image_id}-{version}-{arch}.json"
+
+
+def flat_manifest_name(image_id: str, arch: str) -> str:
+    return f"{image_id}-{arch}.manifest.json"
+
+
+def part_name(image_id: str, arch: str, index: int) -> str:
+    return f"{image_id}-{arch}.ext4.zst.part-{index:02d}"
 
 
 def kernel_artifact_name(arch: str) -> str:
@@ -298,8 +343,11 @@ def _as_object(raw: str | bytes | dict[str, Any]) -> dict[str, Any]:
 
 
 def _schema(data: dict[str, Any], kind: str) -> None:
-    if data.get("schema") != SCHEMA:
-        raise ImageFormatError(f"unknown {kind} schema {data.get('schema')}")
+    value = data.get("schema")
+    if kind == "image index" and value in {1, 2}:
+        return
+    if value != SCHEMA:
+        raise ImageFormatError(f"unknown {kind} schema {value}")
 
 
 def _invalid(kind: str, exc: ValidationError) -> ImageFormatError:
@@ -320,6 +368,19 @@ def dump_manifest(manifest: ImageManifest) -> str:
 
 
 def _require_one_latest(index: ImageIndex) -> None:
+    if index.schema_version == 2 and index.store_version:
+        seen: dict[tuple[str, str], int] = {}
+        for item in index.images:
+            if item.latest:
+                raise ImageFormatError("versioned store index has no latest flag")
+            key = (item.id, item.arch)
+            seen[key] = seen.get(key, 0) + 1
+        for (image_id, arch), count in seen.items():
+            if count != 1:
+                raise ImageFormatError(
+                    f"index needs exactly one {image_id} {arch}, found {count}"
+                )
+        return
     groups: dict[tuple[str, str], int] = {}
     for item in index.images:
         key = (item.id, item.arch)

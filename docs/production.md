@@ -87,12 +87,18 @@ attempt. Settings and the budget against `APIPI_TURN_TIMEOUT` are in
 
 ## Guest image store
 
-Build images once with `apipi images build`, push them with
-`apipi images push` (`apipi images publish` is the same command), and
-pull on every worker with `apipi images pull`. `apipi images list
---remote` shows whether the local copy matches the store. `--to`
-defaults to `APIPI_IMAGE_SOURCE`. An `https://` static host is a valid
-source once the files are there; push itself rejects `https://`.
+Mirror the official GitHub release store, verify it, then pull on
+every worker. `apipi images mirror --from 0.12.0 --to s3://bucket/images`
+copies one immutable `v<version>/` prefix. `apipi images verify` checks
+the signature and digest chain. `apipi images pull` installs that
+version. Rollback is `APIPI_IMAGE_STORE_VERSION` plus another pull.
+Each image boots the kernel named in its manifest, so two store
+versions can keep different kernels locally. A mirror that omits an
+arch is partial: workers of the missing arch get a clear unavailable
+error. Custom images still use `apipi images build` and
+`apipi images push --store-version`. `--to` defaults to
+`APIPI_IMAGE_SOURCE`. An `https://` static host is a valid source once
+the files are there; push itself rejects `https://`.
 
 The image store can use a different S3 endpoint and account than the
 artifact store. Set `APIPI_IMAGE_S3_ENDPOINT`, `APIPI_IMAGE_S3_REGION`,

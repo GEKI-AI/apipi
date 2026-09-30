@@ -43,6 +43,7 @@ dependencies = [
 
 [project.optional-dependencies]
 s3 = ["boto3>=1.35,<2"]
+images = ["sigstore>=3,<5"]
 
 [project.urls]
 Homepage = "https://github.com/GEKI-AI/apipi"

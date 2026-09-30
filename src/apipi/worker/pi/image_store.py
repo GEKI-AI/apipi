@@ -269,7 +269,12 @@ class HttpImageStore:
 
     def exists(self, name: str) -> bool:
         response = self.client.head(self._url(name))
-        return response.status_code == 200
+        if response.status_code == 200:
+            return True
+        if response.status_code in {403, 405}:
+            probe = self.client.get(self._url(name), headers={"Range": "bytes=0-0"})
+            return probe.status_code in {200, 206}
+        return False
 
     def get(self, name: str) -> bytes:
         response = self.client.get(self._url(name))
@@ -280,10 +285,19 @@ class HttpImageStore:
     def get_to(self, name: str, dest: Path) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_name(dest.name + ".part")
-        with self.client.stream("GET", self._url(name)) as response:
-            if response.status_code != 200:
+        headers: dict[str, str] = {}
+        mode = "wb"
+        start = tmp.stat().st_size if tmp.is_file() else 0
+        if start:
+            headers["Range"] = f"bytes={start}-"
+            mode = "ab"
+        with self.client.stream("GET", self._url(name), headers=headers) as response:
+            if start and response.status_code == 200:
+                tmp.unlink(missing_ok=True)
+                mode = "wb"
+            elif response.status_code not in {200, 206}:
                 raise ConfigError(f"image store is missing {name}")
-            with tmp.open("wb") as out:
+            with tmp.open(mode) as out:
                 for chunk in response.iter_bytes():
                     out.write(chunk)
         tmp.replace(dest)

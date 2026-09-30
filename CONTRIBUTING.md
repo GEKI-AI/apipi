@@ -163,10 +163,10 @@ not bump on every merge.
    workflow with `workflow_dispatch` and repository `testpypi` (no
    GitHub Release).
 
-Official guest images are not part of that tag. Dispatch the
-Images workflow (`.github/workflows/images.yml`) when you want a
-GitHub release of `default` and `browser`. It does not run on pull
-requests.
+Official guest images publish with the same `v*` tag. The Images
+workflow builds the store, signs `SHA256SUMS`, and attaches the flat
+assets to that GitHub release. It does not run on pull requests. A
+release that already has `index.json` is left unchanged.
 
 Before the first upload, an owner must create the PyPI project (name
 `geki-apipi`) and a Trusted Publisher: GitHub org `GEKI-AI`, repository

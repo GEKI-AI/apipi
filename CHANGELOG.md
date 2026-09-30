@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- The image store is versioned per release. `image_source` is the base
+  above `v<version>/` prefixes. Workers pull that store version, which
+  defaults to the running ApiPi version, instead of `latest` per image.
+  Set `APIPI_IMAGE_STORE_VERSION` to pin or roll back. The official
+  store is the GitHub release at
+  `https://github.com/GEKI-AI/apipi/releases/download/v<version>/`.
+- Operators mirror and verify that store, then pull. `apipi images
+  push` without `--store-version` writes a deprecated schema 1 store
+  and warns. `--force` is refused for a complete versioned prefix.
+- The local kernel layout gains `kernels/<arch>/<kernel_version>/vmlinux`.
+  `kernels/<arch>/vmlinux` remains a compatibility copy.
+
+### Breaking
+
 - All guest images (`default`, `work`, `browser`) now use Debian
   trixie slim instead of Alpine. Operators must re-pull or rebuild
   every image. 0.11.x images and manifests are not compatible.

@@ -201,6 +201,10 @@ def _images_command(args: argparse.Namespace) -> int:
         return _images_push(args)
     if args.images_command == "check":
         return _images_check(args)
+    if args.images_command == "mirror":
+        return _images_mirror(args)
+    if args.images_command == "verify":
+        return _images_verify(args)
     return 1
 
 
@@ -223,12 +227,49 @@ def _images_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _images_mirror(args: argparse.Namespace) -> int:
+    from apipi.worker.pi.image_catalog import mirror_store
+
+    settings = load_settings(config_path=args.config)
+    configure_logging(level=settings.log_level, format=settings.log_format)
+    for line in mirror_store(
+        settings,
+        args.source,
+        args.to,
+        version=args.version,
+        no_signature=args.no_signature,
+        dry_run=args.dry_run,
+    ):
+        print(line)
+    return 0
+
+
+def _images_verify(args: argparse.Namespace) -> int:
+    from apipi.worker.pi.image_catalog import verify_store
+
+    settings = load_settings(config_path=args.config)
+    configure_logging(level=settings.log_level, format=settings.log_format)
+    verify_store(
+        settings,
+        source=args.source,
+        version=args.version,
+        local=args.local,
+        no_signature=args.no_signature,
+    )
+    print("image store verify ok")
+    return 0
+
+
 def _images_push(args: argparse.Namespace) -> int:
     settings = load_settings(config_path=args.config)
     target = args.to or settings.image_source
     if not target:
         raise ConfigError("APIPI_IMAGE_SOURCE is unset. Set it, or pass --to.")
     source = Path(args.source) if args.source else _default_image_build_dir()
+    if args.store_version:
+        from apipi.worker.pi.image_catalog import join_store
+
+        target = join_store(target, args.store_version)
     store = open_image_store(target, settings, write=True)
     planned = publish_images(
         store,
@@ -236,6 +277,7 @@ def _images_push(args: argparse.Namespace) -> int:
         ids=list(args.ids),
         force=args.force,
         dry_run=args.dry_run,
+        store_version=args.store_version,
     )
     for name in planned:
         if name.startswith("skip "):
@@ -259,6 +301,11 @@ def _add_image_push_parser(subparsers: Any, name: str, help_text: str) -> None:
         help="Build directory (default: last images build output)",
     )
     parser.add_argument("ids", nargs="*", help="Image ids to push")
+    parser.add_argument(
+        "--store-version",
+        default=None,
+        help="Write a versioned schema 2 prefix instead of a legacy store",
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -436,6 +483,23 @@ def main(argv: list[str] | None = None) -> int:
     list_parser.add_argument(
         "--remote", action="store_true", help="Compare with the image source"
     )
+    mirror_parser = images_sub.add_parser(
+        "mirror", help="Copy a versioned image store without root"
+    )
+    mirror_parser.add_argument("--config", default=None, help="TOML config file")
+    mirror_parser.add_argument("--from", dest="source", required=True)
+    mirror_parser.add_argument("--to", required=True)
+    mirror_parser.add_argument("--version", default=None)
+    mirror_parser.add_argument("--no-signature", action="store_true")
+    mirror_parser.add_argument("--dry-run", action="store_true")
+    verify_parser = images_sub.add_parser(
+        "verify", help="Check a store or the local images"
+    )
+    verify_parser.add_argument("--config", default=None, help="TOML config file")
+    verify_parser.add_argument("--source", default=None)
+    verify_parser.add_argument("--version", default=None)
+    verify_parser.add_argument("--local", action="store_true")
+    verify_parser.add_argument("--no-signature", action="store_true")
     check_parser = images_sub.add_parser(
         "check", help="Check a built guest image on this machine"
     )

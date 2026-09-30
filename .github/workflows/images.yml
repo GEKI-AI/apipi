@@ -1,16 +1,19 @@
 name: Images
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: GitHub release tag for the image assets
-        required: false
-        default: images-manual
+      version:
+        description: Release version to fill, such as 0.12.0
+        required: true
         type: string
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build:
@@ -63,10 +66,36 @@ jobs:
           pattern: images-*
           path: image-in
           merge-multiple: true
-      - name: Publish a local store
-        run: uv run apipi images publish --from "$GITHUB_WORKSPACE/image-in" --to "file://$GITHUB_WORKSPACE/image-store"
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Refuse an existing store
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ steps.version.outputs.value }}"
+          names=$(gh release view "$tag" --json assets --jq '.assets[].name' || true)
+          if printf '%s\n' "$names" | grep -qx index.json; then
+            echo "release $tag already has index.json" >&2
+            exit 1
+          fi
+      - name: Publish a versioned store
+        run: |
+          uv run apipi images publish \
+            --from "$GITHUB_WORKSPACE/image-in" \
+            --to "file://$GITHUB_WORKSPACE/image-store" \
+            --store-version "${{ steps.version.outputs.value }}"
+      - name: Sign checksums
+        uses: sigstore/gh-action-sigstore-python@v3.0.0
+        with:
+          inputs: image-store/v${{ steps.version.outputs.value }}/SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag }}
-          files: image-store/*
+          tag_name: v${{ steps.version.outputs.value }}
+          files: image-store/v${{ steps.version.outputs.value }}/*
           make_latest: false

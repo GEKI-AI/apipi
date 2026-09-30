@@ -118,7 +118,34 @@ itself with `sudo -E`, the absolute Python interpreter, and `PATH` /
 `sudo uv`. `apipi serve` does not re-exec. TAP and jailer still need
 root or the capabilities in [run modes](run-modes.md).
 
-## Build, push, and pull guest images
+## Mirror, verify, and pull guest images
+
+The official store for a release is the GitHub release assets at
+`https://github.com/GEKI-AI/apipi/releases/download/v<version>/`.
+Mirror that prefix, verify it, then pull on each worker. None of those
+commands need root, a loop device, or a chroot.
+
+```
+apipi images mirror --from 0.12.0 --to s3://bucket/images
+apipi images verify --source s3://bucket/images --version 0.12.0
+apipi images pull
+```
+
+`--from 0.12.0` means the official release. `--from` can also be an
+HTTPS prefix, an `s3://` prefix, or `file://`. `--to` is an `s3://` or
+`file://` base. The command writes `<to>/v<version>/` and refuses to
+overwrite a complete prefix whose checksums differ. `https://` is
+read-only. A worker with `image_source` set to that base and no
+`image_store_version` pulls `v<this ApiPi version>`. Set
+`APIPI_IMAGE_STORE_VERSION` to roll back to an older compatible store.
+An explicit missing version fails. A defaulted missing version can use
+`versions.json` on a mirror. The official GitHub base has no
+`versions.json`, so that version must exist exactly.
+
+`apipi images verify --no-signature` checks `SHA256SUMS` and the digest
+chain without Sigstore. Signature checks need `uv sync --extra images`.
+
+## Custom images
 
 Build once, push to a store, and pull on every worker. `apipi images
 build <id>` runs the recipe in `images/<id>/` and writes a zstd rootfs
@@ -151,8 +178,10 @@ or the profile `APIPI_IMAGE_S3_PROFILE`. If none of those is set, the
 AWS credential chain is used, including the instance role. Keys are
 never read from TOML. Install the client with `uv sync --extra s3`.
 
-`apipi images pull` installs `latest` for this host's arch into the
-images directory. It checks the compressed sha256, decompresses as a
+`apipi images push --store-version 0.12.0` writes a schema 2 prefix.
+Without that flag, push writes a deprecated schema 1 store and warns.
+`apipi images pull` installs the pinned store version for this host's
+arch into the images directory. It checks the compressed sha256, decompresses as a
 stream, then checks the ext4 sha256. Peak RAM does not grow with the
 image size. `apipi images list --remote` compares the local images
 with that source. See [production](production.md).
