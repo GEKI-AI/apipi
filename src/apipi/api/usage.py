@@ -4,7 +4,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
-from apipi.gateway.auth import require_tenant
+from apipi.gateway.auth import check_authorize, require_tenant
 from apipi.store.models import Tenant
 
 router = APIRouter()
@@ -22,6 +22,9 @@ async def get_usage(
     turn_id: uuid.UUID | None = None,
     day: date | None = None,
 ) -> dict[str, int]:
+    await check_authorize(
+        request, action="usage.read", resource_type="usage", resource_id=None
+    )
     user = getattr(request.state, "user_id", None)
     user_id = user if isinstance(user, str) and user else None
     return await _usage(request).get(

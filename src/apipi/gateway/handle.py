@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -10,6 +10,7 @@ from fastapi import APIRouter, FastAPI
 
 from apipi.api.agent_versions import router as agent_versions_router
 from apipi.api.agents import router as agents_router
+from apipi.api.auth import router as auth_router
 from apipi.api.chat import router as chat_router
 from apipi.api.environments import router as environments_router
 from apipi.api.ext import include_ext
@@ -25,7 +26,14 @@ from apipi.api.vaults import router as vaults_router
 from apipi.api.workers import router as workers_router
 from apipi.config import VAULT_MASTER_KEY_UNSET, Settings, load_settings
 from apipi.env.hub import EnvironmentHub
-from apipi.gateway.auth import AuthCache, Authenticate, load_authenticate
+from apipi.gateway.auth import (
+    AuthCache,
+    Authenticate,
+    AuthIdentity,
+    Authorize,
+    load_authenticate,
+    load_authorize,
+)
 from apipi.gateway.errors import register_exception_handlers
 from apipi.gateway.logutil import RequestLogMiddleware
 from apipi.gateway.metrics import Metrics, mount_metrics
@@ -100,6 +108,7 @@ class Gateway:
         execution: LocalExecution | RemoteExecution,
         workers: WorkerHub,
         authenticate: Authenticate,
+        authorize: Authorize | None = None,
         isolation: Isolation,
         pool: PiPool,
         harness: FakeHarness | PiHarness,
@@ -115,6 +124,7 @@ class Gateway:
         self.execution = execution
         self.workers = workers
         self.authenticate = authenticate
+        self.authorize = authorize
         self.isolation = isolation
         self.pool = pool
         self.harness = harness
@@ -167,10 +177,26 @@ class Gateway:
             health=health_router,
         )
         self._store_owned = store_owned
-        self._auth_cache = AuthCache(settings.auth_cache_ttl)
+        self._auth_cache = AuthCache(
+            settings.auth_cache_ttl, max_entries=settings.auth_cache_max
+        )
+        from collections import OrderedDict as _OrderedDict
+
+        self._tenant_cache: _OrderedDict[uuid.UUID, Tenant] = _OrderedDict()
         self._usage_sinks = load_usage_sinks(settings, metrics)
         self._payload_sinks = load_payload_sinks(settings, metrics)
         self._tasks: list[asyncio.Task[None]] = []
+
+    def invalidate_auth(self, cache_key: str) -> bool:
+        from apipi.gateway.tokens import hash_token as _hash
+
+        return self._auth_cache.invalidate(_hash(cache_key))
+
+    def invalidate_auth_where(self, predicate: Callable[[AuthIdentity], bool]) -> int:
+        return self._auth_cache.invalidate_where(predicate)
+
+    def clear_auth_cache(self) -> int:
+        return self._auth_cache.clear()
 
     @classmethod
     def create(
@@ -184,6 +210,7 @@ class Gateway:
         objects: ObjectStore | None = None,
         *,
         authenticate: Authenticate | None = None,
+        authorize: Authorize | None = None,
         event_hub: EventHub | None = None,
         execution: LocalExecution | RemoteExecution | None = None,
         workers: WorkerHub | None = None,
@@ -252,6 +279,9 @@ class Gateway:
             if authenticate is not None
             else load_authenticate(resolved.auth)
         )
+        resolved_authorize = (
+            authorize if authorize is not None else load_authorize(resolved.authorize)
+        )
         return cls(
             settings=resolved,
             store=resolved_store,
@@ -261,6 +291,7 @@ class Gateway:
             execution=resolved_execution,
             workers=resolved_workers,
             authenticate=auth,
+            authorize=resolved_authorize,
             isolation=isolation,
             pool=resolved_pool,
             harness=resolved_harness,
@@ -271,8 +302,22 @@ class Gateway:
         )
 
     async def ensure_tenant(self, tenant_id: uuid.UUID) -> Tenant:
+        cached = self._tenant_cache.get(tenant_id)
+        if cached is not None:
+            self._tenant_cache.move_to_end(tenant_id)
+            return cached
         async with self.store.session() as db:
-            return await store_ensure_tenant(db, tenant_id)
+            tenant = await store_ensure_tenant(db, tenant_id)
+            detached = Tenant(id=tenant.id, name=tenant.name)
+            limit = (
+                max(1, self.settings.auth_cache_max)
+                if self.settings.auth_cache_max
+                else 10000
+            )
+            self._tenant_cache[tenant_id] = detached
+            while len(self._tenant_cache) > limit:
+                self._tenant_cache.popitem(last=False)
+            return detached
 
     def configure(self, app: FastAPI) -> None:
         app.add_middleware(RequestIdMiddleware)
@@ -292,6 +337,7 @@ class Gateway:
         app.state.mcp_http = self.mcp_http
         app.state.sessions = self.sessions
         app.state.authenticate = self.authenticate
+        app.state.authorize = self.authorize
         app.state.auth_cache = self._auth_cache
         app.state.usage_sinks = self._usage_sinks
         app.state.payload_sinks = self._payload_sinks
@@ -349,6 +395,7 @@ def create_app(
     objects: ObjectStore | None = None,
     *,
     authenticate: Authenticate | None = None,
+    authorize: Authorize | None = None,
     event_hub: EventHub | None = None,
     execution: LocalExecution | RemoteExecution | None = None,
     workers: WorkerHub | None = None,
@@ -362,6 +409,7 @@ def create_app(
         blobs=blobs,
         objects=objects,
         authenticate=authenticate,
+        authorize=authorize,
         event_hub=event_hub,
         execution=execution,
         workers=workers,
@@ -386,6 +434,7 @@ def create_app(
     app.include_router(gateway.routers.templates)
     app.include_router(gateway.routers.agents)
     app.include_router(agent_versions_router)
+    app.include_router(auth_router)
     app.include_router(gateway.routers.environments)
     app.include_router(gateway.routers.usage)
     app.include_router(gateway.routers.models)

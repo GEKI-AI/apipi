@@ -121,7 +121,9 @@ still reads the process environment. See [config](config.md).
 
 Pass `authenticate=` on `Gateway.create` to inject the auth callback
 without `APIPI_AUTH`. The callable is the same shape as the plugin in
-[auth](auth.md).
+[auth](auth.md). Pass `authorize=` the same way for the optional
+authorization hook. `AuthFilter` carries the allowed ids for list
+actions.
 
 ## In-process SessionService
 
@@ -346,7 +348,7 @@ Supported for extenders (also listed on `apipi.__all__`):
 
 | Export | Role |
 | --- | --- |
-| `Gateway` | `create`, `configure`, `startup`, `shutdown`, `ensure_tenant`, `sessions`, `agents`, `vaults`, `usage`, `models`, `routers`, `store`, `event_hub`, `execution`, `workers`, `env_hub`, `authenticate`, `settings` |
+| `Gateway` | `create`, `configure`, `startup`, `shutdown`, `ensure_tenant`, `invalidate_auth`, `invalidate_auth_where`, `clear_auth_cache`, `sessions`, `agents`, `vaults`, `usage`, `models`, `routers`, `store`, `event_hub`, `execution`, `workers`, `env_hub`, `authenticate`, `authorize`, `settings` |
 | `create_app` | Standalone FastAPI app (CLI and tests) |
 | `extend_settings` | `Settings` from arguments only; no env bleed |
 | `Settings` | Operator settings type |
@@ -363,6 +365,7 @@ Worker and environment WebSockets stay `gateway.workers` and
 `gateway.env_hub`.
 | `EventHub` | In-process live events |
 | `Authenticate`, `AuthIdentity`, `AuthReject` | Auth callback types |
+| `Authorize`, `AuthFilter` | Authorization hook types |
 
 ApiPi-only HTTP routes are also mounted at `/v1/apipi/` by
 `create_app`. An extender that copies `include_router` calls should

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Gateway auth is bounded and revocable. `APIPI_AUTH_CACHE_MAX`
+  (default `10000`, `0` disables caching) adds LRU eviction to the
+  auth cache. `Gateway.invalidate_auth`,
+  `Gateway.invalidate_auth_where`, and `Gateway.clear_auth_cache`
+  drop entries in process, and
+  `POST /v1/apipi/auth/invalidate` drops the caller's tenant entries
+  over HTTP. The auth plugin may be `async def` or sync (sync runs in
+  a worker thread), concurrent misses for one key call the plugin
+  once, and the tenant lookup is memoized.
+- Optional `APIPI_AUTHORIZE` hook (`authorize=` on `Gateway.create`)
+  enforces resource-level authorization with stable action names
+  (`agent.read`, `agent.write`, `agent.list`, `agent.run`,
+  `session.read`, `session.list`, `vault.*`, `file.*`, `skill.*`,
+  `template.*`, `usage.read`, `auth.invalidate`). List actions accept
+  `AuthFilter(ids)`. Missing resources stay `404`; denied resources
+  are `403`. Existing sync `authenticate` plugins now run in a
+  thread; plugins that relied on running on the event loop thread
+  should become `async def`.
+
 ### Breaking
 
 - Pi 0.99.1 (was 0.85.1). All guest images are rebuilt with a new

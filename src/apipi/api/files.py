@@ -3,7 +3,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
-from apipi.gateway.auth import require_tenant
+from apipi.gateway.auth import check_authorize, require_tenant
 from apipi.store.blobs import NS_FILES, file_object_id
 from apipi.store.disposition import content_disposition
 from apipi.store.models import Tenant
@@ -25,6 +25,9 @@ async def upload_file(
     data = await file.read()
     filename = file.filename or "upload"
     content_type = file.content_type
+    await check_authorize(
+        request, action="file.write", resource_type="file", resource_id=None
+    )
     return await _files(request).create(
         tenant.id,
         data=data,
@@ -39,7 +42,17 @@ async def list_files(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    return await _files(request).list_objects(tenant.id)
+    filt = await check_authorize(
+        request, action="file.list", resource_type="file", resource_id=None
+    )
+    payload = await _files(request).list_objects(tenant.id)
+    if filt is not None and filt.ids is not None:
+        items = payload.get("files", payload.get("data", []))
+        key = "files" if "files" in payload else ("data" if "data" in payload else None)
+        if key is not None:
+            payload = dict(payload)
+            payload[key] = [f for f in items if str(f.get("id")) in filt.ids]
+    return payload
 
 
 @router.get("/v1/files/{file_id}")
@@ -48,6 +61,16 @@ async def read_file(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_file as _gf
+
+        if await _gf(_db, tenant.id, file_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="file.read", resource_type="file", resource_id=str(file_id)
+    )
     return await _files(request).get(tenant.id, file_id)
 
 
@@ -57,6 +80,16 @@ async def read_file_content(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> Response:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_file as _gf
+
+        if await _gf(_db, tenant.id, file_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="file.read", resource_type="file", resource_id=str(file_id)
+    )
     data, content_type, filename = await _files(request).content(tenant.id, file_id)
     media = content_type if content_type else "application/octet-stream"
     return Response(
@@ -75,6 +108,16 @@ async def download_file(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_file as _gf
+
+        if await _gf(_db, tenant.id, file_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="file.read", resource_type="file", resource_id=str(file_id)
+    )
     filename, content_type = await _files(request).meta(tenant.id, file_id)
     return request.app.state.gateway.uploads.download(
         NS_FILES,
@@ -90,4 +133,14 @@ async def remove_file(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_file as _gf
+
+        if await _gf(_db, tenant.id, file_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="file.write", resource_type="file", resource_id=str(file_id)
+    )
     return await _files(request).delete(tenant.id, file_id)

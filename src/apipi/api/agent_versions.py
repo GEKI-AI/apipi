@@ -4,7 +4,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query, Request
 
 from apipi.api.deps import model_key
-from apipi.gateway.auth import require_tenant
+from apipi.gateway.auth import check_authorize, require_tenant
 from apipi.gateway.schemas import StrictModel
 from apipi.store.models import Tenant
 
@@ -32,6 +32,16 @@ async def create_version(
     tenant: Annotated[Tenant, Depends(require_tenant)],
     body: VersionCreate | None = None,
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_agent as _ga
+
+        if await _ga(_db, tenant.id, agent_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="agent.write", resource_type="agent", resource_id=str(agent_id)
+    )
     payload = body if body is not None else VersionCreate()
     return await _versions(request).create_explicit(
         tenant.id,
@@ -51,6 +61,16 @@ async def list_versions(
     after: Annotated[str | None, Query()] = None,
     include: Annotated[str | None, Query()] = None,
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_agent as _ga
+
+        if await _ga(_db, tenant.id, agent_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="agent.read", resource_type="agent", resource_id=str(agent_id)
+    )
     return await _versions(request).list_versions(
         tenant.id,
         agent_id,
@@ -67,6 +87,16 @@ async def read_version(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_agent as _ga
+
+        if await _ga(_db, tenant.id, agent_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="agent.read", resource_type="agent", resource_id=str(agent_id)
+    )
     return await _versions(request).get_version(tenant.id, agent_id, version)
 
 
@@ -77,6 +107,16 @@ async def restore_version(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_agent as _ga
+
+        if await _ga(_db, tenant.id, agent_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="agent.write", resource_type="agent", resource_id=str(agent_id)
+    )
     return await _versions(request).restore(
         tenant.id,
         agent_id,
@@ -93,4 +133,14 @@ async def delete_version(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
+    async with request.app.state.store.session() as _db:
+        from apipi.store.repo import get_agent as _ga
+
+        if await _ga(_db, tenant.id, agent_id) is None:
+            from apipi.gateway.auth import not_found as _nf
+
+            _nf()
+    await check_authorize(
+        request, action="agent.write", resource_type="agent", resource_id=str(agent_id)
+    )
     return await _versions(request).delete_version(tenant.id, agent_id, version)

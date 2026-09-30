@@ -120,6 +120,96 @@ success. A `429` reject is not cached, so a quota can recover before
 the TTL. Plugin errors are not stored as success; the next request
 calls the plugin again.
 
+The cache is a bounded LRU with `APIPI_AUTH_CACHE_MAX` entries
+(default `10000`). Over the limit the least-recently-used entry is
+evicted. `0` disables caching entirely: every request calls the
+plugin, which is useful for tests and strict revocation.
+
+The plugin may be `async def`, or a sync function that returns an
+awaitable. Otherwise it runs in a worker thread, so sync plugins that
+do network or DB I/O never block the event loop. Concurrent misses
+for the same cache key call the plugin once (single-flight).
+
+`ensure_tenant` is memoized per `tenant_id` in the gateway with the
+same bound, so an auth plus tenant cache hit makes no plugin call and
+no tenant lookup. Tenants are never deleted, so the memo needs no
+TTL.
+
+## Invalidation
+
+Per process. With several gateway instances, call every instance or
+rely on the TTL.
+
+In process:
+
+```python
+gateway.invalidate_auth("the-bearer-or-cache-key")  # -> bool
+gateway.invalidate_auth_where(lambda i: i.user_id == "u1")  # -> int
+gateway.clear_auth_cache()  # -> int
+```
+
+`invalidate_auth` takes the unhashed cache key (the bearer by
+default, or the plugin's `cache_key` value) and hashes it the same
+way as lookup. `invalidate_auth_where` drops every cached identity
+that matches; cached rejects are left alone. `clear_auth_cache`
+drops everything and returns the count.
+
+Over HTTP, `POST /v1/apipi/auth/invalidate` is authenticated like
+every other route. The body filters are optional and combined with
+AND: `{"key_id": "...", "user_id": "...", "org_id": "..."}`. An
+empty body means every cached identity of the caller's tenant. The
+route is always scoped to the caller's tenant and cannot drop
+another tenant's entries. Cross-tenant invalidation is in-process
+only. When the hook below is configured it runs with action
+`auth.invalidate`. The response is `{"invalidated": <count>}`.
+
+## Authorization hook
+
+Optional. `APIPI_AUTHORIZE` (TOML `authorize`) is an import path
+(`package.mod:func`), or pass `authorize=` on `Gateway.create`. It
+may be sync (run in a thread) or async.
+
+```python
+authorize(identity, action, resource_type, resource_id, ctx=None) -> None | AuthReject | AuthFilter
+```
+
+`identity` is the cached `AuthIdentity`. `action` is one of the
+stable names below. `resource_type` is `agent`, `vault`, `file`,
+`skill`, `template`, `usage`, or `auth`. `resource_id` is the id
+string, or `None` on create. `ctx` is the `AuthRequest` (method,
+path, headers) when the plugin takes five arguments.
+
+Return `None` to allow. Return `AuthReject` (default `403` with code
+`forbidden` for this path) to deny. Return `AuthFilter(ids)` only
+for list actions; `None` means all. The service applies the filter
+so pagination and counts stay correct.
+
+The hook runs after the gateway resolves the target resource and
+before any side effect. For session routes it receives the agent id
+of the loaded session, so "this key may only use agent X" works on
+every session sub-route. For session create the agent id comes from
+the body; inline agents pass `None`. A resource that does not exist
+stays `404`; the hook runs only for resources that exist.
+
+| Action | Routes (resource type → id) |
+|---|---|
+| `agent.read` | `GET /v1/agents/{id}`, `GET /v1/apipi/agents/{id}/versions[/{v}]`, `GET /v1/apipi/agents/{id}/export` (agent) |
+| `agent.write` | `POST /v1/agents` (id `None`), `POST`/`DELETE /v1/agents/{id}`, version create/restore/delete, `POST /v1/templates/{id}/agents` (agent) |
+| `agent.list` | `GET /v1/agents` (list → `AuthFilter`) |
+| `agent.run` | `POST /v1/agents/sessions`, `POST /v1/agents/sessions/{id}`, `DELETE …/sessions/{id}`, `POST …/sessions/{id}/events`, artifact delete (agent of the session) |
+| `session.read` | `GET …/sessions/{id}`, `…/events`, `…/turns[/{t}]`, `…/items`, `…/export`, `…/artifacts[...]` (resource type `agent`, agent of the session) |
+| `session.list` | `GET /v1/agents/sessions` (list → `AuthFilter` on agent ids) |
+| `vault.read` / `vault.write` / `vault.list` | `/v1/agents/vaults[/{id}]` and `…/credentials[...]` (vault) |
+| `file.read` / `file.write` / `file.list` | `/v1/files[...]`, `/v1/uploads[...]` (file; `None` on create) |
+| `skill.read` / `skill.write` / `skill.list` | `/v1/skills[...]` (skill) |
+| `template.read` / `template.write` / `template.list` | `/v1/templates[...]` (template) |
+| `usage.read` | `GET /v1/usage`, `GET /v1/apipi/usage` |
+| `auth.invalidate` | `POST /v1/apipi/auth/invalidate` |
+
+Chat routes map to the same `agent.run`, `session.read` and
+`session.list` actions. Model listing and health are not authorized
+by the hook. Without a hook everything behaves as before.
+
 ## Store
 
 A `tenants` row is created on first use of a `tenant_id`. There is no
