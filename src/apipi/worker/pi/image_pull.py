@@ -19,6 +19,7 @@ from apipi.worker.pi.images import (
     ImageIndex,
     ImageManifest,
     LocalImage,
+    is_versioned_store,
     latest_entry,
     load_index,
     load_manifest,
@@ -281,8 +282,11 @@ def list_images(
             )
             index = load_index(store.get("index.json"))
             arch = _host_arch()
+            versioned = is_versioned_store(index)
             for item in index.images:
-                if item.arch == arch and item.latest:
+                if item.arch != arch:
+                    continue
+                if versioned or item.latest:
                     remote_rows[item.id] = item.version
         except (ConfigError, ImageFormatError, OSError):
             remote_rows = {}

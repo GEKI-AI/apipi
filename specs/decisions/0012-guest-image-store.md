@@ -93,9 +93,11 @@ for the worker arch is `image_unavailable`, not a generic pull error.
 
 ## Index
 
-`index.json` lists kernels and images. More than one version of an id
-may be listed. Exactly one entry per `(id, arch)` has `latest: true`.
-Pull uses that latest entry, then checks the manifest. If it is not
+`index.json` lists kernels and images. A flat schema 1 store may list
+more than one version of an id, and exactly one entry per `(id, arch)`
+has `latest: true`. A versioned schema 2 store with `store_version`
+holds exactly one row per `(id, arch)` and uses no `latest` flag.
+Pull uses that entry, then checks the manifest. If it is not
 compatible, pull fails. It does not silently pick an older version.
 
 `apipi images push` writes new objects first and rewrites `index.json`

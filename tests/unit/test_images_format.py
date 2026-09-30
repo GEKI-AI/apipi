@@ -10,6 +10,8 @@ from apipi.worker.pi.images import (
     dump_manifest,
     hash_files,
     image_version,
+    is_versioned_store,
+    latest_entry,
     load_index,
     load_manifest,
     local_images,
@@ -158,3 +160,67 @@ def test_local_layout(tmp_path: Path) -> None:
 def test_empty_index_round_trip() -> None:
     index = ImageIndex(schema_version=2, kernels=[], images=[])
     assert load_index(dump_index(index)).images == []
+
+
+def test_latest_entry_on_versioned_store() -> None:
+    entry = {
+        "id": "default",
+        "version": "0.85.1-aaaaaaaa",
+        "arch": "x86_64",
+        "manifest": "default-x86_64.manifest.json",
+        "latest": False,
+    }
+    index = load_index(
+        {
+            "schema": 2,
+            "kernels": [],
+            "images": [entry],
+            "store_version": "0.12.1",
+        }
+    )
+    assert is_versioned_store(index)
+    assert latest_entry(index, "default", "x86_64").version == "0.85.1-aaaaaaaa"
+    with pytest.raises(ImageFormatError, match="exactly one browser x86_64"):
+        latest_entry(index, "browser", "x86_64")
+
+
+def test_latest_entry_on_versioned_store_rejects_duplicates() -> None:
+    entry = {
+        "id": "default",
+        "version": "0.85.1-aaaaaaaa",
+        "arch": "x86_64",
+        "manifest": "default-x86_64.manifest.json",
+        "latest": False,
+    }
+    raw = {
+        "schema": 2,
+        "kernels": [],
+        "images": [entry, {**entry, "manifest": "other.json"}],
+        "store_version": "0.12.1",
+    }
+    with pytest.raises(ImageFormatError, match="exactly one default x86_64"):
+        load_index(raw)
+
+
+def test_latest_entry_on_flat_store_needs_latest() -> None:
+    entry = {
+        "id": "default",
+        "version": "0.85.1-aaaaaaaa",
+        "arch": "x86_64",
+        "manifest": "default-0.85.1-aaaaaaaa-x86_64.json",
+        "latest": True,
+    }
+    index = load_index({"schema": 1, "kernels": [], "images": [entry]})
+    assert not is_versioned_store(index)
+    assert latest_entry(index, "default", "x86_64").version == "0.85.1-aaaaaaaa"
+    with pytest.raises(ImageFormatError, match="no latest browser"):
+        latest_entry(index, "browser", "x86_64")
+    bad = {
+        "id": "default",
+        "version": "0.85.1-aaaaaaaa",
+        "arch": "x86_64",
+        "manifest": "default-0.85.1-aaaaaaaa-x86_64.json",
+        "latest": False,
+    }
+    with pytest.raises(ImageFormatError, match="exactly one latest"):
+        load_index({"schema": 1, "kernels": [], "images": [bad]})
