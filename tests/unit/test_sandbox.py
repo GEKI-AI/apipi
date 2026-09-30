@@ -230,3 +230,57 @@ def test_browser_image_has_two_vcpu_floor() -> None:
     assert min_vcpus_for_image("browser") == 2
     assert min_vcpus_for_image("default") == 1
     assert min_vcpus_for_image("work") == 1
+
+
+def test_image_min_vcpus_override_replaces_floor() -> None:
+    from apipi.worker.pi.microvm import guest_vcpus
+
+    lowered = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        sandbox_image_min_vcpus={"browser": 1},
+    )
+    assert min_vcpus_for_image("browser", lowered) == 1
+    assert guest_vcpus(lowered, 1024, image="browser") == 1
+    assert guest_vcpus(lowered, 2048, image="browser") == 2
+    raised = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        sandbox_image_min_vcpus={"work": 4},
+    )
+    assert min_vcpus_for_image("work", raised) == 4
+    assert guest_vcpus(raised, 1024, image="work") == 4
+    unset = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+    )
+    assert min_vcpus_for_image("browser", unset) == 2
+    assert guest_vcpus(unset, 1024, image="browser") == 2
+    other = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        sandbox_image_min_vcpus={"nope": 8},
+    )
+    assert min_vcpus_for_image("browser", other) == 2
+
+
+def test_image_min_vcpus_warns_once_when_below_recommended(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from apipi.worker.pi import sandbox as sandbox_mod
+
+    sandbox_mod._warned_min_vcpus.clear()
+    caplog.set_level("WARNING", logger="apipi.worker.pi")
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        sandbox_image_min_vcpus={"browser": 1},
+    )
+    assert min_vcpus_for_image("browser", settings) == 1
+    assert min_vcpus_for_image("browser", settings) == 1
+    notes = [
+        record.message
+        for record in caplog.records
+        if "min vcpus 1 is below the recommended 2" in record.message
+    ]
+    assert len(notes) == 1

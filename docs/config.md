@@ -602,6 +602,7 @@ A worked example is in [production](production.md#sizing).
 | `APIPI_SANDBOX_L_MEM_MIB` | `[sandbox.resources].l_mem_mib` | `2048` | Guest RAM in MiB for size `L`. |
 | `APIPI_MICROVM_VCPUS` | `[sandbox.resources].vcpus` | `1` | Guest vCPUs for sizes `S` and `M`. |
 | `APIPI_SANDBOX_L_VCPUS` | `[sandbox.resources].l_vcpus` | `2` | Guest vCPUs for size `L`. |
+| `APIPI_SANDBOX_IMAGE_MIN_VCPUS` | `[sandbox.resources].image_min_vcpus` | unset | Per-image vCPU floor. JSON object or TOML inline table, for example `{"browser": 1}`. Replaces the recipe or manifest floor for that image. Spawn still uses `max(size vCPUs, floor)`. |
 
 ```toml
 [sandbox.resources]
@@ -610,6 +611,7 @@ m_mem_mib = 1024
 l_mem_mib = 2048
 vcpus = 1
 l_vcpus = 2
+image_min_vcpus = { browser = 1 }
 ```
 
 ### Networking

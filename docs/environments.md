@@ -134,7 +134,7 @@ maps `L` to `browser`, so existing `L` sessions keep that image.
 | --- | --- | --- | --- |
 | `S` | `[sandbox.resources].mem_mib` (512) | `default` | Pi and light tools |
 | `M` | `APIPI_SANDBOX_M_MEM_MIB` (1024) | `default` | Heavier non-browser work |
-| `L` | `APIPI_SANDBOX_L_MEM_MIB` (2048) | `browser` | agent-browser and chrome-headless-shell, at least 2 vCPUs. Install the browser rootfs. It is x86_64 only. |
+| `L` | `APIPI_SANDBOX_L_MEM_MIB` (2048) | `browser` | agent-browser and chrome-headless-shell, at least 2 vCPUs by default. Operators can change this with `APIPI_SANDBOX_IMAGE_MIN_VCPUS`. Install the browser rootfs. It is x86_64 only. |
 
 Isolation `none` accepts the field and does not apply RAM or rootfs.
 Isolation `microvm` applies both, including when `environment.type` is
@@ -150,7 +150,8 @@ image is omitted. Install that rootfs with
 `apipi install --microvm --image browser`. The image is x86_64 only.
 An aarch64 worker does not offer it, so the placement error is
 `image_unavailable` and names the architecture. Browser guests get at
-least 2 vCPUs, including size `M`. `/dev/shm` is 512 MiB on the
+least 2 vCPUs by default, including size `M`. Operators can change this
+with `APIPI_SANDBOX_IMAGE_MIN_VCPUS`. `/dev/shm` is 512 MiB on the
 browser image and 64 MiB on the others. Chrome still uses `/tmp` for
 shared memory because the image sets `--disable-dev-shm-usage`.
 

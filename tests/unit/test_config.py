@@ -928,3 +928,37 @@ def test_env_none_placement_invalid(
     monkeypatch.setenv("APIPI_ENV_NONE_PLACEMENT", "host")
     with pytest.raises(ConfigError, match="APIPI_ENV_NONE_PLACEMENT must be"):
         load_settings()
+
+
+def test_image_min_vcpus_env_and_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_SANDBOX_IMAGE_MIN_VCPUS", '{"browser": 1}')
+    settings = load_settings()
+    assert settings.sandbox_image_min_vcpus == {"browser": 1}
+    monkeypatch.delenv("APIPI_SANDBOX_IMAGE_MIN_VCPUS")
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        'run_mode = "none"\n'
+        "[sandbox.resources]\n"
+        "image_min_vcpus = { browser = 1, work = 4 }\n"
+    )
+    loaded = load_settings()
+    assert loaded.sandbox_image_min_vcpus == {"browser": 1, "work": 4}
+
+
+def test_image_min_vcpus_bad_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_SANDBOX_IMAGE_MIN_VCPUS", '{"browser": 0}')
+    with pytest.raises(ConfigError, match="APIPI_SANDBOX_IMAGE_MIN_VCPUS"):
+        load_settings()
+    monkeypatch.setenv("APIPI_SANDBOX_IMAGE_MIN_VCPUS", '{"Bad": 1}')
+    with pytest.raises(ConfigError, match="APIPI_SANDBOX_IMAGE_MIN_VCPUS"):
+        load_settings()

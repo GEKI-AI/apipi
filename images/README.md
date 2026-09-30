@@ -19,7 +19,7 @@ It only says what is different. Alpine is not supported.
 | `SIZE_MIB` | ext4 size in MiB. `SIZE_MIB` in the environment overrides this. |
 | `PACKAGES` | Extra Debian packages, space-separated. The base set is always `python3`, `python3-pip`, `python3-venv`, `curl`, `git`, `iproute2`, `socat`, `ca-certificates`, `tar`, and `ripgrep`. Node comes from a pinned nodejs.org tarball, not the distro package. |
 | `MIN_SIZE` | Smallest sandbox size this image is meant for (`S`, `M`, or `L`). |
-| `MIN_VCPUS` | Optional vCPU floor. Spawn uses the larger of the size vCPU count and this value. `browser` sets `2`. |
+| `MIN_VCPUS` | Optional recommended vCPU floor. Spawn uses the larger of the size vCPU count and this value. `browser` sets `2`. Operators can override it with `APIPI_SANDBOX_IMAGE_MIN_VCPUS`. |
 | `ARCHS` | Optional space-separated arches. The default is `x86_64` and `aarch64`. `browser` is `x86_64` only. |
 | `DESCRIPTION` | One line for operators. |
 
