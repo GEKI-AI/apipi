@@ -158,11 +158,10 @@ own attribution headers:
 | `x-apipi-session-id` | Session UUID |
 | `x-apipi-turn-id` | UUID of the turn running on that Pi process; absent outside a turn |
 | `x-apipi-agent-id` | Saved agent UUID; omitted for inline, agent-less sessions |
-| `x-apipi-agent-revision` | Agent definition revision at turn start; omitted for agent-less sessions |
 
 The turn id is updated per turn; consecutive turns on a warm process
 carry different ids. All calls of one turn (streaming, retries,
-compaction) carry the same revision even if the agent is updated
+compaction) carry the same agent even if the agent is updated
 mid-turn; the next turn picks up the new value. `APIPI_MODEL_ATTRIBUTION_HEADERS`
 (default `true`) disables stamping; stripping of guest-set
 `x-apipi-*` always applies. The headers are attribution metadata

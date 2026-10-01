@@ -65,8 +65,6 @@ class PiHarness:
         codemode = raw_codemode if isinstance(raw_codemode, str) else "off"
         raw_turn = _kwargs.get("turn_id")
         turn_id = str(raw_turn) if raw_turn else None
-        raw_revision = _kwargs.get("agent_revision")
-        agent_revision = raw_revision if isinstance(raw_revision, int) else None
         agent_id = str(raw_agent) if raw_agent else None
         proc = await self.pool.get(
             session_id,
@@ -100,7 +98,7 @@ class PiHarness:
                 set_context(str(session_id), agent_id)
             set_turn = getattr(broker, "set_turn", None)
             if callable(set_turn):
-                set_turn(turn_id, agent_revision)
+                set_turn(turn_id)
         settled = False
         thinking = ThinkingTracker()
         abort = _kwargs.get("abort")

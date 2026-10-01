@@ -882,13 +882,6 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices("APIPI_MAX_FILE_BYTES", "max_file_bytes"),
     )
-    agent_versions_keep: int = Field(
-        default=10,
-        ge=1,
-        validation_alias=AliasChoices(
-            "APIPI_AGENT_VERSIONS_KEEP", "agent_versions_keep"
-        ),
-    )
     artifact_store: ArtifactStore = Field(
         default="local",
         validation_alias=AliasChoices("APIPI_ARTIFACT_STORE", "artifact_store"),
@@ -1260,8 +1253,18 @@ def _warn_removed_browser_env() -> None:
         _log.warning("APIPI_SANDBOX_AUTO_PLAYWRIGHT was removed and is ignored")
 
 
+def _warn_removed_agent_versions_env() -> None:
+    raw = os.environ.get("APIPI_AGENT_VERSIONS_KEEP")
+    if raw:
+        _log.warning(
+            "APIPI_AGENT_VERSIONS_KEEP was removed; agent versions are gone, "
+            "use the agent bundle export for snapshots"
+        )
+
+
 def load_settings(*, config_path: str | None = None) -> Settings:
     _warn_removed_browser_env()
+    _warn_removed_agent_versions_env()
     path = resolve_config_path(config_path)
     values = _toml_values(path) if path is not None else {}
     env_file = Path(".env") if Path(".env").is_file() else None

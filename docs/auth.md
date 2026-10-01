@@ -193,8 +193,8 @@ stays `404`; the hook runs only for resources that exist.
 
 | Action | Routes (resource type → id) |
 |---|---|
-| `agent.read` | `GET /v1/agents/{id}`, `GET /v1/apipi/agents/{id}/versions[/{v}]`, `GET /v1/apipi/agents/{id}/export` (agent) |
-| `agent.write` | `POST /v1/agents` (id `None`), `POST`/`DELETE /v1/agents/{id}`, version create/restore/delete, `POST /v1/templates/{id}/agents` (agent) |
+| `agent.read` | `GET /v1/agents/{id}`, `GET /v1/apipi/agents/{id}/export` (agent) |
+| `agent.write` | `POST /v1/agents` (id `None`), `POST`/`DELETE /v1/agents/{id}`, `POST /v1/templates/{id}/agents` (agent) |
 | `agent.list` | `GET /v1/agents` (list → `AuthFilter`) |
 | `agent.run` | `POST /v1/agents/sessions`, `POST /v1/agents/sessions/{id}`, `DELETE …/sessions/{id}`, `POST …/sessions/{id}/events`, artifact delete (agent of the session) |
 | `session.read` | `GET …/sessions/{id}`, `…/events`, `…/turns[/{t}]`, `…/items`, `…/export`, `…/artifacts[...]` (resource type `agent`, agent of the session) |

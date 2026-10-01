@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- Agent versions and snapshots are removed. The versions routes
+  (`/v1/apipi/agents/{id}/versions`, including create, list, get,
+  restore, and delete) are gone and return `404`, and
+  `APIPI_AGENT_VERSIONS_KEEP` is removed (still setting it logs a
+  warning and is ignored). Migration `0022` drops the
+  `agent_versions` table, so existing snapshots are deleted. Export
+  any you need before upgrading. To keep snapshots, use the agent
+  bundle export (`GET /v1/apipi/agents/{id}/export`) and store the
+  zip yourself.
+- Agent `revision` is removed from the agent object, and the
+  `x-apipi-agent-revision` model-host header is no longer sent.
+  `x-apipi-session-id`, `x-apipi-turn-id`, and `x-apipi-agent-id`
+  are unchanged.
+- Agent export no longer takes `?version=`, and new bundles have no
+  `source_version` (import still accepts old bundles and ignores
+  it).
+
 ### Security
 
 - MCP headers no longer expand `${ENV}` from the gateway process.

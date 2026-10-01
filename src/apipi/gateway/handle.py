@@ -8,7 +8,6 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI
 
-from apipi.api.agent_versions import router as agent_versions_router
 from apipi.api.agents import router as agents_router
 from apipi.api.auth import router as auth_router
 from apipi.api.chat import router as chat_router
@@ -40,7 +39,6 @@ from apipi.gateway.metrics import Metrics, mount_metrics
 from apipi.gateway.middleware import InstanceMiddleware, MaxBodyMiddleware
 from apipi.gateway.otel import Tracing
 from apipi.gateway.request_id import RequestIdMiddleware
-from apipi.services.agent_versions import AgentVersionService
 from apipi.services.agents import AgentService
 from apipi.services.files import FileService
 from apipi.services.models import ModelsService
@@ -149,7 +147,6 @@ class Gateway:
             mcp_http=self.mcp_http,
         )
         self.agents = AgentService(store, settings)
-        self.versions = AgentVersionService(store, settings)
         self.templates = TemplateService(
             store,
             objects,
@@ -433,7 +430,6 @@ def create_app(
     app.include_router(gateway.routers.skills)
     app.include_router(gateway.routers.templates)
     app.include_router(gateway.routers.agents)
-    app.include_router(agent_versions_router)
     app.include_router(auth_router)
     app.include_router(gateway.routers.environments)
     app.include_router(gateway.routers.usage)

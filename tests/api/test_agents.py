@@ -64,7 +64,6 @@ async def test_agent_crud(client: AsyncClient) -> None:
         "tools",
         "session_defaults",
         "reasoning",
-        "revision",
         "created_at",
         "updated_at",
     }
@@ -252,3 +251,44 @@ async def test_cross_tenant_agent_is_404(client: AsyncClient) -> None:
     still = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token_a))
     assert still.status_code == 200
     assert still.json()["name"] == "secret"
+
+
+async def test_agent_versions_routes_are_gone(client: AsyncClient) -> None:
+    token = _token("no-versions")
+    created = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={"name": "bot", "model": "test"},
+    )
+    assert created.status_code == 200
+    agent_id = created.json()["id"]
+    version_id = str(uuid.uuid4())
+    assert (
+        await client.post(
+            f"/v1/apipi/agents/{agent_id}/versions",
+            headers=_auth(token),
+            json={},
+        )
+    ).status_code == 404
+    assert (
+        await client.get(f"/v1/apipi/agents/{agent_id}/versions", headers=_auth(token))
+    ).status_code == 404
+    assert (
+        await client.get(
+            f"/v1/apipi/agents/{agent_id}/versions/{version_id}",
+            headers=_auth(token),
+        )
+    ).status_code == 404
+    assert (
+        await client.post(
+            f"/v1/apipi/agents/{agent_id}/versions/{version_id}/restore",
+            headers=_auth(token),
+            json={},
+        )
+    ).status_code == 404
+    assert (
+        await client.delete(
+            f"/v1/apipi/agents/{agent_id}/versions/{version_id}",
+            headers=_auth(token),
+        )
+    ).status_code == 404

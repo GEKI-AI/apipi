@@ -18,6 +18,7 @@ from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics, observe_turn
 from apipi.gateway.otel import Tracing, set_span, start_span
+from apipi.services.agents import definition_for_session
 from apipi.services.chat_tools import is_chat_profile
 from apipi.services.failures import (
     Failure,
@@ -436,20 +437,12 @@ async def _agent_tools_and_model(
     list[Any],
     dict[str, Any],
     str | None,
-    int | None,
 ]:
     if row.agent_id is None:
-        return [], row.model, row.instructions, [], {}, None, None
-    from apipi.services.agent_versions import definition_for_session
-    from apipi.store.repo import get_agent
-
+        return [], row.model, row.instructions, [], {}, None
     definition = await definition_for_session(db, tenant_id, row)
     if definition is None:
-        return [], row.model, row.instructions, [], {}, None, None
-    agent = await get_agent(db, tenant_id, row.agent_id)
-    revision = agent.revision if agent is not None else None
-    if revision is None:
-        revision = 1 if agent is not None else None
+        return [], row.model, row.instructions, [], {}, None
     raw_tools = definition.get("tools")
     raw: list[Any] = raw_tools if isinstance(raw_tools, list) else []
     meta = definition.get("metadata")
@@ -465,7 +458,6 @@ async def _agent_tools_and_model(
         raw,
         meta,
         idle if isinstance(idle, str) else None,
-        revision,
     )
 
 
@@ -706,8 +698,6 @@ async def _write_turn_log(
     model: str | None = None
     labels: list[str] = []
     if row is not None and row.agent_id is not None:
-        from apipi.services.agent_versions import definition_for_session
-
         definition = await definition_for_session(db, tenant_id, row)
         if isinstance(definition, dict):
             raw_model = definition.get("model")
@@ -1300,7 +1290,6 @@ async def load_boot_kwargs(
             _raw_tools,
             agent_metadata,
             agent_idle,
-            _agent_revision,
         ) = await _agent_tools_and_model(db, tenant_id, row)
         session_metadata = (
             row.metadata_json if isinstance(row.metadata_json, dict) else {}
@@ -1459,7 +1448,6 @@ async def run_turn(
         session_metadata: dict[str, Any]
         session_idle: str | None
         agent_idle: str | None
-        agent_revision: int | None = None
         spawn_ids = _spawn_identity_empty(user_id, org_id)
         item_content: str | list[dict[str, Any]] = text
         ordered = parts or []
@@ -1500,7 +1488,6 @@ async def run_turn(
                 _raw_tools,
                 agent_metadata,
                 agent_idle,
-                agent_revision,
             ) = await _agent_tools_and_model(db, tenant_id, row)
             session_metadata = (
                 row.metadata_json if isinstance(row.metadata_json, dict) else {}
@@ -1700,7 +1687,6 @@ async def run_turn(
                     image=sandbox_image,
                     extra_env=extra_env,
                     turn_id=turn_id,
-                    agent_revision=agent_revision,
                     **spawn_ids,
                     **_pi_spawn_overrides(settings, session_metadata, agent_metadata),
                     **_idle_spawn(
@@ -1914,7 +1900,6 @@ async def continue_turn(
     instructions: str | None = None
     computer: Computer | None
     env_type: str | None
-    agent_revision_cont: int | None = None
     spawn_ids = _spawn_identity_empty(user_id, org_id)
     async with store.session() as db:
         row = await get_session(db, tenant_id, session_id)
@@ -2006,7 +1991,6 @@ async def continue_turn(
             _raw_tools,
             agent_metadata,
             agent_idle,
-            agent_revision_cont,
         ) = await _agent_tools_and_model(db, tenant_id, row)
         session_metadata = (
             row.metadata_json if isinstance(row.metadata_json, dict) else {}
@@ -2083,7 +2067,6 @@ async def continue_turn(
                     image=sandbox_image,
                     extra_env=extra_env,
                     turn_id=turn_id,
-                    agent_revision=agent_revision_cont,
                     **spawn_ids,
                     **_pi_spawn_overrides(settings, session_metadata, agent_metadata),
                     **_idle_spawn(

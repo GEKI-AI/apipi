@@ -46,8 +46,8 @@ async def test_pi_harness_sets_and_clears_turn_context() -> None:
         def set_context(self, session_id: object, agent_id: object) -> None:
             calls.append(("context", session_id, agent_id))
 
-        def set_turn(self, turn_id: object, revision: object = None) -> None:
-            calls.append(("turn", turn_id, revision))
+        def set_turn(self, turn_id: object) -> None:
+            calls.append(("turn", turn_id, None))
 
         def clear_turn(self) -> None:
             calls.append(("clear", None, None))
@@ -75,9 +75,8 @@ async def test_pi_harness_sets_and_clears_turn_context() -> None:
             session_id=session_id,
             turn_id="turn-1",
             agent_id="agent-1",
-            agent_revision=3,
         )
     ]
     assert calls[0] == ("context", str(session_id), "agent-1")
-    assert calls[1] == ("turn", "turn-1", 3)
+    assert calls[1] == ("turn", "turn-1", None)
     assert calls[-1] == ("clear", None, None)

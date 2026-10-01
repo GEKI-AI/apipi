@@ -134,12 +134,6 @@ def build_bundle(
     }
     if image is not None:
         manifest["image"] = image
-    source_version = agent.get("source_version")
-    if isinstance(source_version, dict):
-        manifest["source_version"] = {
-            "id": source_version.get("id"),
-            "number": source_version.get("number"),
-        }
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("agent.json", json.dumps(manifest, indent=2) + "\n")

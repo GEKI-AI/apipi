@@ -192,23 +192,8 @@ class TemplateService:
         self,
         tenant_id: uuid.UUID,
         agent_id: uuid.UUID,
-        *,
-        version: str | None = None,
     ) -> tuple[str, bytes]:
         agent = await self.agents.get(tenant_id, agent_id)
-        if version is not None:
-            from apipi.services.agent_versions import AgentVersionService
-
-            loaded = await AgentVersionService(self.store, self.settings).get_version(
-                tenant_id, agent_id, version
-            )
-            definition = loaded.get("definition")
-            if isinstance(definition, dict):
-                agent = {**agent, **definition}
-                agent["source_version"] = {
-                    "id": loaded.get("id"),
-                    "number": loaded.get("number"),
-                }
         raw_name = agent.get("name")
         data, _manifest, _warnings = await self._bundle_from_agent(
             tenant_id,
