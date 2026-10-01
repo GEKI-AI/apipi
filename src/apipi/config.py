@@ -127,6 +127,9 @@ _REMOVED_BROWSER_KEYS = frozenset({"auto_playwright", "playwright_mcp"})
 _PLACEMENT_TOML = {
     "env_none": "env_none_placement",
 }
+_MCP_TOML = {
+    "allow_hosts": "mcp_allow_hosts",
+}
 _LEGACY_FLAT_TOML = {
     "run_mode": "[sandbox].backend",
     "pi_command": "[pi].command",
@@ -138,6 +141,7 @@ _LEGACY_FLAT_TOML = {
     "microvm_egress_allowlist": "[sandbox.network].egress_allowlist",
     "microvm_egress_hosts": "[sandbox.network].egress_hosts",
     "microvm_egress_mbit": "[sandbox.network].egress_mbit",
+    "mcp_allow_hosts": "[mcp].allow_hosts",
 }
 
 
@@ -520,6 +524,10 @@ class Settings(BaseSettings):
     vault_master_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_VAULT_MASTER_KEY", "vault_master_key"),
+    )
+    mcp_allow_hosts: HostList = Field(
+        default="",
+        validation_alias=AliasChoices("APIPI_MCP_ALLOW_HOSTS", "mcp_allow_hosts"),
     )
     worker_lease_ttl: IdleTtl = Field(
         default=timedelta(seconds=30),
@@ -1208,6 +1216,14 @@ def _toml_values(path: Path) -> dict[str, Any]:
                 _require_table(raw.pop("placement"), "[placement]"),
                 _PLACEMENT_TOML,
                 "placement",
+            )
+        )
+    if "mcp" in raw:
+        nested.update(
+            _map_table(
+                _require_table(raw.pop("mcp"), "[mcp]"),
+                _MCP_TOML,
+                "mcp",
             )
         )
     known = set(Settings.model_fields)

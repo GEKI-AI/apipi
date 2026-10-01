@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -13,6 +14,16 @@ pytest_plugins = ["tests.support.mcp_http_server"]
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def settings(tmp_path: Path) -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        sessions_dir=str(Path(tmp_path) / "sessions"),
+        mcp_allow_hosts="127.0.0.1",
+    )
 
 
 @pytest.fixture
@@ -54,16 +65,14 @@ async def test_mcp_http_starts_with_session(
     mcp_client: AsyncClient,
     mcp_harness: FakeHarness,
     mcp_server: tuple[str, dict[str, str]],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mcp_url, seen = mcp_server
-    monkeypatch.setenv("MCP_TOKEN", "from-env")
     token = "mcp"
     agent_id = await _agent_with_mcp(
         mcp_client,
         token,
         mcp_url,
-        headers={"Authorization": "Bearer ${MCP_TOKEN}"},
+        headers={"Authorization": "Bearer from-env"},
     )
     created = await mcp_client.post(
         "/v1/agents/sessions",
@@ -95,16 +104,14 @@ async def test_mcp_http_on_chat_session(
     mcp_client: AsyncClient,
     mcp_harness: FakeHarness,
     mcp_server: tuple[str, dict[str, str]],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mcp_url, seen = mcp_server
-    monkeypatch.setenv("MCP_TOKEN", "from-env")
     token = "mcp-chat"
     agent_id = await _agent_with_mcp(
         mcp_client,
         token,
         mcp_url,
-        headers={"Authorization": "Bearer ${MCP_TOKEN}"},
+        headers={"Authorization": "Bearer from-env"},
     )
     created = await mcp_client.post(
         "/v1/chat/sessions",
@@ -162,3 +169,32 @@ async def test_mcp_http_missing_env_fails(
     )
     assert created.status_code == 200
     assert created.json()["status"] == "failed"
+
+
+async def test_mcp_http_env_header_fails_session(
+    mcp_client: AsyncClient, mcp_server: tuple[str, dict[str, str]]
+) -> None:
+    mcp_url, _seen = mcp_server
+    token = "mcp-env"
+    agent_id = await _agent_with_mcp(
+        mcp_client,
+        token,
+        mcp_url,
+        headers={"Authorization": "Bearer ${MCP_TOKEN}"},
+    )
+    created = await mcp_client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {"type": "none"},
+            "input": "hello",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["status"] == "failed"
+    session_id = created.json()["id"]
+    events = await mcp_client.get(
+        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+    )
+    assert "vault" in str(events.json())

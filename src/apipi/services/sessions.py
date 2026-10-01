@@ -20,6 +20,7 @@ from apipi.gateway.errors import ApiError, gone
 from apipi.gateway.logutil import log_event
 from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.gateway.tokens import hash_token
+from apipi.mcp.guard import split_allow_hosts
 from apipi.mcp.http import (
     McpConnectError,
     apply_vault_headers,
@@ -651,7 +652,10 @@ class SessionService:
             model=model,
         ):
             try:
-                connected = await connect_mcp_http_tools(raw_tools)
+                connected = await connect_mcp_http_tools(
+                    raw_tools,
+                    allow_hosts=split_allow_hosts(self.settings.mcp_allow_hosts),
+                )
                 if vault_id_strs:
                     async with self.store.session() as db:
                         creds = await list_credentials_for_vault_ids(

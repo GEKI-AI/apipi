@@ -962,3 +962,21 @@ def test_image_min_vcpus_bad_values(
     monkeypatch.setenv("APIPI_SANDBOX_IMAGE_MIN_VCPUS", '{"Bad": 1}')
     with pytest.raises(ConfigError, match="APIPI_SANDBOX_IMAGE_MIN_VCPUS"):
         load_settings()
+
+
+def test_mcp_allow_hosts_env_and_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
+    monkeypatch.setenv("APIPI_MCP_ALLOW_HOSTS", "mcp.internal, 10.0.0.0/8")
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "[mcp]\n"
+        'allow_hosts = "toml.internal"\n'
+    )
+    assert Settings().mcp_allow_hosts == "mcp.internal, 10.0.0.0/8"
+    assert load_settings().mcp_allow_hosts == "mcp.internal, 10.0.0.0/8"
+    monkeypatch.delenv("APIPI_MCP_ALLOW_HOSTS")
+    assert load_settings().mcp_allow_hosts == "toml.internal"

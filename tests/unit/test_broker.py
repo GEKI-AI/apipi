@@ -229,6 +229,7 @@ async def test_broker_injects_mcp_header(tmp_path: Path) -> None:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     port = server.server_address[1]
     settings = _settings(tmp_path, "http://127.0.0.1/v1")
+    settings = settings.model_copy(update={"mcp_allow_hosts": "127.0.0.1"})
     mcp = [
         McpHttpServer(
             server_label="mock",
@@ -342,3 +343,57 @@ def test_apply_vault_headers_match_and_conflict() -> None:
                 _Cred("c2", "https://mcp.example.com/mcp", "b"),
             ],
         )
+
+
+async def test_broker_rejects_private_mcp_host_by_default(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, "http://127.0.0.1/v1")
+    mcp = [
+        McpHttpServer(
+            server_label="mock",
+            server_url="http://127.0.0.1:9/mcp",
+            headers={},
+        )
+    ]
+    with pytest.raises(Exception, match="blocked host"):
+        await start_broker(
+            settings, api_key="k", mcp_http=mcp, host="127.0.0.1", port=0
+        )
+
+
+async def test_broker_allowlists_private_mcp_host(tmp_path: Path) -> None:
+    seen: dict[str, str] = {}
+
+    class McpHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            seen["hit"] = "yes"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"jsonrpc":"2.0","id":1,"result":{}}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), McpHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    settings = _settings(tmp_path, "http://127.0.0.1/v1")
+    settings = settings.model_copy(update={"mcp_allow_hosts": "127.0.0.1"})
+    mcp = [
+        McpHttpServer(
+            server_label="mock",
+            server_url=f"http://127.0.0.1:{port}/mcp",
+            headers={},
+        )
+    ]
+    broker = await start_broker(
+        settings, api_key="k", mcp_http=mcp, host="127.0.0.1", port=0
+    )
+    try:
+        async with AsyncClient() as client:
+            response = await client.post(broker.mcp_url("0"), json={})
+        assert response.status_code == 200
+        assert seen.get("hit") == "yes"
+    finally:
+        await broker.stop()
+        server.shutdown()

@@ -31,7 +31,7 @@ over streamable HTTP. There is no stdio MCP.
   "type": "mcp",
   "server_label": "docs",
   "server_url": "https://mcp.example.com/mcp",
-  "headers": {"X-Api-Key": "${DOCS_KEY}"},
+  "headers": {"X-Api-Key": "public-value"},
   "allowed_tools": ["search"],
   "require_approval": "never",
   "server_description": "Product docs search"
@@ -39,8 +39,13 @@ over streamable HTTP. There is no stdio MCP.
 ```
 
 `server_label` is required and must match `[A-Za-z0-9_-]`.
-`server_url` is required. `headers` entries with `${ENV}` expand on
-the host. `allowed_tools` is a list of tool names, or
+`server_url` is required and must be public HTTP(S): loopback, RFC 1918,
+link-local, and other special-use addresses are rejected, including hostnames
+that resolve to them. `headers` are sent as-is; values that contain `${...}`
+are rejected because the gateway never expands environment variables into
+caller-supplied headers. Store secrets in a [vault](api.md#vaults)
+(`static_bearer` bound to `mcp_server_url`, attach `vault_ids` on the session)
+and the host broker injects the bearer. `allowed_tools` is a list of tool names, or
 `{"tool_names": [...]}`. Other filter forms return `not_implemented`.
 `require_approval` accepts only `"never"` or an absent value; anything
 else returns `not_implemented`. `server_description` is accepted and
@@ -63,6 +68,15 @@ and the turn continues without that server's tools.
 Prefer a [vault](api.md#vaults) (`static_bearer` bound to
 `mcp_server_url`, attach `vault_ids` on the session).
 
+The SSRF guard runs on the gateway connect and on every broker call: the
+hostname is resolved and every address is checked, so DNS rebinding cannot
+swap in a private address after the check. There are no redirects to follow.
+Operators that run an MCP server on a private address (including local
+development on `127.0.0.1`) list it in `APIPI_MCP_ALLOW_HOSTS` or
+`[mcp].allow_hosts` (hostnames or CIDRs, for example
+`mcp.internal, 10.0.0.0/8`). A blocked target fails session create; a target
+that turns private later fails that call with a `502`, not the turn.
+
 A bash call with no `timeout` is capped at 120 seconds so a stuck
 command cannot hold the turn until `APIPI_TURN_TIMEOUT`.
 
@@ -70,7 +84,9 @@ Search goes through MCP.
 
 ### Search — Tavily example
 
-Tavily's hosted MCP is one search option. Set `TAVILY_API_KEY`. See
+Tavily's hosted MCP is one search option. Create a vault credential with
+auth type `static_bearer`, `mcp_server_url` `https://mcp.tavily.com/mcp`, and
+the Tavily key as the token, then attach `vault_ids` on the session. See
 `examples/tavily.yaml`. You can swap that for Brave, Exa, or any other
 server that speaks MCP.
 
