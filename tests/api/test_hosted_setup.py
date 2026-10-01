@@ -536,7 +536,7 @@ async def test_network_ignored_on_type_none(client: AsyncClient) -> None:
     assert "network" not in created.json()["environment"]
 
 
-async def test_network_rejected_on_self_hosted(client: AsyncClient) -> None:
+async def test_self_hosted_rejected_not_implemented(client: AsyncClient) -> None:
     token = "net-self"
     agent_id = await _agent(client, token)
     response = await client.post(
@@ -551,7 +551,7 @@ async def test_network_rejected_on_self_hosted(client: AsyncClient) -> None:
         },
     )
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == "invalid_request"
+    assert response.json()["error"]["type"] == "not_implemented"
 
 
 async def test_network_bad_host_rejected(client: AsyncClient) -> None:

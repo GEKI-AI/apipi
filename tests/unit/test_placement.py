@@ -54,7 +54,7 @@ def test_env_none_reject() -> None:
     )
 
 
-@pytest.mark.parametrize("env_type", ["openai_hosted", "hosted", "self_hosted"])
+@pytest.mark.parametrize("env_type", ["openai_hosted", "hosted"])
 def test_computer_is_microvm(env_type: str) -> None:
     assert (
         placement_for(

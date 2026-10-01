@@ -348,7 +348,7 @@ Supported for extenders (also listed on `apipi.__all__`):
 
 | Export | Role |
 | --- | --- |
-| `Gateway` | `create`, `configure`, `startup`, `shutdown`, `ensure_tenant`, `invalidate_auth`, `invalidate_auth_where`, `clear_auth_cache`, `sessions`, `agents`, `vaults`, `usage`, `models`, `routers`, `store`, `event_hub`, `execution`, `workers`, `env_hub`, `authenticate`, `authorize`, `settings` |
+| `Gateway` | `create`, `configure`, `startup`, `shutdown`, `ensure_tenant`, `invalidate_auth`, `invalidate_auth_where`, `clear_auth_cache`, `sessions`, `agents`, `vaults`, `usage`, `models`, `routers`, `store`, `event_hub`, `execution`, `workers`, `authenticate`, `authorize`, `settings` |
 | `create_app` | Standalone FastAPI app (CLI and tests) |
 | `extend_settings` | `Settings` from arguments only; no env bleed |
 | `Settings` | Operator settings type |
@@ -358,20 +358,17 @@ Supported for extenders (also listed on `apipi.__all__`):
 | `tenant_from_key` | Default tenant UUID from a key. Same mapping as default authenticate. |
 
 `gateway.agents`, `gateway.vaults`, `gateway.usage`, and `gateway.models`
-are the same functions as `/v1/agents`, `/v1/agents/vaults`, `/v1/usage`,
+are the same functions as `/v1/agents`, `/v1/agents/vaults`, `/v1/apipi/usage`,
 and `/v1/models`. Vault get/list never returns credential token values.
 Vault tokens are encrypted at rest.
-Worker and environment WebSockets stay `gateway.workers` and
-`gateway.env_hub`.
+The worker WebSocket stays `gateway.workers`.
 | `EventHub` | In-process live events |
 | `Authenticate`, `AuthIdentity`, `AuthReject` | Auth callback types |
 | `Authorize`, `AuthFilter` | Authorization hook types |
 
-ApiPi-only HTTP routes are also mounted at `/v1/apipi/` by
-`create_app`. An extender that copies `include_router` calls should
-call `include_ext` from `apipi.api.ext` so those paths exist.
+ApiPi-only HTTP routes live under `/v1/apipi/` (templates, uploads, usage, chat, exports, and presigned downloads). An extender that copies `include_router` calls should include the same routers so those paths exist.
 
-`gateway.routers` names: `sessions`, `agents`, `vaults`,
+`gateway.routers` names: `sessions`, `chat`, `agents`, `vaults`, `files`, `uploads`, `skills`, `templates`,
 `environments`, `usage`, `models`, `workers`, `health`.
 
 Everything else under `apipi` is internal unless a product page says

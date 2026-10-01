@@ -3,7 +3,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from apipi.api.ext import include_ext
 from apipi.config import extend_settings
 from apipi.gateway import Gateway
 from apipi.store.engine import Store, create_engine
@@ -40,16 +39,6 @@ app.include_router(gateway.routers.usage)
 app.include_router(gateway.routers.models)
 app.include_router(gateway.routers.workers)
 app.include_router(gateway.routers.health)
-include_ext(
-    app,
-    [
-        gateway.routers.sessions,
-        gateway.routers.chat,
-        gateway.routers.uploads,
-        gateway.routers.templates,
-        gateway.routers.usage,
-    ],
-)
 
 
 @app.get("/ok")

@@ -67,7 +67,7 @@ async def test_placement_matrix(
         agent_id = await _agent(client, token)
         if kind == "chat":
             created = await client.post(
-                "/v1/chat/sessions",
+                "/v1/apipi/chat/sessions",
                 headers=_auth(token),
                 json={"agent_id": agent_id},
             )
@@ -120,25 +120,27 @@ async def test_chat_facade_does_not_leak_environment(client: AsyncClient) -> Non
     token = "facade"
     agent_id = await _agent(client, token)
     created = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={"agent_id": agent_id, "input": "hello"},
     )
     assert created.status_code == 200
     session_id = created.json()["id"]
-    listed = await client.get("/v1/chat/sessions", headers=_auth(token))
-    got = await client.get(f"/v1/chat/sessions/{session_id}", headers=_auth(token))
+    listed = await client.get("/v1/apipi/chat/sessions", headers=_auth(token))
+    got = await client.get(
+        f"/v1/apipi/chat/sessions/{session_id}", headers=_auth(token)
+    )
     events = await client.get(
-        f"/v1/chat/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/apipi/chat/sessions/{session_id}/events", headers=_auth(token)
     )
     turns = await client.get(
-        f"/v1/chat/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/apipi/chat/sessions/{session_id}/turns", headers=_auth(token)
     )
     items = await client.get(
-        f"/v1/chat/sessions/{session_id}/items", headers=_auth(token)
+        f"/v1/apipi/chat/sessions/{session_id}/items", headers=_auth(token)
     )
     exported = await client.get(
-        f"/v1/chat/sessions/{session_id}/export", headers=_auth(token)
+        f"/v1/apipi/chat/sessions/{session_id}/export", headers=_auth(token)
     )
     for body in (
         created.json(),
@@ -165,7 +167,7 @@ async def test_chat_rejects_computer_and_bash_tools(client: AsyncClient) -> None
     token = "deny"
     agent_id = await _agent(client, token)
     hosted = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={
             "agent_id": agent_id,
@@ -175,7 +177,7 @@ async def test_chat_rejects_computer_and_bash_tools(client: AsyncClient) -> None
     assert hosted.status_code == 400
     assert hosted.json()["error"]["code"] == "unknown_field"
     bash = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={
             "agent": {
@@ -187,7 +189,7 @@ async def test_chat_rejects_computer_and_bash_tools(client: AsyncClient) -> None
     )
     assert bash.status_code == 400
     stdio = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={
             "agent": {
@@ -216,13 +218,13 @@ async def test_chat_create_failed_turn_is_502(settings: Settings, store: Store) 
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         created = await client.post(
-            "/v1/chat/sessions",
+            "/v1/apipi/chat/sessions",
             headers=_auth(token),
             json={"agent": {"model": "test"}, "input": "pong"},
         )
         assert created.status_code == 502
         error = created.json()["error"]
-        assert error["code"] == "model_host_error"
+        assert error["code"] == "upstream_error"
         assert error["detail_code"] == "upstream_error"
         assert error["failure_source"] == "upstream"
         assert error["upstream_status"] is None
@@ -231,7 +233,7 @@ async def test_chat_create_failed_turn_is_502(settings: Settings, store: Store) 
         assert error["message"] == "No model configured for provider"
         assert error["session_id"]
         got = await client.get(
-            f"/v1/chat/sessions/{error['session_id']}",
+            f"/v1/apipi/chat/sessions/{error['session_id']}",
             headers=_auth(token),
         )
         assert got.status_code == 200

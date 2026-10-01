@@ -102,7 +102,7 @@ async def read_file_content(
     )
 
 
-@router.post("/v1/files/{file_id}/download")
+@router.post("/v1/apipi/files/{file_id}/download")
 async def download_file(
     file_id: str,
     request: Request,

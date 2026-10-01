@@ -1,8 +1,7 @@
 # Run modes
 
 Run mode is where Pi and MCP run (`APIPI_RUN_MODE`). Environment
-is a separate choice: where file and shell tools run. A remote runner
-leaves Pi isolation in place. The gateway always stays on the host.
+is a separate choice: where file and shell tools run. Pi and the computer always share one isolation boundary, and there is no split. The gateway always stays on the host.
 Why the modes exist, and what a microVM contains, is in
 [isolation](isolation.md).
 
@@ -20,10 +19,7 @@ succeed before the API listens. `apipi serve --api-only` skips that
 probe so a rootless API host does not need `/dev/kvm`. Sandbox guests
 then belong on `apipi worker`.
 
-When the computer is local (`openai_hosted` or the `hosted` alias), Pi
-and the session files share that isolation boundary. The only supported
-split is `self_hosted`: Pi stays in the run mode, and the runner is
-elsewhere. The customer must sandbox the runner. Tests that do not
+Pi and the computer always share one isolation boundary, and there is no split. Tests that do not
 need a computer can use `environment.type=none`. That environment value
 means “no files.” Isolation `none` means “no sandbox for Pi.” They are
 not the same setting. On `apipi serve --api-only`, Agents sessions with
@@ -195,7 +191,7 @@ and the wrong machine.
 | --- | --- | --- | --- |
 | **Session** | Transcript: events, turns, items, artifact metadata | SQLite for one process; Postgres when the store is shared | Until the session is deleted. A session [export](api.md#export) is the thread. |
 | **Harness session cache** | Pi's conversation file so a new process can continue the thread | Bytes in `APIPI_ARTIFACT_STORE` under the same session prefix as artifacts. The session row holds `pi_session_id`, size, and a full URI (`file://…` locally or `s3://bucket/key` on S3). Not listed on `GET …/artifacts`. | Until the session is deleted. Reloaded into a fresh `/workspace` on the next turn from that URI. |
-| **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. Guest cwd is `/workspace`. `self_hosted`: the runner. `none`: no files. | `openai_hosted` is ephemeral: sandbox TTL (default 1 hour) stops Pi and deletes scratch files, or the session is deleted. Runner files stay on the runner. |
+| **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. Guest cwd is `/workspace`. `none`: no files. | `openai_hosted` is ephemeral: sandbox TTL (default 1 hour) stops Pi and deletes scratch files, or the session is deleted. |
 | **Artifacts** | Named outputs the API can fetch | Metadata in the store. Bytes in `APIPI_ARTIFACT_STORE`: local files under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`, or an S3-compatible bucket with the same key layout. Hosted file and skill bytes use the same backend under `files` and `skills` namespaces. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
 
 `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB) caps one `openai_hosted`
@@ -215,10 +211,8 @@ rehydrates skills, packages, and setup commands into a fresh
 `/workspace`, and reloads the harness session cache so Pi keeps the
 conversation. Published artifact bytes stay in the artifact store;
 they are not copied back into `/workspace`. Isolation `none` reads the session directory on the
-host. `microvm` unpacks onto guest `/workspace`. `self_hosted` reads
-`outputs/` from the runner if it is connected. A crash before publish
-can lose unpublished files. The gateway cannot delete files on a
-remote runner. Existing stores may still list rows whose path starts
+host. `microvm` unpacks onto guest `/workspace`. A crash before publish
+can lose unpublished files. Existing stores may still list rows whose path starts
 with `artifacts/`. Those remain readable. New publishes use
 `outputs/`.
 
@@ -397,8 +391,7 @@ host `apipi worker` unit (`deploy/systemd/apipi-worker.service`). Nested
 microVM inside Docker is a lab setup only.
 
 The API process is public HTTP. Workers connect outbound to
-`/internal/worker`. Do not publish the worker. Tenant `self_hosted`
-runners are a different socket and a different secret.
+`/internal/worker`. Do not publish the worker.
 
 Sandbox backend, guest images, RAM, vCPUs, and TAP egress are in
 [configuration](config.md#sandbox).

@@ -6,7 +6,7 @@ not own per-LLM-call tracing. That stays on the model API.
 
 Postgres is the hot store. `APIPI_USAGE_STORE` is `turns` (default),
 `rollups`, or `off`. Turn log rows may expire (`APIPI_USAGE_RETENTION`,
-default 15 days). Daily tenant rollups stay for `GET /v1/usage?day=`.
+default 15 days). Daily tenant rollups stay for `GET /v1/apipi/usage?day=`.
 Long-term analytics use an optional HTTPS usage export
 (`APIPI_USAGE_EXPORT_URL`) plus any extra `emit` sinks on
 `APIPI_USAGE_SINKS`. Prompt and tool bodies never go in that

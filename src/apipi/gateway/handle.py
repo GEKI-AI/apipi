@@ -11,7 +11,6 @@ from apipi.api.agents import router as agents_router
 from apipi.api.auth import router as auth_router
 from apipi.api.chat import router as chat_router
 from apipi.api.environments import router as environments_router
-from apipi.api.ext import include_ext
 from apipi.api.files import router as files_router
 from apipi.api.health import router as health_router
 from apipi.api.models import router as models_router
@@ -23,7 +22,6 @@ from apipi.api.usage import router as usage_router
 from apipi.api.vaults import router as vaults_router
 from apipi.api.workers import router as workers_router
 from apipi.config import VAULT_MASTER_KEY_UNSET, Settings, load_settings
-from apipi.env.hub import EnvironmentHub
 from apipi.gateway.auth import (
     AuthCache,
     Authenticate,
@@ -101,7 +99,6 @@ class Gateway:
         store: Store,
         store_owned: bool,
         event_hub: EventHub,
-        env_hub: EnvironmentHub,
         execution: LocalExecution | RemoteExecution,
         workers: WorkerHub,
         authenticate: Authenticate,
@@ -117,7 +114,6 @@ class Gateway:
         self.settings = settings
         self.store = store
         self.event_hub = event_hub
-        self.env_hub = env_hub
         self.execution = execution
         self.workers = workers
         self.authenticate = authenticate
@@ -136,7 +132,6 @@ class Gateway:
             settings=settings,
             store=store,
             event_hub=event_hub,
-            env_hub=env_hub,
             execution=execution,
             blobs=blobs,
             files=self.files,
@@ -225,7 +220,6 @@ class Gateway:
         isolation = load_isolation(resolved.run_mode)
         resolved_harness = harness if harness is not None else PiHarness(resolved_pool)
         hub = event_hub if event_hub is not None else EventHub()
-        env_hub = EnvironmentHub()
         resolved_objects = objects if objects is not None else object_store(resolved)
         resolved_blobs = (
             blobs if blobs is not None else ArtifactAdapter(resolved_objects)
@@ -261,7 +255,6 @@ class Gateway:
                 harness=resolved_harness,
                 isolation=isolation,
                 hub=hub,
-                env_hub=env_hub,
                 store=resolved_store,
                 blobs=resolved_blobs,
                 objects=resolved_objects,
@@ -281,7 +274,6 @@ class Gateway:
             store=resolved_store,
             store_owned=store_owned,
             event_hub=hub,
-            env_hub=env_hub,
             execution=resolved_execution,
             workers=resolved_workers,
             authenticate=auth,
@@ -335,7 +327,6 @@ class Gateway:
         app.state.usage_sinks = self._usage_sinks
         app.state.payload_sinks = self._payload_sinks
         app.state.event_hub = self.event_hub
-        app.state.env_hub = self.env_hub
         app.state.pi_pool = self.pool
         app.state.harness = self.harness
         app.state.execution = self.execution
@@ -432,16 +423,6 @@ def create_app(
     app.include_router(gateway.routers.models)
     app.include_router(gateway.routers.workers)
     app.include_router(gateway.routers.health)
-    include_ext(
-        app,
-        [
-            gateway.routers.sessions,
-            gateway.routers.chat,
-            gateway.routers.uploads,
-            gateway.routers.templates,
-            gateway.routers.usage,
-        ],
-    )
     if isinstance(gateway.metrics, Metrics):
         mount_metrics(app, gateway.metrics)
     return app

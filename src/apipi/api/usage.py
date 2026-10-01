@@ -14,7 +14,7 @@ def _usage(request: Request) -> Any:
     return request.app.state.gateway.usage
 
 
-@router.get("/v1/usage")
+@router.get("/v1/apipi/usage")
 async def get_usage(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],

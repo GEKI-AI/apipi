@@ -247,20 +247,20 @@ async def test_compat_environment_none(client: AsyncClient) -> None:
     assert created["status"] == "idle"
 
 
-async def test_compat_environment_self_hosted(client: AsyncClient) -> None:
+async def test_compat_environment_self_hosted_not_supported(
+    client: AsyncClient,
+) -> None:
     token = "compat-self"
     agent_id = await _agent(client, token)
-    created = await _session(
-        client, token, agent_id=agent_id, environment={"type": "self_hosted"}
+    response = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent_id, "environment": {"type": "self_hosted"}},
     )
-    assert created["environment"]["type"] == "self_hosted"
-    env_id = created["environment_id"]
-    assert env_id == created["environment"]["id"]
-    uuid.UUID(env_id)
-    assert isinstance(created["key"], str) and created["key"]
-    assert created["required_actions"] == [
-        {"type": "environment_connection", "environment_id": env_id}
-    ]
+    assert response.status_code == 400
+    error = _error(response)
+    assert error["type"] == "not_implemented"
+    assert "self_hosted" in str(error["message"])
 
 
 async def test_compat_function_tools(settings: Settings, store: Store) -> None:
@@ -422,7 +422,7 @@ async def test_compat_session_export(client: AsyncClient) -> None:
     )
     session_id = created["id"]
     exported = await client.get(
-        f"/v1/agents/sessions/{session_id}/export", headers=_auth(token)
+        f"/v1/apipi/sessions/{session_id}/export", headers=_auth(token)
     )
     assert exported.status_code == 200
     body = exported.json()

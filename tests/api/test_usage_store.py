@@ -95,7 +95,7 @@ async def test_usage_store_off_writes_no_rows(
         day = utc_now().date()
         assert (await usage_day(db, tenant_id, day))["turns"] == 0
     usage = await off_client.get(
-        "/v1/usage", headers=_auth(token), params={"session_id": session_id}
+        "/v1/apipi/usage", headers=_auth(token), params={"session_id": session_id}
     )
     assert usage.status_code == 200
     assert usage.json()["turns"] == 0
@@ -118,12 +118,12 @@ async def test_usage_store_rollups_skips_turn_rows(
         assert (await usage_day(db, tenant_id, day))["turns"] == 1
     day = utc_now().date().isoformat()
     usage = await rollup_client.get(
-        "/v1/usage", headers=_auth(token), params={"day": day}
+        "/v1/apipi/usage", headers=_auth(token), params={"day": day}
     )
     assert usage.status_code == 200
     assert usage.json()["turns"] == 1
     turn_usage = await rollup_client.get(
-        "/v1/usage", headers=_auth(token), params={"turn_id": str(turn_id)}
+        "/v1/apipi/usage", headers=_auth(token), params={"turn_id": str(turn_id)}
     )
     assert turn_usage.status_code == 200
     assert turn_usage.json()["turns"] == 0

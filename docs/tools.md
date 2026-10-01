@@ -2,7 +2,7 @@
 
 The base tools are Pi's four: read, write, edit, and bash. Those exist
 when the session has a computer (`openai_hosted` or a connected
-`self_hosted` runner). They do not exist when `environment.type` is
+host computer). They do not exist when `environment.type` is
 `none`. Everything else is attached per agent: function tools, MCP
 servers, and skills.
 

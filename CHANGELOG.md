@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- `environment.type=self_hosted` is not supported for now. Session create, agent `session_defaults`, and template import with that type return `400` with type `not_implemented` and the message `environment type self_hosted is not supported`. The runner WebSocket (`/v1/environments/{environment_id}`), `EnvironmentHub`, runner client (`examples/self_hosted_runner.py`), `APIPI_SANDBOX_TTL_SELF_HOSTED` / `[sandbox.ttl].self_hosted`, and the `self_hosted` prompt fragments are removed. `GET /v1/agents/environments/{id}` stays for hosted computers. The type may come back later on worker protocol v2. Use `openai_hosted` as the workaround.
+- Old route aliases outside `/v1/apipi` are removed and return `404`. Routers now serve directly under `/v1/apipi/...`. Migrate:
+  - `GET /v1/usage` -> `GET /v1/apipi/usage`
+  - `POST /v1/templates`, `POST /v1/templates/import`, `GET /v1/templates`, `GET /v1/templates/{id}`, `GET /v1/templates/{id}/download`, `DELETE /v1/templates/{id}`, `POST /v1/templates/{id}/agents` -> the same paths under `/v1/apipi/templates/...`
+  - `POST /v1/uploads`, `POST /v1/uploads/{id}/complete` -> `POST /v1/apipi/uploads`, `POST /v1/apipi/uploads/{id}/complete`
+  - `/v1/chat/sessions...` -> `/v1/apipi/chat/sessions...` (the `/v1/apipi/chat` routes themselves are unchanged)
+  - `GET /v1/agents/{id}/export` -> `GET /v1/apipi/agents/{id}/export`
+  - `GET /v1/agents/sessions/{id}/export` -> `GET /v1/apipi/sessions/{id}/export`
+  - `POST /v1/agents/sessions/{id}/artifacts/{artifact_id}/download` -> `POST /v1/apipi/sessions/{id}/artifacts/{artifact_id}/download`
+  - `POST /v1/files/{id}/download` -> `POST /v1/apipi/files/{id}/download`
+  - `POST /v1/skills/{id}/download` -> `POST /v1/apipi/skills/{id}/download`
 - Agent versions and snapshots are removed. The versions routes
   (`/v1/apipi/agents/{id}/versions`, including create, list, get,
   restore, and delete) are gone and return `404`, and
@@ -34,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Agent sessions rebuild the server list from the live agent at every
   turn, so agent edits apply to the next turn without recreating the
   session.
+- `APIPI_ERROR_CODES` now defaults to `specific`. `agent.session.error` and the non-stream `502` body carry the specific failure code in `code` (copied in `detail_code`), with `legacy_code` still `model_host_error` on upstream failures. Set `APIPI_ERROR_CODES=legacy` to keep `model_host_error` in `code` for one release. Clients that match `model_host_error` on `agent.session.error` or the `502` body should match the specific code (or `detail_code`) instead.
 
 ### Security
 

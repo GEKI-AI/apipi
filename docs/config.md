@@ -61,14 +61,13 @@ hosted files and skills).
 | `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
 | `APIPI_LOG_FORMAT` | `log_format` | `json` | `json` (one object per line on stderr) or `text` (laptop). |
-| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Idle timer for `none` and `self_hosted` sessions. Kills Pi to free RAM. Hosted computers use the sandbox TTL instead. This follows environment type, not `APIPI_RUN_MODE`. The process that holds Pi runs the timer: combined `apipi serve`, or `apipi worker` in a split deploy. An agent or session `idle_ttl` overrides it. |
+| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Idle timer for `none` sessions. Kills Pi to free RAM. Hosted computers use the sandbox TTL instead. This follows environment type, not `APIPI_RUN_MODE`. The process that holds Pi runs the timer: combined `apipi serve`, or `apipi worker` in a split deploy. An agent or session `idle_ttl` overrides it. |
 | `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | `[sandbox.ttl].openai_hosted` | `1h` | Idle timer for an `openai_hosted` computer. One timer stops Pi and deletes the workspace together. There is no separate guest timeout. Transcript and published artifacts stay. `0` turns the timer off. `APIPI_WORKSPACE_TTL` / `workspace_ttl` is an alias. An agent or session `idle_ttl` overrides it. |
-| `APIPI_SANDBOX_TTL_SELF_HOSTED` | `[sandbox.ttl].self_hosted` | `0` (off) | Not used by the Pi idle reap. `self_hosted` Pi uses `APIPI_IDLE_TTL` (or an agent or session override). The gateway cannot delete files on the runner. `0` means off. |
 | `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. Workers advertise this as `capacity`. |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | `max_sessions_per_tenant` | `32` | Live Pi processes for one tenant. A new turn that would pass the cap returns `429` with code `capacity_tenant`. The node cap still applies. |
 | `APIPI_WORKER_MEMORY_MB` | `worker_memory_mb` | `max_sessions × mem_mib` (16384 at defaults) | RAM budget this worker (or combined node) will run, in MiB. Sum of guest `mem_mib` for live leases must stay under this. Set it to usable host RAM minus OS and worker reserve. Do not read `/proc/meminfo` automatically. |
 | `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Fail a stuck turn with code `turn_timeout`. This is not a user cancel. |
-| `APIPI_ERROR_CODES` | `error_codes` | `legacy` | `legacy` or `specific`. `legacy` keeps `model_host_error` on `agent.session.error` and the non-stream `502` body for upstream failures. The specific code is `detail_code`. `specific` puts that code in `code` now. `turn.failed`, logs, and usage always use the specific code. See [failure codes](errors.md). |
+| `APIPI_ERROR_CODES` | `error_codes` | `specific` | `specific` or `legacy`. `specific` puts the specific code in `code` on `agent.session.error` and the non-stream `502` body for upstream failures. `legacy` keeps `model_host_error` there for one release. The specific code is always `detail_code`, and `legacy_code` is still `model_host_error` on those failures. `turn.failed`, logs, and usage always use the specific code. See [failure codes](errors.md). |
 | `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. The callback may return a typed reject (`401` or `429`). |
 | `APIPI_WORKER_TOKEN` | `worker_token` | unset | Shared secret for `apipi worker` connections. Compared in memory. Not a tenant key and not stored in the database. Unset rejects the worker socket. Put this in the process environment. See [workers](workers.md). |
 | `APIPI_VAULT_MASTER_KEY` | `vault_master_key` | local default | 32-byte AES-256-GCM key for MCP vault tokens at rest (standard or urlsafe base64, or 64-char hex). Unset uses a local default so laptop try-outs keep working, and logs a warning. Production must set a real key from the deploy secret store. Never commit it. `apipi migrate` rewrites leftover plaintext rows to ciphertext. Generate with `python -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"`. |
@@ -190,11 +189,11 @@ guests. A new turn that would pass either node cap returns `429` with
 code `capacity`. The session row in Postgres can outlive the process;
 idle TTL kills the process and frees a slot. In a split deploy the
 worker runs that reap, not the API. The timer is chosen by environment
-type, not by run mode. `none` and `self_hosted` use `APIPI_IDLE_TTL`.
+type, not by run mode. `none` uses `APIPI_IDLE_TTL`.
 `openai_hosted` uses the sandbox TTL, and that one timer covers Pi and
 the guest together. A session `idle_ttl`, then the agent `idle_ttl`,
 then that default. `0` on an override turns the timer off for that
-session. `APIPI_SANDBOX_TTL_SELF_HOSTED` does not kill Pi.
+session.
 
 | Failure | HTTP or event | Code |
 | --- | --- | --- |
@@ -209,13 +208,13 @@ session. `APIPI_SANDBOX_TTL_SELF_HOSTED` does not kill Pi.
 | Unknown model on agent create or edit | `400` | `model_not_found` |
 | Model list unreachable on agent write, including `404` | `400` | `model_host_unreachable` |
 | Model host rejects the key on agent write (`401` or `403`) | `401` | `model_host_unauthorized` |
-| Host rejects the model during a turn | `agent.session.turn.failed` | specific upstream code (`model_host_error` on `agent.session.error` while `APIPI_ERROR_CODES=legacy`) |
+| Host rejects the model during a turn | `agent.session.turn.failed` | specific upstream code (also on `agent.session.error`; `model_host_error` there only while `APIPI_ERROR_CODES=legacy`) |
 
 The gateway does not intercept every write inside a guest. Guest tmpfs
 is already bounded by `[sandbox.resources].mem_mib`. Workspace and
 artifact caps are enforced when the host unpacks or publishes. Host
 files that are already on disk stay until workspace TTL.
-`self_hosted` runner disk is not capped; bytes published onto the
+Bytes published onto the
 gateway still count toward `max_artifact_bytes`.
 
 Artifact metadata stays in Postgres. Bytes default to local files.
@@ -235,7 +234,7 @@ AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 ```
 
-Presigned uploads (`POST /v1/uploads`) send bytes straight to the bucket.
+Presigned uploads (`POST /v1/apipi/uploads`) send bytes straight to the bucket.
 The browser never holds the ApiPi API key. Virtual-hosted URLs match
 Hetzner (`https://bucket.hel1.your-objectstorage.com/…`). Set a CORS
 rule on the bucket that allows `PUT`, `GET`, and `HEAD` from your SPA
@@ -308,10 +307,11 @@ ApiPi classifies Pi's `errorMessage` into a specific code, a
 `retryable`. The parser matches the pinned Pi version and is
 best-effort: Pi does not send the HTTP status as a field. A secret in
 the message is still masked. `agent.session.turn.failed` carries the
-specific code. In this release `agent.session.error` and the
-non-stream `502` body keep `model_host_error` for upstream failures,
-with the specific code in `detail_code`. Set `APIPI_ERROR_CODES=specific`
-to opt in early. The session returns to `idle`, so a follow-up message
+specific code. `agent.session.error` and the
+non-stream `502` body carry that specific code in `code` (and in
+`detail_code`), with `legacy_code` still `model_host_error` on upstream
+failures. Set `APIPI_ERROR_CODES=legacy` to keep the old
+`model_host_error` in `code` for one release. The session returns to `idle`, so a follow-up message
 can try again. An artifact-store failure during the turn uses
 `artifact_store` and `failure_source` `internal`. A Pi process that
 exits before the turn settles is `pi_exited`. A host Pi killed for
@@ -472,7 +472,7 @@ both identity files when the per-type identity env is unset.
 The extension replaces only Pi's intro line, `You are an expert coding
 assistant operating inside pi`. The rest of Pi's prompt stays. If that
 line is missing, Pi's prompt is kept and a log line is written.
-Computer sessions (`openai_hosted`, `hosted`, and `self_hosted`) use
+Computer sessions (`openai_hosted` and `hosted`) use
 `identity-computer.txt`: `You are a ${platform_name} agent running in a
 sandbox using Pi as your harness.` Chat and `environment.type` `none`
 use `identity-none.txt`, the same line without `running in a sandbox`.
@@ -488,9 +488,7 @@ A missing file is probably a sandbox restart. `outputs/` is for
 artifacts. Those files are collected after each turn and shared with
 the user. The copy in the sandbox is removed on restart. The agent
 should put a file there only when the user asked for it, or when it
-explicitly wants to share it. A self-hosted computer is told that the
-working directory is the runner's files, and the same `outputs/`
-rules. It is not told that a restart deletes those files. Chat and
+explicitly wants to share it. Chat and
 `environment.type` `none` are told there is no computer and no file or
 shell tools. They are not told about `/workspace`, sandbox size, or a
 browser.
@@ -499,7 +497,7 @@ browser.
 | --- | --- |
 | No-computer main prompt | Chat, or `environment.type` is `none` or omitted. No `/workspace`, size, or browser text. |
 | Hosted main prompt | `openai_hosted` (and the `hosted` alias) and not chat. Names `/workspace`, an idle stop with no duration, `inputs/`, and `outputs/`. |
-| Self-hosted main prompt | `self_hosted` and not chat. Names the runner's files and `outputs/`. Does not mention `/workspace` or a sandbox wipe. |
+
 | Operator main prompt | `APIPI_PLATFORM_PROMPT` is set. Replaces the built-in main block. `""` drops it. |
 | Additional platform text | `APIPI_PLATFORM_PROMPT_ADDITIONAL` is non-empty. Always, after the main block. |
 | Size | Hosted microvm only, and only when the size fragment is overridden. The built-in capability line names the image, RAM, and vCPUs. It does not claim a browser unless the image is `browser`. |
@@ -679,7 +677,6 @@ egress_mbit = 50
 ```toml
 [sandbox.ttl]
 openai_hosted = "1h"
-self_hosted = "0"
 ```
 
 ## Dev and production files
@@ -746,7 +743,6 @@ egress_mbit = 50
 
 [sandbox.ttl]
 openai_hosted = "1h"
-self_hosted = "0"
 
 [placement]
 env_none = "chat"

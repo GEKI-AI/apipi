@@ -50,7 +50,7 @@ def _public(body: dict[str, Any]) -> dict[str, Any]:
     return chat_session_body(body)
 
 
-@router.post("/v1/chat/sessions")
+@router.post("/v1/apipi/chat/sessions")
 async def create_chat_session(
     body: ChatSessionCreate,
     request: Request,
@@ -96,7 +96,7 @@ async def create_chat_session(
     return chat_session_body(payload)
 
 
-@router.get("/v1/chat/sessions")
+@router.get("/v1/apipi/chat/sessions")
 async def list_chat_sessions(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
@@ -123,7 +123,7 @@ async def list_chat_sessions(
     }
 
 
-@router.get("/v1/chat/sessions/{session_id}")
+@router.get("/v1/apipi/chat/sessions/{session_id}")
 async def read_chat_session(
     session_id: uuid.UUID,
     request: Request,
@@ -139,7 +139,7 @@ async def read_chat_session(
     )
 
 
-@router.post("/v1/chat/sessions/{session_id}")
+@router.post("/v1/apipi/chat/sessions/{session_id}")
 async def update_chat_session(
     session_id: uuid.UUID,
     body: SessionUpdate,
@@ -159,7 +159,7 @@ async def update_chat_session(
     )
 
 
-@router.delete("/v1/chat/sessions/{session_id}")
+@router.delete("/v1/apipi/chat/sessions/{session_id}")
 async def delete_chat_session(
     session_id: uuid.UUID,
     request: Request,
@@ -173,7 +173,7 @@ async def delete_chat_session(
     return await sessions.delete(tenant.id, session_id, user_id=_user_id(request))
 
 
-@router.post("/v1/chat/sessions/{session_id}/events")
+@router.post("/v1/apipi/chat/sessions/{session_id}/events")
 async def post_chat_session_event(
     session_id: uuid.UUID,
     body: SessionEventBody,
@@ -204,7 +204,7 @@ async def post_chat_session_event(
     )
 
 
-@router.get("/v1/chat/sessions/{session_id}/events")
+@router.get("/v1/apipi/chat/sessions/{session_id}/events")
 async def get_chat_session_events(
     session_id: uuid.UUID,
     request: Request,
@@ -226,7 +226,7 @@ async def get_chat_session_events(
     )
 
 
-@router.get("/v1/chat/sessions/{session_id}/export")
+@router.get("/v1/apipi/chat/sessions/{session_id}/export")
 async def export_chat_session(
     session_id: uuid.UUID,
     request: Request,
@@ -240,7 +240,7 @@ async def export_chat_session(
     return await sessions.export(tenant.id, session_id, user_id=_user_id(request))
 
 
-@router.get("/v1/chat/sessions/{session_id}/turns")
+@router.get("/v1/apipi/chat/sessions/{session_id}/turns")
 async def list_chat_session_turns(
     session_id: uuid.UUID,
     request: Request,
@@ -254,7 +254,7 @@ async def list_chat_session_turns(
     return await sessions.list_turns(tenant.id, session_id, user_id=_user_id(request))
 
 
-@router.get("/v1/chat/sessions/{session_id}/turns/{turn_id}")
+@router.get("/v1/apipi/chat/sessions/{session_id}/turns/{turn_id}")
 async def read_chat_session_turn(
     session_id: uuid.UUID,
     turn_id: uuid.UUID,
@@ -271,7 +271,7 @@ async def read_chat_session_turn(
     )
 
 
-@router.get("/v1/chat/sessions/{session_id}/items")
+@router.get("/v1/apipi/chat/sessions/{session_id}/items")
 async def list_chat_session_items(
     session_id: uuid.UUID,
     request: Request,

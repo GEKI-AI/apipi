@@ -194,16 +194,16 @@ stays `404`; the hook runs only for resources that exist.
 | Action | Routes (resource type → id) |
 |---|---|
 | `agent.read` | `GET /v1/agents/{id}`, `GET /v1/apipi/agents/{id}/export` (agent) |
-| `agent.write` | `POST /v1/agents` (id `None`), `POST`/`DELETE /v1/agents/{id}`, `POST /v1/templates/{id}/agents` (agent) |
+| `agent.write` | `POST /v1/agents` (id `None`), `POST`/`DELETE /v1/agents/{id}`, `POST /v1/apipi/templates/{id}/agents` (agent) |
 | `agent.list` | `GET /v1/agents` (list → `AuthFilter`) |
 | `agent.run` | `POST /v1/agents/sessions`, `POST /v1/agents/sessions/{id}`, `DELETE …/sessions/{id}`, `POST …/sessions/{id}/events`, artifact delete (agent of the session) |
 | `session.read` | `GET …/sessions/{id}`, `…/events`, `…/turns[/{t}]`, `…/items`, `…/export`, `…/artifacts[...]` (resource type `agent`, agent of the session) |
 | `session.list` | `GET /v1/agents/sessions` (list → `AuthFilter` on agent ids) |
 | `vault.read` / `vault.write` / `vault.list` | `/v1/agents/vaults[/{id}]` and `…/credentials[...]` (vault) |
-| `file.read` / `file.write` / `file.list` | `/v1/files[...]`, `/v1/uploads[...]` (file; `None` on create) |
+| `file.read` / `file.write` / `file.list` | `/v1/files[...]`, `/v1/apipi/uploads[...]` (file; `None` on create) |
 | `skill.read` / `skill.write` / `skill.list` | `/v1/skills[...]` (skill) |
-| `template.read` / `template.write` / `template.list` | `/v1/templates[...]` (template) |
-| `usage.read` | `GET /v1/usage`, `GET /v1/apipi/usage` |
+| `template.read` / `template.write` / `template.list` | `/v1/apipi/templates[...]` (template) |
+| `usage.read` | `GET /v1/apipi/usage` |
 | `auth.invalidate` | `POST /v1/apipi/auth/invalidate` |
 
 Chat routes map to the same `agent.run`, `session.read` and

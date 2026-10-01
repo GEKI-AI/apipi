@@ -109,16 +109,6 @@ def test_hosted_prompt_names_workspace_not_size_on_none() -> None:
     assert "Playwright" not in text
 
 
-def test_self_hosted_prompt_names_runner_files() -> None:
-    text = compose_instructions(_settings(), None, env_type="self_hosted")
-    assert text == _main("self_hosted")
-    assert text is not None
-    assert "runner's files" in text
-    assert "/workspace" not in text
-    assert "idle time" not in text
-    assert "15m" not in text
-
-
 def test_microvm_size_hint_is_ram_only() -> None:
     text = sandbox_size_hint("L", 2048)
     assert text == "Sandbox size is L (2048 MiB)."

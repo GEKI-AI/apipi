@@ -24,7 +24,7 @@ Pi (OpenAI's field name for a folder on your machine).
 | --- | --- |
 | Agents, sessions, events, artifacts | An OpenAI-compatible model URL |
 | Function tools, MCP, skills | A bearer the gateway maps to a tenant |
-| A local directory or a `self_hosted` runner | Pi on `PATH` for live turns |
+| A local directory | Pi on `PATH` for live turns |
 
 ## Quickstart
 

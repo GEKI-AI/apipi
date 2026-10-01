@@ -3,7 +3,6 @@ from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
 
-from apipi.env.computer import Computer
 from apipi.mcp.http import McpHttpServer
 from apipi.services.failures import failure_for, pi_payload
 from apipi.worker.pi.map import ThinkingTracker, map_pi_event
@@ -23,7 +22,6 @@ class PiHarness:
         tools: bool = True,
         mcp_http: list[McpHttpServer] | None = None,
         skill_dirs: list[str] | None = None,
-        computer: Computer | None = None,
         tenant_id: uuid.UUID | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
@@ -69,7 +67,7 @@ class PiHarness:
         proc = await self.pool.get(
             session_id,
             cwd=cwd,
-            tools=False if computer is not None else tools,
+            tools=tools,
             mcp_http=mcp_http,
             skill_dirs=skill_dirs,
             tenant_id=tenant_id,

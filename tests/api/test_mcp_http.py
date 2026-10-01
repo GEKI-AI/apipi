@@ -114,7 +114,7 @@ async def test_mcp_http_on_chat_session(
         headers={"Authorization": "Bearer static-secret"},
     )
     created = await mcp_client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={"agent_id": agent_id, "input": "hello"},
     )

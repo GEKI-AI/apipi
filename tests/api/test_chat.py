@@ -21,7 +21,7 @@ async def test_chat_create_hides_environment(client: AsyncClient) -> None:
     token = _token()
     agent_id = await _agent_id(client, token)
     created = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={"agent_id": agent_id, "input": "hello"},
     )
@@ -31,17 +31,19 @@ async def test_chat_create_hides_environment(client: AsyncClient) -> None:
     assert body["metadata"]["apipi.session_kind"] == "chat"
     assert body["status"] == "idle"
     session_id = body["id"]
-    got = await client.get(f"/v1/chat/sessions/{session_id}", headers=_auth(token))
+    got = await client.get(
+        f"/v1/apipi/chat/sessions/{session_id}", headers=_auth(token)
+    )
     assert got.status_code == 200
     assert "environment" not in got.json()
     events = await client.get(
-        f"/v1/chat/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/apipi/chat/sessions/{session_id}/events", headers=_auth(token)
     )
     assert events.status_code == 200
     types = [event["type"] for event in events.json()["data"]]
     assert "agent.session.created" in types
     turns = await client.get(
-        f"/v1/chat/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/apipi/chat/sessions/{session_id}/turns", headers=_auth(token)
     )
     assert turns.status_code == 200
     assert turns.json()["data"]
@@ -51,7 +53,7 @@ async def test_chat_rejects_environment_field(client: AsyncClient) -> None:
     token = _token()
     agent_id = await _agent_id(client, token)
     created = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={
             "agent_id": agent_id,
@@ -72,19 +74,19 @@ async def test_chat_list_skips_agent_sessions(client: AsyncClient) -> None:
     )
     assert hosted.status_code == 200
     chat = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={"agent_id": agent_id},
     )
     assert chat.status_code == 200
-    listed = await client.get("/v1/chat/sessions", headers=_auth(token))
+    listed = await client.get("/v1/apipi/chat/sessions", headers=_auth(token))
     assert listed.status_code == 200
     ids = [row["id"] for row in listed.json()["data"]]
     assert chat.json()["id"] in ids
     assert hosted.json()["id"] not in ids
     assert all("environment" not in row for row in listed.json()["data"])
     missing = await client.get(
-        f"/v1/chat/sessions/{hosted.json()['id']}", headers=_auth(token)
+        f"/v1/apipi/chat/sessions/{hosted.json()['id']}", headers=_auth(token)
     )
     assert missing.status_code == 404
 
@@ -93,19 +95,19 @@ async def test_chat_events_and_export(client: AsyncClient) -> None:
     token = _token()
     agent_id = await _agent_id(client, token)
     created = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={"agent_id": agent_id},
     )
     session_id = created.json()["id"]
     posted = await client.post(
-        f"/v1/chat/sessions/{session_id}/events",
+        f"/v1/apipi/chat/sessions/{session_id}/events",
         headers=_auth(token),
         json={"type": "agent.session.input.message", "content": "hi"},
     )
     assert posted.status_code == 200
     exported = await client.get(
-        f"/v1/chat/sessions/{session_id}/export", headers=_auth(token)
+        f"/v1/apipi/chat/sessions/{session_id}/export", headers=_auth(token)
     )
     assert exported.status_code == 200
     assert "events" in exported.json()
@@ -128,7 +130,7 @@ _FN = {"type": "function", "name": "echo", "parameters": {"type": "object"}}
 async def test_chat_allows_function_tools(client: AsyncClient) -> None:
     token = _token()
     created = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={"agent": {"name": "bot", "model": "test", "tools": [_FN]}},
     )
@@ -139,7 +141,7 @@ async def test_chat_allows_function_tools(client: AsyncClient) -> None:
 async def test_chat_rejects_stdio_mcp(client: AsyncClient) -> None:
     token = _token()
     created = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={"agent": {"name": "bot", "model": "test", "tools": [_STDIO]}},
     )

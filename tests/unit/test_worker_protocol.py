@@ -1,11 +1,8 @@
-from apipi.env.hub import VERBS
 from apipi.worker.hub import COMMAND_OPS, WORKER_IN, worker_ws_url
 
 
-def test_worker_protocol_is_not_self_hosted() -> None:
-    assert COMMAND_OPS.isdisjoint(VERBS)
+def test_worker_protocol_commands() -> None:
     assert "hello" not in WORKER_IN
-    assert "/v1/environments/" not in "/internal/worker"
     assert {
         "turn.start",
         "turn.cancel",

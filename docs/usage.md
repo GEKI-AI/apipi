@@ -12,7 +12,7 @@ into ApiPi Postgres is rejected at startup. Payload bodies, if you
 need them, go to an optional external HTTPS export.
 
 Postgres is the **hot** store: recent turns and daily rollups for
-quotas and `GET /v1/usage`. Long-term analytics go through an optional
+quotas and `GET /v1/apipi/usage`. Long-term analytics go through an optional
 HTTPS usage export. Prometheus and OpenTelemetry traces are local
 exports of the same non-text facts. How operators collect those
 signals is in [observability](observability.md).
@@ -48,7 +48,7 @@ not a substitute for provider billing traces.
 
 `APIPI_USAGE_RETENTION` (default `15d`) deletes **turn log** rows older
 than that. Empty means no purge. Rollups are not purged; one row per
-tenant per UTC day stays small. After turn rows expire, `GET /v1/usage`
+tenant per UTC day stays small. After turn rows expire, `GET /v1/apipi/usage`
 by `session_id` or `turn_id` only sees what is still hot. `day` still
 reads the rollup.
 
@@ -81,7 +81,7 @@ on, POSTs the full object.
 | `tool_counts` | Calls per function tool |
 | `mcp_names` | MCP server labels used |
 | `mcp_counts` | Calls per MCP server |
-| `environment_type` | `none` \| `openai_hosted` \| `self_hosted` |
+| `environment_type` | `none` \| `openai_hosted` |
 | `run_mode` | `none` \| `chat` \| `microvm` \| custom backend `name` |
 | `instance_id` | Process name, if set |
 | `artifact_bytes` | Bytes published this turn |
@@ -100,7 +100,7 @@ Join warehouse rows with `tenant_id`, `user_id`, `agent_id`,
 `session_id`, `turn_id`, and `request_id`. Prometheus labels stay
 low-cardinality: `tenant` is allowed; `user_id` and `session_id` are
 not Prometheus labels. Per-user and per-agent totals come from the
-HTTPS usage export (or extra sinks), not from `GET /v1/usage`. That
+HTTPS usage export (or extra sinks), not from `GET /v1/apipi/usage`. That
 query is tenant-scoped session, turn, or day rollups only.
 
 ## Request ids
@@ -148,7 +148,7 @@ The numbers come from whatever hot data the store still has.
 
 | Method | Path |
 | --- | --- |
-| `GET` | `/v1/usage` |
+| `GET` | `/v1/apipi/usage` |
 
 Query params (exactly one of):
 

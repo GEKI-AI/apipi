@@ -31,11 +31,7 @@ guest to named public hosts.
 protects the host from a hostile session (hardware virt). Still not a
 full QEMU PC.
 
-When the computer is local (`openai_hosted` or the `hosted` alias), Pi
-and the session files share one guest (or the host process in `none`).
-Do not split them. The only supported split is `self_hosted`: Pi stays
-in the run mode, and the runner is elsewhere. The customer must
-sandbox the runner.
+Pi and the computer always share one isolation boundary, and there is no split.
 
 Production is systemd on the host. Docker Compose starts Postgres
 only. Nested microvm inside a container is not the production path.
@@ -60,7 +56,6 @@ a local folder, not OpenAI's cloud. `hosted` is an alias for the same
 folder.
 
 `environment.type=none` turns file tools off. Isolation `none` is the
-un-sandboxed Pi process. `self_hosted` puts the computer on a runner
-you attach. Remote works with every run mode.
+un-sandboxed Pi process.
 
 Operator install, systemd, and storage are in [run modes](../../docs/run-modes.md).

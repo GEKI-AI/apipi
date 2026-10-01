@@ -43,7 +43,7 @@ requires the mode it asked for.
 | `tests/e2e/test_metrics_scrape.py` | `e2e` | `/metrics` scrape | yes |
 | `tests/e2e/test_pi_live.py` | `slow` | `pi` is on `PATH` | no |
 | `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against FakeHarness | no |
-| `tests/support/` | — | FakeHarness helpers, fake Pi, fake runner. Not a suite | — |
+| `tests/support/` | — | FakeHarness helpers, fake Pi, fake worker. Not a suite | — |
 
 GitHub runs `pytest -m "not slow"`. That is unit, API, and `e2e`.
 Microvm tests skip if KVM, Firecracker, images, or net tools cannot
@@ -141,7 +141,7 @@ The suite starts one `apipi serve --api-only` process and one
 `apipi worker` with `APIPI_RUN_MODE=microvm`, then runs every script in
 `examples/sessions/` (write-and-run `tree.py`, inject-and-sort a file,
 size `L` browser screenshot). The playground and
-`examples/self_hosted_runner.py` are separate; they are not in this
+Session examples are separate; they are not in this
 script.
 
 ### Requirements

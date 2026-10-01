@@ -18,7 +18,6 @@ runs, and where files run.
       Pi  (+ MCP)           none | microvm
            |
            +-- local files        next to Pi (/workspace in a guest)
-           +-- or remote env      self_hosted runner
            +-- HTTP MCP           e.g. Tavily
            +-- model host         OPENAI_BASE_URL
 ```
@@ -41,7 +40,7 @@ Two knobs:
 | **Run mode** | Where Pi and MCP run (`APIPI_RUN_MODE`) |
 | **Environment** | Where file and shell tools run (`environment.type`) |
 
-They combine. `self_hosted` does not replace a microVM around Pi. The
+Pi and the computer always share one isolation boundary, and there is no split. The
 API stays on the host.
 
 Agents, sessions, the computer, and artifacts below are the pieces the
@@ -103,7 +102,7 @@ starts the first turn. Follow-up messages go to
 `POST /v1/agents/sessions/{session_id}/events`. Status is `idle`,
 `in_progress`, `requires_action`, or `failed`.
 
-When a `none` or `self_hosted` session is idle for `APIPI_IDLE_TTL`
+When a `none` session is idle for `APIPI_IDLE_TTL`
 (default 15 minutes), the process that holds Pi kills it to free RAM.
 That follows the environment type, not the run mode. Combined
 `apipi serve` does that in-process. In a split deploy, `apipi worker`
@@ -116,7 +115,7 @@ The session row stays. The next message starts
 Pi again, rebuilds `/workspace` from stored config (skills, packages,
 setup commands), reloads the cached harness session file so the model
 keeps the conversation, and continues the event log.
-`GET /v1/agents/sessions/{id}/export` returns the transcript as JSON.
+`GET /v1/apipi/sessions/{id}/export` returns the transcript as JSON.
 A session export is enough to leave.
 
 `DELETE` removes the session for that tenant, including the workspace
@@ -132,7 +131,7 @@ which is where Pi itself runs.
 | --- | --- |
 | `openai_hosted` (default) | A local directory next to Pi. OpenAI's field name; not OpenAI's cloud. `hosted` is the same. |
 | `none` | No filesystem and no shell. |
-| `self_hosted` | An external runner. Tools go over a WebSocket. |
+| `self_hosted` | Currently not supported (`not_implemented`; may return on worker protocol v2). |
 
 On `openai_hosted`, the path is
 `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}`. In a microVM the guest
@@ -145,9 +144,8 @@ continues the conversation. Scratch files and published artifact bytes
 are not copied back into `/workspace`. That directory is bounded by
 `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB).
 
-On `self_hosted`, files stay on the runner. The gateway also copies
-`outputs/` from the runner on turn complete and on Pi stop if the
-socket is up. On `none`, there is no computer.
+The gateway also copies
+`outputs/` from the hosted computer on turn complete and on Pi stop. On `none`, there is no computer.
 
 A crash before publish can lose unpublished files under `outputs/`.
 
@@ -197,10 +195,10 @@ downloadable after the sandbox expires. The next
 turn recopies skills and re-runs packages and setup commands into a
 fresh workspace.
 
-OpenAI's `self_hosted` files stay with your provider and are not
-published through their Artifacts API. Ours stay on the runner the
-same way, except we also copy `outputs/` from the runner on turn
-complete and on Pi stop if the socket is up.
+Provider-hosted files stay with your provider and are not
+published through their Artifacts API. Ours stay in the hosted workspace
+the same way, except we also copy `outputs/` into the artifact store on turn
+complete and on Pi stop.
 
 Session conversation state is similar: both keep turns and items so
 you can continue later. OpenAI stores that on their side. ApiPi stores
