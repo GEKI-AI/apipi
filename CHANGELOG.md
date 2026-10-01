@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- MCP headers no longer expand `${ENV}` from the gateway process.
+  Values that contain `${...}` are rejected at session create, so a
+  tenant can no longer have gateway environment values (for example
+  `APIPI_VAULT_MASTER_KEY` or `DATABASE_URL`) sent to a server of
+  their choice. Store MCP secrets in a vault credential
+  (`static_bearer` bound to `mcp_server_url`) and attach `vault_ids`
+  on the session. `examples/tavily.yaml` now shows that shape.
+- MCP `server_url` targets pass an SSRF guard on the gateway connect
+  and on every host broker call. Loopback, RFC 1918, link-local
+  (including cloud metadata), CGNAT, ULA, multicast, reserved, and
+  other special-use addresses are rejected, including hostnames that
+  resolve to them. Operators with an MCP server on a private address
+  (including local development on `127.0.0.1`) list it in the new
+  `APIPI_MCP_ALLOW_HOSTS` / `[mcp].allow_hosts` setting (hostnames or
+  CIDRs, empty by default).
+
+### Upgrade notes
+
+- Replace `${ENV}` in MCP tool headers with a vault credential and
+  `vault_ids` on the session. Sessions that still send `${...}`
+  headers fail with a message that names the vault path.
+- MCP servers on private addresses need `APIPI_MCP_ALLOW_HOSTS` /
+  `[mcp].allow_hosts`, or session create fails with a blocked-host
+  message.
+
 ## [0.13.0] - 2026-09-30
 
 ### Added

@@ -80,8 +80,10 @@ async def test_http_client_calls_through_broker_without_bearer(
     thread.start()
     port = server.server_address[1]
     secret = "Bearer vault-secret"
+    settings = _settings(tmp_path)
+    settings = settings.model_copy(update={"mcp_allow_hosts": "127.0.0.1"})
     broker = await start_broker(
-        _settings(tmp_path),
+        settings,
         api_key="k",
         mcp_http=[
             McpHttpServer(

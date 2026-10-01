@@ -3,7 +3,7 @@ import secrets
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import httpx
 import uvicorn
@@ -13,6 +13,7 @@ from starlette.responses import Response, StreamingResponse
 from starlette.routing import Route
 
 from apipi.config import Settings
+from apipi.mcp.guard import McpConnectError, check_mcp_url, split_allow_hosts
 from apipi.mcp.http import McpHttpServer
 
 DUMMY_KEY = "apipi"
@@ -77,6 +78,7 @@ class SessionBroker:
         model_key: str | None,
         mcp_routes: list[McpRoute],
         attribution: bool = True,
+        allow_hosts: tuple[str, ...] = (),
     ) -> None:
         self.host = host
         self.port = port
@@ -86,6 +88,7 @@ class SessionBroker:
         self.model_key = model_key
         self.mcp_routes = {route.route_id: route for route in mcp_routes}
         self.attribution = attribution
+        self.allow_hosts = allow_hosts
         self._session_id: str | None = None
         self._agent_id: str | None = None
         self._turn_id: str | None = None
@@ -197,6 +200,12 @@ class SessionBroker:
         route = self.mcp_routes.get(route_id)
         if route is None:
             return Response(status_code=404)
+        try:
+            await check_mcp_url(
+                route.upstream, label=route_id, allow_hosts=self.allow_hosts
+            )
+        except McpConnectError as exc:
+            return Response(status_code=502, content=str(exc))
         path = str(request.path_params.get("path") or "")
         url = _join(route.upstream, path)
         return await self._forward(request, url, route.headers)
@@ -256,13 +265,6 @@ def _mcp_routes(mcp_http: list[McpHttpServer] | None) -> list[McpRoute]:
     return routes
 
 
-def _blocked_host(url: str) -> bool:
-    host = urlparse(url).hostname
-    if host is None:
-        return True
-    return host in {"169.254.169.254", "metadata.google.internal"}
-
-
 async def start_broker(
     settings: Settings,
     *,
@@ -274,9 +276,13 @@ async def start_broker(
 ) -> SessionBroker:
     base = settings.model_base_url or "http://127.0.0.1"
     key = api_key if api_key else settings.model_api_key_overwrite
+    allow_hosts = split_allow_hosts(settings.mcp_allow_hosts)
     for server in mcp_http or []:
-        if _blocked_host(server.server_url):
-            raise ValueError(f"blocked MCP host: {server.server_url}")
+        await check_mcp_url(
+            server.server_url,
+            label=server.server_label,
+            allow_hosts=allow_hosts,
+        )
     broker = SessionBroker(
         host=host,
         port=port,
@@ -286,6 +292,7 @@ async def start_broker(
         model_key=key,
         mcp_routes=_mcp_routes(mcp_http),
         attribution=settings.model_attribution_headers,
+        allow_hosts=allow_hosts,
     )
     await broker.start()
     return broker

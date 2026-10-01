@@ -1,17 +1,14 @@
-import os
-import re
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from apipi import __version__
+from apipi.mcp.guard import McpConnectError, check_mcp_url
 
-_ENV = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+__all__ = ["McpConnectError", "McpHttpServer", "McpToolDescription"]
 
-
-class McpConnectError(Exception):
-    pass
+_ENV_PATTERN = "${"
 
 
 @dataclass(frozen=True)
@@ -60,6 +57,13 @@ def mcp_http_tools(tools: list[Any] | None) -> list[McpHttpServer]:
             continue
         raw_headers = tool.get("headers")
         headers = raw_headers if isinstance(raw_headers, dict) else {}
+        for value in headers.values():
+            if _ENV_PATTERN in str(value):
+                raise McpConnectError(
+                    f"mcp {label} headers must not contain ${{...}}; "
+                    "store the secret in a vault credential bound to "
+                    "mcp_server_url and attach vault_ids on the session"
+                )
         raw_cred = tool.get("credential_id")
         credential_id = raw_cred if isinstance(raw_cred, str) and raw_cred else None
         servers.append(
@@ -74,23 +78,13 @@ def mcp_http_tools(tools: list[Any] | None) -> list[McpHttpServer]:
     return servers
 
 
-def expand_headers(headers: dict[str, str]) -> dict[str, str]:
-    expanded: dict[str, str] = {}
-    for key, value in headers.items():
-
-        def _sub(match: re.Match[str]) -> str:
-            name = match.group(1)
-            found = os.environ.get(name)
-            if found is None:
-                raise McpConnectError(f"missing env {name}")
-            return found
-
-        expanded[key] = _ENV.sub(_sub, value)
-    return expanded
-
-
-async def connect_mcp_http(server: McpHttpServer) -> McpHttpServer:
-    headers = expand_headers(server.headers)
+async def connect_mcp_http(
+    server: McpHttpServer, *, allow_hosts: tuple[str, ...] = ()
+) -> McpHttpServer:
+    await check_mcp_url(
+        server.server_url, label=server.server_label, allow_hosts=allow_hosts
+    )
+    headers = dict(server.headers)
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -215,8 +209,10 @@ def apply_vault_headers(
     return applied
 
 
-async def connect_mcp_http_tools(tools: list[Any] | None) -> list[McpHttpServer]:
+async def connect_mcp_http_tools(
+    tools: list[Any] | None, *, allow_hosts: tuple[str, ...] = ()
+) -> list[McpHttpServer]:
     connected: list[McpHttpServer] = []
     for server in mcp_http_tools(tools):
-        connected.append(await connect_mcp_http(server))
+        connected.append(await connect_mcp_http(server, allow_hosts=allow_hosts))
     return connected

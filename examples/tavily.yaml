@@ -1,13 +1,15 @@
-# Web search via Tavily. Requires TAVILY_API_KEY.
+# Web search via Tavily. The Tavily key lives in a vault credential,
+# not in the tool headers: the gateway never expands ${ENV} there.
 # https://docs.tavily.com/documentation/mcp
 #
-# Attach on the agent as tools, or merge into server config.
+# 1. Create a vault with a static_bearer credential bound to the
+#    server URL below (POST /v1/agents/vaults and
+#    POST /v1/agents/vaults/{vault_id}/credentials with
+#    mcp_server_url https://mcp.tavily.com/mcp).
+# 2. Attach the agent as tools below, or merge into server config.
+# 3. Attach vault_ids on the session so the host broker injects the bearer.
 
 tools:
   - type: mcp
     server_label: tavily
-    transport:
-      type: http
-      server_url: https://mcp.tavily.com/mcp
-    headers:
-      Authorization: Bearer ${TAVILY_API_KEY}
+    server_url: https://mcp.tavily.com/mcp
