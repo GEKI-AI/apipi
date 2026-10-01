@@ -70,45 +70,6 @@ class Agent(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
-    version_seq: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default=text("0")
-    )
-    revision: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1, server_default=text("1")
-    )
-
-
-class AgentVersion(Base):
-    __tablename__ = "agent_versions"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "id"),
-        UniqueConstraint("tenant_id", "agent_id", "number"),
-        ForeignKeyConstraint(
-            ["tenant_id", "agent_id"],
-            ["agents.tenant_id", "agents.id"],
-            ondelete="CASCADE",
-        ),
-        CheckConstraint("number >= 1", name="agent_versions_number_check"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
-    )
-    agent_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    number: Mapped[int] = mapped_column(Integer, nullable=False)
-    definition: Mapped[dict[str, Any]] = mapped_column(
-        JSONType, default=dict, nullable=False
-    )
-    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    comment: Mapped[str | None] = mapped_column(String, nullable=True)
-    source: Mapped[str] = mapped_column(String(32), nullable=False)
-    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
-    )
 
 
 class SessionRow(Base):

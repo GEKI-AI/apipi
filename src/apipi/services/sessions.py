@@ -26,7 +26,7 @@ from apipi.mcp.http import (
     apply_vault_headers,
     connect_mcp_http_tools,
 )
-from apipi.services.agents import AgentWrite
+from apipi.services.agents import AgentWrite, definition_for_session
 from apipi.services.chat_tools import is_chat_profile, reject_disallowed_chat_tools
 from apipi.services.failures import error_extra
 from apipi.services.files import FileService
@@ -867,8 +867,6 @@ class SessionService:
                 validate_idle_metadata(merged)
                 model = changes.get("model", current.model)
                 if not isinstance(model, str) and current.agent_id is not None:
-                    from apipi.services.agent_versions import definition_for_session
-
                     definition = await definition_for_session(db, tenant_id, current)
                     raw_model = (
                         definition.get("model")
@@ -898,8 +896,6 @@ class SessionService:
             return body
         agent_meta = None
         if row.agent_id is not None:
-            from apipi.services.agent_versions import definition_for_session
-
             definition = await definition_for_session(db, tenant_id, row)
             if isinstance(definition, dict) and isinstance(
                 definition.get("metadata"), dict
@@ -995,8 +991,6 @@ class SessionService:
                 stale = row.status == "in_progress"
                 follow_model = row.model
                 if not follow_model and row.agent_id is not None:
-                    from apipi.services.agent_versions import definition_for_session
-
                     definition = await definition_for_session(db, tenant_id, row)
                     raw_model = (
                         definition.get("model")

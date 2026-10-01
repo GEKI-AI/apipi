@@ -179,7 +179,6 @@ async def export_agent(
     agent_id: uuid.UUID,
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
-    version: str | None = None,
 ) -> Response:
     async with request.app.state.store.session() as _db:
         from apipi.store.repo import get_agent as _ga
@@ -191,9 +190,7 @@ async def export_agent(
     await check_authorize(
         request, action="agent.read", resource_type="agent", resource_id=str(agent_id)
     )
-    filename, data = await _templates(request).export_agent(
-        tenant.id, agent_id, version=version
-    )
+    filename, data = await _templates(request).export_agent(tenant.id, agent_id)
     return Response(
         content=data,
         media_type="application/zip",

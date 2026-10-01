@@ -36,10 +36,9 @@ agents until you create one.
 | `GET` | `/v1/agents/{agent_id}/export` |
 
 Fields: `id`, `name`, `model`, `instructions`, `idle_ttl`, `metadata`,
-`tools` (function, mcp), `session_defaults`, `revision`,
-`created_at`, `updated_at`. `revision` is read-only: `1` on create,
-plus one on every definition update and restore. Snapshot
-create/delete leaves it unchanged. Writing it is `unknown_field`.
+`tools` (function, mcp), `session_defaults`,
+`created_at`, `updated_at`. Writing an unknown field such as `revision`
+is `unknown_field`.
 `idle_ttl` is an ApiPi extension: a duration such as `30m` or `1h`,
 or `0` to turn the idle timer off. Omit it to keep the environment
 default. See [config](config.md).

@@ -203,10 +203,38 @@ def agent_body(agent: Agent) -> dict[str, Any]:
         "tools": agent.tools,
         "session_defaults": defaults,
         "reasoning": reasoning_body(agent.metadata_json),
-        "revision": agent.revision or 1,
         "created_at": agent.created_at.isoformat(),
         "updated_at": agent.updated_at.isoformat(),
     }
+
+
+def snapshot_from_agent(agent: Agent) -> dict[str, Any]:
+    metadata = agent.metadata_json if isinstance(agent.metadata_json, dict) else {}
+    tools = agent.tools if isinstance(agent.tools, list) else []
+    defaults = (
+        agent.session_defaults if isinstance(agent.session_defaults, dict) else None
+    )
+    return {
+        "name": agent.name,
+        "model": agent.model,
+        "instructions": agent.instructions,
+        "idle_ttl": agent.idle_ttl,
+        "metadata": metadata,
+        "tools": tools,
+        "session_defaults": defaults,
+        "reasoning": reasoning_body(metadata),
+    }
+
+
+async def definition_for_session(
+    db: Any, tenant_id: uuid.UUID, row: Any
+) -> dict[str, Any] | None:
+    if row.agent_id is None:
+        return None
+    agent = await get_agent(db, tenant_id, row.agent_id)
+    if agent is None:
+        return None
+    return snapshot_from_agent(agent)
 
 
 def reasoning_write(body: AgentWrite) -> tuple[object, bool] | None:

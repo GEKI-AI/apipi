@@ -92,7 +92,6 @@ class SessionBroker:
         self._session_id: str | None = None
         self._agent_id: str | None = None
         self._turn_id: str | None = None
-        self._agent_revision: int | None = None
         self._client = httpx.AsyncClient(timeout=None)
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task[None] | None = None
@@ -132,13 +131,11 @@ class SessionBroker:
         self._session_id = session_id
         self._agent_id = agent_id
 
-    def set_turn(self, turn_id: str | None, agent_revision: int | None = None) -> None:
+    def set_turn(self, turn_id: str | None) -> None:
         self._turn_id = turn_id
-        self._agent_revision = agent_revision
 
     def clear_turn(self) -> None:
         self._turn_id = None
-        self._agent_revision = None
 
     def attribution_headers(self) -> dict[str, str]:
         if not self.attribution:
@@ -150,8 +147,6 @@ class SessionBroker:
             headers["x-apipi-turn-id"] = self._turn_id
         if self._agent_id is not None:
             headers["x-apipi-agent-id"] = self._agent_id
-            if self._agent_revision is not None:
-                headers["x-apipi-agent-revision"] = str(self._agent_revision)
         return headers
 
     def _check_token(self, request: Request) -> bool:

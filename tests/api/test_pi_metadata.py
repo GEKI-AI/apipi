@@ -66,11 +66,9 @@ async def test_reasoning_update_keeps_other_metadata(client: AsyncClient) -> Non
         },
     )
     assert matched.status_code == 200
-    snap = await client.post(
-        f"/v1/apipi/agents/{agent_id}/versions", headers=_auth(token), json={}
-    )
-    assert snap.json()["definition"]["metadata"]["team"] == "x"
-    assert snap.json()["definition"]["metadata"]["apipi.thinking"] == "high"
+    live = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
+    assert live.json()["metadata"]["team"] == "x"
+    assert live.json()["metadata"]["apipi.thinking"] == "high"
 
 
 async def test_session_reasoning_update_replaces_effort(client: AsyncClient) -> None:

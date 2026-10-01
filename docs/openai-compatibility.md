@@ -122,7 +122,6 @@ New extension fields are grouped. Older flat fields stay flat.
 | Kind | Name | Notes |
 | --- | --- | --- |
 | Field | `idle_ttl` | Agent and session. Flat. |
-| Field | `revision` | Agent response, read-only. `1` on create, plus one per update and restore. |
 | Field | `user_id`, `org_id` | Session response. Flat. |
 | Field | `session_defaults` | Agent. |
 | Field | `environment.sandbox_size` | `S` / `M` / `L`. Alias of OpenAI `container_size`. |
@@ -133,7 +132,6 @@ New extension fields are grouped. Older flat fields stay flat.
 | Metadata | `apipi.sandbox_size`, `apipi.sandbox_image` | Stock SDK inputs. |
 | Metadata | `apipi.sandbox_eager_boot` | Overrides eager boot. |
 | Metadata | `apipi.thinking`, `apipi.system_prompt`, `apipi.idle_ttl` | Pi and idle overrides. `reasoning.effort` is the same thinking level. `none` is `off`. On update, `reasoning.effort` replaces the stored level and `null` clears it. A 400 happens only when the same request also sets a different `apipi.thinking`. |
-| Route | `/v1/apipi/agents/{id}/versions` | Explicit snapshots. Create, list, get, restore, and delete. Sessions keep using the live agent. |
 | Metadata | `apipi.session_kind` | `chat` for chat sessions. |
 | Event data | `data.sandbox` | Hosted `environment.*` events. |
 | Route | `/v1/apipi/agents/{id}/export` | Agent zip. |
