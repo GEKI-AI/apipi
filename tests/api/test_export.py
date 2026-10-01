@@ -34,7 +34,7 @@ async def test_export_after_a_turn(client: AsyncClient) -> None:
     token = _token()
     session_id = await _session_with_turn(client, token)
     exported = await client.get(
-        f"/v1/agents/sessions/{session_id}/export", headers=_auth(token)
+        f"/v1/apipi/sessions/{session_id}/export", headers=_auth(token)
     )
     assert exported.status_code == 200
     body = exported.json()
@@ -83,7 +83,7 @@ async def test_export_cross_tenant_is_404(client: AsyncClient) -> None:
     token_b = _token("b")
     session_id = await _session_with_turn(client, token_a)
     other = await client.get(
-        f"/v1/agents/sessions/{session_id}/export", headers=_auth(token_b)
+        f"/v1/apipi/sessions/{session_id}/export", headers=_auth(token_b)
     )
     assert other.status_code == 404
     assert other.json()["error"]["code"] == "not_found"

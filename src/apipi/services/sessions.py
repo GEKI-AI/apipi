@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from apipi.config import Settings
-from apipi.env.hub import EnvironmentHub
 from apipi.env.setup import (
     SetupError,
     prepare_workspace,
@@ -289,7 +288,6 @@ class SessionService:
         settings: Settings,
         store: Store,
         event_hub: EventHub,
-        env_hub: EnvironmentHub,
         execution: LocalExecution | RemoteExecution,
         blobs: ArtifactBlobs,
         files: FileService,
@@ -299,7 +297,6 @@ class SessionService:
         self.settings = settings
         self.store = store
         self.event_hub = event_hub
-        self.env_hub = env_hub
         self.execution = execution
         self.blobs = blobs
         self.files = files
@@ -483,8 +480,6 @@ class SessionService:
                     status_code=503,
                 ) from exc
         raw_tools: list[Any] = []
-        env_key: str | None = None
-        env_id: uuid.UUID | None = None
         model: str | None = None
         instructions: str | None = None
         chat = is_chat_session({"metadata": metadata or {}})
@@ -635,25 +630,6 @@ class SessionService:
                     status="disconnected",
                 )
                 await db.flush()
-            elif env.get("type") == "self_hosted":
-                env_id = uuid.uuid4()
-                env_key = secrets.token_urlsafe(32)
-                env = {**env, "id": str(env_id)}
-                row.environment = env
-                row.required_actions = [
-                    {
-                        "type": "environment_connection",
-                        "environment_id": str(env_id),
-                    }
-                ]
-                await create_environment(
-                    db,
-                    tenant_id,
-                    row.id,
-                    environment_id=env_id,
-                    key_hash=hash_token(env_key),
-                )
-                await db.flush()
             await persist_event(
                 db,
                 self.event_hub,
@@ -662,15 +638,6 @@ class SessionService:
                 type="agent.session.created",
                 data={"id": str(row.id)},
             )
-            if env_id is not None:
-                await persist_event(
-                    db,
-                    self.event_hub,
-                    tenant_id,
-                    row.id,
-                    type="agent.session.environment.pending",
-                    data={"environment_id": str(env_id)},
-                )
             session_id = row.id
         with start_span(
             self.tracing,
@@ -792,9 +759,6 @@ class SessionService:
             if row is None:
                 not_found()
             payload = session_body(row)
-            if env_id is not None and env_key is not None:
-                payload["environment_id"] = str(env_id)
-                payload["key"] = env_key
         if env.get("type") == "openai_hosted":
             from apipi.services.sandbox_status import eager_boot_enabled
 
@@ -947,11 +911,8 @@ class SessionService:
             row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
-            env_id_raw = row.environment.get("id")
             directory = row.environment.get("directory")
             key_id = row.key_id
-        if isinstance(env_id_raw, str):
-            await self.env_hub.close(uuid.UUID(env_id_raw))
         await self.execution.teardown(session_id)
         if isinstance(directory, str) and directory:
             wipe_workspace(Path(directory))

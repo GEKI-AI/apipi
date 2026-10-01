@@ -46,12 +46,10 @@ text are masked. If the text cannot be classified, the code is
 `failure_source: user`, `code: cancelled`, and `reason: user`.
 
 `agent.session.error` for a turn failure, and the non-stream `502`
-body, keep `code: model_host_error` for every upstream failure in this
-release. The specific code is `detail_code`. `legacy_code` is
-`model_host_error` on those failures. Set `APIPI_ERROR_CODES=specific`
-to put the specific code in `code` now. The next minor release will
-make that the default and keep `legacy_code` for one release after
-that, then drop it.
+body, carry the specific `code` (copied in `detail_code`). `legacy_code`
+is `model_host_error` on those failures. Set `APIPI_ERROR_CODES=legacy`
+to keep `model_host_error` in `code` for one release. The next minor
+release drops `legacy_code`.
 
 Logs and the usage event use the specific code in `error_code`, plus
 `failure_source`, `upstream_status`, `retryable`, and `legacy_code`.
@@ -114,7 +112,7 @@ A user cancel:
 }
 ```
 
-An upstream `429`, with `APIPI_ERROR_CODES=legacy`:
+An upstream `429`, with `APIPI_ERROR_CODES=specific` (the default):
 
 ```json
 {
@@ -132,6 +130,6 @@ An upstream `429`, with `APIPI_ERROR_CODES=legacy`:
 }
 ```
 
-The matching `agent.session.error` uses `code: model_host_error` and
-`detail_code: upstream_rate_limited`. The `502` body copies those
-fields.
+The matching `agent.session.error` uses `code: upstream_rate_limited` and
+`detail_code: upstream_rate_limited`, with `legacy_code: model_host_error`. The `502` body copies those
+fields. With `APIPI_ERROR_CODES=legacy`, `code` there stays `model_host_error`.

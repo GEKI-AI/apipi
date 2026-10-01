@@ -4,7 +4,6 @@ from typing import cast
 import pytest
 
 from apipi.config import Settings
-from apipi.env.hub import EnvironmentHub
 from apipi.gateway import create_app
 from apipi.gateway.errors import ApiError
 from apipi.services.runtime import EventHub, FakeHarness
@@ -43,7 +42,6 @@ def test_local_execution_capacity_uses_pool(settings: Settings) -> None:
         harness=FakeHarness(),
         isolation=load_isolation("none"),
         hub=EventHub(),
-        env_hub=EnvironmentHub(),
     )
     first = uuid.uuid4()
     second = uuid.uuid4()
@@ -61,7 +59,6 @@ async def test_local_execution_cancel_idle_errors(settings: Settings) -> None:
         harness=FakeHarness(),
         isolation=load_isolation("none"),
         hub=EventHub(),
-        env_hub=EnvironmentHub(),
     )
     with pytest.raises(ApiError, match="not in_progress"):
         await execution.cancel(uuid.uuid4(), status="idle")
@@ -74,7 +71,6 @@ async def test_local_execution_probe_none(settings: Settings) -> None:
         harness=FakeHarness(),
         isolation=load_isolation("none"),
         hub=EventHub(),
-        env_hub=EnvironmentHub(),
     )
     execution.require()
     await execution.probe()

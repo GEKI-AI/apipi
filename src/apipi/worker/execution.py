@@ -6,7 +6,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn, Protocol
 
 from apipi.config import Settings
-from apipi.env.hub import EnvironmentHub
 from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics
@@ -124,7 +123,6 @@ class LocalExecution:
         harness: Any,
         isolation: Isolation,
         hub: EventHub,
-        env_hub: EnvironmentHub,
         store: Store | None = None,
         blobs: ArtifactBlobs | None = None,
         objects: ObjectStore | None = None,
@@ -136,7 +134,6 @@ class LocalExecution:
         self.harness = harness
         self.isolation = isolation
         self.hub = hub
-        self.env_hub = env_hub
         self.store = store
         self.blobs = blobs
         self.objects = objects
@@ -198,7 +195,6 @@ class LocalExecution:
             metrics=self.metrics,
             tracing=self.tracing,
             turn_timeout=self.settings.turn_timeout,
-            env_hub=self.env_hub,
             settings=self.settings,
             pool=self.pool,
             api_key=api_key,
@@ -244,7 +240,6 @@ class LocalExecution:
             metrics=self.metrics,
             tracing=self.tracing,
             turn_timeout=self.settings.turn_timeout,
-            env_hub=self.env_hub,
             settings=self.settings,
             pool=self.pool,
             api_key=api_key,
@@ -435,7 +430,6 @@ class LocalExecution:
             kwargs = await load_boot_kwargs(
                 store,
                 self.settings,
-                self.env_hub,
                 tenant_id,
                 session_id,
                 mcp_http=mcp_http,
@@ -498,7 +492,6 @@ class LocalExecution:
                         self.settings,
                         session_id,
                         proc,
-                        self.env_hub,
                         sync_workspace=False,
                         blobs=self.blobs,
                     )
@@ -518,7 +511,6 @@ def local_execution(
     store: Store,
     harness: Any | None = None,
     hub: EventHub | None = None,
-    env_hub: EnvironmentHub | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
 ) -> LocalExecution:
@@ -534,7 +526,6 @@ def local_execution(
         harness=resolved_harness,
         isolation=isolation,
         hub=hub if hub is not None else EventHub(),
-        env_hub=env_hub if env_hub is not None else EnvironmentHub(),
         store=store,
         blobs=blob_store(settings),
         objects=object_store(settings),

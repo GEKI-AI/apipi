@@ -6,10 +6,9 @@ which process needs KVM. Why workers exist and how a turn moves is in
 [isolation](isolation.md).
 
 Trusted ApiPi workers host Firecracker. They are **not** customer
-`self_hosted` runners. `self_hosted` is an untrusted computer that a
-tenant attaches with a per-session key on `/v1/environments/{id}`.
-Workers use a different path, a different secret, and different
-messages.
+external computers. `self_hosted` is currently not supported
+(see [environments](environments.md)). Workers use `/internal/worker`,
+a different secret, and different messages.
 
 Firecracker, jailer, TAP, and the guest live on the **worker**.
 `apipi serve --api-only` never probes `/dev/kvm` and never creates a
@@ -43,7 +42,7 @@ apipi install --role worker
 
 Combined `apipi serve` keeps today's single-host path. `--api-only`
 skips the KVM probe so the API can run without Firecracker.
-`apipi worker` is the sandbox process. It is not a `self_hosted`
+`apipi worker` is the sandbox process. It is not a tenant computer
 runner.
 
 ## Auth
@@ -118,7 +117,7 @@ A session is assigned only to a connected worker whose advertised
 | Session | Required worker `run_mode` |
 | --- | --- |
 | Session metadata `apipi.session_kind=chat` (`/v1/chat`) | `chat` always |
-| Agents with a computer (`openai_hosted`, `hosted`, or `self_hosted`) | `microvm` |
+| Agents with a computer (`openai_hosted` or `hosted`) | `microvm` |
 | Agents with `environment.type=none` | `APIPI_ENV_NONE_PLACEMENT` / `[placement].env_none`: `chat` (default), `microvm`, or `reject` |
 
 `reject` fails the turn with `400` and code `placement`. No matching
@@ -140,7 +139,7 @@ Idle Pi reap and hosted workspace wipe run on the process that holds
 Pi. Combined `apipi serve` starts those loops in the API process.
 `apipi worker` starts the same loops. `apipi serve --api-only` does
 not kill idle guests; the worker that owns the session does. `none`
-and `self_hosted` use `APIPI_IDLE_TTL`. Hosted computers use
+use `APIPI_IDLE_TTL`. Hosted computers use
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED`. A host Pi kill increments
 `apipi_pi_kill_total` with reason `idle` on the worker metrics
 endpoint. A process that exits by itself is `crash`. Worker drain
@@ -203,7 +202,7 @@ The hub does not forward lifecycle events. See
 | `apipi serve --api-only` | Operator control plane | Postgres, worker token, no KVM |
 | `apipi worker` | Operator sandbox host | KVM, Firecracker, worker token, outbound to the API |
 | Combined `apipi serve` | Lab / one box | Whatever the run mode needs, including KVM when `microvm` |
-| `self_hosted` runner | Tenant computer | Per-session key on `/v1/environments/{id}` |
+
 
 The worker token is an operator secret. It is not a tenant bearer and
 is not stored in Postgres. Do not put it in the browser. The API

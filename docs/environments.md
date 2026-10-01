@@ -2,9 +2,7 @@
 
 An environment is where file and shell tools run. That choice is
 independent of [isolation](isolation.md) (run mode), which is where Pi
-itself runs. When the computer is local, Pi and the files share the same
-isolation boundary. A remote runner is valid with `none` and
-`microvm`. That is the only supported split.
+itself runs. Pi and the computer always share one isolation boundary, and there is no split.
 
 ## Types
 
@@ -13,7 +11,7 @@ isolation boundary. A remote runner is valid with `none` and
 | `openai_hosted` | Default. Session directory next to Pi. |
 | `hosted` | Alias for `openai_hosted`. Stored and returned as `openai_hosted`. |
 | `none` | No filesystem, no shell. |
-| `self_hosted` | External runner. Tools go over a socket. Not an ApiPi sandbox worker. |
+| `self_hosted` | Currently not supported (see below). |
 
 `openai_hosted` is OpenAI's field name for a local session directory.
 It is **not** OpenAI's cloud VM. `hosted` means the same folder. You
@@ -287,83 +285,24 @@ Debian) are added for that session if the matching package list is set.
 
 A nonzero exit emits `agent.session.environment.failed` and
 `agent.session.failed`. Pi does not start. Successful prep is visible
-in the workspace before the turn. `none` and `self_hosted` environment
-types reject packages, setup commands, env, and files. `self_hosted`
-also rejects `network`. Environment type `none` ignores `network`.
+in the workspace before the turn. `none` rejects packages, setup commands, env, and files. Environment type `none` ignores `network`.
 
 ## `none`
 
 No computer. Pi still runs the loop. Function tools and MCP still
 work. There is no session directory and no shell. This type is an
-Agents API field. `/v1/chat` never asks clients to set it and never
+Agents API field. `/v1/apipi/chat` never asks clients to set it and never
 returns `environment`. Chat sessions still store `type=none` internally
 so placement can use chat workers. See [chat fleets](chat.md).
 
 ## `self_hosted`
 
-Pi stays in the run mode (`none` or `microvm`). Production
-SaaS and enterprise still run that Pi under `microvm`. The computer
-is elsewhere. You must sandbox the runner. The gateway does not nest
-the remote runner in a microvm. This socket is not the trusted
-[sandbox worker](workers.md) protocol.
-
-1. Create the session with `environment.type` `self_hosted`.
-2. The create response includes `environment.id` on the environment
-   object, a top-level `environment_id`, and a one-time `key`. The key
-   is not stored in plaintext and is not returned again.
-3. The gateway emits `environment.pending`. When the runner connects,
-   it emits `environment.connected`. If the socket drops, it emits
-   `environment.disconnected`.
-4. `read` / `write` / `edit` / `bash` go over the socket, not through
-   the Pi process's local filesystem.
-
-`required_actions` may include `environment_connection` until the
-runner is connected. Session status stays `idle` so turns that do not
-need files can still run. If nothing connects, file tools stay off.
-
-The runner opens `/v1/environments/{environment_id}` as a WebSocket and
-sends `hello` with the key. Wrong id or key is not found. There is no
-`/v1/runners` resource. One key is one workspace. That socket must
-reach the same gateway process that created the session. See
-[multiple nodes](scale.md).
-
-Messages are JSON objects. `hello` is first:
-
-```json
-{"type": "hello", "key": "..."}
-```
-
-The gateway replies `{"type": "hello", "ok": true}`. Later requests
-have `id`. Replies: `{"id": "...", "ok": true, ...}` or
-`{"id": "...", "ok": false, "error": "..."}`.
-
-| Verb | Direction | Job |
-| --- | --- |
-| `hello` | runner → gateway | Auth, capabilities |
-| `exec` | gateway → runner | Command in workspace cwd |
-| `read` / `write` / `edit` / `list` | gateway → runner | Files |
-| `artifact` | gateway → runner | Publish an output |
-| `ping` | either | Keepalive (`pong` back) |
-| `close` | either | Shutdown |
-
-```json
-{"id": "...", "type": "exec", "command": "ls"}
-{"id": "...", "type": "read", "path": "a.txt"}
-{"id": "...", "type": "write", "path": "a.txt", "content": "..."}
-{"id": "...", "type": "edit", "path": "a.txt", "old_text": "...", "new_text": "..."}
-{"id": "...", "type": "list", "path": "."}
-{"id": "...", "type": "artifact", "path": "out.bin"}
-{"id": "...", "type": "ping"}
-{"id": "...", "type": "close"}
-```
-
-Artifact bytes are `read` while the socket is up. `410` if the file is
-gone or the runner is disconnected.
-
-A runnable example that attaches a local directory as that computer is
-`examples/self_hosted_runner.py`. It speaks this protocol. Pass the
-one-time `key` and `environment_id` from session create in the
-environment, not in the file. Setup is in `examples/README.md`.
+`self_hosted` is currently not supported. Requests with
+`environment.type` `self_hosted` (session create, agent
+`session_defaults`, template import) return `400` with type
+`not_implemented` and the message `environment type self_hosted is not
+supported`. Use `openai_hosted` instead. The type may come back later
+on worker protocol v2 (see #442).
 
 ## Skills
 

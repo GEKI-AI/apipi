@@ -132,7 +132,9 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
     env_type = spec.type if spec is not None else "openai_hosted"
     if env_type == "hosted":
         env_type = "openai_hosted"
-    if env_type not in {"none", "openai_hosted", "self_hosted"}:
+    if env_type == "self_hosted":
+        not_implemented("self_hosted", "environment type self_hosted is not supported")
+    if env_type not in {"none", "openai_hosted"}:
         not_implemented(env_type)
     payload: dict[str, Any] = {"type": env_type}
     if spec is None:
@@ -171,12 +173,6 @@ def environment_payload(spec: EnvironmentSpec | None) -> dict[str, Any]:
     if spec.skills is not None:
         payload["skills"] = [item.model_dump() for item in spec.skills]
     if spec.network is not None:
-        if env_type == "self_hosted":
-            raise ApiError(
-                "invalid_request",
-                "network needs openai_hosted",
-                code="invalid_request",
-            )
         dumped = spec.network.model_dump(exclude_none=True)
         try:
             session_network_from({"network": dumped})

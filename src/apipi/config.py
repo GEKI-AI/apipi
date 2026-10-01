@@ -121,7 +121,6 @@ _SANDBOX_NETWORK_TOML = {
 }
 _SANDBOX_TTL_TOML = {
     "openai_hosted": "workspace_ttl",
-    "self_hosted": "sandbox_ttl_self_hosted",
 }
 _REMOVED_BROWSER_KEYS = frozenset({"auto_playwright", "playwright_mcp"})
 _PLACEMENT_TOML = {
@@ -491,12 +490,6 @@ class Settings(BaseSettings):
             "workspace_ttl",
         ),
     )
-    sandbox_ttl_self_hosted: OptionalTtl = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "APIPI_SANDBOX_TTL_SELF_HOSTED", "sandbox_ttl_self_hosted"
-        ),
-    )
     max_sessions: int = Field(
         default=32,
         ge=1,
@@ -514,7 +507,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("APIPI_TURN_TIMEOUT", "turn_timeout"),
     )
     error_codes: ErrorCodes = Field(
-        default="legacy",
+        default="specific",
         validation_alias=AliasChoices("APIPI_ERROR_CODES", "error_codes"),
     )
     worker_token: str | None = Field(
@@ -1091,8 +1084,6 @@ class Settings(BaseSettings):
     def sandbox_ttl_for(self, env_type: str | None) -> timedelta | None:
         if env_type in {"openai_hosted", "hosted"}:
             return self.workspace_ttl
-        if env_type == "self_hosted":
-            return self.sandbox_ttl_self_hosted
         return None
 
     def pi_idle_ttl_for(self, env_type: str | None) -> timedelta | None:
@@ -1341,8 +1332,6 @@ def _settings_message(exc: ValidationError) -> str:
             or "APIPI_SANDBOX_TTL_OPENAI_HOSTED" in loc
         ):
             return "APIPI_SANDBOX_TTL_OPENAI_HOSTED must be like 15m or 0"
-        if "sandbox_ttl_self_hosted" in loc or "APIPI_SANDBOX_TTL_SELF_HOSTED" in loc:
-            return "APIPI_SANDBOX_TTL_SELF_HOSTED must be like 15m or 0"
         if "turn_timeout" in loc:
             return "APIPI_TURN_TIMEOUT must be like 15m"
         if "auth_cache_ttl" in loc:

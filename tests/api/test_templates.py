@@ -92,7 +92,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     assert created.status_code == 200, created.text
     agent_id = created.json()["id"]
     stored = await client.post(
-        "/v1/templates",
+        "/v1/apipi/templates",
         headers=_auth(token),
         json={"agent_id": agent_id, "name": "Research agent"},
     )
@@ -102,7 +102,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     assert stored.json()["created_by"] is None
     assert stored.json()["visibility"] == "tenant"
     downloaded = await client.get(
-        f"/v1/templates/{template_id}/download", headers=_auth(token)
+        f"/v1/apipi/templates/{template_id}/download", headers=_auth(token)
     )
     assert downloaded.status_code == 200
     assert b"secret-token" not in downloaded.content
@@ -115,7 +115,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     assert metadata["host.keep"] == "yes"
     assert "apipi.title" not in metadata
     imported = await client.post(
-        "/v1/templates/import",
+        "/v1/apipi/templates/import",
         headers=_auth(token),
         files={
             "bundle": (
@@ -127,7 +127,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     )
     assert imported.status_code == 200, imported.text
     made = await client.post(
-        f"/v1/templates/{imported.json()['id']}/agents",
+        f"/v1/apipi/templates/{imported.json()['id']}/agents",
         headers=_auth(token),
         json={
             "secrets": {
@@ -145,7 +145,9 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     assert (
         made.json()["agent"]["metadata"]["apipi.template_id"] == imported.json()["id"]
     )
-    exported = await client.get(f"/v1/agents/{new_id}/export", headers=_auth(token))
+    exported = await client.get(
+        f"/v1/apipi/agents/{new_id}/export", headers=_auth(token)
+    )
     assert exported.status_code == 200
     assert b"secret-token" not in exported.content
     assert b"secret-env" not in exported.content
@@ -154,12 +156,14 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     assert again["agent"]["name"] == first["agent"]["name"]
     assert again["agent"]["metadata"]["apipi.thinking"] == "medium"
     assert "apipi.template_id" not in again["agent"].get("metadata", {})
-    deleted = await client.delete(f"/v1/templates/{template_id}", headers=_auth(token))
+    deleted = await client.delete(
+        f"/v1/apipi/templates/{template_id}", headers=_auth(token)
+    )
     assert deleted.status_code == 200
     still = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
     assert still.status_code == 200
     other = await client.get(
-        f"/v1/templates/{imported.json()['id']}", headers=_auth("tpl-other")
+        f"/v1/apipi/templates/{imported.json()['id']}", headers=_auth("tpl-other")
     )
     assert other.status_code == 404
 
@@ -167,10 +171,10 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
 async def test_import_rejects_bad_zip(client: AsyncClient) -> None:
     token = "tpl-bad"
     uploaded = await client.post(
-        "/v1/templates/import",
+        "/v1/apipi/templates/import",
         headers=_auth(token),
         files={"bundle": ("nope.zip", b"not-a-zip", "application/zip")},
     )
     assert uploaded.status_code == 400
-    listed = await client.get("/v1/templates", headers=_auth(token))
+    listed = await client.get("/v1/apipi/templates", headers=_auth(token))
     assert listed.json()["data"] == []

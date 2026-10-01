@@ -19,10 +19,8 @@ FILES: dict[str, str] = {
     "identity.computer": "identity-computer.txt",
     "main.none": "none.txt",
     "main.hosted": "hosted.txt",
-    "main.self_hosted": "self-hosted.txt",
     "additional.none": "additional-none.txt",
     "additional.hosted": "additional-hosted.txt",
-    "additional.self_hosted": "additional-self-hosted.txt",
     "size": "size.txt",
     "network": "network.txt",
     "network.enabled": "network-enabled.txt",
@@ -69,10 +67,6 @@ _ENV = {
         "APIPI_PLATFORM_PROMPT_HOSTED",
         "APIPI_PLATFORM_PROMPT_HOSTED_FILE",
     ),
-    "main.self_hosted": (
-        "APIPI_PLATFORM_PROMPT_SELF_HOSTED",
-        "APIPI_PLATFORM_PROMPT_SELF_HOSTED_FILE",
-    ),
     "additional.none": (
         "APIPI_PLATFORM_PROMPT_NONE_ADDITIONAL",
         "APIPI_PLATFORM_PROMPT_NONE_ADDITIONAL_FILE",
@@ -80,10 +74,6 @@ _ENV = {
     "additional.hosted": (
         "APIPI_PLATFORM_PROMPT_HOSTED_ADDITIONAL",
         "APIPI_PLATFORM_PROMPT_HOSTED_ADDITIONAL_FILE",
-    ),
-    "additional.self_hosted": (
-        "APIPI_PLATFORM_PROMPT_SELF_HOSTED_ADDITIONAL",
-        "APIPI_PLATFORM_PROMPT_SELF_HOSTED_ADDITIONAL_FILE",
     ),
     "size": ("APIPI_PLATFORM_SIZE", "APIPI_PLATFORM_SIZE_FILE"),
     "network": ("APIPI_PLATFORM_NETWORK", "APIPI_PLATFORM_NETWORK_FILE"),
@@ -307,4 +297,4 @@ def cap_prompt(text: str) -> str:
 
 
 def computer_identity(env_type: str | None) -> bool:
-    return env_type in {"openai_hosted", "hosted", "self_hosted"}
+    return env_type in {"openai_hosted", "hosted"}

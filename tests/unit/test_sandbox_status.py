@@ -176,14 +176,12 @@ async def test_none_env_emits_no_sandbox_events(
     pool = PiPool(_settings())
     pool.on_transition = on_transition
     await pool.get(uuid.uuid4(), cwd=None, tools=False, env_type="none")
-    await pool.get(uuid.uuid4(), cwd=None, tools=False, env_type="self_hosted")
     assert seen == []
 
 
 async def test_pool_kill_notifies_lease_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from apipi.env.hub import EnvironmentHub
     from apipi.services.runtime import EventHub
     from apipi.worker.execution import LocalExecution
     from apipi.worker.pi.isolation import load_isolation
@@ -205,7 +203,6 @@ async def test_pool_kill_notifies_lease_release(
         harness=object(),
         isolation=load_isolation("none"),
         hub=EventHub(),
-        env_hub=EnvironmentHub(),
     )
     execution.note_stopped = note
     session_id = uuid.uuid4()
@@ -301,7 +298,6 @@ def test_eager_boot_overrides() -> None:
 async def test_capacity_failure_marks_environment_failed(
     store: Store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from apipi.env.hub import EnvironmentHub
     from apipi.worker.execution import LocalExecution
     from apipi.worker.pi.isolation import load_isolation
 
@@ -327,7 +323,6 @@ async def test_capacity_failure_marks_environment_failed(
         harness=object(),
         isolation=load_isolation("none"),
         hub=hub,
-        env_hub=EnvironmentHub(),
         store=store,
     )
     tenant_id, session_id = await _hosted(store)

@@ -3,7 +3,7 @@
 Isolation is where Pi (and MCP) run. It is server config
 (`APIPI_RUN_MODE`), not an OpenAI field. It is independent of
 [environment](environments.md), which is where file and shell tools
-run. A remote `self_hosted` computer does not replace Pi isolation.
+run. Pi and the computer always share one isolation boundary, and there is no split.
 The HTTP API never runs inside a guest.
 
 This page explains why the modes exist and what a session looks like

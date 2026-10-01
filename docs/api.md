@@ -33,7 +33,7 @@ agents until you create one.
 | `GET` | `/v1/agents/{agent_id}` |
 | `POST` | `/v1/agents/{agent_id}` |
 | `DELETE` | `/v1/agents/{agent_id}` |
-| `GET` | `/v1/agents/{agent_id}/export` |
+| `GET` | `/v1/apipi/agents/{agent_id}/export` |
 
 Fields: `id`, `name`, `model`, `instructions`, `idle_ttl`, `metadata`,
 `tools` (function, mcp), `session_defaults`,
@@ -80,18 +80,14 @@ availability is not checked until a session is created. See
 
 Rejected: `multi_agent`, `tool_search`, `programmatic_tool_calling`.
 
-`GET /v1/agents/{agent_id}/export` downloads a template bundle for that
+`GET /v1/apipi/agents/{agent_id}/export` downloads a template bundle for that
 agent without storing a template. The zip is the same format as
 [agent templates](agent-templates.md). Secrets and credential values
 are not included.
 
 ## Templates
 
-ApiPi-only routes are canonical under `/v1/apipi/`. The old paths
-still work and are deprecated: `/v1/templates`, `/v1/uploads`,
-`/v1/usage`, `/v1/chat/sessions`, `/v1/agents/{id}/export`,
-`/v1/agents/sessions/{id}/export`, and artifact `download`. A hit on
-an old path is logged once per process.
+ApiPi-only routes live under `/v1/apipi/`. The old paths outside that prefix are gone and return `404` (see the changelog for the old-to-new mapping).
 
 `POST /v1/apipi/auth/invalidate` drops cached auth identities for
 the caller's tenant. The body filters are optional and combined with
@@ -106,16 +102,16 @@ does not change agents already created from it.
 
 | Method | Path |
 | --- | --- |
-| `POST` | `/v1/templates` |
-| `POST` | `/v1/templates/import` |
-| `GET` | `/v1/templates` |
-| `GET` | `/v1/templates/{template_id}` |
-| `GET` | `/v1/templates/{template_id}/download` |
-| `DELETE` | `/v1/templates/{template_id}` |
-| `POST` | `/v1/templates/{template_id}/agents` |
+| `POST` | `/v1/apipi/templates` |
+| `POST` | `/v1/apipi/templates/import` |
+| `GET` | `/v1/apipi/templates` |
+| `GET` | `/v1/apipi/templates/{template_id}` |
+| `GET` | `/v1/apipi/templates/{template_id}/download` |
+| `DELETE` | `/v1/apipi/templates/{template_id}` |
+| `POST` | `/v1/apipi/templates/{template_id}/agents` |
 
-`POST /v1/templates` takes `{"agent_id", "name"?, "description"?}` and
-returns the template object. `POST /v1/templates/import` uploads a zip
+`POST /v1/apipi/templates` takes `{"agent_id", "name"?, "description"?}` and
+returns the template object. `POST /v1/apipi/templates/import` uploads a zip
 as multipart field `bundle`, with optional form fields `name` and
 `description`. Both return the template object: `id`, `name`,
 `description`, `schema_version`, `visibility` (`tenant` only),
@@ -127,7 +123,7 @@ Download streams the zip when the artifact store is local. When the
 store is S3, the response is `302` to a presigned GET. Another tenant's
 id is `404`.
 
-`POST /v1/templates/{template_id}/agents` takes `secrets`,
+`POST /v1/apipi/templates/{template_id}/agents` takes `secrets`,
 `credentials`, and `overrides` (`name`, `model`). It returns `agent`,
 `skills`, `missing`, and `warnings`. A missing secret or credential
 mapping still creates the agent and lists the name under
@@ -150,8 +146,7 @@ code `model_not_found`. A host that cannot list models is `400`
 `model_host_unreachable`, or `401` `model_host_unauthorized`. A later
 turn does not repeat that check. If the host then rejects the model,
 the turn fails and the session returns to `idle`. The public code on
-`agent.session.error` stays `model_host_error` in this release. The
-specific code is `detail_code`. Failure modes are in
+`agent.session.error` is the specific code (copied in `detail_code`, with `legacy_code` still `model_host_error`). Set `APIPI_ERROR_CODES=legacy` to keep `model_host_error` in `code` for one release. Failure modes are in
 [configuration](config.md#failure-modes) and
 [failure codes](errors.md).
 Inline `model` and `instructions` are kept on the
@@ -214,7 +209,7 @@ use [presigned uploads](#uploads) instead of this multipart route.
 `GET /v1/files/{id}/content` still streams through the gateway. The
 response uses `Content-Disposition: attachment` with the stored file
 name, including an RFC 5987 `filename*` when the name is not ASCII, and
-`X-Content-Type-Options: nosniff`. `POST /v1/files/{id}/download`
+`X-Content-Type-Options: nosniff`. `POST /v1/apipi/files/{id}/download`
 returns a short-lived GET URL when the artifact store is S3.
 
 ## Uploads
@@ -224,11 +219,11 @@ store returns `400` with code `presign_unsupported`.
 
 | Method | Path |
 | --- | --- |
-| `POST` | `/v1/uploads` |
-| `POST` | `/v1/uploads/{upload_id}/complete` |
-| `POST` | `/v1/files/{file_id}/download` |
-| `POST` | `/v1/skills/{skill_id}/download` |
-| `POST` | `/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/download` |
+| `POST` | `/v1/apipi/uploads` |
+| `POST` | `/v1/apipi/uploads/{upload_id}/complete` |
+| `POST` | `/v1/apipi/files/{file_id}/download` |
+| `POST` | `/v1/apipi/skills/{skill_id}/download` |
+| `POST` | `/v1/apipi/sessions/{session_id}/artifacts/{artifact_id}/download` |
 
 Create takes `purpose` (`file`, `attachment`, or `skill`), `filename`,
 `bytes`, and optional `content_type`. `attachment` is the same store as
@@ -303,17 +298,17 @@ do not upgrade in place.
 
 | Method | Path |
 | --- | --- |
-| `POST` | `/v1/chat/sessions` |
-| `GET` | `/v1/chat/sessions` |
-| `GET` | `/v1/chat/sessions/{session_id}` |
-| `POST` | `/v1/chat/sessions/{session_id}` |
-| `DELETE` | `/v1/chat/sessions/{session_id}` |
-| `POST` | `/v1/chat/sessions/{session_id}/events` |
-| `GET` | `/v1/chat/sessions/{session_id}/events` |
-| `GET` | `/v1/chat/sessions/{session_id}/turns` |
-| `GET` | `/v1/chat/sessions/{session_id}/turns/{turn_id}` |
-| `GET` | `/v1/chat/sessions/{session_id}/items` |
-| `GET` | `/v1/chat/sessions/{session_id}/export` |
+| `POST` | `/v1/apipi/chat/sessions` |
+| `GET` | `/v1/apipi/chat/sessions` |
+| `GET` | `/v1/apipi/chat/sessions/{session_id}` |
+| `POST` | `/v1/apipi/chat/sessions/{session_id}` |
+| `DELETE` | `/v1/apipi/chat/sessions/{session_id}` |
+| `POST` | `/v1/apipi/chat/sessions/{session_id}/events` |
+| `GET` | `/v1/apipi/chat/sessions/{session_id}/events` |
+| `GET` | `/v1/apipi/chat/sessions/{session_id}/turns` |
+| `GET` | `/v1/apipi/chat/sessions/{session_id}/turns/{turn_id}` |
+| `GET` | `/v1/apipi/chat/sessions/{session_id}/items` |
+| `GET` | `/v1/apipi/chat/sessions/{session_id}/export` |
 
 Create accepts `agent` or `agent_id`, `input`, `metadata`, `vault_ids`,
 and `stream`. `stream: true` returns SSE as soon as the session exists.
@@ -352,9 +347,9 @@ a client does not wait for a later event.
 
 Status: `idle | in_progress | requires_action | failed`. That is the turn, not the sandbox. An idle session can still have a live computer.
 
-`required_actions`: `function_call`, `environment_connection`. A hosted stop does not add `environment_connection`. The next turn rebuilds the computer.
+`required_actions`: `function_call`. The next turn rebuilds the computer when it needs one.
 
-A hosted session (`openai_hosted`) has `environment.id`, `environment.status`, and `environment.sandbox`. `environment.status` is the OpenAI value: `provisioning` while the computer is starting, `connected` when Pi is ready, `disconnected` when it has not started or has stopped, `failed` when boot or setup failed. `environment.sandbox` is ApiPi detail: `state` (`none`, `starting`, `ready`, `stopped`, `failed`), `reason`, `since`, `image`, `image_version`, `size`, `cold_boots`, and `last_boot_ms`. It does not include a worker id. `none` and `self_hosted` set `environment.sandbox` to null and keep their existing connection fields. Chat responses omit `environment`.
+A hosted session (`openai_hosted`) has `environment.id`, `environment.status`, and `environment.sandbox`. `environment.status` is the OpenAI value: `provisioning` while the computer is starting, `connected` when Pi is ready, `disconnected` when it has not started or has stopped, `failed` when boot or setup failed. `environment.sandbox` is ApiPi detail: `state` (`none`, `starting`, `ready`, `stopped`, `failed`), `reason`, `since`, `image`, `image_version`, `size`, `cold_boots`, and `last_boot_ms`. It does not include a worker id. `none` sets `environment.sandbox` to null. Chat responses omit `environment`.
 
 `GET /v1/agents/environments/{environment_id}` returns `id`, `type`, `status`, and `sandbox` for that session. Another tenant's id is `404`. There is no pause. A stop deletes the hosted workspace. Clients may label a stopped computer "paused" in the UI, but files do not survive.
 
@@ -527,7 +522,7 @@ total). Tokens only. See [usage](usage.md).
 
 | Method | Path |
 | --- | --- |
-| `GET` | `/v1/agents/sessions/{session_id}/export` |
+| `GET` | `/v1/apipi/sessions/{session_id}/export` |
 
 JSON of the transcript from the store: public events, turns, and items.
 Same shapes as the list endpoints. Does not read Pi files. Wrong tenant
@@ -538,7 +533,7 @@ thread if the gateway disappears.
 
 | Method | Path |
 | --- | --- |
-| `GET` | `/v1/usage` |
+| `GET` | `/v1/apipi/usage` |
 
 Tenant-scoped totals from hot usage data (turn log and/or daily
 rollups). Filter by exactly one of `session_id`, `turn_id`, or `day`.
@@ -566,7 +561,7 @@ these. See [multiple nodes](scale.md).
 | `openai_hosted` | **Default.** Session directory next to Pi. Not OpenAI's cloud. |
 | `hosted` | Alias for `openai_hosted`. Stored and returned as `openai_hosted`. |
 | `none` | No computer. MCP and chat only. |
-| `self_hosted` | Wait for an external runner. Create returns `environment_id` and a one-time `key`. Runner WebSocket: `/v1/environments/{environment_id}`. |
+| `self_hosted` | Not supported for now. Requests return `400` with type `not_implemented` (`environment type self_hosted is not supported`). It may come back later on worker protocol v2. Use `openai_hosted`. |
 
 `environment.capability_directories`: paths on the computer that contain
 `SKILL.md` trees. See [tools](tools.md).
@@ -600,8 +595,7 @@ written first, then packages install, then setup commands run, before
 the first agent turn. A nonzero install or setup exit emits
 `agent.session.environment.failed` and fails the session; Pi does not
 start. `packages`, `setup_commands`, `env`, `files`, and `skills` on
-`none` or `self_hosted` return `400`. `network` on `self_hosted`
-returns `400`.
+`none` return `400`.
 On environment type `none` it is ignored. Isolation `none` cannot
 enforce `disabled` or `restricted` and fails the environment instead.
 Session `network` cannot open hosts that `[sandbox.network]` forbids.
@@ -652,9 +646,8 @@ example is `examples/sessions/openai_sdk.py`. Create-and-stream steps are in
 turn failed. The session stays `idle` so a follow-up message works.
 That is a turn failure (`agent.session.turn.failed`), not
 `agent.session.failed`. A non-stream create that fails the first turn
-returns `502`. In this release the body `code` stays
-`model_host_error` for an upstream failure, and `detail_code` is the
-specific code. The body also has `failure_source`, `upstream_status`,
+returns `502`. The body `code` is the
+specific code (copied in `detail_code`, with `legacy_code` still `model_host_error` for upstream failures). The body also has `failure_source`, `upstream_status`,
 `retryable`, and `upstream_attempts` when a count is known. A terminal session failure emits
 `agent.session.error` and then `agent.session.failed`, and status
 becomes `failed`. Codes, sources, and log levels are in

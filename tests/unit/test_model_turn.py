@@ -89,7 +89,9 @@ async def test_run_turn_model_required_reaches_session(
 
 async def test_turn_catches_unavailable_model(store: Store, settings: Settings) -> None:
     tenant_id, session_id = await _session(store)
-    host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
+    host = settings.model_copy(
+        update={"model_base_url": "http://model.test/v1", "error_codes": "legacy"}
+    )
     harness = FakeHarness()
     harness.fail_message = "model missing is not available"
     await run_turn(

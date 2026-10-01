@@ -22,7 +22,7 @@ def _user_id(request: Request) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-@router.post("/v1/templates")
+@router.post("/v1/apipi/templates")
 async def create_template(
     body: TemplateCreate,
     request: Request,
@@ -36,7 +36,7 @@ async def create_template(
     )
 
 
-@router.post("/v1/templates/import")
+@router.post("/v1/apipi/templates/import")
 async def import_template(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
@@ -57,7 +57,7 @@ async def import_template(
     )
 
 
-@router.get("/v1/templates")
+@router.get("/v1/apipi/templates")
 async def list_templates(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
@@ -79,7 +79,7 @@ async def list_templates(
     return payload
 
 
-@router.get("/v1/templates/{template_id}")
+@router.get("/v1/apipi/templates/{template_id}")
 async def read_template(
     template_id: str,
     request: Request,
@@ -101,7 +101,7 @@ async def read_template(
     return await _templates(request).get(tenant.id, template_id)
 
 
-@router.get("/v1/templates/{template_id}/download")
+@router.get("/v1/apipi/templates/{template_id}/download")
 async def download_template(
     template_id: str,
     request: Request,
@@ -130,7 +130,7 @@ async def download_template(
     )
 
 
-@router.delete("/v1/templates/{template_id}")
+@router.delete("/v1/apipi/templates/{template_id}")
 async def delete_template(
     template_id: str,
     request: Request,
@@ -152,7 +152,7 @@ async def delete_template(
     return await _templates(request).delete(tenant.id, template_id)
 
 
-@router.post("/v1/templates/{template_id}/agents")
+@router.post("/v1/apipi/templates/{template_id}/agents")
 async def create_agent_from_template(
     template_id: str,
     body: TemplateAgentCreate,
@@ -174,7 +174,7 @@ async def create_agent_from_template(
     )
 
 
-@router.get("/v1/agents/{agent_id}/export")
+@router.get("/v1/apipi/agents/{agent_id}/export")
 async def export_agent(
     agent_id: uuid.UUID,
     request: Request,

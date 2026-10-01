@@ -177,7 +177,7 @@ On a shared node set `APIPI_MAX_SESSIONS_PER_TENANT` lower than the
 node cap (for example 8). A tenant that would pass it gets `429` with
 code `capacity_tenant`.
 
-`self_hosted` still costs a Pi guest on this host. The runner disk is
+A session still costs a Pi guest on this host. Hosted workspace disk is
 elsewhere and is not capped here.
 
 ## Overprovision
@@ -225,7 +225,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_MAX_SESSIONS` | Live Pi on this node. Hard cap (`429` `capacity`). |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | Live Pi for one tenant (`429` `capacity_tenant`). |
 | `APIPI_MICROVM_MEM_MIB` / `APIPI_MICROVM_VCPUS` / `APIPI_SANDBOX_L_VCPUS` | Guest RAM and vCPUs. Raise RAM for the browser image. `S` and non-browser `M` stay at 1 vCPU. `L` defaults to 2. Browser guests get at least 2 even on `M`. |
-| `APIPI_IDLE_TTL` | Kill idle Pi for `none` and `self_hosted` (default 15 minutes) and free a live slot. Hosted computers use sandbox TTL. |
+| `APIPI_IDLE_TTL` | Kill idle Pi for `none` (default 15 minutes) and free a live slot. Hosted computers use sandbox TTL. |
 | `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | Stop hosted Pi and delete the workspace (default 1 hour). |
 | `APIPI_TURN_TIMEOUT` | Cancel a stuck turn (default 10 minutes). |
 | `APIPI_DB_POOL_SIZE` | Postgres connections from this process (default 5). |

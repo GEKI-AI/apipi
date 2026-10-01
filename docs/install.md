@@ -264,7 +264,7 @@ docker compose up --build
 That publishes Postgres on `5432` and the API on `8000` at
 `0.0.0.0`. Set `OPENAI_BASE_URL` or serve exits. Put
 `APIPI_WORKER_TOKEN` in the environment so workers can connect.
-`self_hosted` runners still attach to `/v1/environments/{id}` on the
+Workers attach to `/internal/worker` on the
 API; they are not the worker.
 
 On a KVM host:

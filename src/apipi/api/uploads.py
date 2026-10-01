@@ -26,7 +26,7 @@ def _uploads(request: Request) -> Any:
     return request.app.state.gateway.uploads
 
 
-@router.post("/v1/uploads")
+@router.post("/v1/apipi/uploads")
 async def create_upload(
     body: UploadCreate,
     request: Request,
@@ -45,7 +45,7 @@ async def create_upload(
     )
 
 
-@router.post("/v1/uploads/{upload_id}/complete")
+@router.post("/v1/apipi/uploads/{upload_id}/complete")
 async def complete_upload(
     upload_id: uuid.UUID,
     request: Request,

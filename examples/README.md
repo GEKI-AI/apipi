@@ -9,7 +9,6 @@ chat playground. Keys come from the environment, not from these files.
 | [extend_fastapi.py](extend_fastapi.py) | Extend ApiPi: Agents API plus `GET /ok` in one FastAPI app. Run `apipi migrate` on that SQLite file first. See [Extending ApiPi](../docs/extending.md). |
 | [webpage-check/](webpage-check/) | Extend ApiPi: `POST /examples/webpage-check` fetches a URL with bash and streams plain text |
 | [playground/](playground/) | Vite React playground (agents, sessions, turns, artifacts) |
-| [self_hosted_runner.py](self_hosted_runner.py) | Local directory as a `self_hosted` computer |
 | [apipi.toml](apipi.toml) | Gateway settings file |
 | [env.example](env.example) | Dotenv template; copy to `.env` at the repo root |
 | [auth_callback.py](auth_callback.py) | Auth callback (`APIPI_AUTH`) |
@@ -61,35 +60,7 @@ session. `GET /v1/models` on the gateway must be enabled
 (`APIPI_FORWARD_MODELS`, on by default).
 
 Artifact bytes exist after a turn completes. Files under `outputs/`
-are copied into the host store then. Idle Pi TTL for `none` and
-`self_hosted` is `APIPI_IDLE_TTL` (default 15 minutes). A hosted
+are copied into the host store then. Idle Pi TTL for `none` is
+`APIPI_IDLE_TTL` (default 15 minutes). A hosted
 workspace lasts until `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1
 hour).
-
-## self_hosted runner
-
-[self_hosted_runner.py](self_hosted_runner.py) attaches a local
-directory as the session computer. Create a session with
-`environment.type` `self_hosted`. The create response includes
-`environment_id` and a one-time `key`. The runner opens
-`/v1/environments/{environment_id}` as a WebSocket and sends `hello`
-with that key. After that it serves `exec`, `read`, `write`, `edit`,
-`list`, `artifact`, `ping`, and `close` against the directory. The
-protocol is in [docs/environments.md](../docs/environments.md).
-
-The `websockets` package is not an ApiPi dependency. Install it for
-this script only. The gateway must already be running. `OPENAI_BASE_URL`
-is the ApiPi gateway. If you omit it, the default is
-`http://localhost:8000/v1`. Put the one-time key in the environment,
-not in the file:
-
-```
-export OPENAI_BASE_URL=http://localhost:8000/v1
-export APIPI_ENVIRONMENT_ID=...
-export APIPI_ENVIRONMENT_KEY=...
-uv run --with websockets python examples/self_hosted_runner.py --dir ./workspace
-```
-
-`--dir` is the workspace. You can also set `APIPI_RUNNER_DIR`. File
-and shell tools reach that folder over the socket once the runner is
-connected.

@@ -5,8 +5,7 @@ How you load-balance depends on whether Pi lives in the API process.
 With `apipi serve --api-only` and `apipi worker`, a session is owned by
 a **worker lease**. API replicas are interchangeable for create,
 follow-up REST, and SSE. SSE also polls the store. You do not need
-sticky routing for live Pi. `self_hosted` runner sockets still stick
-to the API process that created them.
+sticky routing for live Pi.
 
 Combined `apipi serve` (no `--api-only`) still owns live Pi, local
 `openai_hosted` directories, and in-memory SSE in that process.
@@ -63,10 +62,7 @@ replay from the store.
 For **combined serve**, follow-up REST and SSE must return to the node
 that owns Pi. Hash that path segment.
 
-`/v1/environments/{environment_id}` is the `self_hosted` runner
-WebSocket. That id is not the session id. For `self_hosted` with more
-than one API process, use a dedicated tenant pool with one node, or
-send the runner to the instance shown in `X-ApiPi-Instance` on create.
+There is no runner WebSocket. `self_hosted` is currently not supported (see [environments](environments.md)).
 
 ## nginx
 
@@ -88,14 +84,6 @@ upstream apipi_api {
 
 server {
     listen 443 ssl;
-    location /v1/environments/ {
-        proxy_pass http://apipi_api;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 3600s;
-    }
     location / {
         proxy_pass http://apipi_api;
         proxy_http_version 1.1;
@@ -123,9 +111,7 @@ upstream apipi_session {
 }
 ```
 
-Send `/v1/agents/sessions/…` to `apipi_session` in that mode. The
-`/v1/environments/` location is for a single-node tenant pool or for a
-runner you already send to the owning instance.
+Send `/v1/agents/sessions/…` to `apipi_session` in that mode.
 
 ## Tenant pools
 

@@ -169,7 +169,9 @@ async def test_upstream_turn_keeps_legacy_public_code(
     store: Store, settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
     tenant_id, session_id = await _ready(store)
-    host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
+    host = settings.model_copy(
+        update={"model_base_url": "http://model.test/v1", "error_codes": "legacy"}
+    )
     harness = FakeHarness()
     harness.fail_message = "429 Rate limit reached for requests"
     caplog.set_level(logging.WARNING, logger="apipi")
@@ -237,6 +239,35 @@ async def test_specific_mode_puts_code_on_session_error(
     assert isinstance(error.data, dict)
     assert error.data["code"] == "upstream_5xx"
     assert error.data["detail_code"] == "upstream_5xx"
+    assert error.data["legacy_code"] == "model_host_error"
+
+
+def test_error_codes_default_is_specific() -> None:
+    assert Settings.model_fields["error_codes"].default == "specific"
+
+
+async def test_default_error_codes_are_specific(
+    store: Store, settings: Settings
+) -> None:
+    assert settings.error_codes == "specific"
+    tenant_id, session_id = await _ready(store)
+    host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
+    harness = FakeHarness()
+    harness.fail_message = "503: overloaded"
+    await run_turn(
+        store,
+        EventHub(),
+        cast(Harness, harness),
+        tenant_id,
+        session_id,
+        "hello",
+        settings=host,
+    )
+    async with store.session() as db:
+        events = await list_events(db, tenant_id, session_id)
+    error = next(event for event in events if event.type == "agent.session.error")
+    assert isinstance(error.data, dict)
+    assert error.data["code"] == "upstream_5xx"
     assert error.data["legacy_code"] == "model_host_error"
 
 
@@ -431,7 +462,9 @@ async def test_pi_exited_keeps_legacy_error_code(
     store: Store, settings: Settings
 ) -> None:
     tenant_id, session_id = await _ready(store)
-    host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
+    host = settings.model_copy(
+        update={"model_base_url": "http://model.test/v1", "error_codes": "legacy"}
+    )
     await run_turn(
         store,
         EventHub(),

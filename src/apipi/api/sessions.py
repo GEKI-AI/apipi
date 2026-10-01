@@ -380,7 +380,7 @@ async def get_session_events(
     )
 
 
-@router.get("/v1/agents/sessions/{session_id}/export")
+@router.get("/v1/apipi/sessions/{session_id}/export")
 async def export_agent_session(
     session_id: uuid.UUID,
     request: Request,
@@ -474,7 +474,7 @@ async def read_session_artifact_content(
     )
 
 
-@router.post("/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/download")
+@router.post("/v1/apipi/sessions/{session_id}/artifacts/{artifact_id}/download")
 async def download_session_artifact(
     session_id: uuid.UUID,
     artifact_id: uuid.UUID,

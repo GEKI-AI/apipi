@@ -11,8 +11,6 @@ from typing import Any, Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.config import CapacityError, Settings
-from apipi.env.computer import Computer, bind_computer, computer_item_events
-from apipi.env.hub import EnvironmentHub
 from apipi.env.setup import SetupError, provision_hosted_async, session_env_from
 from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
@@ -217,7 +215,6 @@ class FakeHarness:
         self.skill_dirs: list[str] | None = None
         self.instructions: str | None = None
         self.tools: bool | None = None
-        self.computer_calls: list[dict[str, Any]] = []
         self.hold = False
         self.fail_message: str | None = None
         self.usage: dict[str, int] = dict(FAKE_USAGE)
@@ -240,7 +237,6 @@ class FakeHarness:
         mcp_http: list[Any] | None = None,
         skill_dirs: list[str] | None = None,
         abort: asyncio.Event | None = None,
-        computer: Computer | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         del session_id, cwd
@@ -263,21 +259,6 @@ class FakeHarness:
             if isinstance(raw_instructions, str) and raw_instructions
             else None
         )
-        if tools and computer is not None and self.computer_calls:
-            calls = list(self.computer_calls)
-            self.computer_calls = []
-            for call in calls:
-                name = call.get("name")
-                call_id = call.get("call_id")
-                arguments = call.get("arguments")
-                if not isinstance(name, str) or not isinstance(call_id, str):
-                    continue
-                if not isinstance(arguments, dict):
-                    arguments = {}
-                result = await computer(name, arguments)
-                is_error = not bool(result.get("ok"))
-                for event in computer_item_events(call_id, name, is_error=is_error):
-                    yield event
         if tool_result is not None:
             if tool_result.get("success"):
                 output = tool_result.get("output")
@@ -338,31 +319,15 @@ def _function_tools(tools: list[Any] | None) -> list[dict[str, Any]]:
     ]
 
 
-def _environment_id(environment: dict[str, Any]) -> uuid.UUID | None:
-    raw = environment.get("id")
-    if not isinstance(raw, str) or raw == "":
-        return None
-    try:
-        return uuid.UUID(raw)
-    except ValueError:
-        return None
-
-
 def _cwd_and_tools(
-    environment: dict[str, Any], env_hub: EnvironmentHub | None = None
-) -> tuple[str | None, bool, uuid.UUID | None]:
+    environment: dict[str, Any],
+) -> tuple[str | None, bool]:
     env_type = environment.get("type")
     if env_type == "none":
-        return None, False, None
-    if env_type == "self_hosted":
-        env_id = _environment_id(environment)
-        connected = (
-            env_hub is not None and env_id is not None and env_hub.connected(env_id)
-        )
-        return None, connected, env_id if connected else None
+        return None, False
     cwd = environment.get("directory")
     cwd_path = cwd if isinstance(cwd, str) else None
-    return cwd_path, True, None
+    return cwd_path, True
 
 
 def with_env_actions(current: list[Any], actions: list[Any]) -> list[Any]:
@@ -419,7 +384,7 @@ def _pi_spawn_overrides(
 
 
 def _skill_dirs(environment: dict[str, Any]) -> list[str]:
-    cwd_path, _tools, _env_id = _cwd_and_tools(environment)
+    cwd_path, _tools = _cwd_and_tools(environment)
     workspace = Path(cwd_path) if cwd_path is not None else None
     raw = environment.get("capability_directories")
     directories = None
@@ -913,7 +878,6 @@ async def _complete_turn(
     tracing: Tracing | None = None,
     settings: Settings | None = None,
     proc: PiProc | None = None,
-    env_hub: EnvironmentHub | None = None,
     user_id: str | None = None,
     blobs: ArtifactBlobs | None = None,
 ) -> None:
@@ -938,7 +902,6 @@ async def _complete_turn(
             settings,
             session_id,
             proc,
-            env_hub,
             turn_id=turn_id,
             blobs=blobs,
         )
@@ -1263,7 +1226,6 @@ async def fail_environment(
 async def load_boot_kwargs(
     store: Store,
     settings: Settings,
-    env_hub: EnvironmentHub | None,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     *,
@@ -1319,7 +1281,7 @@ async def load_boot_kwargs(
             await SkillService(store, backend, settings).install(
                 tenant_id, row.environment, Path(directory)
             )
-        cwd_path, tools, _env_id = _cwd_and_tools(row.environment, env_hub)
+        cwd_path, tools = _cwd_and_tools(row.environment)
         sandbox_size = sandbox_size_of(row.environment)
         stored_image = sandbox_image_of(row.environment)
         sandbox_image = stored_image or image_for_size(sandbox_size)
@@ -1418,7 +1380,6 @@ async def run_turn(
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
     turn_timeout: timedelta | None = None,
-    env_hub: EnvironmentHub | None = None,
     settings: Settings | None = None,
     pool: PiPool | None = None,
     api_key: str | None = None,
@@ -1439,7 +1400,6 @@ async def run_turn(
         skill_dirs: list[str]
         model: str | None
         instructions: str | None
-        computer: Computer | None
         env_type: str | None
         sandbox_mem: int | None
         sandbox_image: str
@@ -1548,7 +1508,7 @@ async def run_turn(
                     code="artifact_store",
                 )
                 return
-            cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
+            cwd_path, tools = _cwd_and_tools(row.environment)
             cache_error: ObjectStoreError | None = None
             if settings is not None and cwd_path:
                 try:
@@ -1558,11 +1518,6 @@ async def run_turn(
                         cache_error = exc
                     else:
                         raise
-            computer = (
-                bind_computer(env_hub, env_id)
-                if env_hub is not None and env_id is not None
-                else None
-            )
             skill_dirs = _skill_dirs(row.environment)
             env_type = row.environment.get("type")
             chat = is_chat_profile(session_metadata)
@@ -1676,7 +1631,6 @@ async def run_turn(
                     mcp_http=mcp_http,
                     skill_dirs=skill_dirs,
                     abort=abort,
-                    computer=computer,
                     tenant_id=tenant_id,
                     model=model,
                     instructions=composed,
@@ -1855,7 +1809,6 @@ async def run_turn(
                     tracing=tracing,
                     settings=settings,
                     proc=pool.peek(session_id) if pool is not None else None,
-                    env_hub=env_hub,
                     user_id=user_id,
                     blobs=blobs,
                 )
@@ -1882,7 +1835,6 @@ async def continue_turn(
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
     turn_timeout: timedelta | None = None,
-    env_hub: EnvironmentHub | None = None,
     settings: Settings | None = None,
     pool: PiPool | None = None,
     api_key: str | None = None,
@@ -1898,7 +1850,6 @@ async def continue_turn(
     result: dict[str, Any]
     model: str | None = None
     instructions: str | None = None
-    computer: Computer | None
     env_type: str | None
     spawn_ids = _spawn_identity_empty(user_id, org_id)
     async with store.session() as db:
@@ -1957,7 +1908,7 @@ async def continue_turn(
         if pool is not None:
             pool.hold(session_id)
         ensure_openai_workspace(row.environment)
-        cwd_path, tools, env_id = _cwd_and_tools(row.environment, env_hub)
+        cwd_path, tools = _cwd_and_tools(row.environment)
         if settings is not None and cwd_path:
             try:
                 await restore_pi_session(settings, row, Path(cwd_path), blobs=blobs)
@@ -1979,11 +1930,6 @@ async def continue_turn(
                     )
                     return
                 raise
-        computer = (
-            bind_computer(env_hub, env_id)
-            if env_hub is not None and env_id is not None
-            else None
-        )
         (
             function_tools,
             model,
@@ -2056,7 +2002,6 @@ async def continue_turn(
                     tool_result=result,
                     mcp_http=mcp_http,
                     skill_dirs=skill_dirs,
-                    computer=computer,
                     tenant_id=tenant_id,
                     model=model,
                     instructions=composed,
@@ -2213,7 +2158,6 @@ async def continue_turn(
                     tracing=tracing,
                     settings=settings,
                     proc=pool.peek(session_id) if pool is not None else None,
-                    env_hub=env_hub,
                     user_id=user_id,
                     blobs=blobs,
                 )

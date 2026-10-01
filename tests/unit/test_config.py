@@ -204,10 +204,8 @@ def test_sandbox_ttl_zero_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.delenv("APIPI_WORKSPACE_TTL", raising=False)
     monkeypatch.setenv("APIPI_SANDBOX_TTL_OPENAI_HOSTED", "0")
-    monkeypatch.setenv("APIPI_SANDBOX_TTL_SELF_HOSTED", "0")
     settings = Settings()
     assert settings.workspace_ttl is None
-    assert settings.sandbox_ttl_self_hosted is None
     assert settings.sandbox_ttl_for("openai_hosted") is None
     assert settings.pi_idle_ttl_for("openai_hosted") is None
     assert settings.pi_idle_ttl_for("none") == timedelta(minutes=15)
@@ -671,7 +669,6 @@ def test_nested_toml_sandbox_and_pi(
         "egress_mbit = 25\n"
         "[sandbox.ttl]\n"
         'openai_hosted = "45m"\n'
-        'self_hosted = "0"\n'
         "[sandbox.browser]\n"
         "auto_playwright = false\n"
     )
@@ -697,7 +694,6 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.microvm_egress_hosts == "mcp.example.com"
     assert settings.microvm_egress_mbit == 25
     assert settings.workspace_ttl == timedelta(minutes=45)
-    assert settings.sandbox_ttl_self_hosted is None
     assert not hasattr(settings, "sandbox_auto_playwright")
 
 

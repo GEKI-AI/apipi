@@ -6,8 +6,6 @@ _HOSTED = frozenset({"openai_hosted", "hosted"})
 def _computer(env_type: str | None, chat: bool) -> str | None:
     if chat or not env_type or env_type == "none":
         return None
-    if env_type == "self_hosted":
-        return "self_hosted"
     if env_type in _HOSTED:
         return "hosted"
     return None

@@ -132,7 +132,7 @@ rates and saturation. Use logs for error codes.
 
 ## Usage export
 
-`GET /v1/usage` is the hot store: tenant-scoped session, turn, or
+`GET /v1/apipi/usage` is the hot store: tenant-scoped session, turn, or
 day. Long-term “who used what” is `APIPI_USAGE_EXPORT_URL`: one JSON
 event per turn, tokens and counts only, never USD. Join with
 `tenant_id`, `user_id` (when the auth plugin set it), `agent_id`,

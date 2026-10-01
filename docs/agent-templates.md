@@ -16,7 +16,7 @@ Another tenant's template is `404`.
 ## Routes
 
 The routes, the template object, and the create-agent response are in
-[API](api.md#templates). `GET /v1/agents/{agent_id}/export` builds the
+[API](api.md#templates). `GET /v1/apipi/agents/{agent_id}/export` builds the
 same zip without storing a template.
 
 ## Bundle layout
@@ -32,7 +32,7 @@ README.md
 ```
 
 `README.md` is optional and ignored on import. Skill zips are the same
-zip `GET /v1/skills/{id}/download` returns. Files are the bytes that
+zip `GET /v1/apipi/skills/{id}/download` returns. Files are the bytes that
 were inline or stored as `file_id` on the agent's session defaults.
 
 `agent.json` uses schema version `1.0` and `kind` `apipi.agent`. It
@@ -62,7 +62,7 @@ plain env values.
 Vault ids, credential ids, and tokens are not written. The names are
 listed in `requires`.
 
-On `POST /v1/templates/{id}/agents`, `secrets` maps those names to
+On `POST /v1/apipi/templates/{id}/agents`, `secrets` maps those names to
 values. Those values are stored where agent create already stores them:
 header strings and env strings. `credentials` maps a name to a vault or
 credential id in the caller's tenant. A credential id also fills

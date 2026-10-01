@@ -46,7 +46,7 @@ def _zip_skill() -> bytes:
 
 async def test_presign_requires_s3(client: AsyncClient) -> None:
     created = await client.post(
-        "/v1/uploads",
+        "/v1/apipi/uploads",
         headers=_auth("t"),
         json={
             "purpose": "file",
@@ -73,7 +73,7 @@ async def test_file_presign_put_then_complete(settings: Settings, store: Store) 
     ) as client:
         token = "up2"
         created = await client.post(
-            "/v1/uploads",
+            "/v1/apipi/uploads",
             headers=_auth(token),
             json={
                 "purpose": "attachment",
@@ -86,7 +86,7 @@ async def test_file_presign_put_then_complete(settings: Settings, store: Store) 
         file_id = created.json()["object_id"]
         upload_id = created.json()["upload_id"]
         missing = await client.post(
-            f"/v1/uploads/{upload_id}/complete",
+            f"/v1/apipi/uploads/{upload_id}/complete",
             headers=_auth(token),
             json={},
         )
@@ -100,7 +100,7 @@ async def test_file_presign_put_then_complete(settings: Settings, store: Store) 
             ContentType="text/plain",
         )
         done = await client.post(
-            f"/v1/uploads/{upload_id}/complete",
+            f"/v1/apipi/uploads/{upload_id}/complete",
             headers=_auth(token),
             json={},
         )
@@ -108,13 +108,13 @@ async def test_file_presign_put_then_complete(settings: Settings, store: Store) 
         assert done.json()["id"] == file_id
         assert done.json()["bytes"] == 5
         other = await client.post(
-            f"/v1/uploads/{upload_id}/complete",
+            f"/v1/apipi/uploads/{upload_id}/complete",
             headers=_auth("other"),
             json={},
         )
         assert other.status_code == 404
         download = await client.post(
-            f"/v1/files/{file_id}/download", headers=_auth(token)
+            f"/v1/apipi/files/{file_id}/download", headers=_auth(token)
         )
         assert download.status_code == 200
         assert download.json()["method"] == "GET"
@@ -140,7 +140,7 @@ async def test_skill_presign_complete(settings: Settings, store: Store) -> None:
     ) as client:
         token = "sk"
         created = await client.post(
-            "/v1/uploads",
+            "/v1/apipi/uploads",
             headers=_auth(token),
             json={
                 "purpose": "skill",
@@ -159,7 +159,7 @@ async def test_skill_presign_complete(settings: Settings, store: Store) -> None:
             ContentType="application/zip",
         )
         done = await client.post(
-            f"/v1/uploads/{upload_id}/complete",
+            f"/v1/apipi/uploads/{upload_id}/complete",
             headers=_auth(token),
             json={},
         )
@@ -167,7 +167,7 @@ async def test_skill_presign_complete(settings: Settings, store: Store) -> None:
         assert done.json()["id"] == skill_id
         assert done.json()["name"] == "demo"
         download = await client.post(
-            f"/v1/skills/{skill_id}/download", headers=_auth(token)
+            f"/v1/apipi/skills/{skill_id}/download", headers=_auth(token)
         )
         assert download.status_code == 200
         assert download.json()["method"] == "GET"
@@ -180,7 +180,7 @@ async def test_skill_presign_complete(settings: Settings, store: Store) -> None:
 
 async def test_upload_oversize_rejected(client: AsyncClient) -> None:
     created = await client.post(
-        "/v1/uploads",
+        "/v1/apipi/uploads",
         headers=_auth("t"),
         json={
             "purpose": "file",
@@ -228,7 +228,7 @@ async def test_artifact_download_forces_attachment(
             )
             artifact_id = artifact.id
         download = await client.post(
-            f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/download",
+            f"/v1/apipi/sessions/{session_id}/artifacts/{artifact_id}/download",
             headers=_auth(token),
         )
         assert download.status_code == 200

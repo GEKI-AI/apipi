@@ -1,8 +1,7 @@
 # Workers
 
 A worker is an operator process that runs Pi and the sandbox. It is
-not a tenant `self_hosted` runner. Runners attach with a per-session
-key on `/v1/environments/{id}`. Workers use a different URL, a
+not a tenant computer. Workers attach with a lease on `/internal/worker`. Workers use a different URL, a
 different secret, and different messages. Protocol fields are in
 [sandbox workers](workers.md).
 
@@ -111,10 +110,10 @@ Copy-paste recipes are on [install](install.md). Unit files are in
 | --- | --- | --- |
 | Tenant bearer | Your app | `Authorization` on Agents API routes. Mapped to a tenant. Not stored. |
 | `APIPI_WORKER_TOKEN` | Operator | Worker `Authorization` on `/internal/worker`. Compared in memory. Not in Postgres. |
-| Environment `key` | Tenant runner | `hello` on `/v1/environments/{id}`. One session. |
+
 
 Do not put the worker token in a browser. Do not reuse it as a tenant
-key. `self_hosted` is the customer's computer; they sandbox it. The
+key. The computer always shares Pi's isolation boundary. The
 worker is yours.
 
 ## What this is not

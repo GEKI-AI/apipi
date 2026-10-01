@@ -11,7 +11,6 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.config import ConfigError, DiskLimitError, Settings
-from apipi.env.hub import EnvDisconnected, EnvironmentHub
 from apipi.services.skills import copy_capability_directories
 from apipi.store.blobs import (
     ArtifactBlobs,
@@ -222,36 +221,6 @@ async def _persist_files(
         latest[rel] = data
 
 
-async def _harvest_self_hosted(
-    env_hub: EnvironmentHub, env_id: uuid.UUID
-) -> list[tuple[str, bytes]]:
-    files: list[tuple[str, bytes]] = []
-    for folder in PUBLISH_DIRS:
-        try:
-            listed = await env_hub.call(env_id, "list", path=folder)
-        except (EnvDisconnected, TimeoutError):
-            continue
-        if not listed.get("ok"):
-            continue
-        names = listed.get("names")
-        if not isinstance(names, list):
-            continue
-        for raw in names:
-            if not isinstance(raw, str) or not _publish_path(raw):
-                continue
-            try:
-                result = await env_hub.call(env_id, "read", path=raw)
-            except (EnvDisconnected, TimeoutError):
-                continue
-            if not result.get("ok"):
-                continue
-            content = result.get("content")
-            if not isinstance(content, str):
-                continue
-            files.append((raw, content.encode()))
-    return files
-
-
 async def _hosted_files(
     proc: PiProc | None,
     dest: Path | None,
@@ -299,7 +268,6 @@ async def harvest_session(
     settings: Settings,
     session_id: uuid.UUID,
     proc: PiProc | None,
-    env_hub: EnvironmentHub | None = None,
     *,
     turn_id: uuid.UUID | None = None,
     sync_workspace: bool = False,
@@ -311,11 +279,7 @@ async def harvest_session(
     env_type = row.environment.get("type")
     files: list[tuple[str, bytes]] = []
     workspace_error: DiskLimitError | None = None
-    if env_type == "self_hosted" and env_hub is not None:
-        env_id_raw = row.environment.get("id")
-        if isinstance(env_id_raw, str):
-            files = await _harvest_self_hosted(env_hub, uuid.UUID(env_id_raw))
-    elif env_type == "openai_hosted":
+    if env_type == "openai_hosted":
         directory = row.environment.get("directory")
         dest = Path(directory) if isinstance(directory, str) and directory else None
         files, workspace_error = await _hosted_files(

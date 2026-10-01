@@ -1,4 +1,3 @@
-import logging
 import uuid
 
 from fastapi.routing import APIRoute
@@ -13,18 +12,15 @@ _AGENTS_ALLOW = frozenset(
     {
         "/v1/agents",
         "/v1/agents/{agent_id}",
-        "/v1/agents/{agent_id}/export",
         "/v1/agents/environments/{environment_id}",
         "/v1/agents/sessions",
         "/v1/agents/sessions/{session_id}",
         "/v1/agents/sessions/{session_id}/events",
-        "/v1/agents/sessions/{session_id}/export",
         "/v1/agents/sessions/{session_id}/turns",
         "/v1/agents/sessions/{session_id}/turns/{turn_id}",
         "/v1/agents/sessions/{session_id}/items",
         "/v1/agents/sessions/{session_id}/artifacts",
         "/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
-        "/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/download",
         "/v1/agents/sessions/{session_id}/artifacts/{artifact_id}",
         "/v1/agents/vaults",
         "/v1/agents/vaults/{vault_id}",
@@ -42,6 +38,8 @@ _CANONICAL = frozenset(
         "/v1/apipi/agents/{agent_id}/export",
         "/v1/apipi/sessions/{session_id}/export",
         "/v1/apipi/sessions/{session_id}/artifacts/{artifact_id}/download",
+        "/v1/apipi/files/{file_id}/download",
+        "/v1/apipi/skills/{skill_id}/download",
     }
 )
 
@@ -163,14 +161,13 @@ def test_body_functions_are_the_public_shapes() -> None:
     }
 
 
-async def test_usage_alias_and_canonical(client: AsyncClient, caplog) -> None:
+async def test_old_alias_paths_are_gone(client: AsyncClient) -> None:
     token = "namespace"
-    caplog.set_level(logging.WARNING, logger="apipi.api")
     old = await client.get("/v1/usage", headers=_auth(token))
+    assert old.status_code == 404
     new = await client.get("/v1/apipi/usage", headers=_auth(token))
-    assert old.status_code == new.status_code == 400
-    assert old.json() == new.json()
-    assert any("deprecated route /v1/usage" in rec.message for rec in caplog.records)
+    assert new.status_code == 400
+    assert new.json() != old.json()
 
 
 async def test_container_size_maps_to_sandbox_size(client: AsyncClient) -> None:

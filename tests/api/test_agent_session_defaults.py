@@ -167,7 +167,7 @@ async def test_inherit_false_and_chat_type_rule(client: AsyncClient) -> None:
     assert "env" not in opted.json()["environment"]
     assert opted.json()["environment"]["sandbox_size"] == "S"
     chat = await client.post(
-        "/v1/chat/sessions",
+        "/v1/apipi/chat/sessions",
         headers=_auth(token),
         json={"agent_id": agent_id},
     )

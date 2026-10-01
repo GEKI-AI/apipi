@@ -141,7 +141,7 @@ The suite starts one `apipi serve --api-only` process and one
 `apipi worker` with `APIPI_RUN_MODE=microvm`, then runs every script in
 `examples/sessions/` (write-and-run `tree.py`, inject-and-sort a file,
 size `L` browser screenshot). The playground and
-`examples/self_hosted_runner.py` are separate; they are not in this
+Session examples are separate; they are not in this
 script.
 
 ### Requirements

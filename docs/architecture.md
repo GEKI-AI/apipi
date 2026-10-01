@@ -17,7 +17,6 @@ The explanation of the system is under [Concepts](concepts.md):
       Pi  (+ MCP)           none | microvm
            |
            +-- local files        next to Pi
-           +-- or remote env      self_hosted runner
            +-- HTTP MCP           e.g. Tavily
 ```
 

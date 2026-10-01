@@ -69,7 +69,6 @@ async def test_remote_turn_via_worker(settings: Settings, store: Store) -> None:
         store=store,
         harness=FakeHarness(),
         hub=app.state.event_hub,
-        env_hub=app.state.env_hub,
     )
     token = "t"
     worker = FakeWorker(app, "worker-secret")
@@ -148,7 +147,6 @@ async def test_get_during_remote_turn_stays_in_progress(
         store=store,
         harness=held,
         hub=app.state.event_hub,
-        env_hub=app.state.env_hub,
     )
     worker = FakeWorker(app, "worker-secret")
     ready = asyncio.Event()
@@ -249,7 +247,6 @@ async def test_remote_turn_records_metrics_and_spans_on_worker(
         store=store,
         harness=FakeHarness(),
         hub=app.state.event_hub,
-        env_hub=app.state.env_hub,
         metrics=worker_metrics,
         tracing=tracing,
     )
@@ -334,7 +331,6 @@ async def test_remote_turn_shares_trace_and_assign_span(
         store=store,
         harness=FakeHarness(),
         hub=app.state.event_hub,
-        env_hub=app.state.env_hub,
         tracing=worker_tracing,
     )
     token = "t"

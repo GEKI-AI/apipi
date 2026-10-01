@@ -2,7 +2,7 @@
 
 Chat is a light Pi pool and a GEKI-native HTTP facade. Computer
 agents stay on microVM workers. Both use the same session and event
-store. Clients of `/v1/chat` never set or see `environment`.
+store. Clients of `/v1/apipi/chat` never set or see `environment`.
 
 This page is the operator layout and the product rules. Route fields
 are in [API](api.md#chat). Worker pick rules are in
@@ -39,16 +39,16 @@ metrics are on. See
 [sandbox workers](workers.md#drain-and-expiry) and
 [observability](observability.md#prometheus).
 
-## `/v1/chat`
+## `/v1/apipi/chat`
 
-`POST /v1/chat/sessions` creates a session in the same store as
+`POST /v1/apipi/chat/sessions` creates a session in the same store as
 Agents. The gateway stores `environment.type=none` and
 `metadata.apipi.session_kind=chat`. Public chat JSON has no
 `environment` field. Sending `environment` is `400` with code
 `unknown_field`.
 
 Do not document or send `environment.type=none` on the chat API.
-That field is an Agents API value. Chat clients talk to `/v1/chat`
+That field is an Agents API value. Chat clients talk to `/v1/apipi/chat`
 and omit environment.
 
 Chat tools are function tools and MCP only. workspace skills, and a computer are `400` with code
@@ -73,7 +73,7 @@ is `APIPI_ENV_NONE_PLACEMENT` / `[placement].env_none`:
 | `microvm` | Legacy: microVM workers. The guest still boots, which costs RAM for a session with no computer |
 | `reject` | `400` with code `placement` |
 
-`/v1/chat` always uses chat placement. The flag only affects raw
+`/v1/apipi/chat` always uses chat placement. The flag only affects raw
 Agents + `environment.type=none`.
 
 Footgun: a microVM-only fleet with the default `chat` placement
@@ -87,7 +87,7 @@ guest.
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
 | `APIPI_RUN_MODE` | `[sandbox].backend` | `none` | Worker process: `chat` for the chat pool, `microvm` for computers. `none` is local/CI. |
-| `APIPI_ENV_NONE_PLACEMENT` | `[placement].env_none` | `chat` | Agents `environment.type=none` → `chat`, `microvm`, or `reject`. Ignored by `/v1/chat`. |
+| `APIPI_ENV_NONE_PLACEMENT` | `[placement].env_none` | `chat` | Agents `environment.type=none` → `chat`, `microvm`, or `reject`. Ignored by `/v1/apipi/chat`. |
 | `APIPI_API_ONLY` | `api_only` | off | API process with no in-process Pi. Turns lease a worker. |
 | `APIPI_WORKER_TOKEN` | `worker_token` | unset | Shared secret for both pools. |
 
@@ -100,7 +100,7 @@ These are the Path A rules this version ships:
 1. Agents `environment.type=none` auto-routes to the chat pool when
    present (default `APIPI_ENV_NONE_PLACEMENT=chat`).
 2. Chat → computer is a new session only.
-3. `/v1/chat` and placement live in core ApiPi.
+3. `/v1/apipi/chat` and placement live in core ApiPi.
 
-A later optional non-Pi ChatHarness behind the same `/v1/chat` is
+A later optional non-Pi ChatHarness behind the same `/v1/apipi/chat` is
 parked. This version ships light Pi.

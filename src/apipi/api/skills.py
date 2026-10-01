@@ -66,7 +66,7 @@ async def read_skill(
     return await _skills(request).get(tenant.id, skill_id)
 
 
-@router.post("/v1/skills/{skill_id}/download")
+@router.post("/v1/apipi/skills/{skill_id}/download")
 async def download_skill(
     skill_id: str,
     request: Request,
