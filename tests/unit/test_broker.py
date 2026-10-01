@@ -277,6 +277,7 @@ def test_pi_env_with_broker_hides_secrets(tmp_path: Path) -> None:
             server_label="tavily",
             server_url="https://mcp.tavily.com/mcp",
             headers={"Authorization": "Bearer secret"},
+            allowed_tools=("search",),
         )
     ]
     env = pi_env(settings, mcp, api_key="real-key", broker=_Broker())
@@ -285,6 +286,7 @@ def test_pi_env_with_broker_hides_secrets(tmp_path: Path) -> None:
     assert "secret" not in env.values()
     assert env["APIPI_MCP_0_URL"] == "http://127.0.0.1:9/tok/mcp/0"
     assert "APIPI_MCP_0_AUTHORIZATION" not in env
+    assert env["APIPI_MCP_0_ALLOWED"] == "search"
 
 
 def test_plain_vault_creds_decrypt_for_broker() -> None:

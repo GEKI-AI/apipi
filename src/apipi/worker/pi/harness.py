@@ -104,19 +104,6 @@ class PiHarness:
         abort = _kwargs.get("abort")
         raw_images = _kwargs.get("images")
         images = raw_images if isinstance(raw_images, list) and raw_images else None
-        for server in mcp_http or []:
-            tool_list = [
-                {"name": tool.name, "description": tool.description}
-                for tool in getattr(server, "tools", ())
-            ]
-            yield (
-                "agent.session.turn.item.added",
-                {
-                    "item_type": "mcp_list_tools",
-                    "server_label": server.server_label,
-                    "tools": tool_list,
-                },
-            )
         stream = proc.prompt(text, images=images) if images else proc.prompt(text)
         try:
             async for event in stream:

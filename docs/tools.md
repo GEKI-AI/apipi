@@ -53,22 +53,23 @@ shown to the model. `connector_id` and `authorization` return
 `not_implemented`. `credential_id` and `required` work as before. A
 nested `transport` object is an unknown field.
 
-The gateway connects HTTP servers when the session is created, then
-hands them to Pi through a host credential broker. A thin Pi extension
-calls `pi.registerMcpServer()` with the broker URL, `direct` exposure,
-and the allowed tools. The guest does not receive MCP bearers. Model
-facing tool names are `mcp__<server>__<tool>`, sanitised and hashed
-when long. API output items still carry the original `server_label`
-and tool name. Each turn starts with one `mcp_list_tools` item per
-server. A connect failure at session create fails the session. A later
-server error does not fail the turn. The worker logs
-`pi.extension_error` with the server label, the phase, and the error,
-and the turn continues without that server's tools.
+The gateway checks the tool shape, the headers, and the SSRF guard when
+the session is created, then hands the servers to Pi through a host
+credential broker. Pi's built-in MCP client is the only client: it connects
+through the broker when the turn starts, so the gateway never probes the
+server. A thin Pi extension calls `pi.registerMcpServer()` with the broker
+URL, `direct` exposure, and the allowed tools. The guest does not receive
+MCP bearers. Model facing tool names are `mcp__<server>__<tool>`, sanitised
+and hashed when long. API output items still carry the original `server_label`
+and tool name. A server that is down or rejects the call does not fail the
+turn. The worker logs `pi.extension_error` with the server label, the phase,
+and the error, and the turn continues without that server's tools.
 
 Prefer a [vault](api.md#vaults) (`static_bearer` bound to
 `mcp_server_url`, attach `vault_ids` on the session).
 
-The SSRF guard runs on the gateway connect and on every broker call: the
+The SSRF guard runs when the session is created, when the broker starts,
+and on every broker call: the
 hostname is resolved and every address is checked, so DNS rebinding cannot
 swap in a private address after the check. There are no redirects to follow.
 Operators that run an MCP server on a private address (including local

@@ -17,6 +17,7 @@ def test_mcp_extension_source_is_pi_module() -> None:
     text = mcp_extension_source().decode()
     assert "registerMcpServer" in text
     assert "APIPI_MCP_SERVERS" in text
+    assert "toolExposure" in text
     assert "APIPI_IMAGE_CHECK" in text
     assert "attachStdio" not in text
     assert "APIPI_MCP_STDIO" not in text
