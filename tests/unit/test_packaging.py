@@ -42,4 +42,5 @@ def test_alembic_revisions_chain() -> None:
         "0020_mcp_list_tools.py",
         "0021_agent_revision.py",
         "0022_drop_agent_versions.py",
+        "0023_session_tools.py",
     ]

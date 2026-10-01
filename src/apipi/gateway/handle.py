@@ -4,7 +4,6 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
 
 from fastapi import APIRouter, FastAPI
 
@@ -130,7 +129,6 @@ class Gateway:
         self.objects = objects
         self.metrics = metrics
         self.tracing = tracing
-        self.mcp_http: dict[uuid.UUID, Any] = {}
         self.files = FileService(store, objects, settings)
         self.skill_store = SkillService(store, objects, settings)
         self.uploads = UploadService(store, objects, settings)
@@ -144,7 +142,6 @@ class Gateway:
             files=self.files,
             skill_store=self.skill_store,
             tracing=tracing,
-            mcp_http=self.mcp_http,
         )
         self.agents = AgentService(store, settings)
         self.templates = TemplateService(
@@ -331,7 +328,6 @@ class Gateway:
         app.state.metrics = self.metrics
         app.state.tracing = self.tracing
         app.state.store = self.store
-        app.state.mcp_http = self.mcp_http
         app.state.sessions = self.sessions
         app.state.authenticate = self.authenticate
         app.state.authorize = self.authorize

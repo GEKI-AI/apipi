@@ -146,6 +146,7 @@ async def create_session(
     user_id: str | None = None,
     org_id: str | None = None,
     vault_ids: list[str] | None = None,
+    tools: list[Any] | None = None,
 ) -> SessionRow:
     row = SessionRow(
         tenant_id=tenant_id,
@@ -160,6 +161,7 @@ async def create_session(
         user_id=user_id,
         org_id=org_id,
         vault_ids=vault_ids if vault_ids is not None else [],
+        tools=tools,
     )
     db.add(row)
     await db.flush()

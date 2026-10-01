@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent export no longer takes `?version=`, and new bundles have no
   `source_version` (import still accepts old bundles and ignores
   it).
+- Pi's built-in MCP client is the only client. The gateway no longer
+  probes MCP servers at session create: the shape, headers, vault,
+  and SSRF guard are still checked there, but a dead server or one
+  that rejects unauthenticated calls no longer fails session create.
+  Server failures surface at turn time as `pi.extension_error` and do
+  not fail the turn. The per-turn `mcp_list_tools` items are gone.
+  Agent sessions rebuild the server list from the live agent at every
+  turn, so agent edits apply to the next turn without recreating the
+  session.
 
 ### Security
 

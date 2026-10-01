@@ -20,11 +20,12 @@ from apipi.gateway.errors import ApiError, gone
 from apipi.gateway.logutil import log_event
 from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.gateway.tokens import hash_token
-from apipi.mcp.guard import split_allow_hosts
+from apipi.mcp.guard import check_mcp_url, split_allow_hosts
 from apipi.mcp.http import (
     McpConnectError,
+    McpHttpServer,
     apply_vault_headers,
-    connect_mcp_http_tools,
+    mcp_http_tools,
 )
 from apipi.services.agents import AgentWrite, definition_for_session
 from apipi.services.chat_tools import is_chat_profile, reject_disallowed_chat_tools
@@ -294,7 +295,6 @@ class SessionService:
         files: FileService,
         skill_store: SkillService,
         tracing: Tracing | None,
-        mcp_http: dict[uuid.UUID, Any],
     ) -> None:
         self.settings = settings
         self.store = store
@@ -305,7 +305,6 @@ class SessionService:
         self.files = files
         self.skill_store = skill_store
         self.tracing = tracing
-        self.mcp_http = mcp_http
         self._turn_tasks: set[asyncio.Task[None]] = set()
 
     async def cancel_turns(self) -> None:
@@ -314,6 +313,34 @@ class SessionService:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _mcp_servers(
+        self, tenant_id: uuid.UUID, session_id: uuid.UUID
+    ) -> list[McpHttpServer]:
+        async with self.store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            if row is None:
+                not_found()
+            if row.agent_id is not None:
+                definition = await definition_for_session(db, tenant_id, row)
+                raw = definition.get("tools") if isinstance(definition, dict) else []
+            else:
+                raw = row.tools if isinstance(row.tools, list) else []
+            servers = mcp_http_tools(raw)
+            allow_hosts = split_allow_hosts(self.settings.mcp_allow_hosts)
+            for server in servers:
+                await check_mcp_url(
+                    server.server_url,
+                    label=server.server_label,
+                    allow_hosts=allow_hosts,
+                )
+            vault_ids = [uuid.UUID(item) for item in (row.vault_ids or []) if item]
+            if vault_ids:
+                creds = await list_credentials_for_vault_ids(db, tenant_id, vault_ids)
+                servers = apply_vault_headers(
+                    servers, _plain_vault_creds(self.settings, creds)
+                )
+            return servers
 
     def _require_capacity(
         self,
@@ -566,6 +593,7 @@ class SessionService:
                 user_id=user_id,
                 org_id=org_id,
                 vault_ids=vault_id_strs,
+                tools=raw_tools if agent_id is None else None,
             )
             if env.get("type") == "openai_hosted":
                 directory = session_workspace(self.settings, tenant_id, row.id)
@@ -652,10 +680,14 @@ class SessionService:
             model=model,
         ):
             try:
-                connected = await connect_mcp_http_tools(
-                    raw_tools,
-                    allow_hosts=split_allow_hosts(self.settings.mcp_allow_hosts),
-                )
+                servers = mcp_http_tools(raw_tools)
+                allow_hosts = split_allow_hosts(self.settings.mcp_allow_hosts)
+                for server in servers:
+                    await check_mcp_url(
+                        server.server_url,
+                        label=server.server_label,
+                        allow_hosts=allow_hosts,
+                    )
                 if vault_id_strs:
                     async with self.store.session() as db:
                         creds = await list_credentials_for_vault_ids(
@@ -663,8 +695,8 @@ class SessionService:
                             tenant_id,
                             [uuid.UUID(item) for item in vault_id_strs],
                         )
-                    connected = apply_vault_headers(
-                        connected, _plain_vault_creds(self.settings, creds)
+                    servers = apply_vault_headers(
+                        servers, _plain_vault_creds(self.settings, creds)
                     )
             except McpConnectError as exc:
                 async with self.store.session() as db:
@@ -676,7 +708,6 @@ class SessionService:
                         not_found()
                     set_span(self.tracing, status="failed")
                     return session_body(row)
-            self.mcp_http[session_id] = connected
             text = turn_content.text
             if text or turn_content.images:
                 require_model(model)
@@ -693,7 +724,7 @@ class SessionService:
                         text,
                         images=[image.rpc() for image in turn_content.images],
                         parts=turn_content.wire_parts(),
-                        mcp_http=connected,
+                        mcp_http=servers,
                         request_id=request_id,
                         api_key=api_key,
                         key_id=key_id or None,
@@ -711,7 +742,7 @@ class SessionService:
                                 text,
                                 images=[image.rpc() for image in turn_content.images],
                                 parts=turn_content.wire_parts(),
-                                mcp_http=connected,
+                                mcp_http=servers,
                                 request_id=request_id,
                                 api_key=api_key,
                                 key_id=key_id or None,
@@ -777,7 +808,7 @@ class SessionService:
                     self.execution.boot_hosted(
                         tenant_id,
                         session_id,
-                        mcp_http=self.mcp_http.get(session_id),
+                        mcp_http=await self._mcp_servers(tenant_id, session_id),
                     )
                 )
                 self._turn_tasks.add(task)
@@ -929,7 +960,6 @@ class SessionService:
             deleted = await delete_session(db, tenant_id, session_id, user_id=user_id)
             if not deleted:
                 not_found()
-        self.mcp_http.pop(session_id, None)
         return {"id": str(session_id), "deleted": True}
 
     async def post_event(
@@ -1001,6 +1031,19 @@ class SessionService:
                         follow_model = raw_model
         if action == "message":
             require_image_model(self.settings, follow_model, parsed)
+        turn_servers: list[McpHttpServer] | None = None
+        if action in ("tool", "message"):
+            try:
+                turn_servers = await self._mcp_servers(tenant_id, session_id)
+            except McpConnectError as exc:
+                async with self.store.session() as db:
+                    await fail_session(
+                        db, self.event_hub, tenant_id, session_id, str(exc)
+                    )
+                    row = await get_session(db, tenant_id, session_id)
+                    if row is None:
+                        not_found()
+                    return session_body(row)
         if action == "cancel":
             await self.execution.cancel(session_id, status=cancel_status)
         elif action == "tool":
@@ -1024,7 +1067,7 @@ class SessionService:
                     success=success,
                     output=output,
                     error=error,
-                    mcp_http=self.mcp_http.get(session_id),
+                    mcp_http=turn_servers,
                     request_id=request_id,
                     api_key=api_key,
                     key_id=key_id,
@@ -1051,7 +1094,7 @@ class SessionService:
                     message,
                     images=[image.rpc() for image in parsed.images],
                     parts=parsed.wire_parts(),
-                    mcp_http=self.mcp_http.get(session_id),
+                    mcp_http=turn_servers,
                     request_id=request_id,
                     api_key=api_key,
                     key_id=key_id,

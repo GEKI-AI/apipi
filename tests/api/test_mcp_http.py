@@ -66,13 +66,13 @@ async def test_mcp_http_starts_with_session(
     mcp_harness: FakeHarness,
     mcp_server: tuple[str, dict[str, str]],
 ) -> None:
-    mcp_url, seen = mcp_server
+    mcp_url, _seen = mcp_server
     token = "mcp"
     agent_id = await _agent_with_mcp(
         mcp_client,
         token,
         mcp_url,
-        headers={"Authorization": "Bearer from-env"},
+        headers={"Authorization": "Bearer static-secret"},
     )
     created = await mcp_client.post(
         "/v1/agents/sessions",
@@ -87,7 +87,7 @@ async def test_mcp_http_starts_with_session(
     assert created.json()["status"] == "idle"
     assert mcp_harness.mcp_http is not None
     assert mcp_harness.mcp_http[0].server_label == "mock"
-    assert seen.get("Authorization") == "Bearer from-env"
+    assert mcp_harness.mcp_http[0].headers == {"Authorization": "Bearer static-secret"}
     session_id = created.json()["id"]
     events = await mcp_client.get(
         f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
@@ -97,7 +97,7 @@ async def test_mcp_http_starts_with_session(
     assert types[-1] == "agent.session.idle"
     dumped = str(events.json())
     assert "Authorization" not in dumped
-    assert "from-env" not in dumped
+    assert "static-secret" not in dumped
 
 
 async def test_mcp_http_on_chat_session(
@@ -105,13 +105,13 @@ async def test_mcp_http_on_chat_session(
     mcp_harness: FakeHarness,
     mcp_server: tuple[str, dict[str, str]],
 ) -> None:
-    mcp_url, seen = mcp_server
+    mcp_url, _seen = mcp_server
     token = "mcp-chat"
     agent_id = await _agent_with_mcp(
         mcp_client,
         token,
         mcp_url,
-        headers={"Authorization": "Bearer from-env"},
+        headers={"Authorization": "Bearer static-secret"},
     )
     created = await mcp_client.post(
         "/v1/chat/sessions",
@@ -123,38 +123,126 @@ async def test_mcp_http_on_chat_session(
     assert created.json()["status"] == "idle"
     assert mcp_harness.mcp_http is not None
     assert mcp_harness.mcp_http[0].server_label == "mock"
-    assert seen.get("Authorization") == "Bearer from-env"
+    assert mcp_harness.mcp_http[0].headers == {"Authorization": "Bearer static-secret"}
 
 
-async def test_mcp_http_failure_is_session_failed(
-    mcp_client: AsyncClient, mcp_fail_url: str
+async def test_mcp_http_dead_server_no_longer_fails_create(
+    mcp_client: AsyncClient,
+    mcp_harness: FakeHarness,
+    mcp_fail_url: str,
 ) -> None:
     token = "mcp"
     agent_id = await _agent_with_mcp(mcp_client, token, mcp_fail_url)
     created = await mcp_client.post(
         "/v1/agents/sessions",
         headers=_auth(token),
-        json={"agent_id": agent_id, "environment": {"type": "none"}},
+        json={
+            "agent_id": agent_id,
+            "environment": {"type": "none"},
+            "input": "hello",
+        },
     )
     assert created.status_code == 200
-    assert created.json()["status"] == "failed"
-    session_id = created.json()["id"]
-    events = await mcp_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
-    )
-    types = [event["type"] for event in events.json()["data"]]
-    assert "agent.session.error" in types
-    assert types[-1] == "agent.session.failed"
-    other = await mcp_client.get(
-        f"/v1/agents/sessions/{session_id}", headers=_auth("other")
-    )
-    assert other.status_code == 404
+    assert created.json()["status"] == "idle"
+    assert mcp_harness.mcp_http is not None
+    assert mcp_harness.mcp_http[0].server_label == "mock"
 
 
-async def test_mcp_http_missing_env_fails(
-    mcp_client: AsyncClient, mcp_url: str, monkeypatch: pytest.MonkeyPatch
+async def test_mcp_http_vault_only_server_starts(
+    mcp_client: AsyncClient,
+    mcp_harness: FakeHarness,
+    mcp_server: tuple[str, dict[str, str]],
 ) -> None:
-    monkeypatch.delenv("MCP_TOKEN", raising=False)
+    mcp_url, _seen = mcp_server
+    token = "mcp-vault"
+    vault = await mcp_client.post(
+        "/v1/agents/vaults", headers=_auth(token), json={"name": "v"}
+    )
+    assert vault.status_code == 200
+    cred = await mcp_client.post(
+        f"/v1/agents/vaults/{vault.json()['id']}/credentials",
+        headers=_auth(token),
+        json={
+            "name": "c",
+            "auth": {
+                "type": "static_bearer",
+                "mcp_server_url": mcp_url,
+                "token": "vault-secret",
+            },
+        },
+    )
+    assert cred.status_code == 200
+    agent_id = await _agent_with_mcp(mcp_client, token, mcp_url)
+    created = await mcp_client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {"type": "none"},
+            "vault_ids": [vault.json()["id"]],
+            "input": "hello",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["status"] == "idle"
+    assert mcp_harness.mcp_http is not None
+    assert mcp_harness.mcp_http[0].headers == {"Authorization": "Bearer vault-secret"}
+
+
+async def test_mcp_http_followup_turn_uses_live_agent(
+    mcp_client: AsyncClient,
+    mcp_harness: FakeHarness,
+    mcp_server: tuple[str, dict[str, str]],
+) -> None:
+    mcp_url, _seen = mcp_server
+    token = "mcp-live"
+    agent_id = await _agent_with_mcp(
+        mcp_client,
+        token,
+        mcp_url,
+        headers={"Authorization": "Bearer first"},
+    )
+    created = await mcp_client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent_id,
+            "environment": {"type": "none"},
+            "input": "hello",
+        },
+    )
+    assert created.status_code == 200
+    session_id = created.json()["id"]
+    assert mcp_harness.mcp_http is not None
+    assert mcp_harness.mcp_http[0].headers == {"Authorization": "Bearer first"}
+    updated = await mcp_client.post(
+        f"/v1/agents/{agent_id}",
+        headers=_auth(token),
+        json={
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server_label": "mock",
+                    "server_url": mcp_url,
+                    "headers": {"Authorization": "Bearer second"},
+                }
+            ]
+        },
+    )
+    assert updated.status_code == 200
+    again = await mcp_client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(token),
+        json={"type": "agent.session.input.message", "content": "again"},
+    )
+    assert again.status_code == 200
+    assert mcp_harness.mcp_http is not None
+    assert mcp_harness.mcp_http[0].headers == {"Authorization": "Bearer second"}
+
+
+async def test_mcp_http_env_reference_fails(
+    mcp_client: AsyncClient, mcp_url: str
+) -> None:
     token = "mcp"
     agent_id = await _agent_with_mcp(
         mcp_client,
