@@ -145,8 +145,7 @@ are not copied back into `/workspace`. That directory is bounded by
 `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB).
 
 The gateway also copies
-`outputs/` from the runner on turn complete and on Pi stop if the
-socket is up. On `none`, there is no computer.
+`outputs/` from the hosted computer on turn complete and on Pi stop. On `none`, there is no computer.
 
 A crash before publish can lose unpublished files under `outputs/`.
 
@@ -197,9 +196,9 @@ turn recopies skills and re-runs packages and setup commands into a
 fresh workspace.
 
 Provider-hosted files stay with your provider and are not
-published through their Artifacts API. Ours stay on the runner the
-same way, except we also copy `outputs/` from the runner on turn
-complete and on Pi stop if the socket is up.
+published through their Artifacts API. Ours stay in the hosted workspace
+the same way, except we also copy `outputs/` into the artifact store on turn
+complete and on Pi stop.
 
 Session conversation state is similar: both keep turns and items so
 you can continue later. OpenAI stores that on their side. ApiPi stores

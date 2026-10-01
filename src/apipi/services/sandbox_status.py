@@ -28,7 +28,7 @@ _ROW_STATUS = {
     "stopped": "disconnected",
     "failed": "failed",
 }
-_RUNNER_STATUS = {
+_STORED_STATUS = {
     "pending": "provisioning",
     "connected": "connected",
     "disconnected": "disconnected",
@@ -335,14 +335,14 @@ async def touch_seen(store: Store, session_ids: list[uuid.UUID]) -> None:
         )
 
 
-def environment_public(row: SessionRow, runner: str | None) -> dict[str, Any]:
+def environment_public(row: SessionRow, stored: str | None) -> dict[str, Any]:
     environment = row.environment if isinstance(row.environment, dict) else {}
     env_type = environment.get("type")
     if is_hosted(environment):
         status = environment_status(row) or "disconnected"
         sandbox = sandbox_public(row)
     else:
-        status = runner_status(runner)
+        status = stored_status(stored)
         sandbox = None
     raw_id = environment.get("id")
     return {
@@ -353,7 +353,7 @@ def environment_public(row: SessionRow, runner: str | None) -> dict[str, Any]:
     }
 
 
-def runner_status(status: str | None) -> str:
+def stored_status(status: str | None) -> str:
     if status is None:
         return "disconnected"
-    return _RUNNER_STATUS.get(status, "disconnected")
+    return _STORED_STATUS.get(status, "disconnected")

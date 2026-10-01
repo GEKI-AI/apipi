@@ -330,20 +330,6 @@ def _cwd_and_tools(
     return cwd_path, True
 
 
-def with_env_actions(current: list[Any], actions: list[Any]) -> list[Any]:
-    env = [
-        item
-        for item in current
-        if isinstance(item, dict) and item.get("type") == "environment_connection"
-    ]
-    rest = [
-        item
-        for item in actions
-        if isinstance(item, dict) and item.get("type") != "environment_connection"
-    ]
-    return rest + env
-
-
 def _idle_spawn(
     settings: Settings | None,
     env_type: str | None,
@@ -953,13 +939,11 @@ async def _complete_turn(
         type="agent.session.turn.completed",
         data={"turn_id": str(turn_id), "usage": stored},
     )
-    row = await get_session(db, tenant_id, session_id)
-    current = row.required_actions if row is not None else []
     await update_session(
         db,
         tenant_id,
         session_id,
-        changes={"status": "idle", "required_actions": with_env_actions(current, [])},
+        changes={"status": "idle", "required_actions": []},
     )
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
@@ -1004,13 +988,11 @@ async def _cancel_turn(
         type="agent.session.turn.cancelled",
         data=cancel_data(str(turn_id)),
     )
-    row = await get_session(db, tenant_id, session_id)
-    current = row.required_actions if row is not None else []
     await update_session(
         db,
         tenant_id,
         session_id,
-        changes={"status": "idle", "required_actions": with_env_actions(current, [])},
+        changes={"status": "idle", "required_actions": []},
     )
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
@@ -1135,13 +1117,11 @@ async def _fail_turn(
         type="agent.session.error",
         data=session_error_data(resolved, mode=error_mode(settings)),
     )
-    row = await get_session(db, tenant_id, session_id)
-    current = row.required_actions if row is not None else []
     await update_session(
         db,
         tenant_id,
         session_id,
-        changes={"status": "idle", "required_actions": with_env_actions(current, [])},
+        changes={"status": "idle", "required_actions": []},
     )
     await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
@@ -1538,7 +1518,7 @@ async def run_turn(
                 session_id,
                 changes={
                     "status": "in_progress",
-                    "required_actions": with_env_actions(row.required_actions, []),
+                    "required_actions": [],
                 },
             )
             await persist_event(
@@ -1775,9 +1755,7 @@ async def run_turn(
                     )
                     return
                 if pending:
-                    latest = await get_session(db, tenant_id, session_id)
-                    current = latest.required_actions if latest is not None else []
-                    actions = with_env_actions(current, pending)
+                    actions = pending
                     await update_session(
                         db,
                         tenant_id,
@@ -1898,11 +1876,7 @@ async def continue_turn(
                 db,
                 tenant_id,
                 session_id,
-                changes={
-                    "required_actions": with_env_actions(
-                        row.required_actions, remaining
-                    )
-                },
+                changes={"required_actions": remaining},
             )
             return
         if pool is not None:
@@ -2124,9 +2098,7 @@ async def continue_turn(
                 )
             async with store.session() as db:
                 if pending:
-                    latest = await get_session(db, tenant_id, session_id)
-                    current = latest.required_actions if latest is not None else []
-                    actions = with_env_actions(current, pending)
+                    actions = pending
                     await update_session(
                         db,
                         tenant_id,

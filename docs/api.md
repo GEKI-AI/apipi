@@ -457,7 +457,7 @@ log line.
 | `agent.session.turn.compaction.completed` | Pi finished compaction. Stored. `reason`, `aborted`, `will_retry`, `tokens_before`, `tokens_after`, and a short `error` when present. The summary text is not stored. |
 | `agent.session.turn.retrying` | Pi will retry the model call. Stored. `attempt`, `max_attempts`, `delay_ms`, `code`, `failure_source`, `upstream_status`. The raw error text is not stored. |
 | `agent.session.turn.retry.completed` | That retry wait finished. Stored. `success`, `attempts`. A success does not end the turn. |
-| `agent.session.environment.pending` | Hosted cold boot started, or a self-hosted runner is not connected yet. Hosted `data.sandbox` has `state`, `cold`, `cause`, `image`, and `size`. |
+| `agent.session.environment.pending` | Hosted cold boot started. Hosted `data.sandbox` has `state`, `cold`, `cause`, `image`, and `size`. |
 | `agent.session.environment.connected` | Computer ready. Hosted `data.sandbox` has `image`, `image_version`, `size`, `run_mode`, `boot_ms`, `lock_wait_ms`, and `setup_ms`. |
 | `agent.session.environment.disconnected` | Computer gone. Hosted `data.sandbox` has `reason` and `live_ms`. |
 | `agent.session.environment.failed` | Could not attach, or hosted setup failed. Hosted `data.sandbox.state` is `failed`. |

@@ -193,7 +193,7 @@ type, not by run mode. `none` uses `APIPI_IDLE_TTL`.
 `openai_hosted` uses the sandbox TTL, and that one timer covers Pi and
 the guest together. A session `idle_ttl`, then the agent `idle_ttl`,
 then that default. `0` on an override turns the timer off for that
-session. `APIPI_SANDBOX_TTL_SELF_HOSTED` does not kill Pi.
+session.
 
 | Failure | HTTP or event | Code |
 | --- | --- | --- |

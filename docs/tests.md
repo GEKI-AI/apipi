@@ -43,7 +43,7 @@ requires the mode it asked for.
 | `tests/e2e/test_metrics_scrape.py` | `e2e` | `/metrics` scrape | yes |
 | `tests/e2e/test_pi_live.py` | `slow` | `pi` is on `PATH` | no |
 | `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against FakeHarness | no |
-| `tests/support/` | — | FakeHarness helpers, fake Pi, fake runner. Not a suite | — |
+| `tests/support/` | — | FakeHarness helpers, fake Pi, fake worker. Not a suite | — |
 
 GitHub runs `pytest -m "not slow"`. That is unit, API, and `e2e`.
 Microvm tests skip if KVM, Firecracker, images, or net tools cannot

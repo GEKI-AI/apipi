@@ -42,8 +42,7 @@ apipi install --role worker
 
 Combined `apipi serve` keeps today's single-host path. `--api-only`
 skips the KVM probe so the API can run without Firecracker.
-`apipi worker` is the sandbox process. It is not a tenant computer
-runner.
+`apipi worker` is the sandbox process. It is not a tenant computer.
 
 ## Auth
 
