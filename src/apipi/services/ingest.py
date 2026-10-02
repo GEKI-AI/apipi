@@ -47,7 +47,11 @@ OVERSIZE = "oversize"
 INVALID_ENVELOPE = "invalid_envelope"
 UNKNOWN_SESSION = "unknown_session"
 
-DEFERRED_TYPES = frozenset({"sandbox.status", "artifact.completed"})
+# Envelope types no sender may emit yet: rejected like any other
+# violation (and acked past, so the worker drops them). Empty now:
+# #448 owns `artifact.presign` / `artifact.completed` and #449 owns
+# `sandbox.status`, the wipe receipts, and the lifecycle envelopes.
+DEFERRED_TYPES = frozenset()
 
 
 @dataclass
@@ -273,9 +277,12 @@ async def _validate(
         return NOT_LEASED
     if envelope.type in DEFERRED_TYPES:
         return NOT_IMPLEMENTED
-    if envelope.type == "sandbox.status":
-        if envelope.payload.get("status") not in {"starting", "ready", "stopped"}:
-            return INVALID_ENVELOPE
+    if envelope.type == "sandbox.status" and envelope.payload.get("status") not in {
+        "starting",
+        "ready",
+        "stopped",
+    }:
+        return INVALID_ENVELOPE
     if envelope.type == "artifact.presign":
         raw_request = envelope.payload.get("request_id")
         if not isinstance(raw_request, str) or not raw_request:
@@ -818,9 +825,9 @@ async def flush_batch(
                 if queued_item.raw_size > MAX_MESSAGE_BYTES:
                     raise _Reject(OVERSIZE)
                 if envelope.type in DEFERRED_TYPES:
-                    # No sender emits these until #448/#449 own them; until
-                    # then they are rejected like any other violation (and
-                    # acked past, so the worker drops them).
+                    # Deferred types are rejected like any other
+                    # violation (and acked past, so the worker drops
+                    # them).
                     raise _Reject(NOT_IMPLEMENTED)
                 # Claim, validation, and apply share one savepoint so a
                 # failed envelope rolls back completely: no partial

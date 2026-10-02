@@ -328,7 +328,9 @@ async def test_unknown_and_live_events_rejected(store: Store, settings) -> None:
     assert outcome.acks == {session_id: 2}
 
 
-async def test_deferred_types_rejected_without_apply(store: Store, settings) -> None:
+async def test_malformed_artifact_completed_rejected_without_apply(
+    store: Store, settings
+) -> None:
     worker_id = uuid.uuid4()
     _tenant, session_id, _lease = await _leased(store, worker_id)
     outcome = await _flush(
@@ -344,9 +346,9 @@ async def test_deferred_types_rejected_without_apply(store: Store, settings) -> 
         ],
         settings,
     )
-    assert [reason for _, _, reason in outcome.rejected] == ["not_implemented"]
+    assert [reason for _, _, reason in outcome.rejected] == ["invalid_envelope"]
     assert outcome.wakes == []
-    assert outcome.acks == {session_id: 2}
+    assert outcome.acks == {session_id: 1}
 
 
 async def test_sandbox_status_applies_without_wake_on_none_env(

@@ -182,9 +182,7 @@ record with the in-memory tool and MCP tallies. `event` carries any
 other public event with its data. `session.status` carries the
 session status change. `error` carries a worker-reported error.
 `artifact.completed` and `sandbox.status` are accepted on the wire
-but only `artifact.completed` is applied yet: ingest rejects sandbox
-messages (counted, and the worker keeps them buffered) until the step
-that owns them lands. `artifact.presign` reserves the upload slot and
+and applied by ingest. `artifact.presign` reserves the upload slot and
 returns its reply on the same socket; `artifact.completed` carries the
 API-issued `upload_id` with the observed size and checksum (plus `path`
 for the filesystem store) and verifies the object (S3 `HEAD` size and

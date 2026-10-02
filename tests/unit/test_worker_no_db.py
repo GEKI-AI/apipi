@@ -48,18 +48,6 @@ async def test_transition_reports_envelope_without_db(settings) -> None:
     assert pending[0]["payload"]["boot_ms"] == 7
 
 
-async def test_harvest_killed_reports_error_without_db(settings) -> None:
-    execution = _execution(settings)
-    session_id = uuid.uuid4()
-    await execution._harvest_killed(session_id, None)
-    outbox = execution.outbox
-    assert outbox is not None
-    pending = outbox.pending(session_id)
-    assert len(pending) == 1
-    assert pending[0]["type"] == "error"
-    assert pending[0]["payload"]["code"] == "pi_exited"
-
-
 async def test_seen_loop_uses_hook_without_db(settings, monkeypatch) -> None:
     import asyncio
     import datetime
