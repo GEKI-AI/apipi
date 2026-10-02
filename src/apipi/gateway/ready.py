@@ -162,7 +162,11 @@ def run_checks(
             reject_legacy_worker_token,
             reject_worker_database_url,
         )
-        from apipi.worker.tls import check_worker_mtls_files, require_worker_tls
+        from apipi.worker.tls import (
+            check_worker_mtls_files,
+            require_worker_tls,
+            worker_ssl_context,
+        )
 
         try:
             reject_legacy_worker_token()
@@ -174,6 +178,7 @@ def run_checks(
         try:
             require_worker_tls(settings.api_url or "http://127.0.0.1:8000")
             check_worker_mtls_files(settings)
+            worker_ssl_context(settings)
             checks.append(Check("ok", "worker TLS", "wss or loopback"))
         except ConfigError as exc:
             checks.append(Check("fail", "worker TLS", str(exc)))

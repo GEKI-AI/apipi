@@ -163,3 +163,18 @@ def test_run_checks_role_worker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = run_checks(secure, role="worker")
     by_name = {row.name: row for row in rows}
     assert by_name["worker TLS"].status == "ok"
+
+
+def test_run_checks_role_worker_bad_ca(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "require_run_mode", lambda *_a, **_k: None)
+    bad_ca = tmp_path / "bad-ca.crt"
+    bad_ca.write_text("not a pem bundle")
+    settings = _settings().model_copy(update={"worker_server_ca": str(bad_ca)})
+    rows = run_checks(settings, role="worker")
+    by_name = {row.name: row for row in rows}
+    assert by_name["worker TLS"].status == "fail"
+    assert "APIPI_WORKER_SERVER_CA" in by_name["worker TLS"].detail

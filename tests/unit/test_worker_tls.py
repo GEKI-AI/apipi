@@ -202,6 +202,29 @@ def test_mtls_server_ca_only_builds_context(tmp_path: Path) -> None:
     assert isinstance(context, ssl.SSLContext)
 
 
+def test_invalid_tls_material_is_config_error(tmp_path: Path) -> None:
+    bad_ca = tmp_path / "bad-ca.crt"
+    bad_ca.write_text("not a pem bundle")
+    settings = Settings(run_mode="none", worker_server_ca=str(bad_ca))
+    check_worker_mtls_files(settings)
+    with pytest.raises(ConfigError, match="APIPI_WORKER_SERVER_CA"):
+        worker_ssl_context(settings)
+
+
+def test_mismatched_key_is_config_error(tmp_path: Path) -> None:
+    _, ca_key, ca_cert = _make_ca(tmp_path)
+    cert_path, _ = _issue_cert(tmp_path, "client", ca_key, ca_cert)
+    _, other_key = _issue_cert(tmp_path, "other", ca_key, ca_cert)
+    settings = Settings(
+        run_mode="none",
+        worker_client_cert=str(cert_path),
+        worker_client_key=str(other_key),
+    )
+    check_worker_mtls_files(settings)
+    with pytest.raises(ConfigError, match="APIPI_WORKER_CLIENT_CERT"):
+        worker_ssl_context(settings)
+
+
 def test_connect_kwargs_omit_ssl_without_material() -> None:
     settings = Settings(run_mode="none")
     assert _worker_connect_kwargs(settings, "wss://api.example/internal/worker") == {}

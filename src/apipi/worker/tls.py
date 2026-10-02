@@ -91,7 +91,20 @@ def worker_ssl_context(settings: Settings) -> ssl.SSLContext | None:
         return None
     if bool(cert) != bool(key):
         raise ConfigError(MTLS_PAIR_MESSAGE)
-    context = ssl.create_default_context(cafile=ca or None)
+    try:
+        context = ssl.create_default_context(cafile=ca or None)
+    except ssl.SSLError as exc:
+        if ca:
+            raise ConfigError(
+                f"APIPI_WORKER_SERVER_CA is not a valid CA bundle: {ca}: {exc}"
+            ) from exc
+        raise
     if cert:
-        context.load_cert_chain(certfile=cert, keyfile=key)
+        try:
+            context.load_cert_chain(certfile=cert, keyfile=key)
+        except ssl.SSLError as exc:
+            raise ConfigError(
+                "APIPI_WORKER_CLIENT_CERT and APIPI_WORKER_CLIENT_KEY "
+                f"are not a valid certificate/key pair: {cert}: {exc}"
+            ) from exc
     return context
