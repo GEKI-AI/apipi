@@ -2,6 +2,8 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
+import pytest
+
 from apipi.services.ingest import IngestBatcher, flush_batch, last_seq_for
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -438,6 +440,179 @@ async def test_failed_turn_records_failure(store: Store, settings) -> None:
         assert turn is not None and turn.status == "failed"
         turn_log = await get_turn_log(db, tenant_id, turn_id)
         assert turn_log is not None and turn_log.error_code == "worker_outbox_full"
+
+
+async def test_mid_apply_failure_rolls_back_envelope(
+    store: Store, settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import apipi.services.runtime as runtime_module
+
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    turn_id = uuid.uuid4()
+
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("turn log store down")
+
+    monkeypatch.setattr(runtime_module, "_write_turn_log", boom)
+    outcome = await _flush(
+        store,
+        worker_id,
+        [
+            _envelope(
+                session_id,
+                1,
+                "turn.status",
+                {"turn_id": str(turn_id), "status": "started"},
+            ),
+            _envelope(
+                session_id,
+                2,
+                "usage",
+                {
+                    "turn_id": str(turn_id),
+                    "status": "completed",
+                    "prompt_tokens": 11,
+                    "completion_tokens": 7,
+                },
+            ),
+            _envelope(session_id, 3, "session.status", {"status": "idle"}),
+        ],
+        settings,
+    )
+    assert [reason for _, _, reason in outcome.rejected] == ["ingest_error"]
+    assert outcome.acks == {session_id: 3}
+    assert outcome.wakes == []
+    async with store.session() as db:
+        from apipi.store.repo import get_session, get_session_turn, get_turn_log
+
+        turn = await get_session_turn(db, tenant_id, session_id, turn_id)
+        assert turn is not None
+        assert turn.usage is None
+        assert await get_turn_log(db, tenant_id, turn_id) is None
+        row = await get_session(db, tenant_id, session_id)
+        assert row is not None and row.status == "idle"
+        assert row.worker_seq == 3
+
+
+async def test_item_done_merges_data_without_public_event(
+    store: Store, settings
+) -> None:
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    turn_id = uuid.uuid4()
+    item_id = uuid.uuid4()
+    outcome = await _flush(
+        store,
+        worker_id,
+        [
+            _envelope(
+                session_id,
+                1,
+                "turn.status",
+                {"turn_id": str(turn_id), "status": "started"},
+            ),
+            _envelope(
+                session_id,
+                2,
+                "item.added",
+                {
+                    "item_id": str(item_id),
+                    "item_type": "message",
+                    "turn_id": str(turn_id),
+                    "data": {"role": "user"},
+                },
+            ),
+            _envelope(
+                session_id,
+                3,
+                "item.done",
+                {
+                    "item_id": str(item_id),
+                    "turn_id": str(turn_id),
+                    "data": {"content": "hi"},
+                },
+            ),
+            _envelope(
+                session_id,
+                4,
+                "item.done",
+                {"item_id": str(item_id), "turn_id": str(turn_id)},
+            ),
+        ],
+        settings,
+    )
+    assert outcome.rejected == []
+    assert outcome.wakes == []
+    async with store.session() as db:
+        from apipi.store.repo import get_item
+
+        item = await get_item(db, tenant_id, item_id)
+        assert item is not None
+        assert item.data == {"role": "user", "content": "hi"}
+        assert await list_events(db, tenant_id, session_id) == []
+
+
+async def test_item_done_for_other_turn_is_rejected(store: Store, settings) -> None:
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    first_turn = uuid.uuid4()
+    other_turn = uuid.uuid4()
+    item_id = uuid.uuid4()
+    outcome = await _flush(
+        store,
+        worker_id,
+        [
+            _envelope(
+                session_id,
+                1,
+                "turn.status",
+                {"turn_id": str(first_turn), "status": "started"},
+            ),
+            _envelope(
+                session_id,
+                2,
+                "item.added",
+                {
+                    "item_id": str(item_id),
+                    "item_type": "message",
+                    "turn_id": str(first_turn),
+                    "data": {},
+                },
+            ),
+            _envelope(
+                session_id,
+                3,
+                "turn.status",
+                {"turn_id": str(first_turn), "status": "completed"},
+            ),
+            _envelope(
+                session_id,
+                4,
+                "turn.status",
+                {"turn_id": str(other_turn), "status": "started"},
+            ),
+            _envelope(
+                session_id,
+                5,
+                "item.done",
+                {
+                    "item_id": str(item_id),
+                    "turn_id": str(first_turn),
+                    "data": {"content": "hi"},
+                },
+            ),
+        ],
+        settings,
+    )
+    assert [reason for _, _, reason in outcome.rejected] == ["turn_mismatch"]
+    assert outcome.acks == {session_id: 5}
+    async with store.session() as db:
+        from apipi.store.repo import get_item
+
+        item = await get_item(db, tenant_id, item_id)
+        assert item is not None
+        assert item.data == {}
 
 
 def test_batcher_full_and_window() -> None:

@@ -165,6 +165,7 @@ class ItemAddedPayload(StrictPayload):
 class ItemDonePayload(StrictPayload):
     item_id: uuid.UUID
     turn_id: uuid.UUID | None = None
+    data: dict[str, Any] | None = None
 
 
 class TurnStatusPayload(StrictPayload):

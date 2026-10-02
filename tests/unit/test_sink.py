@@ -348,6 +348,30 @@ async def test_outbox_run_with_context_writes_no_db(
         assert turns[0].status == "completed"
 
 
+async def test_worker_emits_no_deferred_envelopes(
+    store: Store, settings: Settings
+) -> None:
+    from apipi.services.ingest import DEFERRED_TYPES
+
+    tenant_id, session_id = await _session(store)
+    outbox = Outbox()
+    harness = FakeHarness()
+    harness.mcp_calls = [{"call_id": "c1", "name": "mcp_tool"}]
+    await run_turn(
+        store,
+        EventHub(),
+        cast(Harness, harness),
+        tenant_id,
+        session_id,
+        "hello",
+        settings=settings,
+        sink=_sink(outbox, tenant_id, session_id),
+    )
+    kinds = {item["type"] for item in outbox.pending(session_id)}
+    assert kinds
+    assert kinds.isdisjoint(DEFERRED_TYPES)
+
+
 async def test_direct_sink_matches_repo_calls(store: Store) -> None:
     tenant_id, session_id = await _session(store)
     sink = DirectSink()

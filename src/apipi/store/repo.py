@@ -341,6 +341,34 @@ async def get_turn(
     )
 
 
+async def get_running_turn(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> Turn | None:
+    """The session's in-progress turn, if any (newest first)."""
+    return await db.scalar(
+        select(Turn)
+        .where(
+            Turn.tenant_id == tenant_id,
+            Turn.session_id == session_id,
+            Turn.status == "in_progress",
+        )
+        .order_by(Turn.created_at.desc())
+        .limit(1)
+    )
+
+
+async def get_latest_turn(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> Turn | None:
+    """The session's newest turn, running or already finished."""
+    return await db.scalar(
+        select(Turn)
+        .where(Turn.tenant_id == tenant_id, Turn.session_id == session_id)
+        .order_by(Turn.created_at.desc())
+        .limit(1)
+    )
+
+
 async def get_item(
     db: AsyncSession, tenant_id: uuid.UUID, item_id: uuid.UUID
 ) -> Item | None:

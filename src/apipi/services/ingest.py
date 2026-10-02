@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.gateway.logutil import log_event
 from apipi.store.engine import Store
-from apipi.store.models import SessionRow, WorkerIngest, utc_now
+from apipi.store.models import SessionRow, Turn, WorkerIngest, utc_now
 from apipi.worker.protocol import (
     EPHEMERAL_MESSAGE_TYPES,
     MAX_MESSAGE_BYTES,
@@ -131,36 +131,59 @@ def envelope_turn_id(envelope: WorkerEnvelope) -> uuid.UUID | None:
     return None
 
 
-async def _running_turn_id(
-    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
-) -> uuid.UUID | None:
-    from apipi.store.repo import list_turns
+class _TurnCache:
+    """Per-batch cache of turn lookups, one `LIMIT 1` read per session.
 
-    turns = await list_turns(db, tenant_id, session_id)
-    if not turns:
-        return None
-    for turn in reversed(turns):
-        if turn.status == "in_progress":
-            return turn.id
-    return None
-
-
-async def _latest_turn_id(
-    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
-) -> uuid.UUID | None:
-    """The newest turn, running or already finished.
-
-    Terminal envelopes (`turn.status` completion, `usage`, and the
-    turn's public events) arrive after the row leaves `in_progress`,
-    in the order the runtime emits them, so they bind to the latest
-    turn instead of the running one.
+    A batch applies envelopes in order and only `turn.status` changes
+    turn rows, so entries are dropped when one applies.
     """
-    from apipi.store.repo import list_turns
 
-    turns = await list_turns(db, tenant_id, session_id)
-    if not turns:
-        return None
-    return turns[-1].id
+    def __init__(self) -> None:
+        self._running: dict[uuid.UUID, Turn | None] = {}
+        self._latest: dict[uuid.UUID, Turn | None] = {}
+
+    async def running(
+        self, db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+    ) -> Turn | None:
+        from apipi.store.repo import get_running_turn
+
+        if session_id not in self._running:
+            self._running[session_id] = await get_running_turn(
+                db, tenant_id, session_id
+            )
+        return self._running[session_id]
+
+    async def latest(
+        self, db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+    ) -> Turn | None:
+        from apipi.store.repo import get_latest_turn
+
+        if session_id not in self._latest:
+            self._latest[session_id] = await get_latest_turn(db, tenant_id, session_id)
+        return self._latest[session_id]
+
+    async def running_id(
+        self, db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+    ) -> uuid.UUID | None:
+        turn = await self.running(db, tenant_id, session_id)
+        return turn.id if turn is not None else None
+
+    async def latest_id(
+        self, db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+    ) -> uuid.UUID | None:
+        """The newest turn, running or already finished.
+
+        Terminal envelopes (`turn.status` completion, `usage`, and the
+        turn's public events) arrive after the row leaves `in_progress`,
+        in the order the runtime emits them, so they bind to the latest
+        turn instead of the running one.
+        """
+        turn = await self.latest(db, tenant_id, session_id)
+        return turn.id if turn is not None else None
+
+    def invalidate(self, session_id: uuid.UUID) -> None:
+        self._running.pop(session_id, None)
+        self._latest.pop(session_id, None)
 
 
 async def _validate(
@@ -170,6 +193,7 @@ async def _validate(
     *,
     worker_id: uuid.UUID,
     row: SessionRow | None,
+    turn_cache: _TurnCache,
 ) -> str | None:
     """Return a reject reason, or None when the envelope may apply."""
     if raw_size > MAX_MESSAGE_BYTES:
@@ -192,17 +216,17 @@ async def _validate(
     if envelope.type == "turn.status" and envelope.payload.get("status") == "started":
         if turn_id is None:
             return INVALID_ENVELOPE
-        running = await _running_turn_id(db, row.tenant_id, row.id)
+        running = await turn_cache.running_id(db, row.tenant_id, row.id)
         if running is not None and running != turn_id:
             return TURN_MISMATCH
         return None
-    if envelope.type in {"item.added", "item.done"}:
-        running = await _running_turn_id(db, row.tenant_id, row.id)
+    if envelope.type == "item.added":
+        running = await turn_cache.running_id(db, row.tenant_id, row.id)
         if running is None or running != turn_id:
             return TURN_MISMATCH
         return None
     if turn_id is not None:
-        latest = await _latest_turn_id(db, row.tenant_id, row.id)
+        latest = await turn_cache.latest_id(db, row.tenant_id, row.id)
         if latest is None or latest != turn_id:
             return TURN_MISMATCH
     if envelope.type == "session.status":
@@ -213,17 +237,17 @@ async def _validate(
     return None
 
 
-async def _claim(db: AsyncSession, session_id: uuid.UUID, seq: int, type: str) -> bool:
-    """Insert the ledger row; False means this envelope already applied."""
+async def _claim(db: AsyncSession, session_id: uuid.UUID, seq: int, type: str) -> None:
+    """Insert the ledger row; raises _Duplicate when already applied.
+
+    Runs inside the caller's per-envelope savepoint: a duplicate rolls
+    the savepoint back (nothing to keep), and so does any failure.
+    """
     try:
-        async with db.begin_nested():
-            db.add(
-                WorkerIngest(session_id=session_id, worker_seq=seq, envelope_type=type)
-            )
-            await db.flush()
-    except IntegrityError:
-        return False
-    return True
+        db.add(WorkerIngest(session_id=session_id, worker_seq=seq, envelope_type=type))
+        await db.flush()
+    except IntegrityError as exc:
+        raise _Duplicate() from exc
 
 
 async def _store_event(
@@ -251,6 +275,7 @@ async def _apply(
     settings: Any,
     metrics: Any,
     wakes: list[tuple[uuid.UUID, dict[str, Any]]],
+    turn_cache: _TurnCache,
 ) -> None:
     from apipi.services.failures import failure_from_dict
     from apipi.services.usage import usage_from
@@ -287,6 +312,7 @@ async def _apply(
             turn.status = status
             turn.updated_at = utc_now()
             await db.flush()
+        turn_cache.invalidate(session_id)
         return
     if envelope.type == "item.added":
         item_id = uuid.UUID(str(payload["item_id"]))
@@ -308,28 +334,25 @@ async def _apply(
         )
         return
     if envelope.type == "item.done":
+        # Like `item.added`, this carries no public event: the runtime
+        # reports item events as `event` envelopes. It only merges
+        # carried data into the row, if any.
         item_id = uuid.UUID(str(payload["item_id"]))
         item = await get_item(db, tenant_id, item_id)
         if item is None or item.session_id != session_id:
             raise _Reject(UNKNOWN_TURN)
         raw_turn = payload.get("turn_id")
-        turn_id = (
-            uuid.UUID(str(raw_turn))
-            if isinstance(raw_turn, str) and raw_turn
-            else item.turn_id
-        )
-        wakes.append(
-            (
-                session_id,
-                await _store_event(
-                    db,
-                    tenant_id,
-                    session_id,
-                    type="agent.session.turn.item.done",
-                    data={"item_id": str(item_id), "turn_id": str(turn_id)},
-                ),
-            )
-        )
+        if isinstance(raw_turn, str) and raw_turn:
+            try:
+                payload_turn = uuid.UUID(raw_turn)
+            except ValueError:
+                raise _Reject(TURN_MISMATCH) from None
+            if item.turn_id is not None and payload_turn != item.turn_id:
+                raise _Reject(TURN_MISMATCH)
+        raw_data = payload.get("data")
+        if isinstance(raw_data, dict) and raw_data:
+            item.data = {**item.data, **raw_data}
+            await db.flush()
         return
     if envelope.type == "usage":
         from apipi.services.runtime import _write_turn_log
@@ -431,6 +454,10 @@ class _Reject(Exception):
         self.reason = reason
 
 
+class _Duplicate(Exception):
+    """The ledger claim conflicted: this envelope already applied."""
+
+
 def classify_incoming(data: Any) -> tuple[str, WorkerEnvelope | None, int]:
     """Sort one incoming socket message.
 
@@ -464,6 +491,7 @@ async def flush_batch(
     outcome = IngestOutcome()
     if not queued:
         return outcome
+    turn_cache = _TurnCache()
     async with store.session() as db:
         rows: dict[uuid.UUID, SessionRow | None] = {}
         for queued_item in queued:
@@ -477,39 +505,56 @@ async def flush_batch(
                 )
             row = rows[session_id]
             tenant_id = row.tenant_id if row is not None else None
+            wakes_before = len(outcome.wakes)
             try:
-                # The ledger claim comes before validation so a replay
-                # of an applied envelope skips quietly instead of
-                # failing validation against newer state. Deferred types
-                # are never claimed: a later step applies them on replay.
                 if row is None or row.worker_id != worker_id or row.lease_id is None:
                     raise _Reject(NOT_LEASED)
                 if queued_item.raw_size > MAX_MESSAGE_BYTES:
                     raise _Reject(OVERSIZE)
                 if envelope.type in DEFERRED_TYPES:
+                    # No sender emits these until #448/#449 own them; until
+                    # then they are rejected like any other violation (and
+                    # acked past, so the worker drops them).
                     raise _Reject(NOT_IMPLEMENTED)
-                first = await _claim(db, session_id, envelope.seq, envelope.type)
-                if first:
-                    assert row is not None
-                    reason = await _validate(
-                        db, envelope, queued_item.raw_size, worker_id=worker_id, row=row
-                    )
-                    if reason is not None:
-                        raise _Reject(reason)
-                    await _apply(
-                        db,
-                        None,
-                        envelope,
-                        row,
-                        settings=settings,
-                        metrics=metrics,
-                        wakes=outcome.wakes,
-                    )
+                # Claim, validation, and apply share one savepoint so a
+                # failed envelope rolls back completely: no partial
+                # writes and no ledger row survive it. The ledger claim
+                # still comes before validation so a replay of an applied
+                # envelope skips quietly instead of failing validation
+                # against newer state.
+                try:
+                    async with db.begin_nested():
+                        await _claim(db, session_id, envelope.seq, envelope.type)
+                        assert row is not None
+                        reason = await _validate(
+                            db,
+                            envelope,
+                            queued_item.raw_size,
+                            worker_id=worker_id,
+                            row=row,
+                            turn_cache=turn_cache,
+                        )
+                        if reason is not None:
+                            raise _Reject(reason)
+                        await _apply(
+                            db,
+                            None,
+                            envelope,
+                            row,
+                            settings=settings,
+                            metrics=metrics,
+                            wakes=outcome.wakes,
+                            turn_cache=turn_cache,
+                        )
+                except _Duplicate:
+                    pass
             except _Reject as rejected:
+                del outcome.wakes[wakes_before:]
                 reason = rejected.reason
                 outcome.rejected.append((session_id, envelope.seq, reason))
                 _count_reject(metrics, worker_id, session_id, tenant_id, reason)
             except Exception:
+                del outcome.wakes[wakes_before:]
                 log.exception(
                     "worker ingest apply failed",
                     extra={

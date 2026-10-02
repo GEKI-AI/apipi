@@ -159,7 +159,7 @@ def test_every_message_type_round_trips() -> None:
             "item_type": "message",
             "data": {"text": "hi"},
         },
-        "item.done": {"item_id": str(item_id)},
+        "item.done": {"item_id": str(item_id), "data": {"note": "done"}},
         "turn.status": {"turn_id": str(turn_id), "status": "completed"},
         "usage": {
             "turn_id": str(turn_id),
