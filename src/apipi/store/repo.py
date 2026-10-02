@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Collection
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -980,6 +981,34 @@ async def extend_worker_leases(
         .values(lease_until=lease_until, updated_at=utc_now())
         .execution_options(synchronize_session=False)
     )
+
+
+async def renew_session_leases(
+    db: AsyncSession,
+    *,
+    worker_id: uuid.UUID,
+    lease_ids: Collection[uuid.UUID],
+    lease_until: datetime,
+) -> int:
+    """Renew exactly the claimed leases; returns the renewed row count.
+
+    The conditional UPDATE matches `worker_id` and `lease_id`, so a
+    reconnecting worker takes over only the leases it still reports:
+    rows granted elsewhere (or since re-granted) keep their cursor.
+    """
+    ids = list(lease_ids)
+    if not ids:
+        return 0
+    result = await db.execute(
+        update(SessionRow)
+        .where(
+            SessionRow.worker_id == worker_id,
+            SessionRow.lease_id.in_(ids),
+        )
+        .values(lease_until=lease_until, updated_at=utc_now())
+        .execution_options(synchronize_session=False)
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def create_vault(
