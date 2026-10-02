@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Event bus with Postgres `LISTEN`/`NOTIFY` fan-out for session
+  events. After the API commits stored events it publishes a wake
+  (`session_id`, `seq`); SSE streams wait for wakes instead of
+  polling every 250ms, and `RemoteExecution._wait` waits on the same
+  mechanism instead of polling every 50ms. A fallback poll
+  (`APIPI_EVENT_BUS_FALLBACK_POLL`, default `3s`) covers lost
+  notifications and listener reconnects, so an idle stream queries
+  the store no more often than that interval. `APIPI_EVENT_BUS` is
+  `auto` (Postgres on a Postgres store, in-memory on SQLite),
+  `memory`, or `postgres`; explicit `postgres` on SQLite fails at
+  startup. Each Postgres replica holds one dedicated `LISTEN`
+  connection outside the SQLAlchemy pool, and each payload carries
+  its sender so a replica never re-delivers its own broadcast.
+  Until durable worker ingest (#446) the worker still writes events
+  itself, so `apipi worker` builds the same bus from its own
+  `DATABASE_URL` and must point at the same database as the API. Live `output_text.delta`
+  batches are coalesced over about 40ms and stay under the
+  8000-byte `NOTIFY` limit (larger batches are split); deltas are
+  never stored. New metrics: `apipi_event_bus_listener_reconnects_total`,
+  `apipi_pg_notification_queue_usage`, and
+  `apipi_event_bus_wake_sse_seconds`. SSE no longer needs sticky
+  routing on a Postgres store (see `docs/scale.md`).
 - Agent option to disable built-in tools: `metadata["apipi.builtin_tools"]`
   (`on`, `off`, default `on`) on the agent or session, with the session
   value winning over the agent. `off` starts Pi with

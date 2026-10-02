@@ -100,11 +100,14 @@ Worker metric sets (same scrape, metrics on):
 | Set | When | Series |
 | --- | --- | --- |
 | Worker util | All run modes | `apipi_worker_{capacity,sessions,memory_mib_*}` |
+| Event bus | Postgres store | `apipi_pg_notification_queue_usage`, `apipi_event_bus_listener_reconnects_total`, `apipi_event_bus_wake_sse_seconds` |
 | Sandbox lifecycle | Any spawn through `PiPool` | `apipi_sandbox_*` |
 | Host Pi | `none` (no `vm_id`) | `apipi_pi_processes`, `apipi_pi_rss_bytes`, `apipi_pi_pss_bytes`, `apipi_pi_spawn_total`, `apipi_pi_kill_total` |
 | MicroVM guest | `vm_id` set | `apipi_guest_*` |
 
 `apipi_worker_memory_mib_used` is reserved guest budget for placement. `apipi_pi_rss_bytes` is actual host Pi RAM (process group, including MCP children Pi started). Guest jailer cgroup is `apipi_guest_memory_bytes`. Do not mix them.
+
+`apipi_event_bus_listener_reconnects_total` counts Postgres `LISTEN` reconnects per replica; a steady climb means the database connection is flapping, and the fallback poll is covering the gaps. `apipi_event_bus_wake_sse_seconds` is the wake-to-SSE delivery latency after the storing read. `apipi_pg_notification_queue_usage` is the Postgres notification queue fill ratio from `pg_notification_queue_usage()`.
 
 Guest resource layers:
 

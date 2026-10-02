@@ -31,6 +31,7 @@ ModelList = Literal["probe", "turn", "off"]
 SandboxSize = Literal["S", "M", "L"]
 ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 ErrorCodes = Literal["legacy", "specific"]
+EventBusMode = Literal["auto", "memory", "postgres"]
 THINKING_HELP = (
     "APIPI_PI_THINKING must be off, minimal, low, medium, high, xhigh, or max"
 )
@@ -577,6 +578,16 @@ class Settings(BaseSettings):
     ] = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_WORKER_ACCEPTS", "worker_accepts"),
+    )
+    event_bus: EventBusMode = Field(
+        default="auto",
+        validation_alias=AliasChoices("APIPI_EVENT_BUS", "event_bus"),
+    )
+    event_bus_fallback_poll: IdleTtl = Field(
+        default=timedelta(seconds=3),
+        validation_alias=AliasChoices(
+            "APIPI_EVENT_BUS_FALLBACK_POLL", "event_bus_fallback_poll"
+        ),
     )
     auth: str | None = Field(
         default=None,

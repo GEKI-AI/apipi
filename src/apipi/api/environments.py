@@ -4,7 +4,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request
 
 from apipi.gateway.auth import not_found, require_tenant
-from apipi.services.runtime import EventHub
+from apipi.services.event_bus import EventBus
 from apipi.services.sandbox_status import environment_public, expire_if_stale
 from apipi.store.engine import Store
 from apipi.store.models import Tenant
@@ -20,7 +20,7 @@ async def read_environment(
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
     store: Store = request.app.state.store
-    hub: EventHub = request.app.state.event_hub
+    hub: EventBus = request.app.state.event_hub
     async with store.session() as db:
         env = await get_tenant_environment(db, tenant.id, environment_id)
         if env is None:

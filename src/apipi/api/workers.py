@@ -7,7 +7,7 @@ from fastapi import APIRouter, WebSocket
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
-from apipi.services.runtime import EventHub
+from apipi.services.event_bus import EventBus
 from apipi.services.worker_tokens import (
     WORKER_TOKEN_PREFIX,
     authenticate_token,
@@ -56,7 +56,7 @@ async def worker_socket(websocket: WebSocket) -> None:
     await websocket.accept()
     hub: WorkerHub = websocket.app.state.workers
     store: Store = websocket.app.state.store
-    event_hub: EventHub = websocket.app.state.event_hub
+    event_hub: EventBus = websocket.app.state.event_hub
     raw_token = _bearer(websocket)
     if raw_token is None or not raw_token.startswith(WORKER_TOKEN_PREFIX):
         hub.observe_protocol("unauthorized")

@@ -17,6 +17,7 @@ from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics, observe_turn
 from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.services.agents import definition_for_session
+from apipi.services.event_bus import EventBus, InMemoryEventBus
 from apipi.services.failures import (
     Failure,
     cancel_data,
@@ -36,7 +37,7 @@ from apipi.services.skills import discover_skill_dirs
 from apipi.services.usage import add_usage, empty_usage, usage_event, usage_from
 from apipi.services.usage_export import export_usage
 from apipi.store.blobs import ArtifactBlobs, ObjectStore, ObjectStoreError, object_store
-from apipi.store.engine import Store
+from apipi.store.engine import Store, after_commit
 from apipi.store.events import append_event, list_events
 from apipi.store.models import Event, SessionRow, utc_now
 from apipi.store.repo import (
@@ -146,41 +147,7 @@ def live_event_body(
     }
 
 
-class EventHub:
-    def __init__(self) -> None:
-        self._subs: dict[uuid.UUID, list[asyncio.Queue[dict[str, Any]]]] = {}
-        self._abort: dict[uuid.UUID, asyncio.Event] = {}
-
-    def watch_turn(self, session_id: uuid.UUID) -> asyncio.Event:
-        ev = asyncio.Event()
-        self._abort[session_id] = ev
-        return ev
-
-    def turn_abort(self, session_id: uuid.UUID) -> asyncio.Event | None:
-        return self._abort.get(session_id)
-
-    def unwatch_turn(self, session_id: uuid.UUID) -> None:
-        self._abort.pop(session_id, None)
-
-    def subscribe(self, session_id: uuid.UUID) -> asyncio.Queue[dict[str, Any]]:
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._subs.setdefault(session_id, []).append(queue)
-        return queue
-
-    def unsubscribe(
-        self, session_id: uuid.UUID, queue: asyncio.Queue[dict[str, Any]]
-    ) -> None:
-        subs = self._subs.get(session_id)
-        if subs is None:
-            return
-        if queue in subs:
-            subs.remove(queue)
-        if not subs:
-            del self._subs[session_id]
-
-    def publish(self, session_id: uuid.UUID, event: dict[str, Any]) -> None:
-        for queue in list(self._subs.get(session_id, ())):
-            queue.put_nowait(event)
+EventHub = InMemoryEventBus
 
 
 class Harness(Protocol):
@@ -292,7 +259,7 @@ class FakeHarness:
 
 async def persist_event(
     db: AsyncSession,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     *,
@@ -302,10 +269,15 @@ async def persist_event(
     if type not in PUBLIC_EVENT_TYPES:
         return None
     if type in LIVE_EVENT_TYPES:
-        hub.publish(session_id, live_event_body(session_id, type=type, data=data))
+        await hub.publish(session_id, live_event_body(session_id, type=type, data=data))
         return None
     event = await append_event(db, tenant_id, session_id, type=type, data=data)
-    hub.publish(session_id, event_body(event))
+    body = event_body(event)
+
+    async def _publish() -> None:
+        await hub.publish(session_id, body)
+
+    after_commit(db, _publish)
     return event
 
 
@@ -442,7 +414,7 @@ async def _agent_tools_and_model(
 
 async def _emit_item(
     db: AsyncSession,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     *,
@@ -496,7 +468,7 @@ def _note_retry(state: dict[str, Any], etype: str, data: dict[str, Any]) -> None
 
 async def _consume_generate(
     store: Store,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     turn_id: uuid.UUID,
@@ -521,7 +493,7 @@ async def _consume_generate(
         payload = dict(data)
         payload.setdefault("turn_id", str(turn_id))
         if etype in LIVE_EVENT_TYPES:
-            hub.publish(
+            await hub.publish(
                 session_id, live_event_body(session_id, type=etype, data=payload)
             )
             continue
@@ -880,7 +852,7 @@ async def _write_turn_log(
 
 async def _complete_turn(
     db: AsyncSession,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     turn_id: uuid.UUID,
@@ -978,7 +950,7 @@ async def _complete_turn(
 
 async def _cancel_turn(
     db: AsyncSession,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     turn_id: uuid.UUID,
@@ -1034,7 +1006,7 @@ def _lease_live(until: datetime | None) -> bool:
 
 async def fail_stale_in_progress(
     db: AsyncSession,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     *,
@@ -1071,7 +1043,7 @@ async def fail_stale_in_progress(
 
 async def prepare_for_new_turn(
     store: Store,
-    hub: EventHub,
+    hub: EventBus,
     harness: Harness,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -1096,7 +1068,7 @@ async def prepare_for_new_turn(
 
 async def _fail_turn(
     db: AsyncSession,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     turn_id: uuid.UUID,
@@ -1159,7 +1131,7 @@ def _cache_expected(row: SessionRow) -> bool:
 
 
 def request_cancel(
-    hub: EventHub, session_id: uuid.UUID, *, status: str
+    hub: EventBus, session_id: uuid.UUID, *, status: str
 ) -> asyncio.Event | None:
     abort = hub.turn_abort(session_id)
     if status != "in_progress" and abort is None:
@@ -1180,7 +1152,7 @@ def _bind_turn_model(settings: Settings | None, model: str | None) -> str:
 
 async def fail_session(
     db: AsyncSession,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     message: str,
@@ -1210,7 +1182,7 @@ async def fail_session(
 
 async def fail_environment(
     db: AsyncSession,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     message: str,
@@ -1380,7 +1352,7 @@ def _spawn_identity(
 
 async def run_turn(
     store: Store,
-    hub: EventHub,
+    hub: EventBus,
     harness: Harness,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -1835,7 +1807,7 @@ async def run_turn(
 
 async def continue_turn(
     store: Store,
-    hub: EventHub,
+    hub: EventBus,
     harness: Harness,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,

@@ -28,6 +28,7 @@ from apipi.gateway.otel import (
     detach_traceparent,
     start_span,
 )
+from apipi.services.event_bus import EventBus
 from apipi.services.failures import (
     failure_for,
     log_extra,
@@ -37,7 +38,6 @@ from apipi.services.failures import (
 )
 from apipi.services.runtime import (
     PUBLIC_EVENT_TYPES,
-    EventHub,
     fail_session,
     persist_event,
 )
@@ -387,7 +387,7 @@ class WorkerHub:
                 conn.lease_mem.pop(lease_id, None)
         self._observe()
 
-    async def expire(self, store: Store, hub: EventHub) -> list[uuid.UUID]:
+    async def expire(self, store: Store, hub: EventBus) -> list[uuid.UUID]:
         expired: list[uuid.UUID] = []
         async with store.session() as db:
             rows = await list_expired_leases(db, utc_now())
@@ -466,7 +466,7 @@ class WorkerHub:
     async def handle_event(
         self,
         store: Store,
-        hub: EventHub,
+        hub: EventBus,
         *,
         lease_id: uuid.UUID,
         event_type: str,
@@ -1160,6 +1160,7 @@ async def run_worker(
     url: str | None = None,
     drain_timeout: float | None = None,
 ) -> int:
+    from apipi.services.event_bus import create_event_bus
     from apipi.store.engine import Store, create_engine
     from apipi.worker.accepts import require_worker_accepts, resolved_worker_accepts
     from apipi.worker.execution import local_execution, worker_observability
@@ -1173,7 +1174,13 @@ async def run_worker(
     heartbeat = min(10.0, max(1.0, settings.worker_lease_ttl.total_seconds() / 2))
     store = Store(create_engine(settings.database_url, pool_size=settings.db_pool_size))
     metrics, tracing = worker_observability(settings)
-    execution = local_execution(settings, store=store, metrics=metrics, tracing=tracing)
+    # Until durable ingest (#446) the worker still writes events itself,
+    # so it uses the configured bus and its commits NOTIFY like the API's.
+    bus = create_event_bus(settings, store=store, metrics=metrics)
+    execution = local_execution(
+        settings, store=store, hub=bus, metrics=metrics, tracing=tracing
+    )
+    await bus.start()
     tasks: set[asyncio.Task[None]] = set()
     if metrics is not None:
         from apipi.worker.scrape import serve_metrics
@@ -1360,5 +1367,6 @@ async def run_worker(
         await execution.close()
         if execution.tracing is not None:
             execution.tracing.shutdown()
+        await bus.close()
         await store.dispose()
     return status

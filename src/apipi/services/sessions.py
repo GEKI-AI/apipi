@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import secrets
+import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ from apipi.gateway.auth import not_found
 from apipi.gateway.content import parse_user_content, require_image_model
 from apipi.gateway.errors import ApiError, gone
 from apipi.gateway.logutil import log_event
+from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.gateway.tokens import hash_token
 from apipi.mcp.guard import check_mcp_url, split_allow_hosts
@@ -32,10 +35,10 @@ from apipi.services.env_none import (
     reject_builtin_tools_for_env_none,
     validate_env_none,
 )
+from apipi.services.event_bus import EventBus, is_wake
 from apipi.services.failures import error_extra
 from apipi.services.files import FileService
 from apipi.services.runtime import (
-    EventHub,
     event_body,
     fail_session,
     fail_stale_in_progress,
@@ -145,7 +148,7 @@ def artifact_body(artifact: Artifact) -> dict[str, Any]:
 
 
 async def _expire_sandbox(
-    db: Any, hub: EventHub, tenant_id: uuid.UUID, row: SessionRow
+    db: Any, hub: EventBus, tenant_id: uuid.UUID, row: SessionRow
 ) -> None:
     from apipi.services.sandbox_status import expire_if_stale
 
@@ -218,19 +221,40 @@ def _stream_ended(event: dict[str, Any] | Any) -> bool:
 
 async def iter_session_events(
     store: Store,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     after_seq: int | None,
     *,
     ping: bool = False,
-) -> AsyncIterator[dict[str, Any] | None]:
+    fallback_poll: timedelta | float | None = None,
+    metrics: Metrics | None = None,
+) -> AsyncGenerator[dict[str, Any] | None]:
+    """Stream stored events, then stay current with bus wakes.
+
+    After the replay, the loop waits for a wake instead of polling: a
+    wake (or the fallback poll below) triggers one ``after_seq`` read.
+    An idle stream therefore queries the database no more often than
+    the fallback interval (3s by default). Full bodies delivered to
+    the publishing process and live deltas are yielded directly.
+    """
+    if fallback_poll is None:
+        interval = 3.0
+    elif isinstance(fallback_poll, timedelta):
+        interval = max(fallback_poll.total_seconds(), 0.01)
+    else:
+        interval = max(float(fallback_poll), 0.01)
     queue = hub.subscribe(session_id)
     try:
         async with store.session() as db:
             existing = await list_events(db, tenant_id, session_id, after_seq=after_seq)
         last = after_seq or 0
         ping_at = 0.0
+
+        async def _read_new() -> list[Any]:
+            async with store.session() as db:
+                return await list_events(db, tenant_id, session_id, after_seq=last)
+
         for event in existing:
             last = event.seq
             body = event_body(event)
@@ -239,22 +263,37 @@ async def iter_session_events(
                 return
         while True:
             try:
-                payload = await asyncio.wait_for(queue.get(), timeout=0.25)
+                payload = await asyncio.wait_for(queue.get(), timeout=interval)
             except TimeoutError:
-                async with store.session() as db:
-                    extra = await list_events(db, tenant_id, session_id, after_seq=last)
+                payload = None
+            if payload is None:
+                for event in await _read_new():
+                    last = event.seq
+                    body = event_body(event)
+                    yield body
+                    if _stream_ended(body):
+                        return
+                ping_at += interval
+                if ping and ping_at >= 15:
+                    ping_at = 0.0
+                    yield None
+                continue
+            if is_wake(payload):
+                seq = payload.get("seq")
+                if not isinstance(seq, int) or seq <= last:
+                    continue
+                extra = await _read_new()
                 if extra:
+                    published = payload.get("published_at")
+                    if metrics is not None and isinstance(published, (int, float)):
+                        metrics.observe_wake_sse(time.time() - published)
                     for event in extra:
                         last = event.seq
                         body = event_body(event)
                         yield body
                         if _stream_ended(body):
                             return
-                    continue
-                ping_at += 0.25
-                if ping and ping_at >= 15:
-                    ping_at = 0.0
-                    yield None
+                ping_at = 0.0
                 continue
             ping_at = 0.0
             seq = payload.get("seq")
@@ -278,12 +317,13 @@ class SessionService:
         *,
         settings: Settings,
         store: Store,
-        event_hub: EventHub,
+        event_hub: EventBus,
         execution: LocalExecution | RemoteExecution,
         blobs: ArtifactBlobs,
         files: FileService,
         skill_store: SkillService,
         tracing: Tracing | None,
+        metrics: Metrics | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -293,6 +333,7 @@ class SessionService:
         self.files = files
         self.skill_store = skill_store
         self.tracing = tracing
+        self.metrics = metrics
         self._turn_tasks: set[asyncio.Task[None]] = set()
 
     async def cancel_turns(self) -> None:
@@ -1096,6 +1137,8 @@ class SessionService:
             tenant_id,
             session_id,
             after_seq,
+            fallback_poll=self.settings.event_bus_fallback_poll,
+            metrics=self.metrics,
         ):
             if item is not None:
                 yield item

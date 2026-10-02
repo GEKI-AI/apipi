@@ -10,8 +10,8 @@ from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing, inject_traceparent
+from apipi.services.event_bus import EventBus, create_event_bus, is_wake
 from apipi.services.runtime import (
-    EventHub,
     continue_turn,
     fail_stale_in_progress,
     prepare_for_new_turn,
@@ -47,7 +47,7 @@ class LocalExecution:
         pool: PiPool,
         harness: Any,
         isolation: Isolation,
-        hub: EventHub,
+        hub: EventBus,
         store: Store | None = None,
         blobs: ArtifactBlobs | None = None,
         objects: ObjectStore | None = None,
@@ -435,7 +435,7 @@ def local_execution(
     *,
     store: Store,
     harness: Any | None = None,
-    hub: EventHub | None = None,
+    hub: EventBus | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
 ) -> LocalExecution:
@@ -450,7 +450,9 @@ def local_execution(
         pool=pool,
         harness=resolved_harness,
         isolation=isolation,
-        hub=hub if hub is not None else EventHub(),
+        hub=hub
+        if hub is not None
+        else create_event_bus(settings, store=store, metrics=metrics),
         store=store,
         blobs=blob_store(settings),
         objects=object_store(settings),
@@ -476,7 +478,7 @@ class RemoteExecution:
         *,
         workers: Any,
         store: Store | None,
-        hub: EventHub,
+        hub: EventBus,
     ) -> None:
         self.settings = settings
         self.workers = workers
@@ -537,16 +539,38 @@ class RemoteExecution:
             "agent.session.turn.cancelled",
             "agent.session.requires_action",
         }
+        interval = max(self.settings.event_bus_fallback_poll.total_seconds(), 0.01)
         async with store.session() as db:
             existing = await list_events(db, tenant_id, session_id)
         last = existing[-1].seq if existing else 0
-        deadline = utc_now() + self.settings.turn_timeout
-        while utc_now() < deadline:
-            async with store.session() as db:
-                extra = await list_events(db, tenant_id, session_id, after_seq=last)
-            if any(event.type in done for event in extra):
-                return
-            await asyncio.sleep(0.05)
+        if any(event.type in done for event in existing):
+            return
+        queue = self.hub.subscribe(session_id)
+        try:
+            deadline = utc_now() + self.settings.turn_timeout
+            while utc_now() < deadline:
+                remaining = (deadline - utc_now()).total_seconds()
+                try:
+                    message = await asyncio.wait_for(
+                        queue.get(), timeout=min(interval, max(remaining, 0.01))
+                    )
+                except TimeoutError:
+                    message = None
+                if message is not None:
+                    if is_wake(message):
+                        seq = message.get("seq")
+                        if not isinstance(seq, int) or seq <= last:
+                            continue
+                    elif message.get("seq") is None or int(message["seq"]) <= last:
+                        continue
+                async with store.session() as db:
+                    extra = await list_events(db, tenant_id, session_id, after_seq=last)
+                if extra:
+                    last = extra[-1].seq
+                if any(event.type in done for event in extra):
+                    return
+        finally:
+            self.hub.unsubscribe(session_id, queue)
         async with store.session() as db:
             await fail_stale_in_progress(db, self.hub, tenant_id, session_id)
 

@@ -17,6 +17,7 @@ from apipi.gateway.auth import (
     tenant_from_key,
 )
 from apipi.services.agents import AgentWrite
+from apipi.services.event_bus import EventBus, InMemoryEventBus, PostgresEventBus
 from apipi.services.runtime import EventHub
 from apipi.services.sessions import SessionService
 from apipi.store.engine import Store
@@ -29,8 +30,11 @@ __all__ = [
     "AuthRequest",
     "Authenticate",
     "Authorize",
+    "EventBus",
     "EventHub",
     "Gateway",
+    "InMemoryEventBus",
+    "PostgresEventBus",
     "SessionService",
     "Settings",
     "Store",

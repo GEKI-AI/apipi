@@ -5,7 +5,8 @@ from typing import Any
 from sqlalchemy import update
 
 from apipi.config import Settings
-from apipi.services.runtime import EventHub, persist_event
+from apipi.services.event_bus import EventBus
+from apipi.services.runtime import persist_event
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import get_session, get_session_environment, update_environment
@@ -168,7 +169,7 @@ async def _sync_environment_row(
 
 async def record_transition(
     store: Store,
-    hub: EventHub,
+    hub: EventBus,
     session_id: uuid.UUID,
     phase: str,
     fields: dict[str, Any],
@@ -260,7 +261,7 @@ async def record_transition(
 
 async def note_failed(
     db: Any,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     message: str,
@@ -288,7 +289,7 @@ async def note_failed(
 
 
 async def expire_if_stale(
-    db: Any, hub: EventHub, tenant_id: uuid.UUID, row: SessionRow
+    db: Any, hub: EventBus, tenant_id: uuid.UUID, row: SessionRow
 ) -> SessionRow:
     if not is_hosted(row.environment):
         return row

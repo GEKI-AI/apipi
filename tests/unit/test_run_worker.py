@@ -4,6 +4,7 @@ import time
 import uuid
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -48,6 +49,10 @@ class _Connect:
 
 
 class _Store:
+    # No real database: the engine URL only tells create_event_bus to
+    # stay on the memory bus so run_worker never dials Postgres here.
+    engine = SimpleNamespace(url="sqlite+aiosqlite:///:memory:")
+
     def __init__(self, *_args: object, **_kwargs: object) -> None:
         return None
 
