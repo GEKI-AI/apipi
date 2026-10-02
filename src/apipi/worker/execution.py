@@ -802,32 +802,53 @@ class RemoteExecution:
             return {}
         return {"context": turn_context}
 
-    async def _wait(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> None:
+    async def _wait(
+        self, tenant_id: uuid.UUID, session_id: uuid.UUID, baseline: int | None = None
+    ) -> None:
         store = self.store
         assert store is not None
-        done = {
-            "agent.session.turn.completed",
+        terminal = {
             "agent.session.turn.failed",
             "agent.session.turn.cancelled",
             "agent.session.requires_action",
+            "agent.session.failed",
         }
         interval = max(self.settings.event_bus_fallback_poll.total_seconds(), 0.01)
-        async with store.session() as db:
-            existing = await list_events(db, tenant_id, session_id)
-        last = existing[-1].seq if existing else 0
-        if any(event.type in done for event in existing):
-            return
+        if baseline is None:
+            async with store.session() as db:
+                existing = await list_events(db, tenant_id, session_id)
+            last = existing[-1].seq if existing else 0
+        else:
+            last = baseline
         queue = self.hub.subscribe(session_id)
+        seen: set[str] = set()
         try:
             deadline = utc_now() + self.settings.turn_timeout
             while utc_now() < deadline:
+                async with store.session() as db:
+                    after = await list_events(db, tenant_id, session_id, after_seq=last)
+                if after:
+                    last = after[-1].seq
+                    seen.update(event.type for event in after)
+                    if any(item in terminal for item in seen):
+                        return
+                    # A completed turn is only done when the idle event that
+                    # follows it is durable too; the two arrive as separate
+                    # outbox envelopes, so wait for both after the baseline.
+                    # This matches combined mode, where run_turn returns with
+                    # the session idle.
+                    if (
+                        "agent.session.turn.completed" in seen
+                        and "agent.session.idle" in seen
+                    ):
+                        return
                 remaining = (deadline - utc_now()).total_seconds()
                 try:
                     message = await asyncio.wait_for(
                         queue.get(), timeout=min(interval, max(remaining, 0.01))
                     )
                 except TimeoutError:
-                    message = None
+                    continue
                 if message is not None:
                     if is_wake(message):
                         seq = message.get("seq")
@@ -835,12 +856,6 @@ class RemoteExecution:
                             continue
                     elif message.get("seq") is None or int(message["seq"]) <= last:
                         continue
-                async with store.session() as db:
-                    extra = await list_events(db, tenant_id, session_id, after_seq=last)
-                if extra:
-                    last = extra[-1].seq
-                if any(event.type in done for event in extra):
-                    return
         finally:
             self.hub.unsubscribe(session_id, queue)
         async with store.session() as db:
@@ -864,6 +879,9 @@ class RemoteExecution:
     ) -> None:
         store = self.store
         assert store is not None
+        async with store.session() as _db:
+            _existing = await list_events(_db, tenant_id, session_id)
+        _baseline = _existing[-1].seq if _existing else 0
         sent = await self.workers.command(
             store,
             tenant_id,
@@ -907,7 +925,7 @@ class RemoteExecution:
             )
         if sent is None:
             await self._raise_no_worker(tenant_id, session_id)
-        await self._wait(tenant_id, session_id)
+        await self._wait(tenant_id, session_id, _baseline)
 
     async def continue_turn(
         self,
@@ -929,6 +947,9 @@ class RemoteExecution:
     ) -> None:
         store = self.store
         assert store is not None
+        async with store.session() as _db:
+            _existing = await list_events(_db, tenant_id, session_id)
+        _baseline = _existing[-1].seq if _existing else 0
         sent = await self.workers.command(
             store,
             tenant_id,
@@ -953,7 +974,7 @@ class RemoteExecution:
         )
         if sent is None:
             await self._raise_no_worker(tenant_id, session_id)
-        await self._wait(tenant_id, session_id)
+        await self._wait(tenant_id, session_id, _baseline)
 
     async def _raise_no_worker(
         self, tenant_id: uuid.UUID, session_id: uuid.UUID
@@ -1023,6 +1044,14 @@ class RemoteExecution:
     async def prepare_for_new_turn(
         self, tenant_id: uuid.UUID, session_id: uuid.UUID
     ) -> None:
+        store = self.store
+        if store is not None:
+            async with store.session() as db:
+                row = await get_session_by_id(db, session_id)
+            if row is None or row.lease_id is None:
+                async with store.session() as db:
+                    await fail_stale_in_progress(db, self.hub, tenant_id, session_id)
+                return
         await self.cancel(session_id, status="in_progress")
         await self._wait(tenant_id, session_id)
 

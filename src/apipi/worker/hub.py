@@ -1913,7 +1913,16 @@ async def run_worker(
     *,
     url: str | None = None,
     drain_timeout: float | None = None,
+    connect: Any | None = None,
 ) -> int:
+    """Run the split worker event loop.
+
+    `connect` is an optional factory for tests: it is called as
+    `connect(ws_url, additional_headers=..., **connect_kwargs)` and must
+    return an async context manager yielding a socket with the `send` /
+    `recv` methods `_serve_connection` uses. Production default stays
+    `websockets.connect`.
+    """
     from apipi.services.event_bus import InMemoryEventBus
     from apipi.services.lifecycle_export import (
         OutboxLifecycleReporter,
@@ -2017,10 +2026,11 @@ async def run_worker(
     status = 0
     backoff = 0.5
     connect_kwargs = _worker_connect_kwargs(settings, ws_url)
+    connect_factory = connect if connect is not None else websockets.connect
     try:
         while True:
             try:
-                async with websockets.connect(
+                async with connect_factory(
                     ws_url,
                     additional_headers={"Authorization": f"Bearer {token}"},
                     **connect_kwargs,
