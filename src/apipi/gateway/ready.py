@@ -81,6 +81,7 @@ def run_checks(
     skip_model: bool = False,
     fast: bool = False,
     role: str = "all",
+    config_path: str | None = None,
 ) -> list[Check]:
     if role == "api":
         fast = True
@@ -157,14 +158,33 @@ def run_checks(
     else:
         checks.append(Check("skip", "images", "none local"))
     if role == "worker":
-        from apipi.config import load_worker_token, reject_legacy_worker_token
+        from apipi.config import (
+            load_worker_token,
+            reject_legacy_worker_token,
+            reject_worker_database_url,
+            reject_worker_database_url_toml,
+        )
+        from apipi.worker.tls import (
+            check_worker_mtls_files,
+            require_worker_tls,
+            worker_ssl_context,
+        )
 
         try:
             reject_legacy_worker_token()
+            reject_worker_database_url()
+            reject_worker_database_url_toml(config_path)
             load_worker_token(settings.worker_token_file)
             checks.append(Check("ok", "worker token", "file"))
         except ConfigError as exc:
             checks.append(Check("fail", "worker token", str(exc)))
+        try:
+            require_worker_tls(settings.api_url or "http://127.0.0.1:8000")
+            check_worker_mtls_files(settings)
+            worker_ssl_context(settings)
+            checks.append(Check("ok", "worker TLS", "wss or loopback"))
+        except ConfigError as exc:
+            checks.append(Check("fail", "worker TLS", str(exc)))
     if vault_master_key_unset(settings.vault_master_key):
         checks.append(Check("ok", "vault key", "unset (local default)"))
     else:
@@ -197,7 +217,12 @@ def check_ready(
         print(_line(Check("fail", "config", str(exc))), file=stream)
         return 1
     checks = run_checks(
-        settings, skip_db=skip_db, skip_model=skip_model, fast=fast, role=role
+        settings,
+        skip_db=skip_db,
+        skip_model=skip_model,
+        fast=fast,
+        role=role,
+        config_path=config_path,
     )
     failed = False
     for item in checks:

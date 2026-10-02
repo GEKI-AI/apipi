@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from apipi.worker.execution import LocalExecution
 from apipi.worker.hub import _seed_reaper_ttl
 from apipi.worker.outbox import Outbox
@@ -140,3 +142,187 @@ async def test_reaper_wipes_with_inventory_ttl(settings) -> None:
     )
     assert wiped == [str(session_id)]
     assert not path.exists()
+
+
+def _block_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail the test if the worker constructs storage clients."""
+
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("split worker must not construct storage clients")
+
+    import apipi.services.runtime as runtime
+    import apipi.store.blobs as blobs
+    import apipi.store.engine as engine
+
+    monkeypatch.setattr(engine, "create_engine", _boom)
+    monkeypatch.setattr(engine, "Store", _boom)
+    monkeypatch.setattr(runtime, "object_store", _boom)
+    monkeypatch.setattr(blobs, "object_store", _boom)
+    monkeypatch.setattr(blobs, "blob_store", _boom)
+    monkeypatch.setattr(blobs, "S3Store", _boom)
+
+
+def test_prepare_worker_refuses_database_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, settings: Any
+) -> None:
+    from apipi.cli import prepare_worker
+    from apipi.config import ConfigError
+
+    monkeypatch.setattr("apipi.cli.probe_model_host", lambda _settings: None)
+    monkeypatch.setattr("apipi.cli.probe_run_mode", lambda _settings: None)
+    token_file = tmp_path / "worker.token"
+    token_file.write_text("secret\n")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://db/apipi")
+    with pytest.raises(ConfigError, match="no longer uses DATABASE_URL"):
+        prepare_worker(
+            settings.model_copy(
+                update={"worker_token_file": str(token_file), "run_mode": "none"}
+            )
+        )
+
+
+def test_prepare_worker_refuses_toml_database_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from apipi.cli import prepare_worker
+    from apipi.config import ConfigError
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    config = tmp_path / "apipi.toml"
+    config.write_text('database_url = "postgresql+asyncpg://db/apipi"\n')
+    with pytest.raises(ConfigError, match="no longer uses DATABASE_URL"):
+        prepare_worker(config_path=str(config))
+
+
+def test_programmatic_settings_without_env_still_prepare(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, settings: Any
+) -> None:
+    from apipi.cli import prepare_worker
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr("apipi.cli.probe_model_host", lambda _settings: None)
+    monkeypatch.setattr("apipi.cli.probe_run_mode", lambda _settings: None)
+    token_file = tmp_path / "worker.token"
+    token_file.write_text("secret\n")
+    resolved = prepare_worker(
+        settings.model_copy(
+            update={"worker_token_file": str(token_file), "run_mode": "none"}
+        )
+    )
+    assert resolved.run_mode == "none"
+
+
+async def test_split_turn_needs_no_store_or_object_credentials(
+    store: Any, settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from apipi.services.event_bus import InMemoryEventBus
+    from apipi.services.runtime import FakeHarness
+    from apipi.services.sink import OutboxSink
+    from apipi.services.turn_context import build_turn_context
+    from apipi.store.repo import create_session, create_tenant
+    from apipi.worker.execution import LocalExecution
+    from apipi.worker.pi.isolation import load_isolation
+    from apipi.worker.pi.pool import PiPool
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    async with store.session() as db:
+        tenant = await create_tenant(db, name="t")
+        row = await create_session(
+            db, tenant.id, model="m1", status="idle", environment={"type": "none"}
+        )
+    tenant_id, session_id = tenant.id, row.id
+    context = await build_turn_context(store, settings, tenant_id, session_id)
+    _block_storage(monkeypatch)
+    outbox = Outbox()
+    harness = FakeHarness()
+    harness.mcp_calls = [{"call_id": "c1", "name": "mcp_tool"}]
+    execution = LocalExecution(
+        settings,
+        pool=PiPool(settings),
+        harness=harness,
+        isolation=load_isolation("none"),
+        hub=InMemoryEventBus(),
+        store=None,
+        outbox=outbox,
+    )
+    await execution.run_turn(
+        tenant_id,
+        session_id,
+        "hello",
+        turn_context=context,
+        sink=OutboxSink(outbox, tenant_id, session_id),
+    )
+    pending = outbox.pending(session_id)
+    assert [item["type"] for item in pending].count("turn.status") >= 1
+    assert any(
+        item["type"] == "event"
+        and item["payload"].get("type") == "agent.session.turn.item.added"
+        and (item["payload"].get("data") or {}).get("item_type") == "mcp_call"
+        for item in pending
+    )
+
+
+async def test_split_boot_hosted_needs_no_store(
+    store: Any, settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from apipi.services.event_bus import InMemoryEventBus
+    from apipi.services.runtime import FakeHarness
+    from apipi.services.turn_context import build_turn_context
+    from apipi.store.repo import create_session, create_tenant
+    from apipi.worker.execution import LocalExecution
+    from apipi.worker.pi.dirs import sessions_root
+    from apipi.worker.pi.isolation import load_isolation
+    from apipi.worker.pi.pool import PiPool
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    workspace = sessions_root(settings) / "tenant" / "session"
+    workspace.mkdir(parents=True, exist_ok=True)
+    async with store.session() as db:
+        tenant = await create_tenant(db, name="t")
+        row = await create_session(
+            db,
+            tenant.id,
+            model="m1",
+            status="idle",
+            environment={"type": "openai_hosted", "directory": str(workspace)},
+        )
+    context = await build_turn_context(store, settings, tenant.id, row.id)
+    _block_storage(monkeypatch)
+    execution = LocalExecution(
+        settings,
+        pool=PiPool(settings),
+        harness=FakeHarness(),
+        isolation=load_isolation("none"),
+        hub=InMemoryEventBus(),
+        store=None,
+        outbox=Outbox(),
+    )
+    spawned: list[dict[str, Any]] = []
+
+    async def _fake_get(session_id: uuid.UUID, **kwargs: Any) -> None:
+        spawned.append({"session_id": session_id, **kwargs})
+
+    monkeypatch.setattr(execution.pool, "get", _fake_get)
+    await execution.boot_hosted(tenant.id, row.id, turn_context=context)
+    assert spawned and spawned[0]["session_id"] == row.id
+    assert spawned[0]["env_type"] == "openai_hosted"
+
+
+async def test_escaped_turn_reported_without_db(settings: Any) -> None:
+    from apipi.gateway.errors import ApiError
+
+    execution = _execution(settings)
+    assert execution.outbox is not None
+    session_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+    from apipi.worker.hub import _report_escaped_turn
+
+    await _report_escaped_turn(
+        execution, tenant_id, session_id, ApiError("invalid_request", "nope")
+    )
+    pending = execution.outbox.pending(session_id)
+    assert any(
+        item["type"] == "event"
+        and item["payload"].get("type") == "agent.session.failed"
+        for item in pending
+    )

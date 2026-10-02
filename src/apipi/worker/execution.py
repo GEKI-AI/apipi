@@ -41,6 +41,22 @@ from apipi.worker.pi.proc import PiProc
 log = logging.getLogger("apipi.worker")
 
 
+def _require_turn_context(
+    store: Store | None, turn_context: dict[str, Any] | None
+) -> None:
+    """Fail fast when a database-less worker gets a context-less command."""
+    if store is None and turn_context is None:
+        # A split worker holds no database: every command must carry
+        # its turn context. The API validates commands before sending
+        # them, so this is a protocol violation.
+        raise ApiError(
+            "internal",
+            "Turn context is required on a worker without database access",
+            code="internal",
+            status_code=500,
+        )
+
+
 class LocalExecution:
     _SINK_CACHE_LIMIT = 4096
 
@@ -180,8 +196,8 @@ class LocalExecution:
         turn_context: dict[str, Any] | None = None,
         sink: ResultSink | None = None,
     ) -> None:
+        _require_turn_context(self.store, turn_context)
         store = self.store
-        assert store is not None
         self.note_context_ttl(session_id, turn_context)
         try:
             await run_turn(
@@ -231,8 +247,8 @@ class LocalExecution:
         turn_context: dict[str, Any] | None = None,
         sink: ResultSink | None = None,
     ) -> None:
+        _require_turn_context(self.store, turn_context)
         store = self.store
-        assert store is not None
         self.note_context_ttl(session_id, turn_context)
         try:
             await continue_turn(
@@ -273,10 +289,8 @@ class LocalExecution:
     async def prepare_for_new_turn(
         self, tenant_id: uuid.UUID, session_id: uuid.UUID
     ) -> None:
-        store = self.store
-        assert store is not None
         await prepare_for_new_turn(
-            store,
+            self.store,
             self.hub,
             self.harness,
             tenant_id,
@@ -486,8 +500,6 @@ class LocalExecution:
         turn_context: dict[str, Any] | None = None,
     ) -> None:
         store = self.store
-        if store is None:
-            return
         self.note_context_ttl(session_id, turn_context)
         from apipi.config import CapacityError
         from apipi.env.setup import SetupError
@@ -508,7 +520,7 @@ class LocalExecution:
             except (SetupError, ApiError) as exc:
                 code = exc.code if isinstance(exc, ApiError) and exc.code else None
                 message = exc.message
-                async with store.session() as db:
+                async with sink.txn(store) as db:
                     await fail_environment(
                         db,
                         self.hub,
@@ -520,7 +532,7 @@ class LocalExecution:
                     )
                 return
             except ObjectStoreError:
-                async with store.session() as db:
+                async with sink.txn(store) as db:
                     await fail_environment(
                         db,
                         self.hub,
@@ -536,7 +548,7 @@ class LocalExecution:
             try:
                 await self.pool.get(session_id, **kwargs)
             except CapacityError as exc:
-                async with store.session() as db:
+                async with sink.txn(store) as db:
                     await fail_environment(
                         db,
                         self.hub,
@@ -550,7 +562,7 @@ class LocalExecution:
                 log.exception(
                     "sandbox boot failed", extra={"session_id": str(session_id)}
                 )
-                async with store.session() as db:
+                async with sink.txn(store) as db:
                     await fail_environment(
                         db,
                         self.hub,
@@ -681,7 +693,7 @@ class LocalExecution:
 def local_execution(
     settings: Settings,
     *,
-    store: Store,
+    store: Store | None = None,
     harness: Any | None = None,
     hub: EventBus | None = None,
     metrics: Metrics | None = None,

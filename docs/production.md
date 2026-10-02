@@ -248,6 +248,33 @@ old token with `apipi workers token revoke`. Several active tokens per
 worker are normal. A revoked token closes live sockets on the next
 heartbeat and is rejected on reconnect. See [workers](workers.md).
 
+## Worker transport security
+
+Worker tokens are bearer secrets, so the worker socket needs TLS
+outside local development. Point workers at an `https://`
+`APIPI_API_URL`: `apipi worker` fails at startup when the URL is a
+non-loopback plain `http://` or `ws://` address. Loopback `http://`
+URLs stay allowed for local development only.
+
+For mutual TLS, provision one client certificate and key per worker
+host and verify them on the reverse proxy or load balancer in front
+of the API:
+
+```
+APIPI_WORKER_CLIENT_CERT=/run/apipi/worker.crt
+APIPI_WORKER_CLIENT_KEY=/run/apipi/worker.key
+APIPI_WORKER_SERVER_CA=/run/apipi/api-ca.crt
+```
+
+`APIPI_WORKER_SERVER_CA` is the optional private CA bundle the
+worker uses to verify the API server certificate when the system
+trust store does not cover it. The certificate and key must be set
+together. On the proxy side, terminate TLS, require a client
+certificate for `/internal/worker`, and verify it against your
+worker CA; the API itself keeps authenticating the per-worker bearer
+token on that route. Rotate client certificates like worker tokens:
+roll the new pair out, then remove the old CA entry.
+
 ## Tenant-aware deployments
 
 Most tenants share one gateway pool. Some tenants get their own pool:

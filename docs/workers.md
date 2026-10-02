@@ -93,8 +93,29 @@ A worker token is valid only on `/internal/worker`. It is rejected
 with `401` on every other route. Worker tokens are operator secrets,
 not tenant bearers. Do not put them in a browser.
 
-This is not mTLS yet. A later change can add it without changing the
-message types.
+## Transport security
+
+Worker tokens are bearer secrets, so the socket needs TLS outside
+local development. `apipi worker` fails at startup when its API URL
+is a non-loopback plain URL: use `https://` (or `wss://`) for any
+API host that is not loopback. Loopback `http://` URLs stay allowed
+for local development. The message types do not change with TLS.
+
+For mutual TLS, give the worker a client certificate and key, and
+point it at the private CA that signed the API server certificate
+when the system trust store does not cover it:
+
+```
+APIPI_WORKER_CLIENT_CERT=/run/apipi/worker.crt
+APIPI_WORKER_CLIENT_KEY=/run/apipi/worker.key
+APIPI_WORKER_SERVER_CA=/run/apipi/api-ca.crt
+```
+
+The certificate and key must be set together; `apipi worker` fails
+at startup when only one is set or when a file is missing or
+unreadable. Terminate TLS (and verify the client certificate
+against your CA) on the reverse proxy or load balancer in front of
+the API. See [production](production.md#worker-transport-security).
 
 ## Handshake
 
@@ -544,13 +565,22 @@ See
 | Process | Trust | Needs |
 | --- | --- | --- |
 | `apipi serve --api-only` | Operator control plane | Postgres, no KVM |
-| `apipi worker` | Operator sandbox host | Its token file, outbound to the API, the model host, the image store, and MCP upstreams. KVM and Firecracker only when it accepts `microvm`. |
+| `apipi worker` | Operator sandbox host | Its token file, outbound to the API, the model host, the image store, and MCP upstreams. KVM and Firecracker only when it accepts `microvm`. No Postgres, no object-store credentials. |
 | Combined `apipi serve` | Lab / one box | Whatever the run mode needs, including KVM when `microvm` |
 
 The worker holds its running sessions in memory only and makes no
 database queries: turns run from the command context, results go
 through the outbox, sandbox and lifecycle state go over the socket,
 and the reaper learns TTLs from the context and the inventory reply.
+`apipi worker` refuses to start when `DATABASE_URL` is set in its
+environment or `database_url` is set in its config file: unset it on
+worker hosts, since only the API connects
+to Postgres. With `APIPI_ARTIFACT_STORE=s3` the worker uploads and
+downloads bytes through API-issued presigned URLs and never sees
+store credentials; with the filesystem store it uses the shared
+store root that the API and every worker mounts at the same path.
+The socket needs TLS for any non-loopback API URL (see
+[Transport security](#transport-security)).
 The per-worker token is an operator secret. It is not a tenant
 bearer. Do not put it in the browser. The API container in Compose is
 unprivileged. The worker unit is the only place that should receive

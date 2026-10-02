@@ -76,6 +76,32 @@ WORKER_TOKEN_FILE_REQUIRED = (
 )
 
 
+WORKER_DATABASE_URL_MESSAGE = (
+    "apipi worker no longer uses DATABASE_URL: unset it on worker hosts, "
+    "in the environment and in the config file. "
+    "Only the API connects to Postgres; the worker gets everything it needs "
+    "over /internal/worker."
+)
+
+
+def reject_worker_database_url() -> None:
+    if os.environ.get("DATABASE_URL"):
+        raise ConfigError(WORKER_DATABASE_URL_MESSAGE)
+
+
+def reject_worker_database_url_toml(config_path: str | None = None) -> None:
+    """Reject `database_url` in the worker's TOML config file.
+
+    Programmatic `Settings` are untouched: only a value that comes
+    from a config file is rejected, so embedding and tests keep
+    working."""
+    path = resolve_config_path(config_path)
+    if path is None:
+        return
+    if "database_url" in _toml_values(path):
+        raise ConfigError(WORKER_DATABASE_URL_MESSAGE)
+
+
 def reject_legacy_worker_token() -> None:
     if os.environ.get("APIPI_WORKER_TOKEN"):
         raise ConfigError(LEGACY_WORKER_TOKEN_MESSAGE)
@@ -167,6 +193,9 @@ _WORKER_TOML = {
     "outbox_max_bytes": "worker_outbox_max_bytes",
     "ingest_batch_size": "worker_ingest_batch_size",
     "ingest_batch_window": "worker_ingest_batch_window",
+    "client_cert": "worker_client_cert",
+    "client_key": "worker_client_key",
+    "server_ca": "worker_server_ca",
 }
 _MCP_TOML = {
     "allow_hosts": "mcp_allow_hosts",
@@ -552,6 +581,18 @@ class Settings(BaseSettings):
     worker_token_file: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_WORKER_TOKEN_FILE", "worker_token_file"),
+    )
+    worker_client_cert: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_WORKER_CLIENT_CERT", "worker_client_cert"),
+    )
+    worker_client_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_WORKER_CLIENT_KEY", "worker_client_key"),
+    )
+    worker_server_ca: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_WORKER_SERVER_CA", "worker_server_ca"),
     )
     vault_master_key: str | None = Field(
         default=None,

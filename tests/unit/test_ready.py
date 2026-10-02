@@ -93,6 +93,20 @@ def test_check_ready_invalid_config(tmp_path: Path) -> None:
     assert "config" in text
 
 
+def test_check_role_worker_refuses_toml_database_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "require_run_mode", lambda *_a, **_k: None)
+    path = tmp_path / "apipi.toml"
+    path.write_text('database_url = "postgresql+asyncpg://db/apipi"\n')
+    out = StringIO()
+    assert check_ready(config_path=str(path), role="worker", out=out) == 1
+    assert "no longer uses DATABASE_URL" in out.getvalue()
+
+
 def test_cli_check_skip(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -143,3 +157,38 @@ def test_run_checks_role_worker_needs_token(monkeypatch: pytest.MonkeyPatch) -> 
     assert by_name["database"].status == "skip"
     assert by_name["model host"].status == "skip"
     assert by_name["worker token"].status == "fail"
+    assert by_name["worker TLS"].status == "ok"
+
+
+def test_run_checks_role_worker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "require_run_mode", lambda *_a, **_k: None)
+    settings = _settings()
+    rows = run_checks(settings, role="worker")
+    by_name = {row.name: row for row in rows}
+    assert by_name["worker TLS"].status == "ok"
+    remote = settings.model_copy(update={"api_url": "http://api.example:8000"})
+    rows = run_checks(remote, role="worker")
+    by_name = {row.name: row for row in rows}
+    assert by_name["worker TLS"].status == "fail"
+    assert "TLS" in by_name["worker TLS"].detail
+    secure = settings.model_copy(update={"api_url": "https://api.example"})
+    rows = run_checks(secure, role="worker")
+    by_name = {row.name: row for row in rows}
+    assert by_name["worker TLS"].status == "ok"
+
+
+def test_run_checks_role_worker_bad_ca(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "require_run_mode", lambda *_a, **_k: None)
+    bad_ca = tmp_path / "bad-ca.crt"
+    bad_ca.write_text("not a pem bundle")
+    settings = _settings().model_copy(update={"worker_server_ca": str(bad_ca)})
+    rows = run_checks(settings, role="worker")
+    by_name = {row.name: row for row in rows}
+    assert by_name["worker TLS"].status == "fail"
+    assert "APIPI_WORKER_SERVER_CA" in by_name["worker TLS"].detail

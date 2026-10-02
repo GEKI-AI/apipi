@@ -55,7 +55,7 @@ hosted files and skills).
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | `database_url` | `.apipi/apipi.db` (SQLite) | Store URL. Unset uses SQLite in the current directory. File SQLite uses WAL. One process only. Shared store: `postgresql+asyncpg://…`. |
+| `DATABASE_URL` | `database_url` | `.apipi/apipi.db` (SQLite) | Store URL. Unset uses SQLite in the current directory. File SQLite uses WAL. One process only. Shared store: `postgresql+asyncpg://…`. API-only: every API process points at the same URL. Workers never use it: `apipi worker` refuses to start when `DATABASE_URL` is set in the environment or `database_url` is set in the worker config file. |
 | `APIPI_HOST` | `host` | `0.0.0.0` | Bind address. |
 | `APIPI_PORT` | `port` | `8000` | Bind port. |
 | `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |
@@ -73,7 +73,10 @@ hosted files and skills).
 | `APIPI_VAULT_MASTER_KEY` | `vault_master_key` | local default | 32-byte AES-256-GCM key for MCP vault tokens at rest (standard or urlsafe base64, or 64-char hex). Unset uses a local default so laptop try-outs keep working, and logs a warning. Production must set a real key from the deploy secret store. Never commit it. `apipi migrate` rewrites leftover plaintext rows to ciphertext. Generate with `python -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"`. |
 | `APIPI_MCP_ALLOW_HOSTS` | `[mcp].allow_hosts` | empty | Private MCP targets the SSRF guard admits, comma-separated or a TOML array. Entries are hostnames or CIDRs (for example `mcp.internal, 10.0.0.0/8`). Empty blocks loopback, RFC 1918, link-local, and other special-use addresses, including names that resolve to them. Public MCP hosts need no entry. See [tools](tools.md#mcp). |
 | `APIPI_WORKER_LEASE_TTL` | `worker_lease_ttl` | `30s` | How long a session lease stays valid without a heartbeat. Expiry fails closed and emits `agent.session.error` with code `worker_lease_expired`. |
-| `APIPI_API_URL` | `api_url` | unset (`http://127.0.0.1:8000` for `apipi worker`) | Base URL the worker uses to open `/internal/worker`. |
+| `APIPI_API_URL` | `api_url` | unset (`http://127.0.0.1:8000` for `apipi worker`) | Base URL the worker uses to open `/internal/worker`. Non-loopback URLs must use TLS (`https://` or `wss://`); `apipi worker` fails at startup otherwise. Loopback `http://` is allowed for local development. |
+| `APIPI_WORKER_CLIENT_CERT` | `[worker].client_cert` | unset | Path to the PEM client certificate `apipi worker` presents for mutual TLS. Must be set together with `APIPI_WORKER_CLIENT_KEY`. See [workers](workers.md#transport-security). |
+| `APIPI_WORKER_CLIENT_KEY` | `[worker].client_key` | unset | Path to the PEM key for `APIPI_WORKER_CLIENT_CERT`. Must be set together with the certificate. |
+| `APIPI_WORKER_SERVER_CA` | `[worker].server_ca` | unset | Optional PEM CA bundle the worker uses to verify the API server certificate when the system trust store does not cover it. |
 | `APIPI_API_ONLY` | `api_only` | off | Control plane only. Turns lease a worker. `apipi serve --api-only` sets this. |
 | `APIPI_WORKER_ACCEPTS` | `[worker].accepts` | backend default (`none,microvm` for a microVM backend, else `none`) | Comma list from `none`, `microvm`. What this worker runs. `none,microvm` does both on one worker (`type=none` on the host, the rest in microVMs), `microvm` is computer sessions only, `none` is text-only sessions only with no KVM. If `microvm` is listed but the microVM backend cannot run, the worker fails fast before it registers. See [workers](workers.md#placement). |
 | `APIPI_WORKER_OUTBOX_DIR` | `[worker].outbox_dir` | unset | Directory for the worker outbox disk spool. Buffered durable envelopes are written through to one JSONL file per session so they survive a worker restart and replay after the next `hello.reply`. Unset keeps the outbox in memory only. See [workers](workers.md#messages). |

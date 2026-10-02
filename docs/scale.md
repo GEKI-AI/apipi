@@ -32,7 +32,9 @@ and `none` workers, or `none`-only. See
 [sandbox workers](workers.md#placement) for `APIPI_WORKER_ACCEPTS`,
 its defaults, and the per-worker supervision (`APIPI_PI_MEM_MIB`,
 `KillMode=control-group`, the orphan reaper). Point every API
-and every worker at the same `DATABASE_URL`. Workers set
+process at the same `DATABASE_URL`; workers never see it (`apipi
+worker` refuses to start when `DATABASE_URL` is set, since only the
+API writes to Postgres). Workers set
 `APIPI_API_URL` and `APIPI_WORKER_TOKEN_FILE` (one token per worker,
 created with `apipi workers token create`). Give each worker its own
 `APIPI_SESSIONS_DIR` for its workspaces. Artifact, file, skill, and Pi
