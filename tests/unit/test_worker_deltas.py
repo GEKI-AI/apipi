@@ -12,6 +12,7 @@ from apipi.services.runtime import live_event_body
 from apipi.store.engine import Store
 from apipi.store.repo import (
     append_event,
+    clear_session_lease,
     create_session,
     create_tenant,
     set_session_lease,
@@ -82,6 +83,53 @@ async def test_relay_drops_empty_fragments() -> None:
     await relay.submit(uuid.uuid4(), uuid.uuid4(), "")
     await relay.flush()
     assert sent == []
+
+
+async def test_relay_send_failure_is_dropped_not_raised() -> None:
+    async def boom(envelope: dict[str, Any]) -> None:
+        del envelope
+        raise RuntimeError("socket closed")
+
+    relay = DeltaRelay(boom, window=60.0)
+    session_id = uuid.uuid4()
+    turn_id = uuid.uuid4()
+    await relay.submit(session_id, turn_id, "hi")
+    await relay.flush()
+    assert relay.dropped == 1
+
+
+async def test_relay_detach_drops_quietly() -> None:
+    sent: list[dict[str, Any]] = []
+
+    async def send(envelope: dict[str, Any]) -> None:
+        sent.append(envelope)
+
+    relay = DeltaRelay(send, window=60.0)
+    relay.detach()
+    await relay.submit(uuid.uuid4(), uuid.uuid4(), "hi")
+    await relay.flush()
+    assert sent == []
+    assert relay.dropped == 1
+
+
+async def test_relay_forget_resets_session() -> None:
+    sent: list[dict[str, Any]] = []
+
+    async def send(envelope: dict[str, Any]) -> None:
+        sent.append(envelope)
+
+    relay = DeltaRelay(send, window=60.0)
+    session_id = uuid.uuid4()
+    turn_id = uuid.uuid4()
+    await relay.submit(session_id, turn_id, "a")
+    await relay.submit(session_id, turn_id, "b")
+    await relay.flush()
+    assert [item["seq"] for item in sent] == [1]
+    relay.forget(session_id)
+    await relay.submit(session_id, turn_id, "c")
+    await relay.flush()
+    assert [item["seq"] for item in sent] == [1, 1]
+    assert sent[1]["payload"] == {"turn_id": str(turn_id), "text": "c"}
 
 
 async def test_relay_window_flushes_without_caller() -> None:
@@ -421,3 +469,154 @@ async def test_handle_delta_counts_protocol_events(
     body = hub.metrics.scrape().decode()
     assert 'event="delta.accepted"' in body
     assert 'event="delta.rejected"' in body
+
+
+async def test_handle_delta_reads_only_new_events_after_baseline(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import apipi.worker.hub as hub_module
+
+    real = hub_module.list_events
+    calls: list[int | None] = []
+
+    async def counting(
+        db: Any, tenant_id: uuid.UUID, session_id: uuid.UUID, **kwargs: Any
+    ) -> Any:
+        calls.append(kwargs.get("after_seq"))
+        return await real(db, tenant_id, session_id, **kwargs)
+
+    monkeypatch.setattr(hub_module, "list_events", counting)
+    hub = WorkerHub(settings)
+    bus = InMemoryEventBus()
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    turn_id = uuid.uuid4()
+    async with store.session() as db:
+        for _ in range(30):
+            await append_event(
+                db,
+                tenant_id,
+                session_id,
+                type="agent.session.turn.output_text.done",
+                data={"text": "old", "turn_id": str(uuid.uuid4())},
+            )
+    conn = _conn(worker_id, lease_id)
+    for seq in range(1, 6):
+        assert await hub.handle_delta(
+            store, bus, conn, _envelope(session_id, turn_id, "x", seq=seq)
+        )
+    assert len(calls) == 5
+    assert calls[0] is None
+    assert calls[1:] == [30, 30, 30, 30]
+
+
+async def test_handle_delta_done_cache_needs_no_read(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import apipi.worker.hub as hub_module
+
+    real = hub_module.list_events
+    calls = 0
+
+    async def counting(
+        db: Any, tenant_id: uuid.UUID, session_id: uuid.UUID, **kwargs: Any
+    ) -> Any:
+        nonlocal calls
+        calls += 1
+        return await real(db, tenant_id, session_id, **kwargs)
+
+    monkeypatch.setattr(hub_module, "list_events", counting)
+    hub = WorkerHub(settings)
+    bus = InMemoryEventBus()
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    turn_id = uuid.uuid4()
+    conn = _conn(worker_id, lease_id)
+    assert await hub.handle_delta(store, bus, conn, _envelope(session_id, turn_id, "x"))
+    async with store.session() as db:
+        await append_event(
+            db,
+            tenant_id,
+            session_id,
+            type="agent.session.turn.output_text.done",
+            data={"text": "full", "turn_id": str(turn_id)},
+        )
+    assert (
+        await hub.handle_delta(
+            store, bus, conn, _envelope(session_id, turn_id, "late", seq=2)
+        )
+        is False
+    )
+    assert (
+        await hub.handle_delta(
+            store, bus, conn, _envelope(session_id, turn_id, "later", seq=3)
+        )
+        is False
+    )
+    assert calls == 2
+
+
+async def test_delta_state_dropped_on_release_and_detach(
+    settings: Settings, store: Store
+) -> None:
+    hub = WorkerHub(settings)
+    bus = InMemoryEventBus()
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    conn = _conn(worker_id, lease_id)
+    await hub.attach(conn)
+    try:
+        turn_id = uuid.uuid4()
+        assert await hub.handle_delta(
+            store, bus, conn, _envelope(session_id, turn_id, "hi")
+        )
+        assert session_id in hub._delta_leases
+        assert session_id in hub._delta_hits
+        await hub.release(store, tenant_id, session_id, lease_id)
+        assert session_id not in hub._delta_leases
+        assert session_id not in hub._delta_hits
+        lease_id2 = uuid.uuid4()
+        async with store.session() as db:
+            from apipi.store.models import utc_now
+
+            await set_session_lease(
+                db,
+                tenant_id,
+                session_id,
+                worker_id=worker_id,
+                lease_id=lease_id2,
+                lease_until=utc_now() + timedelta(minutes=5),
+            )
+        conn.leases.add(lease_id2)
+        assert await hub.handle_delta(
+            store, bus, conn, _envelope(session_id, uuid.uuid4(), "again")
+        )
+        assert session_id in hub._delta_leases
+    finally:
+        await hub.detach(worker_id, conn)
+    assert session_id not in hub._delta_leases
+    assert session_id not in hub._delta_hits
+
+
+async def test_stale_delta_lease_is_revalidated(
+    settings: Settings, store: Store
+) -> None:
+    hub = WorkerHub(settings)
+    bus = InMemoryEventBus()
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    conn = _conn(worker_id, lease_id)
+    turn_id = uuid.uuid4()
+    assert await hub.handle_delta(
+        store, bus, conn, _envelope(session_id, turn_id, "hi")
+    )
+    async with store.session() as db:
+        await clear_session_lease(db, tenant_id, session_id)
+    hub._delta_leases[session_id].refreshed -= 3600.0
+    assert (
+        await hub.handle_delta(
+            store, bus, conn, _envelope(session_id, turn_id, "late", seq=2)
+        )
+        is False
+    )
+    assert session_id not in hub._delta_leases

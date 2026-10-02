@@ -54,10 +54,22 @@ class DeltaRelay:
         self._seq: dict[uuid.UUID, int] = {}
         self._flush_task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
+        self.dropped = 0
 
     def attach(self, send: SendEnvelope) -> None:
         """Set the socket sender once the worker is connected."""
         self._send = send
+
+    def detach(self) -> None:
+        """Drop the socket sender when the connection closes."""
+        self._send = None
+
+    def forget(self, session_id: uuid.UUID) -> None:
+        """Drop buffered fragments and the seq counter for a session."""
+        self._buffers = {
+            key: parts for key, parts in self._buffers.items() if key[0] != session_id
+        }
+        self._seq.pop(session_id, None)
 
     async def submit(
         self,
@@ -79,7 +91,12 @@ class DeltaRelay:
 
     async def _delayed_flush(self) -> None:
         await asyncio.sleep(self._window)
-        await self.flush()
+        try:
+            await self.flush()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.debug("delta relay flush failed; dropping batch")
 
     async def flush(self) -> None:
         """Send one envelope per buffered session and turn."""
@@ -104,19 +121,26 @@ class DeltaRelay:
         send = self._send
         if send is None:
             log.debug("delta relay has no sender; dropping fragment")
+            self.dropped += 1
             return
         last = self._seq.get(session_id, 0) + 1
         self._seq[session_id] = last
-        await send(
-            {
-                "v": 2,
-                "session_id": str(session_id),
-                "turn_id": str(turn_id),
-                "seq": last,
-                "type": kind,
-                "payload": {"turn_id": str(turn_id), "text": text},
-            }
-        )
+        try:
+            await send(
+                {
+                    "v": 2,
+                    "session_id": str(session_id),
+                    "turn_id": str(turn_id),
+                    "seq": last,
+                    "type": kind,
+                    "payload": {"turn_id": str(turn_id), "text": text},
+                }
+            )
+        except Exception:
+            # At-most-once: a dead socket drops the batch. Never let
+            # a send error escape into the turn via the flush task.
+            log.debug("delta relay send failed; dropping fragment")
+            self.dropped += 1
 
 
 def _split(text: str, limit: int) -> list[str]:

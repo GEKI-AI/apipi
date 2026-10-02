@@ -174,10 +174,16 @@ leased to the sending worker (otherwise the delta is rejected and
 logged), applies a 32 KiB size cap and a per-session rate budget
 (100 deltas per second; over-budget deltas are dropped and counted),
 and publishes accepted deltas as `live` bus messages without writing
-to the store. A delta for a turn whose `output_text.done` or
-terminal turn event already committed is dropped: the final item is
+to the store. The lease check reads the socket's in-memory lease
+state and only re-reads the lease row when that state cannot answer
+or is older than 30 seconds; a delta for a turn whose
+`output_text.done` or terminal turn event already committed is
+dropped after reading only the events stored since the last check
+(turns already known done need no read at all): the final item is
 the source of truth, and reconnect and export skip deltas.
-`delta.reasoning` envelopes are accepted but never fanned out.
+Per-session delta state is dropped when the lease ends or the
+connection closes. `delta.reasoning` envelopes are accepted but
+never fanned out.
 Rejections and drops are counted in
 `apipi_worker_protocol_total{event}` (`delta.accepted`,
 `delta.rejected`, `delta.dropped_done`, `delta.rate_limited`,
