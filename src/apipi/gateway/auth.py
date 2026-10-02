@@ -17,6 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from apipi.config import ConfigError
 from apipi.gateway.errors import ApiError
 from apipi.gateway.tokens import hash_token
+from apipi.services.worker_tokens import WORKER_TOKEN_PREFIX
 from apipi.store.engine import Store
 from apipi.store.models import Tenant
 from apipi.store.repo import ensure_tenant
@@ -517,6 +518,13 @@ async def require_tenant(
     if creds is None or creds.scheme.lower() != "bearer" or not creds.credentials:
         unauthorized()
     token = creds.credentials
+    if token.startswith(WORKER_TOKEN_PREFIX):
+        raise ApiError(
+            "invalid_request",
+            "Worker tokens are valid only on /internal/worker",
+            code="unauthorized",
+            status_code=401,
+        )
     ctx = auth_request_of(request)
     fn: Authenticate = request.app.state.authenticate
     cache: AuthCache = request.app.state.auth_cache

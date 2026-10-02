@@ -38,7 +38,7 @@ async def store() -> AsyncIterator[Store]:
     if url:
         engine = create_async_engine(url, pool_pre_ping=True)
         async with engine.begin() as conn:
-            await conn.execute(text("TRUNCATE TABLE tenants CASCADE"))
+            await conn.execute(text("TRUNCATE TABLE tenants, worker_tokens CASCADE"))
     else:
         engine = _sqlite_engine()
         async with engine.begin() as conn:
@@ -70,6 +70,14 @@ def settings(tmp_path: Path) -> Settings:
         run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
     )
+
+
+@pytest.fixture
+async def worker_secret(store: Store) -> AsyncIterator[str]:
+    from apipi.services.worker_tokens import create_token
+
+    created = await create_token(store, name="test-worker")
+    yield created.secret
 
 
 @pytest.fixture

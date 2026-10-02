@@ -372,7 +372,7 @@ install `deploy/systemd/apipi-worker-drain.conf` as
 `TimeoutStopSec=16min` so SIGTERM can empty live Pi before SIGKILL.
 
 Many operators run that unit as root so jailer can chroot Firecracker
-and the process can create TAP devices. Set `APIPI_WORKER_TOKEN` and `APIPI_API_URL` in
+and the process can create TAP devices. Set `APIPI_WORKER_TOKEN_FILE` and `APIPI_API_URL` in
 the environment file. The API unit is `apipi serve --api-only` with
 no DeviceAllow for KVM.
 

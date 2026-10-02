@@ -24,7 +24,8 @@ Why workers exist is in [workers](worker-concepts.md).
 load balancer. APIs run `apipi serve --api-only`. Workers run `apipi
 worker` with `APIPI_RUN_MODE=microvm` on KVM hosts. Point every API
 and every worker at the same `DATABASE_URL`. Workers set
-`APIPI_API_URL` and `APIPI_WORKER_TOKEN`. Give each worker its own
+`APIPI_API_URL` and `APIPI_WORKER_TOKEN_FILE` (one token per worker,
+created with `apipi workers token create`). Give each worker its own
 `APIPI_SESSIONS_DIR`. Artifact bytes can be local on the worker or S3.
 
 The balancer can use least-conn (or round robin) for `/v1`. Workers

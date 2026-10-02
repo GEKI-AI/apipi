@@ -26,3 +26,4 @@ These files are not on the MkDocs site.
 | 0012 | Guest image store |
 | 0013 | Agent templates |
 | 0014 | OpenAI Agents API compatibility |
+| 0015 | Worker protocol v2 |

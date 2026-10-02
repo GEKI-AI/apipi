@@ -164,7 +164,7 @@ OPENAI_BASE_URL=https://your-model-host/v1
 export APIPI_MODEL=your-model-id
 # optional:
 # export APIPI_EXAMPLE_TOKEN=dev-token
-# export APIPI_WORKER_TOKEN=local-worker
+# (the script mints a per-worker token itself; see run-microvm.sh)
 # export DATABASE_URL=postgresql+asyncpg://apipi:apipi@127.0.0.1:5432/apipi
 ./examples/sessions/run-microvm.sh
 ```

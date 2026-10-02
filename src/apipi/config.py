@@ -65,6 +65,37 @@ OTEL_UNSET = "APIPI_OTEL_ENDPOINT unset"
 OPENAI_API_KEY_IGNORED = (
     "OPENAI_API_KEY is ignored; the request bearer is sent to the model host"
 )
+LEGACY_WORKER_TOKEN_MESSAGE = (
+    "APIPI_WORKER_TOKEN was removed. Create a per-worker token with "
+    "`apipi workers token create` and point the worker at it with "
+    "APIPI_WORKER_TOKEN_FILE."
+)
+WORKER_TOKEN_FILE_REQUIRED = (
+    "APIPI_WORKER_TOKEN_FILE is required. Create a per-worker token with "
+    "`apipi workers token create`, write the printed secret to a file, "
+    "and set APIPI_WORKER_TOKEN_FILE to that path."
+)
+
+
+def reject_legacy_worker_token() -> None:
+    if os.environ.get("APIPI_WORKER_TOKEN"):
+        raise ConfigError(LEGACY_WORKER_TOKEN_MESSAGE)
+
+
+def load_worker_token(token_file: str | None) -> str:
+    if not token_file:
+        raise ConfigError(WORKER_TOKEN_FILE_REQUIRED)
+    try:
+        text = Path(token_file).read_text()
+    except OSError:
+        raise ConfigError(
+            f"cannot read APIPI_WORKER_TOKEN_FILE: {token_file}"
+        ) from None
+    token = text.strip()
+    if not token:
+        raise ConfigError(f"APIPI_WORKER_TOKEN_FILE is empty: {token_file}")
+    return token
+
 
 _log = logging.getLogger("apipi")
 
@@ -491,9 +522,9 @@ class Settings(BaseSettings):
         default="specific",
         validation_alias=AliasChoices("APIPI_ERROR_CODES", "error_codes"),
     )
-    worker_token: str | None = Field(
+    worker_token_file: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("APIPI_WORKER_TOKEN", "worker_token"),
+        validation_alias=AliasChoices("APIPI_WORKER_TOKEN_FILE", "worker_token_file"),
     )
     vault_master_key: str | None = Field(
         default=None,
@@ -1002,8 +1033,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_worker_token(cls, values: object) -> object:
+        if isinstance(values, dict) and (
+            "worker_token" in values or "APIPI_WORKER_TOKEN" in values
+        ):
+            raise ValueError(LEGACY_WORKER_TOKEN_MESSAGE)
+        return values
+
     @model_validator(mode="after")
     def run_mode_known(self) -> Self:
+        if os.environ.get("APIPI_WORKER_TOKEN"):
+            raise ValueError(LEGACY_WORKER_TOKEN_MESSAGE)
         mode = self.run_mode
         if mode not in BUILTIN_RUN_MODES and ":" not in mode:
             raise ValueError(RUN_MODE_HELP)
@@ -1175,6 +1217,8 @@ def _toml_values(path: Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ConfigError(f"{path} must be a table")
     nested: dict[str, Any] = {}
+    if "worker_token" in raw:
+        raise ConfigError(LEGACY_WORKER_TOKEN_MESSAGE)
     if "models" in raw and isinstance(raw["models"], dict):
         nested["model_registry"] = raw.pop("models")
     if "pi" in raw:
@@ -1234,6 +1278,7 @@ def _warn_removed_agent_versions_env() -> None:
 
 def load_settings(*, config_path: str | None = None) -> Settings:
     _warn_removed_agent_versions_env()
+    reject_legacy_worker_token()
     path = resolve_config_path(config_path)
     values = _toml_values(path) if path is not None else {}
     env_file = Path(".env") if Path(".env").is_file() else None
@@ -1285,6 +1330,8 @@ def _settings_message(exc: ValidationError) -> str:
     for error in exc.errors():
         loc = error.get("loc", ())
         msg = str(error.get("msg", ""))
+        if "APIPI_WORKER_TOKEN was removed" in msg:
+            return LEGACY_WORKER_TOKEN_MESSAGE
         if "APIPI_S3_BUCKET" in msg:
             return "APIPI_S3_BUCKET is required"
         if "APIPI_VAULT_MASTER_KEY must be 32 bytes" in msg:

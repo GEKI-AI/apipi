@@ -1,9 +1,10 @@
 # Workers
 
 A worker is an operator process that runs Pi and the sandbox. It is
-not a tenant computer. Workers attach with a lease on `/internal/worker`. Workers use a different URL, a
-different secret, and different messages. Protocol fields are in
-[sandbox workers](workers.md).
+not a tenant computer. Workers attach with a lease on `/internal/worker` over worker protocol v2. Workers use a different URL, a
+per-worker token, and versioned messages. Message shapes are in
+[sandbox workers](workers.md), and the contract is in
+[ADR 0015](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0015-worker-protocol-v2.md).
 
 This page explains why the split exists, how a turn moves through it,
 and how that changes scale.
@@ -56,9 +57,13 @@ load balancer. A worker already registered.
 
 The API does not spawn Pi. It sends `turn.start` (or `turn.continue` /
 `turn.cancel`) on the worker socket. The worker runs the turn through
-the same execution contract combined serve uses in-process. Public
-events land in the store before the client sees them on SSE. If the
-SSE connection sits on another API replica, that replica polls the
+the same execution contract combined serve uses in-process, then
+reports back in v2 envelopes: durable results (`item.added`,
+`turn.status`, `usage`, `artifact.completed`, `error`,
+`sandbox.status`) that the API ingests idempotently, and ephemeral
+streaming deltas (`delta.text`, `delta.reasoning`) that are never
+persisted. Public events land in the store before the client sees them
+on SSE. If the SSE connection sits on another API replica, that replica polls the
 store. Pi does not have to live on the API node.
 
 If no worker can take a lease (session cap or RAM budget), the turn
@@ -95,8 +100,9 @@ the host:
 apipi serve --api-only
 
 # KVM host
+apipi workers token create --name worker-1   # prints the secret once
+APIPI_WORKER_TOKEN_FILE=/run/apipi/worker.token \
 APIPI_API_URL=http://api.example:8000 \
-APIPI_WORKER_TOKEN=secret \
 APIPI_RUN_MODE=microvm \
   apipi worker
 ```
@@ -109,7 +115,7 @@ Copy-paste recipes are on [install](install.md). Unit files are in
 | Secret | Who | Where |
 | --- | --- | --- |
 | Tenant bearer | Your app | `Authorization` on Agents API routes. Mapped to a tenant. Not stored. |
-| `APIPI_WORKER_TOKEN` | Operator | Worker `Authorization` on `/internal/worker`. Compared in memory. Not in Postgres. |
+| Per-worker token | Operator | Worker `Authorization` on `/internal/worker`. Only the hash is stored in Postgres. Rejected everywhere else. |
 
 
 Do not put the worker token in a browser. Do not reuse it as a tenant

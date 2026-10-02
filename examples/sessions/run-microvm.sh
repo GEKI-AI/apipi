@@ -17,7 +17,6 @@ if [ -z "${OPENAI_BASE_URL:-}" ] && [ ! -f "$ROOT/.env" ]; then
 fi
 
 TOKEN="${APIPI_EXAMPLE_TOKEN:-dev-token}"
-WORKER_TOKEN="${APIPI_WORKER_TOKEN:-local-worker}"
 DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://apipi:apipi@127.0.0.1:5432/apipi}"
 GATEWAY="http://127.0.0.1:8000"
 LOG_DIR="${APIPI_EXAMPLES_OUT:-/tmp/opencode/apipi-examples}"
@@ -61,9 +60,12 @@ if command -v docker >/dev/null && [ -f "$ROOT/compose.yaml" ]; then
 fi
 
 export DATABASE_URL
-export APIPI_WORKER_TOKEN="$WORKER_TOKEN"
 export PYTHONUNBUFFERED=1
 uv run apipi migrate
+WORKER_TOKEN_FILE="$LOG_DIR/worker.token"
+uv run apipi workers token create --name example-worker >"$WORKER_TOKEN_FILE"
+chmod 600 "$WORKER_TOKEN_FILE"
+export APIPI_WORKER_TOKEN_FILE="$WORKER_TOKEN_FILE"
 uv run apipi check --role api
 
 nohup uv run apipi serve --api-only --host 0.0.0.0 --port 8000 >>"$API_LOG" 2>&1 &
@@ -85,7 +87,7 @@ touch "$WORKER_LOG"
 chmod a+rw "$WORKER_LOG" 2>/dev/null || true
 sudo -E env \
   DATABASE_URL="$DATABASE_URL" \
-  APIPI_WORKER_TOKEN="$WORKER_TOKEN" \
+  APIPI_WORKER_TOKEN_FILE="$WORKER_TOKEN_FILE" \
   APIPI_API_URL="$GATEWAY" \
   APIPI_RUN_MODE=microvm \
   APIPI_SANDBOX_DEFAULT_SIZE=S \

@@ -72,6 +72,17 @@ class AsgiWebsocket:
             if message["type"] == "websocket.close":
                 raise RuntimeError(f"websocket closed {message.get('code')}")
 
+    async def receive_close(self, timeout: float = 5) -> dict[str, Any]:
+        while True:
+            message = await asyncio.wait_for(self._outgoing.get(), timeout=timeout)
+            if message["type"] == "websocket.close":
+                return {
+                    "code": message.get("code"),
+                    "reason": message.get("reason"),
+                }
+            if message["type"] == "websocket.send":
+                continue
+
     async def close(self) -> None:
         await self._incoming.put({"type": "websocket.disconnect", "code": 1000})
         if self._task is not None:

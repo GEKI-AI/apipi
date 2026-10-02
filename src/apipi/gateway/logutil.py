@@ -86,7 +86,8 @@ def extra_fields(record: logging.LogRecord) -> dict[str, Any]:
 class FlushStreamHandler(logging.StreamHandler):
     def emit(self, record: logging.LogRecord) -> None:
         super().emit(record)
-        self.flush()
+        with contextlib.suppress(OSError, ValueError):
+            self.flush()
 
 
 class JsonFormatter(logging.Formatter):

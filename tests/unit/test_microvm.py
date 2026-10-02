@@ -626,7 +626,7 @@ def test_guest_env_drops_host_path(tmp_path: Path) -> None:
 def test_guest_env_drops_worker_secrets(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("APIPI_WORKER_TOKEN", "worker-secret")
+    monkeypatch.setenv("APIPI_WORKER_TOKEN_FILE", "/run/apipi/worker.token")
     monkeypatch.setenv("APIPI_DATABASE_URL", "postgresql://apipi:db-secret@db/apipi")
     monkeypatch.setenv("APIPI_DB_PASSWORD", "db-secret")
     monkeypatch.setenv("APIPI_DB_USER", "apipi")
@@ -661,7 +661,7 @@ def test_guest_env_drops_worker_secrets(
     )
     packed = "\n".join(f"{key}={value}" for key, value in env.items())
     for secret in (
-        "worker-secret",
+        "/run/apipi/worker.token",
         "db-secret",
         "operator-key",
         "process-key",
@@ -679,7 +679,7 @@ def test_guest_env_drops_worker_secrets(
     assert env["APIPI_MCP_0_URL"] == "http://172.16.0.1:1/tok/mcp/0"
     assert "APIPI_MCP_0_AUTHORIZATION" not in env
     assert env["REPORT"] == "yes"
-    assert "APIPI_WORKER_TOKEN" not in env
+    assert "APIPI_WORKER_TOKEN_FILE" not in env
     assert "APIPI_API_URL" not in env
     assert "OPENAI_API_KEY_OVERWRITE" not in env
     forced = env_file(
@@ -687,12 +687,12 @@ def test_guest_env_drops_worker_secrets(
             **env,
             "APIPI_DB_PASSWORD": "db-secret",
             "OPENAI_API_KEY_OVERWRITE": "operator-key",
-            "APIPI_WORKER_TOKEN": "worker-secret",
+            "APIPI_WORKER_TOKEN_FILE": "/run/apipi/worker.token",
         }
     )
     assert "db-secret" not in forced
     assert "operator-key" not in forced
-    assert "worker-secret" not in forced
+    assert "/run/apipi/worker.token" not in forced
     assert "OPENAI_API_KEY=apipi" in forced
 
 

@@ -1,14 +1,16 @@
 # Sandbox workers
 
-This page is the operator reference: messages, leases, drain, and
-which process needs KVM. Why workers exist and how a turn moves is in
-[Workers](worker-concepts.md). Isolation of Pi is in
-[isolation](isolation.md).
+This page is the operator reference for worker protocol v2: auth,
+messages, leases, drain, and which process needs KVM. Why workers
+exist and how a turn moves is in [Workers](worker-concepts.md). The
+architecture choice is in
+[ADR 0015](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0015-worker-protocol-v2.md).
+Isolation of Pi is in [isolation](isolation.md).
 
 Trusted ApiPi workers host Firecracker. They are **not** customer
 external computers. `self_hosted` is currently not supported
 (see [environments](environments.md)). Workers use `/internal/worker`,
-a different secret, and different messages.
+a per-worker token, and the v2 messages below.
 
 Firecracker, jailer, TAP, and the guest live on the **worker**.
 `apipi serve --api-only` never probes `/dev/kvm` and never creates a
@@ -18,9 +20,10 @@ for a laptop or one box. Production is API-only plus one or more
 `apipi worker` hosts. Chat fleets add workers with
 `APIPI_RUN_MODE=chat` next to `microvm`. See [chat fleets](chat.md).
 
-`apipi worker` requires `APIPI_WORKER_TOKEN` and probes the configured
-run mode before it connects. If `APIPI_RUN_MODE=microvm` cannot start,
-the worker exits. It does not fall back to `none`.
+`apipi worker` reads its token from `APIPI_WORKER_TOKEN_FILE` and
+probes the configured run mode before it connects. If
+`APIPI_RUN_MODE=microvm` cannot start, the worker exits. It does not
+fall back to `none`.
 
 `apipi serve --api-only` (or `APIPI_API_ONLY`) runs turns on a leased
 worker. The API persists events from the store and streams SSE without
@@ -33,7 +36,8 @@ Start everything through the ApiPi CLI:
 ```
 apipi serve
 apipi serve --api-only
-APIPI_WORKER_TOKEN=secret APIPI_API_URL=http://api.example:8000 apipi worker
+apipi workers token create --name worker-1
+APIPI_WORKER_TOKEN_FILE=/run/apipi/worker.token APIPI_API_URL=http://api.example:8000 apipi worker
 apipi check --role api
 apipi check --role worker
 apipi install --role api
@@ -47,36 +51,130 @@ skips the KVM probe so the API can run without Firecracker.
 ## Auth
 
 The worker opens an outbound WebSocket to `/internal/worker` and
-sends `Authorization: Bearer <token>`. The token is
-`APIPI_WORKER_TOKEN` on the API process. The gateway compares it in
-memory. It does not store worker secrets in Postgres. If the token is
-unset, the socket is rejected.
+sends `Authorization: Bearer <token>`. Each worker has its own token:
+
+```
+apipi workers token create --name worker-1   # prints the secret once
+apipi workers token list
+apipi workers token revoke <id-or-name>
+```
+
+Only the SHA-256 hash of a token is stored in the API database
+(`worker_tokens`: id, name, hash, creation time, last use,
+revocation). Every secret starts with `apipi_wk_`, so the public API
+recognises a worker bearer by its prefix and rejects it without a
+database lookup. The secret is shown once at creation and never again.
+Write it to a file on the worker host and point the worker at it:
+
+```
+APIPI_WORKER_TOKEN_FILE=/run/apipi/worker.token
+```
+
+The file may end with a newline; surrounding whitespace is trimmed.
+`apipi worker` fails at startup when the setting is unset, or when the
+file is missing, unreadable, or empty. The token is never read from a
+plain environment value. There is no shared worker secret: the old
+`APIPI_WORKER_TOKEN` was removed, and setting it fails API and worker
+startup with a message that points at
+`apipi workers token create`.
+
+A token is bound to one `worker_id` on first register, or declared at
+creation with `--worker-id`. A register without `id` is assigned the
+bound `worker_id` by the API, which is how a restarted `apipi worker`
+(which sends no `id` and keeps no stable id of its own) keeps working.
+A register with a different explicit `id` is rejected with
+`token_bound`, whether or not the bound worker is connected. Keep several active tokens per
+worker so rotation needs no downtime: create the new token, roll it
+out to the worker, then revoke the old one. A revoked token closes
+live sockets on the next heartbeat, and new registers with it are
+rejected.
+
+A worker token is valid only on `/internal/worker`. It is rejected
+with `401` on every other route. Worker tokens are operator secrets,
+not tenant bearers. Do not put them in a browser.
 
 This is not mTLS yet. A later change can add it without changing the
 message types.
 
+## Handshake
+
+The first worker message must be `register` with `protocol: 2`:
+
+| Field | What |
+| --- | --- |
+| `protocol` | Must be `2`. Anything else closes the socket with code `1008` and reason `unsupported_protocol`. There is no fallback for old workers. |
+| `id` | Optional worker UUID. When omitted, the API assigns the token's bound `worker_id` (or mints and binds one on first register). |
+| `capabilities` | Free-form object, reserved for later steps. |
+| `accepts` | Optional list of session kinds. Reserved for placement work; it carries no behavior yet. |
+| `running` | Sessions this worker still holds: `[{session_id, lease_id, last_seq}]`. `last_seq` continues from the API's value on reconnect. |
+| `capacity`, `memory_mb`, `run_mode`, `arch`, `images` | Placement advertisement, as before. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB (default `capacity ×` guest `mem_mib`). `run_mode` is the placement class this process serves. `arch` is the worker machine. `images` lists `{id, version, digest, min_size}` for guest images on this host. A v2 microvm worker that omits `images` is treated as having `default` and `browser`, except on aarch64, which is treated as having `default` only. |
+
+The API answers with `hello.reply`:
+
+| Field | What |
+| --- | --- |
+| `protocol` | Always `2`. |
+| `worker_id`, `generation` | The worker id and its generation. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
+| `sessions` | `{session_id: last_seq}`: the persisted sequence per running session. The worker replays everything after that seq. Sequence persistence is not part of this step: the API always sends `last_seq: 0` as an explicit placeholder until the ingest and replay step lands. |
+
+A first message that is not `register` is rejected with
+`register required`. A bad register is rejected with
+`invalid register`. Rejections are logged on the API and counted in
+`apipi_worker_protocol_total{event}` (`unsupported_protocol`,
+`invalid_register`, `unauthorized`, `revoked`, `token_bound`).
+
 ## Messages
 
-JSON objects. The first worker message must be `register`.
+JSON objects. `register` is the only pre-handshake message.
 
 Worker to API:
 
 | `type` | Fields | What |
 | --- | --- | --- |
-| `register` | `id` (optional UUID), `capacity` (int ≥ 1), `memory_mb` (int ≥ 1, optional), `run_mode` (string, required), `arch` (optional), `images` (optional list) | Create or reconnect the worker. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB. If `memory_mb` is omitted, the API uses `capacity ×` guest `mem_mib`. `run_mode` is the placement class this process serves (`chat`, `microvm`, or the process `APIPI_RUN_MODE`). `arch` is the worker machine (`x86_64` or `aarch64`). `images` lists `{id, version, digest, min_size}` for guest images on this host. An older microvm worker that omits `images` is treated as having `default` and `browser`, except an aarch64 worker, which is treated as having `default` only. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
+| `register` | See [Handshake](#handshake) | Create or reconnect the worker. |
 | `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `arch` (optional), `drain` (optional bool), `images` (optional list) | Refresh `last_seen`. May update caps, advertised `run_mode`, architecture, drain posture, and the image list. |
 | `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. |
 | `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |
 
+The v2 envelope (`{v: 2, session_id, turn_id | null, seq, type,
+payload}`) and its message schemas are defined in
+`src/apipi/worker/protocol.py`, which the API and the worker share.
+Durable ingest, the outbox, replay, and the cumulative ack land in
+later steps; the schemas already describe that target.
+
 API to worker:
 
 | `type` | Fields | What |
 | --- | --- | --- |
-| `hello` | `ok`, `worker_id`, `generation` | Register succeeded. |
-| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.cancel`, `turn.continue`, or `session.stop`. |
+| `hello` | `ok`, `protocol`, `worker_id`, `generation`, `sessions` | Register succeeded. |
+| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.cancel`, `turn.continue`, or `session.stop`. The `id` is the idempotency key. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
 | error object | `ok: false`, `error` | Auth or register failed, then the socket closes. |
+
+Message classes:
+
+| Class | Types | Delivery |
+| --- | --- | --- |
+| Durable | `item.added`, `item.done`, `turn.status`, `usage`, `artifact.completed`, `error`, `sandbox.status` | Kept in the worker outbox until the cumulative `ack{last_seq}`. Ingested idempotently. |
+| Ephemeral | `delta.text`, `delta.reasoning` | At-most-once, never persisted, never acked. The final item is the source of truth. |
+
+The outbox is bounded (10,000 messages). When it is full the worker
+pauses Pi output; if the turn cannot proceed it fails with
+`worker_outbox_full`. Envelopes are capped at 1 MiB.
+
+## Replay
+
+Losing the socket does not abort a turn. A session is orphaned only
+after the lease TTL, and the turn is not moved to another worker.
+
+A reconnect may go to any replica. The worker sends its running
+sessions with their `last_seq` in `register`; the API answers with
+the persisted `last_seq` per session in `hello.reply` (always `0`
+until sequence persistence lands); the worker
+replays everything after that seq. Unacked commands are retransmitted
+with the same `command.id`, so the worker must treat that id as
+idempotent and never run a turn twice.
 
 ## Leases
 
@@ -101,11 +199,6 @@ returns `429` with code `capacity` and names that instance. There is
 no cross-API command forwarding. Point each worker at the API that
 will dispatch its turns, or stick `/internal/worker` to one API. SSE
 and session create stay store-backed on any replica.
-
-Reconnect with the same worker id replaces the old socket, increments
-generation, and retransmits unacked commands for leases that worker
-still owns. The same `command.id` is replayed; the worker must treat
-that id as idempotent so a turn is not run twice.
 
 ## Placement
 
@@ -198,12 +291,13 @@ The hub does not forward lifecycle events. See
 
 | Process | Trust | Needs |
 | --- | --- | --- |
-| `apipi serve --api-only` | Operator control plane | Postgres, worker token, no KVM |
-| `apipi worker` | Operator sandbox host | KVM, Firecracker, worker token, outbound to the API |
+| `apipi serve --api-only` | Operator control plane | Postgres, no KVM |
+| `apipi worker` | Operator sandbox host | KVM, Firecracker, its token file, outbound to the API, the model host, the image store, and MCP upstreams |
 | Combined `apipi serve` | Lab / one box | Whatever the run mode needs, including KVM when `microvm` |
 
-
-The worker token is an operator secret. It is not a tenant bearer and
-is not stored in Postgres. Do not put it in the browser. The API
-container in Compose is unprivileged. The worker unit is the only
-place that should receive `/dev/kvm` and `CAP_NET_ADMIN`.
+The worker still reads the session store today; later protocol steps
+remove that access so the worker keeps only its running sessions in
+memory. The per-worker token is an operator secret. It is not a tenant
+bearer. Do not put it in the browser. The API container in Compose is
+unprivileged. The worker unit is the only place that should receive
+`/dev/kvm` and `CAP_NET_ADMIN`.

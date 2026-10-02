@@ -2,6 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from apipi.cli import main
 from apipi.config import (
@@ -101,13 +102,31 @@ def test_idle_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().idle_ttl == timedelta(minutes=15)
 
 
-def test_worker_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_token_file_from_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_WORKER_TOKEN", "secret")
+    token_file = tmp_path / "worker.token"
+    token_file.write_text("secret\n")
+    monkeypatch.setenv("APIPI_WORKER_TOKEN_FILE", str(token_file))
     monkeypatch.setenv("APIPI_WORKER_LEASE_TTL", "15s")
     settings = Settings()
-    assert settings.worker_token == "secret"
+    assert settings.worker_token_file == str(token_file)
     assert settings.worker_lease_ttl == timedelta(seconds=15)
+
+
+def test_legacy_worker_token_from_env_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_WORKER_TOKEN", "secret")
+    with pytest.raises(ValidationError, match="APIPI_WORKER_TOKEN was removed"):
+        Settings()
+
+
+def test_legacy_worker_token_kwarg_fails() -> None:
+    with pytest.raises(ValidationError, match="APIPI_WORKER_TOKEN was removed"):
+        Settings(**{"worker_token": "secret"})  # type: ignore
 
 
 def test_vault_master_key_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

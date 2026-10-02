@@ -2,6 +2,7 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from apipi.worker.protocol import PROTOCOL_VERSION
 from tests.support.fake_runner import AsgiWebsocket
 
 
@@ -25,9 +26,12 @@ class FakeWorker:
         capacity: int = 1,
         memory_mb: int | None = None,
         run_mode: str | None = "chat",
+        protocol: int | None = PROTOCOL_VERSION,
     ) -> dict[str, Any]:
         await self.ws.connect()
         register: dict[str, Any] = {"type": "register", "capacity": capacity}
+        if protocol is not None:
+            register["protocol"] = protocol
         if memory_mb is not None:
             register["memory_mb"] = memory_mb
         if run_mode is not None:
@@ -45,6 +49,9 @@ class FakeWorker:
 
     async def receive_json(self, timeout: float = 5) -> dict[str, Any]:
         return await self.ws.receive_json(timeout=timeout)
+
+    async def wait_close(self, timeout: float = 5) -> dict[str, Any]:
+        return await self.ws.receive_close(timeout=timeout)
 
     async def close(self) -> None:
         await self.ws.close()
