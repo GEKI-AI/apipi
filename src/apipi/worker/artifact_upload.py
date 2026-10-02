@@ -85,18 +85,12 @@ def write_shared_object(settings: Settings, object_id: str, data: bytes) -> str:
 
     _check_id(object_id)
     root = store_root(settings)
-    # `object_id` for files lives under the files namespace, everything
-    # else under artifacts. The presign reply carries the exact relative
-    # path, so this helper stays for tests and direct callers.
-    for namespace in (NS_ARTIFACTS, NS_FILES):
-        try:
-            path = local_object_path(root, namespace, object_id)
-        except Exception:
-            continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-        return str(path.relative_to(root))
-    path = local_object_path(root, NS_ARTIFACTS, object_id)
+    # File ids are `tenant/file-...` (two parts); session blob keys are
+    # `tenant/key/session/blob`. The presign reply carries the exact
+    # relative path, so this helper stays for tests and direct callers.
+    parts = object_id.strip().strip("/").split("/")
+    namespace = NS_FILES if len(parts) == 2 else NS_ARTIFACTS
+    path = local_object_path(root, namespace, object_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return str(path.relative_to(root))
@@ -204,6 +198,14 @@ async def upload_via_presign(
             if code == "payload_too_large":
                 raise ApiError("invalid_request", message, code=code, status_code=413)
             raise DiskLimitError(message, code=code)
+        if reply.get("unchanged") is True:
+            # The API already holds these bytes; skip the PUT and the
+            # completed envelope, as combined `_persist_files` does.
+            return {
+                "unchanged": True,
+                "size": len(data),
+                "sha256": sha256_hex(data),
+            }
         raw_upload = reply.get("upload_id")
         if not isinstance(raw_upload, str) or not raw_upload:
             raise ConfigError("artifact presign reply is missing upload_id")

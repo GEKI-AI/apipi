@@ -74,6 +74,7 @@ class LocalExecution:
         self._sinks: dict[tuple[uuid.UUID, uuid.UUID], ResultSink] = {}
         self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
         self._context_ttl: dict[str, tuple[float | None, float, str | None]] = {}
+        self._session_dirs: dict[str, str] = {}
         if pool.on_kill is None:
             pool.on_kill = self._harvest_killed
         if pool.on_transition is None:
@@ -91,13 +92,17 @@ class LocalExecution:
         if isinstance(raw, (int, float)) and raw >= 0:
             seconds = float(raw)
         environment = session.get("environment")
-        env_type = (
-            environment.get("type")
-            if isinstance(environment, dict)
-            and isinstance(environment.get("type"), str)
-            else None
-        )
+        env = environment if isinstance(environment, dict) else {}
+        raw_type = env.get("type")
+        env_type = raw_type if isinstance(raw_type, str) else None
         self._context_ttl[str(session_id)] = (seconds, time.time(), env_type)
+        # Remember the hosted workspace directory too, so the killed
+        # harvest can find it without any database read.
+        raw_dir = env.get("directory")
+        if env_type == "openai_hosted" and isinstance(raw_dir, str) and raw_dir:
+            self._session_dirs[str(session_id)] = raw_dir
+        else:
+            self._session_dirs.pop(str(session_id), None)
 
     def refresh_context_seen(self, session_id: uuid.UUID) -> None:
         """Restart the reaper idle clock after turn activity."""
@@ -109,6 +114,7 @@ class LocalExecution:
 
     def _forget_context(self, session_id: str) -> None:
         self._context_ttl.pop(session_id, None)
+        self._session_dirs.pop(session_id, None)
 
     def sink_for(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> ResultSink:
         """Per-session result sink; outbox-backed on a split worker."""
@@ -555,48 +561,38 @@ class LocalExecution:
     async def _harvest_killed_split(
         self, session_id: uuid.UUID, proc: PiProc | None
     ) -> None:
-        """Split-mode killed harvest: presign uploads, no DB writes."""
-        from apipi.store.repo import get_session_by_id
+        """Split-mode killed harvest: presign uploads, no DB access.
+
+        Tenant identity comes from the live sinks and the workspace
+        directory from the remembered turn context; nothing here reads
+        or writes the database.
+        """
+        from pathlib import Path as _Path
+
         from apipi.worker.artifact_upload import upload_via_presign
         from apipi.worker.pi.artifacts import (
             _hosted_files,
             read_pi_session_bytes,
         )
 
-        store = self.store
         tenant_id: uuid.UUID | None = None
-        dest: Any | None = None
-        if store is not None:
-            try:
-                async with store.session() as db:
-                    row = await get_session_by_id(db, session_id)
-                    if row is not None:
-                        tenant_id = row.tenant_id
-                        env = (
-                            row.environment if isinstance(row.environment, dict) else {}
-                        )
-                        if env.get("type") == "openai_hosted":
-                            directory = env.get("directory")
-                            if isinstance(directory, str) and directory:
-                                from pathlib import Path as _Path
-
-                                dest = _Path(directory)
-            except Exception:
-                tenant_id = None
-        if tenant_id is None:
-            for tenant, sid in list(self._sinks.keys()):
-                if sid == session_id:
-                    tenant_id = tenant
-                    break
+        for tenant, sid in list(self._sinks.keys()):
+            if sid == session_id:
+                tenant_id = tenant
+                break
         if tenant_id is None:
             return
+        dest: Any | None = None
+        raw_dir = self._session_dirs.get(str(session_id))
+        if raw_dir:
+            dest = _Path(raw_dir)
         files: list[tuple[str, bytes]] = []
         try:
             hosted, _workspace_error = await _hosted_files(
                 proc,
                 dest,
                 sync_workspace=False,
-                max_workspace_bytes=None,
+                max_workspace_bytes=self.settings.max_workspace_bytes,
             )
             files = hosted
             if not files and dest is not None:

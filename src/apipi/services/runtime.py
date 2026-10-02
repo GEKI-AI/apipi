@@ -929,7 +929,7 @@ async def _harvest_split(
             proc,
             dest,
             sync_workspace=False,
-            max_workspace_bytes=None,
+            max_workspace_bytes=settings.max_workspace_bytes,
         )
         files = hosted
         if not files and dest is not None:

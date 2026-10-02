@@ -322,16 +322,20 @@ class ArtifactPresignReply(WireModel):
     no store credentials on the worker. The shared filesystem carries
     `path`, the store-root relative path the worker must write, and no
     URL. `input_image` also carries `file_id` for the `input_image`
-    item part. Quota failures arrive as `ok: False` with today's store
-    codes (`artifact_store`, `artifact_too_large`,
-    `workspace_too_large`).
+    item part. When the latest stored bytes already match the presigned
+    digest the reply carries `unchanged` instead: no URL, no path, and
+    no `upload_id`; the worker skips the upload. Quota failures arrive
+    as `ok: False` with today's store codes (`artifact_store`,
+    `artifact_too_large`, `workspace_too_large`).
     """
 
     type: Literal["artifact.presign.reply"] = "artifact.presign.reply"
     session_id: uuid.UUID
     request_id: uuid.UUID
     ok: bool = True
+    unchanged: bool = False
     upload_id: uuid.UUID | None = None
+    artifact_id: uuid.UUID | None = None
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     expires_at: str | None = None

@@ -483,6 +483,7 @@ async def _apply(
                 key_id=row.key_id,
                 used_bytes=used,
                 objects=objects if objects is not None else _object_store(settings),
+                blobs=blobs,
             )
         except Exception as exc:
             code, message = _artifact_error(exc)
@@ -497,6 +498,17 @@ async def _apply(
                 }
             )
             raise _Reject(code) from exc
+        if issued.get("unchanged") is True:
+            replies.append(
+                {
+                    "type": "artifact.presign.reply",
+                    "session_id": str(session_id),
+                    "request_id": str(request_id),
+                    "ok": True,
+                    "unchanged": True,
+                }
+            )
+            return
         replies.append(
             {
                 "type": "artifact.presign.reply",
@@ -504,6 +516,7 @@ async def _apply(
                 "request_id": str(request_id),
                 "ok": True,
                 "upload_id": str(issued["upload_id"]),
+                "artifact_id": str(issued["artifact_id"]),
                 "url": issued.get("url"),
                 "headers": issued.get("headers") or {},
                 "expires_at": issued.get("expires_at"),

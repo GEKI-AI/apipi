@@ -27,6 +27,7 @@ from apipi.config import ConfigError, DiskLimitError, Settings
 from apipi.store.blobs import (
     NS_ARTIFACTS,
     NS_FILES,
+    ArtifactBlobs,
     Namespace,
     ObjectStore,
     ObjectStoreError,
@@ -42,6 +43,7 @@ from apipi.store.repo import (
     create_artifact_upload,
     get_artifact_upload,
     get_session,
+    list_artifacts,
 )
 from apipi.worker.pi.dirs import store_root
 
@@ -171,6 +173,31 @@ async def check_quota(
         raise DiskLimitError("Artifact store too large", code="artifact_too_large")
 
 
+async def _latest_artifact_matches(
+    db: AsyncSession,
+    blobs: ArtifactBlobs,
+    tenant_id: uuid.UUID,
+    key_id: str,
+    session_id: uuid.UUID,
+    path: str,
+    digest: str,
+) -> bool:
+    """True when the latest artifact at `path` already holds `digest`."""
+    existing = await list_artifacts(db, tenant_id, session_id)
+    if not existing:
+        return False
+    for artifact in reversed(existing):
+        if artifact.path != path:
+            continue
+        data = await blobs.get(
+            tenant_id, artifact.key_id or key_id, session_id, artifact.id
+        )
+        if data is None:
+            return False
+        return sha256_hex(data) == digest.lower()
+    return False
+
+
 async def issue_artifact_presign(
     db: AsyncSession,
     settings: Settings,
@@ -185,6 +212,7 @@ async def issue_artifact_presign(
     key_id: str,
     used_bytes: int,
     objects: ObjectStore | None = None,
+    blobs: ArtifactBlobs | None = None,
 ) -> dict[str, Any]:
     """Reserve one upload slot; S3 also mints the presigned PUT URL."""
     kind = check_artifact_kind(kind)
@@ -192,13 +220,43 @@ async def issue_artifact_presign(
     row = await get_session(db, tenant_id, session_id)
     if row is None:
         raise _store_error("unknown session", operation="presign")
-    await check_quota(
-        db, settings, row, kind=kind, declared=size, blobs_used_bytes=used_bytes
-    )
-    artifact_id = uuid.uuid4()
     name = (filename or "").strip() or (
         "pi-session.jsonl" if kind == "pi_session" else "artifact"
     )
+    if (
+        kind == "artifact"
+        and digest is not None
+        and blobs is not None
+        and await _latest_artifact_matches(
+            db, blobs, tenant_id, row.key_id, session_id, name, digest
+        )
+    ):
+        # Combined `_persist_files` skips files whose latest stored bytes
+        # already match; answer `unchanged` so the worker skips the PUT
+        # and no upload slot is reserved. This check runs before quota so
+        # unchanged files never trip the store limits, as in combined mode.
+        return {
+            "unchanged": True,
+            "upload_id": None,
+            "artifact_id": None,
+            "object_id": None,
+            "namespace": NS_ARTIFACTS,
+            "file_id": None,
+            "path": None,
+            "url": None,
+            "headers": {},
+            "expires_at": None,
+        }
+    await check_quota(
+        db, settings, row, kind=kind, declared=size, blobs_used_bytes=used_bytes
+    )
+    if kind == "pi_session" and row.pi_session_id is not None:
+        # Reuse the blob id like combined `persist_pi_session_bytes` so
+        # every save overwrites the same object instead of leaking one
+        # new object per save.
+        artifact_id = row.pi_session_id
+    else:
+        artifact_id = uuid.uuid4()
     ctype = (content_type or "").strip() or "application/octet-stream"
     expires_at = utc_now() + settings.presign_ttl
     upload = await create_artifact_upload(
