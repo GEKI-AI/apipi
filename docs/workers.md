@@ -158,7 +158,7 @@ API to worker:
 | --- | --- | --- |
 | `hello` | `ok`, `protocol`, `worker_id`, `generation`, `sessions`, `store_check` | Register succeeded. `store_check` is present only for the filesystem store. |
 | `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key. |
-| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `upload_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
+| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
 | error object | `ok: false`, `error` | Auth or register failed, then the socket closes. |
 
@@ -276,8 +276,16 @@ credentials) or shared-root write (filesystem, to the reply `path`) ->
 serve keeps today's direct path through `DirectSink`. Quota failures
 raise today's codes so the turn fails the way direct writes do
 (`artifact_store` fails the turn, other quota codes emit the session
-error event). Split uploads every file; the API keeps the latest
-version per path (no worker-side dedup in split mode).
+error event). Split uploads every changed file; the API keeps the latest
+version per path. Unchanged files never leave the worker: when the
+presigned digest matches the latest stored bytes for that path, the
+API answers `unchanged` before checking quotas (as in combined
+mode), and the worker skips the PUT and the `completed` envelope, so
+no new row is written. Pi sessions reuse the existing blob id, so
+every save overwrites the same object instead of leaking one new
+object per save. The total workspace limit (`workspace_too_large`)
+is enforced on the worker from settings in both harvest paths, with
+the same codes as combined mode.
 
 With `APIPI_ARTIFACT_STORE=s3` (the recommended production setup)
 the worker sends durable `artifact.presign` with the session id, kind
