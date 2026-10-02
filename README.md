@@ -24,12 +24,14 @@ CLI (`pi --mode rpc`) on `PATH`. The gateway pins Pi 0.99.1; `apipi
 install` can install that binary and, if you pick MicroVM, Firecracker
 plus a guest image.
 
-A single process stores data in SQLite at `.apipi/apipi.db` and binds
-`0.0.0.0:8000`. `OPENAI_BASE_URL` on the gateway is the model host that
-Pi calls. Clients send `Authorization: Bearer`; that value is the model
-key unless you set `OPENAI_API_KEY_OVERWRITE`. Isolation defaults to
-`none` (Pi as a child process). For production, set
-`APIPI_RUN_MODE=microvm`. Several processes share Postgres.
+`apipi serve` is the API. It stores data in SQLite at `.apipi/apipi.db`
+and binds `0.0.0.0:8000`. Pi runs in `apipi worker`, a separate
+process. For local development, `apipi dev` starts both. `OPENAI_BASE_URL`
+on the gateway is the model host that Pi calls. Clients send
+`Authorization: Bearer`; that value is the model key unless you set
+`OPENAI_API_KEY_OVERWRITE`. Worker isolation defaults to `none` (Pi as a
+child process). For production, set `APIPI_RUN_MODE=microvm` on the
+workers. Several API processes share Postgres.
 
 ### From PyPI
 
@@ -37,12 +39,12 @@ key unless you set `OPENAI_API_KEY_OVERWRITE`. Isolation defaults to
 pip install geki-apipi
 apipi install
 export OPENAI_BASE_URL=http://your-model-host/v1
-apipi migrate
-apipi serve
+apipi dev
 ```
 
-`uv add geki-apipi` works in a project. The import package and CLI are
-`apipi`. S3-compatible artifact storage is `pip install "geki-apipi[s3]"`.
+`apipi dev` runs `apipi migrate`, then starts `apipi serve` and
+`apipi worker` as two child processes. `uv add geki-apipi` works in a
+project. The import package and CLI are `apipi`. S3-compatible artifact storage is `pip install "geki-apipi[s3]"`.
 
 ### From a git checkout
 
@@ -52,8 +54,7 @@ cd apipi
 uv sync
 uv run apipi install
 export OPENAI_BASE_URL=http://your-model-host/v1
-uv run apipi migrate
-uv run apipi serve
+uv run apipi dev
 ```
 
 Prefix every `apipi` command with `uv run` in a checkout.
@@ -75,10 +76,12 @@ The stream stays open across idle, so that script stops after the first
 turn outcome. The same flow is on
 [Using the API](https://geki-ai.github.io/apipi/using/).
 
-Production isolation:
+Production runs the API and the workers as separate processes, and the
+workers use `microvm` isolation:
 
 ```
-APIPI_RUN_MODE=microvm apipi serve
+apipi serve
+APIPI_RUN_MODE=microvm apipi worker
 ```
 
 More setup is on [Install](https://geki-ai.github.io/apipi/install/).

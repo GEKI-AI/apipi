@@ -2,15 +2,12 @@ import uuid
 from typing import cast
 
 import pytest
+from tests.support.worker_turn import ingest_outbox, new_session, run_worker_turn
 
 from apipi.config import Settings
-from apipi.services.runtime import (
-    EventHub,
-    FakeHarness,
-    Harness,
-    continue_turn,
-    run_turn,
-)
+from apipi.services.runtime import EventHub, FakeHarness, Harness, continue_turn
+from apipi.services.sink import OutboxSink
+from apipi.services.turn_context import build_turn_context
 from apipi.store.engine import Store
 from apipi.store.repo import (
     create_session,
@@ -19,21 +16,7 @@ from apipi.store.repo import (
     list_events,
     update_session,
 )
-
-
-async def _session(
-    store: Store, *, model: str | None = "m1", status: str = "idle"
-) -> tuple[uuid.UUID, uuid.UUID]:
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(
-            db,
-            tenant.id,
-            model=model,
-            status=status,
-            environment={"type": "none"},
-        )
-        return tenant.id, row.id
+from apipi.worker.outbox import Outbox
 
 
 async def _types(
@@ -51,18 +34,16 @@ async def test_run_turn_does_not_list_models(
         raise AssertionError("listed")
 
     monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", boom)
-    tenant_id, session_id = await _session(store)
+    tenant_id, session_id = await new_session(store)
     host = settings.model_copy(
         update={"model_base_url": "http://model.test/v1", "model_list": "turn"}
     )
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, FakeHarness()),
+        host,
+        FakeHarness(),
         tenant_id,
         session_id,
-        "hello",
-        settings=host,
         api_key="k",
     )
     assert "agent.session.turn.completed" in await _types(store, tenant_id, session_id)
@@ -71,16 +52,14 @@ async def test_run_turn_does_not_list_models(
 async def test_run_turn_model_required_reaches_session(
     store: Store, settings: Settings
 ) -> None:
-    tenant_id, session_id = await _session(store, model=None)
+    tenant_id, session_id = await new_session(store, model=None)
     host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, FakeHarness()),
+        host,
+        FakeHarness(),
         tenant_id,
         session_id,
-        "hello",
-        settings=host,
     )
     types = await _types(store, tenant_id, session_id)
     assert "agent.session.error" in types
@@ -88,20 +67,18 @@ async def test_run_turn_model_required_reaches_session(
 
 
 async def test_turn_catches_unavailable_model(store: Store, settings: Settings) -> None:
-    tenant_id, session_id = await _session(store)
+    tenant_id, session_id = await new_session(store)
     host = settings.model_copy(
         update={"model_base_url": "http://model.test/v1", "error_codes": "legacy"}
     )
     harness = FakeHarness()
     harness.fail_message = "model missing is not available"
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, harness),
+        host,
+        harness,
         tenant_id,
         session_id,
-        "hello",
-        settings=host,
     )
     async with store.session() as db:
         events = await list_events(db, tenant_id, session_id)
@@ -141,8 +118,9 @@ async def test_continue_turn_does_not_list_models(
         session_id = row.id
         turn_id = turn.id
     host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
+    context = await build_turn_context(store, host, tenant_id, session_id)
+    outbox = Outbox()
     await continue_turn(
-        store,
         EventHub(),
         cast(Harness, FakeHarness()),
         tenant_id,
@@ -154,5 +132,8 @@ async def test_continue_turn_does_not_list_models(
         error=None,
         settings=host,
         api_key="k",
+        turn_context=context,
+        sink=OutboxSink(outbox, tenant_id, session_id),
     )
+    await ingest_outbox(store, host, outbox, tenant_id, session_id)
     assert "agent.session.turn.completed" in await _types(store, tenant_id, session_id)

@@ -200,8 +200,7 @@ turn. The HTTPS URL, when set, is one sink on that list.
 Per-turn usage export answers how many tokens a turn used. It does not
 answer how long a session's sandbox was alive, or how many sandboxes a
 tenant held at a given minute. Session lifecycle export is that
-signal. The API owns it: combined `apipi serve` and `apipi serve
---api-only` both emit from the API process. The worker only reports
+signal. The API owns it: `apipi serve` emits it. The worker only reports
 over the worker socket: session live start and stop travel as durable
 v2 envelopes, so they are buffered in the worker outbox during a
 disconnect and replayed exactly once after reconnect, and the
@@ -280,8 +279,7 @@ is the idempotency key. Order events for one `boot_id` by `seq`, not
 by `ts`. `ts` is the worker's UTC wall clock and is approximate across
 hosts. Workers should run NTP.
 
-`worker_id` is the id from the hub `hello` message. It is null in
-embedded mode. `instance_id` is `APIPI_INSTANCE_ID`, the same value
+`worker_id` is the id from the hub `hello` message. `instance_id` is `APIPI_INSTANCE_ID`, the same value
 usage events use. `org_id` is optional. The auth callback may return
 it. ApiPi stores it on the session and forwards it to the worker. It
 is null when the callback does not set it.
@@ -429,8 +427,7 @@ is `completed`, `failed`, or `cancelled`. Never prompt or completion
 text.
 
 Turn, token, and latency series are recorded once, on the process that
-completes the turn. Combined `apipi serve` exposes them on API
-`GET /metrics`. With `apipi serve --api-only` plus `apipi worker`, set
+completes the turn, which is the worker. Set
 `APIPI_METRICS` on the worker so those series are recorded there, and
 scrape the worker at `http://<worker>:9091/metrics` (or
 `APIPI_WORKER_METRICS_PORT`). The API process still has HTTP request
@@ -474,8 +471,7 @@ message text. Not a warehouse for agent usage history.
 | `model` | Upstream model call |
 
 Inbound `traceparent` is honored and becomes the parent of `session`.
-Responses still echo `X-Trace-Id`. Combined `apipi serve` emits the
-full tree in one process. In split mode the API emits `session` and
+Responses still echo `X-Trace-Id`. The API emits `session` and
 `worker.assign`; set `APIPI_OTEL_ENDPOINT` on the worker for
 `sandbox.*`, `turn`, and `model`. The worker command carries
 `traceparent` so those spans stay on the same trace.

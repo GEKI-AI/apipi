@@ -7,7 +7,7 @@ Type=simple
 User=apipi
 WorkingDirectory=/opt/apipi
 EnvironmentFile=/etc/apipi.env
-ExecStart=/opt/apipi/.venv/bin/apipi serve --api-only --config /etc/apipi.toml
+ExecStart=/opt/apipi/.venv/bin/apipi serve --config /etc/apipi.toml
 Restart=on-failure
 NoNewPrivileges=true
 

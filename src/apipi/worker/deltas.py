@@ -153,12 +153,9 @@ class LiveRedirectBus:
     """An :class:`EventBus` that reroutes live deltas to the socket.
 
     The worker builds its execution with this bus wrapped around the
-    configured bus. Stored events still go through the inner bus (the
-    worker still writes the store itself until durable ingest lands),
-    but ``output_text.delta`` fragments go to the relay instead, so
+    configured bus. ``output_text.delta`` fragments go to the relay, so
     they travel over the worker socket and the API fans them out.
-    Without a relay (combined serve, tests that share one bus) live
-    messages are published directly, as before.
+    Without a relay live messages are published directly.
     """
 
     def __init__(self, inner: EventBus, relay: DeltaRelay | None = None) -> None:

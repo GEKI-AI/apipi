@@ -15,7 +15,6 @@ from apipi.config import (
     LIFECYCLE_EXPORT_ON,
     METRICS_OFF,
     METRICS_ON,
-    NONE_MODE_WARNING,
     OPENAI_API_KEY_IGNORED,
     OTEL_SET,
     OTEL_UNSET,
@@ -65,39 +64,21 @@ log = logging.getLogger("apipi")
 
 
 def prepare_serve(
-    settings: Settings | None = None,
-    *,
-    config_path: str | None = None,
-    api_only: bool = False,
+    settings: Settings | None = None, *, config_path: str | None = None
 ) -> Settings:
     resolved = (
         settings if settings is not None else load_settings(config_path=config_path)
     )
-    if api_only and not resolved.api_only:
-        resolved = resolved.model_copy(update={"api_only": True})
-    if not resolved.api_only:
-        require_run_mode(resolved.run_mode, resolved)
     if is_sqlite_url(resolved.database_url):
         log.warning(SQLITE_WARNING)
     probe_model_host(resolved)
-    if not resolved.api_only:
-        probe_run_mode(resolved)
     reject_prompt_body_logging()
     from apipi.worker.pi.fragments import validate_fragments
 
     validate_fragments(resolved)
     configure_logging(level=resolved.log_level, format=resolved.log_format)
-    backend = load_isolation(resolved.run_mode)
     if os.environ.get("OPENAI_API_KEY"):
         log.warning(OPENAI_API_KEY_IGNORED)
-    if not resolved.api_only:
-        from apipi.worker.accepts import require_worker_accepts
-
-        require_worker_accepts(resolved)
-    if not resolved.api_only and resolved.run_mode == "none":
-        log.warning(NONE_MODE_WARNING)
-    elif backend.warn_not_production:
-        log.warning(f"APIPI_RUN_MODE={backend.name} is not suited for production")
     log.info(usage_store_log(resolved.usage_store))
     log.info(usage_retention_log(resolved.usage_retention))
     log.info(USAGE_EXPORT_ON if resolved.usage_export_url else USAGE_EXPORT_OFF)
@@ -407,18 +388,16 @@ def serve(
     host: str | None,
     port: int | None,
     config_path: str | None = None,
-    api_only: bool = False,
 ) -> None:
-    settings = prepare_serve(config_path=config_path, api_only=api_only)
+    settings = prepare_serve(config_path=config_path)
     host = host if host is not None else settings.host
     port = port if port is not None else settings.port
     extra: dict[str, object] = {
         "version": __version__,
         "host": host,
         "port": port,
-        "run_mode": settings.run_mode,
         "store": "sqlite" if is_sqlite_url(settings.database_url) else "postgres",
-        "role": "api" if api_only else "all",
+        "role": "api",
     }
     if settings.instance_id:
         extra["instance_id"] = settings.instance_id
@@ -476,9 +455,9 @@ def main(argv: list[str] | None = None) -> int:
     check_parser.add_argument("--config", default=None, help="TOML config file")
     check_parser.add_argument(
         "--role",
-        choices=("api", "worker", "all"),
-        default="all",
-        help="What this host will run (default: all)",
+        choices=("api", "worker"),
+        required=True,
+        help="What this host will run",
     )
     check_parser.add_argument("--skip-db", action="store_true", help="Skip the store")
     check_parser.add_argument(
@@ -489,17 +468,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip the throwaway sandbox probe",
     )
-    serve_parser = sub.add_parser(
-        "serve", help="Start the API (combined with a local sandbox by default)"
-    )
+    serve_parser = sub.add_parser("serve", help="Start the API")
     serve_parser.add_argument("--host", default=None, help="Bind address")
     serve_parser.add_argument("--port", default=None, type=int, help="Bind port")
     serve_parser.add_argument("--config", default=None, help="TOML config file")
-    serve_parser.add_argument(
-        "--api-only",
-        action="store_true",
-        help="Control plane only: no KVM probe and no local Firecracker",
+    dev_parser = sub.add_parser(
+        "dev", help="Migrate, then run the API and one worker for local development"
     )
+    dev_parser.add_argument("--host", default="127.0.0.1", help="API bind address")
+    dev_parser.add_argument("--port", default=8000, type=int, help="API bind port")
+    dev_parser.add_argument("--config", default=None, help="TOML config file")
     worker_parser = sub.add_parser(
         "worker", help="Start a sandbox worker (Firecracker/KVM lives here)"
     )
@@ -649,9 +627,12 @@ def main(argv: list[str] | None = None) -> int:
                 host=args.host,
                 port=args.port,
                 config_path=args.config,
-                api_only=args.api_only,
             )
             return 0
+        if args.command == "dev":
+            from apipi.dev import run_dev
+
+            return run_dev(config_path=args.config, host=args.host, port=args.port)
         if args.command == "worker":
             from apipi.worker.hub import run_worker
 

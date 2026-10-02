@@ -10,28 +10,26 @@ Message shapes are in
 [sandbox workers](workers.md), and the contract is in
 [ADR 0015](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0015-worker-protocol-v2.md).
 
-This page explains why the split exists, how a turn moves through it,
-and how that changes scale.
+This page explains why the API and the workers are separate processes,
+how a turn moves between them, and how that changes scale.
 
-## Why split
+## Why two processes
 
 The HTTP API should be easy to run: rootless, several replicas, no
 KVM. Firecracker needs `/dev/kvm`, TAP, and usually extra
-capabilities. Putting both in one process forces every API node to be
-a hypervisor host and forces sticky load balancing because Pi lives in
-that process.
+capabilities. If both lived in one process, every API node would have
+to be a hypervisor host, and load balancing would have to be sticky
+because Pi would live in that process.
 
-The split is:
+The two processes are:
 
 | Process | Job |
 | --- | --- |
-| `apipi serve --api-only` | Auth, sessions, event log, SSE, scheduling. No TAP. No idle reap. |
+| `apipi serve` | Auth, sessions, event log, SSE, scheduling. Always the API: no Pi, no TAP, no idle reap. |
 | `apipi worker` | Firecracker (or `none`), Pi, workspace, harvest, idle reap. Outbound to the API. |
-| Combined `apipi serve` | Both in one process, including idle reap. Laptop or a single box. |
 
-Combined serve is the embedded worker: the same in-process adapter the
-project started with. Production is API-only plus one or more workers.
-Sessions without a computer (`environment.type=none`) run on workers whose
+Production is one or more API processes plus one or more workers, and
+`apipi dev` starts one of each for local development. Sessions without a computer (`environment.type=none`) run on workers whose
 accepts set contains `none`, on that same API. See [sandbox workers](workers.md#placement).
 
 ## How a turn moves
@@ -67,10 +65,7 @@ identity, the agent definition, the effective idle TTL, the HTTP MCP
 servers with vault headers applied, the model key, and references (never
 bytes) to workspace files, skills, and the Pi session blob. The worker
 holds the context in memory only and prepares the turn from it, without
-reading the database. Combined serve builds the same context in-process.
-The worker then runs the turn through
-the same execution contract combined serve uses in-process, then
-reports back in v2 envelopes: durable results (`item.added`,
+reading the database. The worker then runs the turn and reports back in v2 envelopes: durable results (`item.added`,
 `turn.status`, `usage`, `event`, `session.status`, `session.stopped`,
 `workspace.reaped`, `lifecycle.start`, `lifecycle.stop`, `error`,
 `sandbox.status`, plus `artifact.completed` for a later step) that the
@@ -103,26 +98,26 @@ cleared and the session gets `agent.session.error` with code
 `worker_lease_expired`. The turn is not moved to another worker: the
 guest was on the expired host. Start a new message after that.
 
-## Combined vs split
+## Development and production
 
 On a laptop you want one command:
 
 ```
 export OPENAI_BASE_URL=http://your-model-host/v1
-apipi migrate
-apipi serve
+apipi dev
 ```
 
-Isolation defaults to `none`. For guests on that same box, set
-`APIPI_RUN_MODE=microvm` and use combined serve. The process probes
-KVM, then serves HTTP.
+`apipi dev` runs `apipi migrate`, then starts `apipi serve` and
+`apipi worker` as two child processes. Isolation defaults to `none`.
+For guests on that same box, set `APIPI_RUN_MODE=microvm`. The worker
+probes KVM before it connects.
 
 In production the API can be a container and the hypervisor stays on
 the host:
 
 ```
 # API host or Compose
-apipi serve --api-only
+apipi serve
 
 # KVM host
 apipi workers token create --name worker-1   # prints the secret once

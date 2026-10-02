@@ -13,7 +13,6 @@ from tests.support.split_worker import api_settings_for
 from apipi.config import Settings, extend_settings
 from apipi.gateway import Gateway, create_app
 from apipi.gateway.auth import AuthIdentity
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -38,7 +37,7 @@ def instance_settings(tmp_path: Path) -> Settings:
 
 
 async def test_verbose_gateway_pattern(settings: Settings, store: Store) -> None:
-    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    gateway = Gateway.create(settings, store=store)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -65,9 +64,7 @@ async def test_verbose_gateway_pattern(settings: Settings, store: Store) -> None
 
 
 async def test_authenticate_inject(settings: Settings, store: Store) -> None:
-    gateway = Gateway.create(
-        settings, store=store, harness=FakeHarness(), authenticate=_only_ok
-    )
+    gateway = Gateway.create(settings, store=store, authenticate=_only_ok)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -90,7 +87,7 @@ async def test_authenticate_inject(settings: Settings, store: Store) -> None:
 
 
 async def test_injected_store_not_disposed(settings: Settings, store: Store) -> None:
-    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    gateway = Gateway.create(settings, store=store)
     with patch.object(store, "dispose", new_callable=AsyncMock) as mocked:
         await gateway.startup()
         await gateway.shutdown()
@@ -105,7 +102,7 @@ async def test_owned_store_disposed(tmp_path: Path) -> None:
         run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
     )
-    gateway = Gateway.create(settings, harness=FakeHarness())
+    gateway = Gateway.create(settings)
     with patch.object(gateway.store, "dispose", new_callable=AsyncMock) as mocked:
         await gateway.startup()
         await gateway.shutdown()

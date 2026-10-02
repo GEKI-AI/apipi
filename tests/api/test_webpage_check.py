@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for, serve_split
 
 from apipi.config import Settings
 from apipi.gateway import Gateway
@@ -71,13 +72,16 @@ def test_flatten_done_without_delta() -> None:
     )
 
 
-async def test_webpage_check_streams_text(settings: Settings, store: Store) -> None:
+async def test_webpage_check_streams_text(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
     mod = _load()
-    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    gateway = Gateway.create(api_settings_for(settings), store=store)
     app = mod.build_app(gateway)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with (
+        serve_split(app, settings, FakeHarness(), worker_secret),
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+    ):
         health = await client.get("/health")
         assert health.status_code == 200
         response = await client.post(
@@ -91,7 +95,7 @@ async def test_webpage_check_streams_text(settings: Settings, store: Store) -> N
 
 async def test_webpage_check_rejects_bad_url(settings: Settings, store: Store) -> None:
     mod = _load()
-    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    gateway = Gateway.create(settings, store=store)
     app = mod.build_app(gateway)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

@@ -100,12 +100,12 @@ development on `127.0.0.1`) list it in `APIPI_MCP_ALLOW_HOSTS` or
 `mcp.internal, 10.0.0.0/8`). A blocked target fails session create; a target
 that turns private later fails that call with a `502`, not the turn.
 
-In split mode the MCP servers travel in the command context (see
+The MCP servers travel in the command context (see
 [command context](workers.md#command-context)). The API resolves them
 from the agent tools, the session vaults, and the SSRF guard on every
 turn, so an HTTP MCP tool works on the first turn and on follow-ups,
 even when a follow-up lands on another API replica. The worker hands
-them to the broker exactly as combined serve does. No MCP state is kept
+them to the broker. No MCP state is kept
 in API process memory between turns.
 
 A bash call with no `timeout` is capped at 120 seconds so a stuck

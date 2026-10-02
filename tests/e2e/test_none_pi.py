@@ -10,7 +10,7 @@ from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.repo import get_session_turn
 
-# Real `apipi serve --api-only` + `apipi worker` processes (run mode
+# Real `apipi serve` + `apipi worker` processes (run mode
 # `none`, fake Pi). Hosted/microvm placement, pool reaping and workspace
 # wipes are covered in tests/api/test_hosted_setup.py and
 # tests/e2e/test_split_worker.py.

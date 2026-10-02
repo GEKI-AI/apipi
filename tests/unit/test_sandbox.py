@@ -189,10 +189,7 @@ def test_validate_sandbox_metadata_skips_worker_availability(
     def boom(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("worker availability checked")
 
-    monkeypatch.setattr(
-        "apipi.worker.pi.sandbox.require_image_rootfs",
-        boom,
-    )
+    monkeypatch.setattr("apipi.worker.pi.image_pull.available_images", boom)
     validate_sandbox_metadata(
         _microvm(),
         {"apipi.sandbox_image": "browser"},

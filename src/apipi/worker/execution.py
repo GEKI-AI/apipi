@@ -12,7 +12,7 @@ from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing, inject_traceparent
-from apipi.services.event_bus import EventBus, create_event_bus, is_wake
+from apipi.services.event_bus import EventBus, InMemoryEventBus, is_wake
 from apipi.services.runtime import (
     continue_turn,
     fail_stale_in_progress,
@@ -21,14 +21,7 @@ from apipi.services.runtime import (
     request_cancel,
     run_turn,
 )
-from apipi.services.sink import DirectSink, OutboxSink, ResultSink
-from apipi.store.blobs import (
-    ArtifactBlobs,
-    ObjectStore,
-    ObjectStoreError,
-    blob_store,
-    object_store,
-)
+from apipi.services.sink import OutboxSink, ResultSink
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
@@ -37,10 +30,8 @@ from apipi.store.repo import (
     get_session_by_id,
     get_worker,
 )
-from apipi.worker.pi.artifacts import harvest_session, reap_workspace_loop
+from apipi.worker.pi.artifacts import reap_workspace_loop
 from apipi.worker.pi.harness import PiHarness
-from apipi.worker.pi.isolation import load_isolation
-from apipi.worker.pi.isolation.base import Isolation
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
@@ -49,22 +40,6 @@ log = logging.getLogger("apipi.worker")
 # How long a follow-up waits for a worker to acknowledge a cancel with
 # events before treating the stale turn as abandoned.
 CANCEL_GRACE = timedelta(seconds=5)
-
-
-def _require_turn_context(
-    store: Store | None, turn_context: dict[str, Any] | None
-) -> None:
-    """Fail fast when a database-less worker gets a context-less command."""
-    if store is None and turn_context is None:
-        # A split worker holds no database: every command must carry
-        # its turn context. The API validates commands before sending
-        # them, so this is a protocol violation.
-        raise ApiError(
-            "internal",
-            "Turn context is required on a worker without database access",
-            code="internal",
-            status_code=500,
-        )
 
 
 class LocalExecution:
@@ -76,23 +51,15 @@ class LocalExecution:
         *,
         pool: PiPool,
         harness: Any,
-        isolation: Isolation,
         hub: EventBus,
-        store: Store | None = None,
-        blobs: ArtifactBlobs | None = None,
-        objects: ObjectStore | None = None,
+        outbox: Any,
         metrics: Metrics | None = None,
         tracing: Tracing | None = None,
-        outbox: Any | None = None,
     ) -> None:
         self.settings = settings
         self.pool = pool
         self.harness = harness
-        self.isolation = isolation
         self.hub = hub
-        self.store = store
-        self.blobs = blobs
-        self.objects = objects
         self.metrics = metrics
         self.tracing = tracing
         self.outbox = outbox
@@ -100,7 +67,6 @@ class LocalExecution:
         self._sinks: dict[tuple[uuid.UUID, uuid.UUID], ResultSink] = {}
         self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
         self.seen_hook: Callable[[list[uuid.UUID]], Awaitable[None]] | None = None
-        self.db_fallback = True
         self._context_ttl: dict[str, tuple[float | None, float, str | None]] = {}
         self._session_dirs: dict[str, str] = {}
         if pool.on_kill is None:
@@ -145,22 +111,19 @@ class LocalExecution:
         self._session_dirs.pop(session_id, None)
 
     def sink_for(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> ResultSink:
-        """Per-session result sink; outbox-backed on a split worker."""
+        """Per-session result sink backed by the worker outbox."""
         key = (tenant_id, session_id)
         sink = self._sinks.get(key)
         if sink is None:
-            if self.outbox is not None:
-                sink = OutboxSink(
-                    self.outbox,
-                    tenant_id,
-                    session_id,
-                    settings=self.settings,
-                    metrics=self.metrics,
-                    tracing=self.tracing,
-                    waiters=self.presign_waiters,
-                )
-            else:
-                sink = DirectSink()
+            sink = OutboxSink(
+                self.outbox,
+                tenant_id,
+                session_id,
+                settings=self.settings,
+                metrics=self.metrics,
+                tracing=self.tracing,
+                waiters=self.presign_waiters,
+            )
             if len(self._sinks) >= self._SINK_CACHE_LIMIT:
                 self._sinks.pop(next(iter(self._sinks)))
             self._sinks[key] = sink
@@ -169,9 +132,6 @@ class LocalExecution:
     def drop_sink(self, session_id: uuid.UUID) -> None:
         for key in [key for key in self._sinks if key[1] == session_id]:
             del self._sinks[key]
-
-    def attach_store(self, store: Store) -> None:
-        self.store = store
 
     def capacity_code(
         self,
@@ -182,12 +142,6 @@ class LocalExecution:
         return self.pool.capacity_code(
             session_id, tenant_id, session_mem_mib=session_mem_mib
         )
-
-    def require(self) -> None:
-        self.isolation.require(self.settings)
-
-    async def probe(self) -> None:
-        await self.isolation.probe(self.settings)
 
     async def run_turn(
         self,
@@ -206,12 +160,9 @@ class LocalExecution:
         turn_context: dict[str, Any] | None = None,
         sink: ResultSink | None = None,
     ) -> None:
-        _require_turn_context(self.store, turn_context)
-        store = self.store
         self.note_context_ttl(session_id, turn_context)
         try:
             await run_turn(
-                store,
                 self.hub,
                 self.harness,
                 tenant_id,
@@ -230,8 +181,6 @@ class LocalExecution:
                 key_id=key_id,
                 user_id=user_id,
                 org_id=org_id,
-                objects=self.objects,
-                blobs=self.blobs,
                 turn_context=turn_context,
                 sink=sink if sink is not None else self.sink_for(tenant_id, session_id),
             )
@@ -257,12 +206,9 @@ class LocalExecution:
         turn_context: dict[str, Any] | None = None,
         sink: ResultSink | None = None,
     ) -> None:
-        _require_turn_context(self.store, turn_context)
-        store = self.store
         self.note_context_ttl(session_id, turn_context)
         try:
             await continue_turn(
-                store,
                 self.hub,
                 self.harness,
                 tenant_id,
@@ -283,7 +229,6 @@ class LocalExecution:
                 key_id=key_id,
                 user_id=user_id,
                 org_id=org_id,
-                blobs=self.blobs,
                 turn_context=turn_context,
                 sink=sink if sink is not None else self.sink_for(tenant_id, session_id),
             )
@@ -299,14 +244,8 @@ class LocalExecution:
     async def prepare_for_new_turn(
         self, tenant_id: uuid.UUID, session_id: uuid.UUID
     ) -> None:
-        await prepare_for_new_turn(
-            self.store,
-            self.hub,
-            self.harness,
-            tenant_id,
-            session_id,
-            sink=self.sink_for(tenant_id, session_id),
-        )
+        del tenant_id
+        await prepare_for_new_turn(self.hub, self.harness, session_id)
 
     async def teardown(self, session_id: uuid.UUID) -> None:
         self._forget_context(str(session_id))
@@ -319,25 +258,21 @@ class LocalExecution:
     async def reap_workspace_loop(self) -> None:
         def on_wiped(session_id: str) -> None:
             self._forget_context(session_id)
-            outbox = self.outbox
-            if outbox is not None:
-                try:
-                    outbox.append(
-                        uuid.UUID(session_id), "workspace.reaped", {"reason": "idle"}
-                    )
-                except Exception:
-                    log.exception(
-                        "workspace reaped report failed",
-                        extra={"session_id": session_id},
-                    )
+            try:
+                self.outbox.append(
+                    uuid.UUID(session_id), "workspace.reaped", {"reason": "idle"}
+                )
+            except Exception:
+                log.exception(
+                    "workspace reaped report failed",
+                    extra={"session_id": session_id},
+                )
 
         await reap_workspace_loop(
             self.settings,
-            self.store,
             self.pool,
             ttl_overrides=self._context_ttl,
             on_wiped=on_wiped,
-            allow_db=self.db_fallback,
         )
 
     async def observe_loop(self) -> None:
@@ -450,56 +385,35 @@ class LocalExecution:
                 workspace_avail_bytes=bucket["workspace_avail_bytes"],
             )
 
-    async def lifecycle_loop(self) -> None:
-        from apipi.services.lifecycle_export import heartbeat_loop
-
-        emitter = self.pool.lifecycle
-        if emitter is None or emitter.heartbeat_s is None:
-            return
-        await heartbeat_loop(self.pool, emitter)
-
     async def sandbox_seen_loop(self) -> None:
-        from apipi.services.sandbox_status import SEEN_INTERVAL, touch_seen
+        from apipi.services.sandbox_status import SEEN_INTERVAL
 
         while True:
             await asyncio.sleep(SEEN_INTERVAL.total_seconds())
             seen = self.pool.sandbox_seen_ids()
-            if self.seen_hook is not None:
-                try:
-                    await self.seen_hook(seen)
-                except Exception:
-                    log.exception("sandbox seen report failed")
+            if self.seen_hook is None:
                 continue
-            store = self.store
-            if store is None:
-                continue
-            await touch_seen(store, seen)
+            try:
+                await self.seen_hook(seen)
+            except Exception:
+                log.exception("sandbox seen report failed")
 
     async def _sandbox_transition(
         self, session_id: uuid.UUID, phase: str, fields: dict[str, Any]
     ) -> None:
-        outbox = self.outbox
-        if outbox is not None:
-            payload: dict[str, Any] = {"status": phase}
-            for key, value in fields.items():
-                if isinstance(value, uuid.UUID):
-                    payload[key] = str(value)
-                elif isinstance(value, (str, int, float, bool)) or value is None:
-                    payload[key] = value
-            try:
-                outbox.append(session_id, "sandbox.status", payload)
-            except Exception:
-                log.exception(
-                    "sandbox status report failed",
-                    extra={"session_id": str(session_id)},
-                )
-            return
-        store = self.store
-        if store is None:
-            return
-        from apipi.services.sandbox_status import record_transition
-
-        await record_transition(store, self.hub, session_id, phase, fields)
+        payload: dict[str, Any] = {"status": phase}
+        for key, value in fields.items():
+            if isinstance(value, uuid.UUID):
+                payload[key] = str(value)
+            elif isinstance(value, (str, int, float, bool)) or value is None:
+                payload[key] = value
+        try:
+            self.outbox.append(session_id, "sandbox.status", payload)
+        except Exception:
+            log.exception(
+                "sandbox status report failed",
+                extra={"session_id": str(session_id)},
+            )
 
     async def boot_hosted(
         self,
@@ -509,18 +423,22 @@ class LocalExecution:
         mcp_http: list[Any] | None = None,
         turn_context: dict[str, Any] | None = None,
     ) -> None:
-        store = self.store
         self.note_context_ttl(session_id, turn_context)
         from apipi.config import CapacityError
         from apipi.env.setup import SetupError
-        from apipi.services.runtime import fail_environment, load_boot_kwargs
+        from apipi.services.runtime import load_boot_kwargs, report_environment_failed
         from apipi.store.blobs import ObjectStoreError
 
         sink = self.sink_for(tenant_id, session_id)
+
+        async def fail(message: str, code: str | None) -> None:
+            await report_environment_failed(
+                sink, self.hub, tenant_id, session_id, message, code=code
+            )
+
         try:
             try:
                 kwargs = await load_boot_kwargs(
-                    store,
                     self.settings,
                     tenant_id,
                     session_id,
@@ -529,59 +447,22 @@ class LocalExecution:
                 )
             except (SetupError, ApiError) as exc:
                 code = exc.code if isinstance(exc, ApiError) and exc.code else None
-                message = exc.message
-                async with sink.txn(store) as db:
-                    await fail_environment(
-                        db,
-                        self.hub,
-                        tenant_id,
-                        session_id,
-                        message,
-                        code=code,
-                        sink=sink,
-                    )
+                await fail(exc.message, code)
                 return
             except ObjectStoreError:
-                async with sink.txn(store) as db:
-                    await fail_environment(
-                        db,
-                        self.hub,
-                        tenant_id,
-                        session_id,
-                        "Cannot read artifacts",
-                        code="artifact_store",
-                        sink=sink,
-                    )
+                await fail("Cannot read artifacts", "artifact_store")
                 return
             if kwargs is None:
                 return
             try:
                 await self.pool.get(session_id, **kwargs)
             except CapacityError as exc:
-                async with sink.txn(store) as db:
-                    await fail_environment(
-                        db,
-                        self.hub,
-                        tenant_id,
-                        session_id,
-                        str(exc),
-                        code=exc.code,
-                        sink=sink,
-                    )
+                await fail(str(exc), exc.code)
             except Exception:
                 log.exception(
                     "sandbox boot failed", extra={"session_id": str(session_id)}
                 )
-                async with sink.txn(store) as db:
-                    await fail_environment(
-                        db,
-                        self.hub,
-                        tenant_id,
-                        session_id,
-                        "Computer failed to start",
-                        code="internal",
-                        sink=sink,
-                    )
+                await fail("Computer failed to start", "internal")
         finally:
             self.refresh_context_seen(session_id)
 
@@ -593,39 +474,17 @@ class LocalExecution:
 
     async def _harvest_killed(self, session_id: uuid.UUID, proc: PiProc | None) -> None:
         try:
-            if self.outbox is not None:
-                await self._harvest_killed_split(session_id, proc)
-                return
-            store = self.store
-            if store is None:
-                return
-            async with store.session() as db:
-                try:
-                    await harvest_session(
-                        db,
-                        self.settings,
-                        session_id,
-                        proc,
-                        sync_workspace=False,
-                        blobs=self.blobs,
-                    )
-                except (OSError, ObjectStoreError):
-                    return
-                except asyncio.CancelledError:
-                    return
+            await self._upload_killed(session_id, proc)
         finally:
             note = self.note_stopped
             if note is not None:
                 await note(session_id)
 
-    async def _harvest_killed_split(
-        self, session_id: uuid.UUID, proc: PiProc | None
-    ) -> None:
-        """Split-mode killed harvest: presign uploads, no DB access.
+    async def _upload_killed(self, session_id: uuid.UUID, proc: PiProc | None) -> None:
+        """Upload a killed session's files through presigned URLs.
 
         Tenant identity comes from the live sinks and the workspace
-        directory from the remembered turn context; nothing here reads
-        or writes the database.
+        directory from the remembered turn context.
         """
         from pathlib import Path as _Path
 
@@ -703,38 +562,22 @@ class LocalExecution:
 def local_execution(
     settings: Settings,
     *,
-    store: Store | None = None,
+    outbox: Any,
     harness: Any | None = None,
     hub: EventBus | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
-    outbox: Any | None = None,
 ) -> LocalExecution:
     pool = PiPool(settings, tracing=tracing, metrics=metrics)
-    if outbox is None:
-        # Local and API processes export lifecycle themselves. A split
-        # worker only reports lifecycle over the socket (see run_worker),
-        # so it never attaches the HTTP exporter.
-        from apipi.services.lifecycle_export import attach_lifecycle
-
-        attach_lifecycle(pool, settings, metrics)
-    isolation = load_isolation(settings.run_mode)
     resolved_harness = harness if harness is not None else PiHarness(pool)
-    split = outbox is not None
     return LocalExecution(
         settings,
         pool=pool,
         harness=resolved_harness,
-        isolation=isolation,
-        hub=hub
-        if hub is not None
-        else create_event_bus(settings, store=store, metrics=metrics),
-        store=store,
-        blobs=None if split else blob_store(settings),
-        objects=None if split else object_store(settings),
+        hub=hub if hub is not None else InMemoryEventBus(),
+        outbox=outbox,
         metrics=metrics,
         tracing=tracing,
-        outbox=outbox,
     )
 
 
@@ -774,12 +617,6 @@ class RemoteExecution:
         del session_id, tenant_id, session_mem_mib
         if self.workers.live() == 0:
             return "capacity"
-        return None
-
-    def require(self) -> None:
-        return None
-
-    async def probe(self) -> None:
         return None
 
     def _payload(
@@ -830,7 +667,7 @@ class RemoteExecution:
         # outbox envelopes (`session.status`, then the `idle` event).
         # Returning on the turn event alone races ingest: the POST would
         # report `in_progress` while the status envelope is still in
-        # flight. In combined mode these complete in one transaction.
+        # flight.
         idle_terminated = {
             "agent.session.turn.completed",
             "agent.session.turn.cancelled",
@@ -859,8 +696,6 @@ class RemoteExecution:
                     # that follows it is durable too; the turn event, the
                     # status change, and idle arrive as separate outbox
                     # envelopes, so wait for both after the baseline.
-                    # This matches combined mode, where run_turn returns
-                    # with the session idle.
                     if (
                         idle_terminated.intersection(seen)
                         and "agent.session.idle" in seen
@@ -1155,25 +990,6 @@ class RemoteExecution:
         if command is not None:
             await self.workers.wait_ack(row.lease_id, str(command["id"]))
         await self.workers.release(store, row.tenant_id, session_id, row.lease_id)
-
-    async def reap_loop(self) -> None:
-        while True:
-            await asyncio.sleep(3600)
-
-    async def reap_workspace_loop(self) -> None:
-        while True:
-            await asyncio.sleep(3600)
-
-    async def observe_loop(self) -> None:
-        while True:
-            await asyncio.sleep(3600)
-
-    async def lifecycle_loop(self) -> None:
-        return None
-
-    async def sandbox_seen_loop(self) -> None:
-        while True:
-            await asyncio.sleep(3600)
 
     async def boot_hosted(
         self,

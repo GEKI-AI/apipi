@@ -42,9 +42,9 @@ from apipi.services.failures import (
 )
 from apipi.services.runtime import (
     PUBLIC_EVENT_TYPES,
-    fail_session,
     live_event_body,
     persist_event,
+    report_session_failed,
 )
 from apipi.store.engine import Store
 from apipi.store.models import WorkerToken, utc_now
@@ -1402,11 +1402,8 @@ async def _close(websocket: WebSocket, reason: str | None = None) -> None:
 
 def _sink_for_execution(
     execution: Any, tenant_id: uuid.UUID, session_id: uuid.UUID
-) -> Any | None:
-    sink_for = getattr(execution, "sink_for", None)
-    if not callable(sink_for):
-        return None
-    return sink_for(tenant_id, session_id)
+) -> Any:
+    return execution.sink_for(tenant_id, session_id)
 
 
 async def _reject_missing_image(
@@ -1417,17 +1414,10 @@ async def _reject_missing_image(
     image: str,
     request_id: str | None,
 ) -> None:
-    store = getattr(execution, "store", None)
     hub = getattr(execution, "hub", None)
     if hub is None:
         return
-    message = (
-        image_unavailable_message(hub, image)
-        if hub is not None
-        else (
-            f'No worker has sandbox_image "{image}". Run apipi images pull on a worker.'
-        )
-    )
+    message = image_unavailable_message(hub, image)
     log_event(
         log,
         logging.WARNING,
@@ -1438,26 +1428,21 @@ async def _reject_missing_image(
         session_id=session_id,
         request_id=request_id,
     )
-    from apipi.services.sink import resolve_sink
-
-    active = resolve_sink(_sink_for_execution(execution, tenant_id, session_id))
-    async with active.txn(store) as db:
-        await active.append_event(
-            db,
-            hub,
-            tenant_id,
-            session_id,
-            type="agent.session.error",
-            data={"message": message, "code": "image_unavailable"},
-        )
-        await active.append_event(
-            db,
-            hub,
-            tenant_id,
-            session_id,
-            type="agent.session.turn.failed",
-            data={"message": message},
-        )
+    active = _sink_for_execution(execution, tenant_id, session_id)
+    await active.append_event(
+        hub,
+        tenant_id,
+        session_id,
+        type="agent.session.error",
+        data={"message": message, "code": "image_unavailable"},
+    )
+    await active.append_event(
+        hub,
+        tenant_id,
+        session_id,
+        type="agent.session.turn.failed",
+        data={"message": message},
+    )
 
 
 async def _reject_mismatched_turn(
@@ -1480,37 +1465,31 @@ async def _reject_mismatched_turn(
         request_id=request_id,
         run_mode=worker_mode,
     )
-    store = getattr(execution, "store", None)
     hub = getattr(execution, "hub", None)
     if hub is None:
         return
     message = f"Worker does not accept {required} sessions"
-    from apipi.services.sink import resolve_sink
-
-    active = resolve_sink(_sink_for_execution(execution, tenant_id, session_id))
-    async with active.txn(store) as db:
-        await active.append_event(
-            db,
-            hub,
-            tenant_id,
-            session_id,
-            type="agent.session.error",
-            data=session_error_data(
-                failure_for("placement", message),
-                mode="legacy",
-            ),
-        )
-        placed = failure_for("placement", message)
-        failed = turn_failed_data("", placed)
-        failed.pop("turn_id", None)
-        await active.append_event(
-            db,
-            hub,
-            tenant_id,
-            session_id,
-            type="agent.session.turn.failed",
-            data=failed,
-        )
+    active = _sink_for_execution(execution, tenant_id, session_id)
+    await active.append_event(
+        hub,
+        tenant_id,
+        session_id,
+        type="agent.session.error",
+        data=session_error_data(
+            failure_for("placement", message),
+            mode="legacy",
+        ),
+    )
+    placed = failure_for("placement", message)
+    failed = turn_failed_data("", placed)
+    failed.pop("turn_id", None)
+    await active.append_event(
+        hub,
+        tenant_id,
+        session_id,
+        type="agent.session.turn.failed",
+        data=failed,
+    )
 
 
 def _check_command_context(op: str, payload: dict[str, Any]) -> None:
@@ -1576,26 +1555,23 @@ async def _report_escaped_turn(
     session_id: uuid.UUID,
     exc: BaseException,
 ) -> None:
-    store = getattr(execution, "store", None)
     hub = getattr(execution, "hub", None)
     if hub is None:
         return
-    from apipi.services.sink import resolve_sink
-
-    active = resolve_sink(_sink_for_execution(execution, tenant_id, session_id))
-    async with active.txn(store) as db:
-        row = await get_session(db, tenant_id, session_id) if db is not None else None
-        if row is not None and row.status == "failed":
-            return
-        if isinstance(exc, ApiError):
-            message = exc.message
-            code = exc.code or "internal"
-        else:
-            message = "Turn failed"
-            code = "internal"
-        await fail_session(
-            db, hub, tenant_id, session_id, message, code=code, sink=active
-        )
+    if isinstance(exc, ApiError):
+        message = exc.message
+        code = exc.code or "internal"
+    else:
+        message = "Turn failed"
+        code = "internal"
+    await report_session_failed(
+        _sink_for_execution(execution, tenant_id, session_id),
+        hub,
+        tenant_id,
+        session_id,
+        message,
+        code=code,
+    )
 
 
 async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
@@ -1788,39 +1764,19 @@ async def _wipe_stopped_session(
 ) -> None:
     from apipi.worker.pi.artifacts import wipe_workspace
 
-    settings = getattr(execution, "settings", None)
-    outbox = getattr(execution, "outbox", None)
-    if outbox is not None and settings is not None:
-        # Split mode wipes without the database: the local workspace
-        # directory follows the shared sessions-root layout, the blob
-        # delete happens on the API when it ingests `session.stopped`,
-        # and the envelope is the durable receipt.
-        base = getattr(settings, "sessions_dir", "")
-        root = Path(base) if base else Path.cwd() / ".apipi" / "sessions"
-        wipe_workspace(root / str(tenant_id) / str(session_id))
-        try:
-            outbox.append(session_id, "session.stopped", {"reason": "stop"})
-        except Exception:
-            log.exception(
-                "session stopped report failed",
-                extra={"session_id": str(session_id)},
-            )
-        return
-    store = getattr(execution, "store", None)
-    if store is None or settings is None:
-        return
-    from apipi.store.blobs import blob_store
-    from apipi.worker.pi.artifacts import wipe_artifact_store, wipe_workspace
-
-    async with store.session() as db:
-        row = await get_session(db, tenant_id, session_id)
-    if row is None:
-        return
-    environment = row.environment if isinstance(row.environment, dict) else {}
-    directory = environment.get("directory")
-    if isinstance(directory, str) and directory:
-        wipe_workspace(Path(directory))
-    await wipe_artifact_store(blob_store(settings), tenant_id, row.key_id, session_id)
+    # The workspace directory follows the shared sessions-root layout,
+    # the blob delete happens on the API when it ingests
+    # `session.stopped`, and the envelope is the durable receipt.
+    base = getattr(execution.settings, "sessions_dir", "")
+    root = Path(base) if base else Path.cwd() / ".apipi" / "sessions"
+    wipe_workspace(root / str(tenant_id) / str(session_id))
+    try:
+        execution.outbox.append(session_id, "session.stopped", {"reason": "stop"})
+    except Exception:
+        log.exception(
+            "session stopped report failed",
+            extra={"session_id": str(session_id)},
+        )
 
 
 def worker_ws_url(base: str) -> str:
@@ -1959,7 +1915,6 @@ async def run_worker(
     outbox = worker_outbox(settings)
     execution = local_execution(
         settings,
-        store=None,
         hub=LiveRedirectBus(bus, relay),
         metrics=metrics,
         tracing=tracing,
@@ -1970,7 +1925,6 @@ async def run_worker(
     # reaper learns idle TTLs from inventory replies, so no background
     # loop needs the database.
     execution.pool.lifecycle = OutboxLifecycleReporter(outbox)
-    execution.db_fallback = False
     await bus.start()
     tasks: set[asyncio.Task[None]] = set()
     if metrics is not None:
@@ -1995,12 +1949,7 @@ async def run_worker(
     tasks.add(asyncio.create_task(execution.observe_loop()))
     tasks.add(asyncio.create_task(execution.reap_loop()))
     tasks.add(asyncio.create_task(execution.reap_workspace_loop()))
-    lifecycle = getattr(execution, "lifecycle_loop", None)
-    if lifecycle is not None:
-        tasks.add(asyncio.create_task(lifecycle()))
-    seen = getattr(execution, "sandbox_seen_loop", None)
-    if seen is not None:
-        tasks.add(asyncio.create_task(seen()))
+    tasks.add(asyncio.create_task(execution.sandbox_seen_loop()))
     emitter = getattr(getattr(execution, "pool", None), "lifecycle", None)
     if emitter is not None:
         emitter.start()

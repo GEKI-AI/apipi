@@ -1,18 +1,17 @@
 # Production
 
 How to choose hosts, scale out, and size an ApiPi process. Production
-is `apipi serve --api-only` plus `apipi worker` on KVM. Combined
-`apipi serve` is one box. Why that split exists is in
+is `apipi serve` plus `apipi worker` on KVM. `apipi dev` runs both on
+one box for local development. Why they are separate processes is in
 [workers](worker-concepts.md). Guest internals are in
 [isolation](isolation.md).
 
 ## Host selection
 
-Run production as `apipi serve --api-only` plus `apipi worker` on
+Run production as `apipi serve` plus `apipi worker` on
 KVM hosts with `APIPI_RUN_MODE=microvm` for computer sessions, plus
 `APIPI_WORKER_ACCEPTS=none` workers where text-only sessions need
-capacity. Combined `apipi serve` is the
-single-host embedded worker. Nested Docker or nested KVM is a lab
+capacity. Nested Docker or nested KVM is a lab
 setup. See [sandbox workers](workers.md#placement). The Compose file in this repo starts Postgres (and can run a
 rootless API). `systemctl stop` / `restart` on `apipi worker` sends
 SIGTERM. The worker heartbeats `"drain": true` (no new leases), waits
@@ -25,7 +24,7 @@ series and turn/model spans are recorded where the turn runs. See
 [usage](usage.md#prometheus).
 
 Isolation `none` is for local machines and CI. If the selected mode
-cannot start, `apipi serve` exits before it binds HTTP. The process
+cannot start, `apipi worker` exits before it connects. The process
 never switches to another mode on its own.
 
 Size the box from **live** sessions, not from Postgres row counts.
@@ -40,14 +39,13 @@ capped at `APIPI_MAX_WORKSPACE_BYTES` (default 1 GiB) and lasts until
 sandbox TTL. Local artifact
 bytes add up to `APIPI_MAX_ARTIFACT_BYTES` (default 512 MiB) per
 session under the shared `APIPI_LOCAL_STORE_DIR` unless you set `APIPI_ARTIFACT_STORE=s3`.
-Production split mode should use `s3`: the API issues presigned PUT and GET URLs,
+Production should use `s3`: the API issues presigned PUT and GET URLs,
 the worker uploads and downloads directly, and store credentials exist only on the API.
 
 Keeping the store off the worker host leaves more RAM for guests when
-you use Postgres. One `apipi worker` (or one combined `apipi serve`)
-per sandbox host; extra uvicorn workers leave the Pi pool in the first
-worker only. One process can use SQLite. Several API processes share
-Postgres. Give each process its own SQLite file if you are not sharing.
+you use Postgres. Run one `apipi worker` per sandbox host; extra uvicorn workers leave the
+Pi pool in the first worker only. One API process can use SQLite. Several
+API processes share Postgres.
 
 ## Store
 
@@ -126,16 +124,14 @@ instead.
 
 | Shape | When | What stays on the node | What is shared |
 | --- | --- | --- | --- |
-| Combined, one host | You fit in `max_sessions` on one box | Pi, SSE, WebSockets, `openai_hosted` directories, local artifacts | SQLite or Postgres |
-| API-only + workers | Production. API in Docker or several replicas | Guests and workspaces on **workers**. API is stateless for Pi | Postgres, per-worker tokens, and artifact bytes through the store (`s3` recommended, or one shared `APIPI_LOCAL_STORE_DIR`) |
-| Combined, several hosts | You have not split workers yet | Same as combined one host, plus each process has its own `APIPI_SESSIONS_DIR` | Postgres, auth callback. Sticky for live Pi. See [multiple nodes](scale.md) |
-| External artifact store | Clients read artifacts from any API node | Live workspace still on the worker (or combined node) | Postgres, S3-compatible bucket |
+| One API + one worker (`apipi dev`) | Local development on one box | Pi, `openai_hosted` directories, and local artifacts on that box | SQLite or Postgres |
+| API + workers | Production. API in Docker or several replicas | Guests and workspaces on **workers**. API is stateless for Pi | Postgres, per-worker tokens, and artifact bytes through the store (`s3` recommended, or one shared `APIPI_LOCAL_STORE_DIR`) |
+| External artifact store | Clients read artifacts from any API node | Live workspace still on the worker | Postgres, S3-compatible bucket |
 
 With workers, `POST /v1/agents/sessions` and follow-up REST/SSE may
 land on any API replica. The session is owned by the worker lease.
-There is no live handoff of a running guest. Combined serve still
-needs sticky routing for Pi. Examples are in
-[multiple nodes](scale.md).
+There is no live handoff of a running guest. Load-balancer examples are
+in [multiple nodes](scale.md).
 
 ## Sizing
 
@@ -233,7 +229,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_DB_POOL_SIZE` | Postgres connections from this process (default 5). |
 | `APIPI_MAX_REQUEST_BYTES` | HTTP body cap (`413` `payload_too_large`). |
 | `APIPI_MAX_WORKSPACE_BYTES` / `APIPI_MAX_ARTIFACT_BYTES` | Directory and published-artifact caps. |
-| `APIPI_ARTIFACT_STORE` | `local` or `s3`. Production split mode uses `s3` so workers hold no store credentials. `local` needs one shared `APIPI_LOCAL_STORE_DIR` on the API and every worker. |
+| `APIPI_ARTIFACT_STORE` | `local` or `s3`. Production uses `s3` so workers hold no store credentials. `local` defaults to `.apipi/store` on a single host. With several hosts, the API and every worker must share one `APIPI_LOCAL_STORE_DIR`. |
 | `APIPI_MICROVM_EGRESS_ALLOWLIST` / `HOSTS` / `MBIT` | Optional destination allowlist (off by default) and 50 Mbit TAP rate. Private IPv4 ranges are always rejected. |
 | `APIPI_INSTANCE_ID` | Sets `X-ApiPi-Instance` so you can confirm stickiness. |
 | `APIPI_VAULT_MASTER_KEY` | Encrypts MCP vault tokens at rest. Put a 32-byte key in the process environment or a k8s secret. Unset uses a local default and logs a warning; do not leave that in production. Same key on every API process that writes or injects vault secrets. |
@@ -285,8 +281,7 @@ gateway. The public Agents API does not change.
 Isolated in a dedicated pool: Pi and per-worker `APIPI_SESSIONS_DIR` workspaces. Shared
 across pools: Postgres, and artifact, file, skill, and Pi session bytes through the
 configured store (`s3` or one shared `APIPI_LOCAL_STORE_DIR`).
-Sticky rules still apply inside the pool. See
-[tenant pools](scale.md#tenant-pools).
+See [tenant pools](scale.md#tenant-pools).
 
 ## Failure and drain
 
@@ -298,11 +293,10 @@ heartbeat `"drain": true`, idle Pi exit, in-flight turns finish, then
 the process exits 0. Use the drain drop-in so `TimeoutStopSec` is
 longer than `--drain-timeout`. A timeout exits 1; systemd then SIGKILLs
 the cgroup (`KillMode=control-group`). Keep API health successful while
-a turn is in flight. A live session stays on the node that owns it.
+a turn is in flight. A live session stays on the worker that owns it.
 
 Host workers (`none`) stamp Pi and host MCP with
-`APIPI_WORKER_PID`. After a crash, the next `apipi worker` or combined
-`apipi serve` start reaps processes whose stamped parent is dead. It
+`APIPI_WORKER_PID`. After a crash, the next `apipi worker` start reaps processes whose stamped parent is dead. It
 does not kill another live worker's Pi, and it does not match on the
 `pi` command name. systemd units must set `KillMode=control-group` so
 `systemctl stop` kills the unit cgroup, including Pi. A raw
@@ -324,10 +318,9 @@ default is 10000 events. A full queue drops the newest event and
 increments `apipi_lifecycle_export_total{result="overflow"}`.
 
 If SSE drops, reconnect with `after_seq` to replay from the store. The
-next turn still needs the node that holds Pi.
+next turn still needs the worker that holds Pi.
 
 A full node returns `429` with code `capacity`. A tenant at its cap
 returns `429` with code `capacity_tenant`. Clients should retry later;
-idle reap on the process that holds Pi frees a slot (the worker, when
-the API is `--api-only`). Request bodies over `APIPI_MAX_REQUEST_BYTES`
+idle reap on the worker frees a slot. Request bodies over `APIPI_MAX_REQUEST_BYTES`
 return `413`.

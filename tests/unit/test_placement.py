@@ -5,10 +5,9 @@ import pytest
 
 from apipi.config import Settings
 from apipi.services.runtime import EventHub
-from apipi.store.engine import Store
-from apipi.store.events import list_events
-from apipi.store.repo import create_session, create_tenant
+from apipi.services.sink import OutboxSink
 from apipi.worker.hub import WorkerConnection, WorkerHub, _run_command
+from apipi.worker.outbox import Outbox
 from apipi.worker.placement import placement_for, worker_accepts
 
 
@@ -55,7 +54,6 @@ def test_worker_accepts_set_membership() -> None:
 async def test_session_stop_kills_the_guest() -> None:
     execution = MagicMock()
     execution.teardown = AsyncMock()
-    execution.store = None
     execution.settings = None
     await _run_command(
         execution,
@@ -82,7 +80,6 @@ def _execution(*, run_mode: str, accepts: list[str] | None = None) -> MagicMock:
     assert resolved_worker_accepts(settings)
     execution = MagicMock()
     execution.settings = settings
-    execution.store = None
     execution.hub = None
     execution.run_turn = AsyncMock()
     return execution
@@ -137,25 +134,21 @@ async def test_turn_start_both_accepts_both() -> None:
         execution.run_turn.assert_awaited_once()
 
 
-async def test_mismatched_turn_persists_error(store: Store) -> None:
-    hub = EventHub()
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(
-            db, tenant.id, environment={"type": "none"}, metadata={}
-        )
-        tenant_id = tenant.id
-        session_id = row.id
+async def test_mismatched_turn_reports_error() -> None:
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    outbox = Outbox()
     execution = MagicMock()
     execution.settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="microvm",
         worker_accepts=["microvm"],
     )
-    execution.store = store
-    execution.hub = hub
+    execution.hub = EventHub()
     execution.run_turn = AsyncMock()
-    execution.sink_for = MagicMock(return_value=None)
+    execution.sink_for = MagicMock(
+        return_value=OutboxSink(outbox, tenant_id, session_id)
+    )
     await _run_command(
         execution,
         "turn.start",
@@ -168,13 +161,16 @@ async def test_mismatched_turn_persists_error(store: Store) -> None:
         user_id=None,
     )
     execution.run_turn.assert_not_called()
-    async with store.session() as db:
-        events = await list_events(db, tenant_id, session_id)
-    types = [event.type for event in events]
+    events = [
+        item["payload"]
+        for item in outbox.pending(session_id)
+        if item["type"] == "event"
+    ]
+    types = [event["type"] for event in events]
     assert "agent.session.error" in types
     assert "agent.session.turn.failed" in types
-    error = next(event for event in events if event.type == "agent.session.error")
-    assert error.data["code"] == "placement"
+    error = next(event for event in events if event["type"] == "agent.session.error")
+    assert error["data"]["code"] == "placement"
 
 
 def test_pick_filters_accepts() -> None:

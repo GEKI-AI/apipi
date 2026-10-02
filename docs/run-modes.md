@@ -5,34 +5,34 @@ is a separate choice: where file and shell tools run. Pi and the computer always
 Why the modes exist, and what a microVM contains, is in
 [isolation](isolation.md).
 
-Production isolation is a Firecracker microVM on a worker (or on
-combined `apipi serve`). Each session gets its own kernel so a hostile
+Production isolation is a Firecracker microVM on a worker. Each session gets its own kernel so a hostile
 tenant cannot share the host kernel with the gateway or with other
 sessions. Pi and the local computer share that guest. The HTTP API
 never runs inside it.
 
-If the selected mode cannot start, `apipi serve` exits before it binds
-HTTP. The process never switches to another mode on its own. For
-`microvm` and for a custom backend that sets `needs_probe`, the process
-also launches a throwaway sandbox and tears it down. That probe must
-succeed before the API listens. `apipi serve --api-only` skips that
-probe so a rootless API host does not need `/dev/kvm`. Sandbox guests
-then belong on `apipi worker`.
+Run mode belongs to `apipi worker`. `apipi serve` is always the API: it
+runs no Pi, no sandbox, and no run-mode probe, so a rootless API host
+does not need `/dev/kvm`. If the selected mode cannot start,
+`apipi worker` exits before it connects to the API. The process never
+switches to another mode on its own. For `microvm` and for a custom
+backend that sets `needs_probe`, the worker also launches a throwaway
+sandbox and tears it down. That probe must succeed before the worker
+connects.
 
 Pi and the computer always share one isolation boundary, and there is no split. Tests that do not
 need a computer can use `environment.type=none`. That environment value
 means “no files.” Isolation `none` means “no sandbox for Pi.” They are
-not the same setting. On `apipi serve --api-only`, Agents sessions with
+not the same setting. Agents sessions with
 `environment.type=none` go to any worker whose accepts set contains
 `none`. See [workers](workers.md#placement).
 
 | Mode | When to use | Isolation |
 | --- | --- | --- |
-| `none` | Local tests, laptops without a sandbox, and `type=none` workers in production | Pi is a child of the process that holds it. `type=none` sessions have no shell, file, or workspace tools, so host Pi for them needs no sandbox. Combined `apipi serve` with `none` still logs a production warning because it cannot serve computer sessions. Workers that accept `none` do not warn. |
+| `none` | Local tests, laptops without a sandbox, and `type=none` workers in production | Pi is a child of the worker that holds it. `type=none` sessions have no shell, file, or workspace tools, so host Pi for them needs no sandbox. A `none` worker logs a warning that this isolation is not suited for production. |
 | `microvm` | SaaS and enterprise production when a computer is in use | KVM guest with its own kernel. Protects the host from a hostile session. |
 | `package.mod:Class` | An operator-provided backend | Whatever that class implements. Missing import fails at startup. |
 
-The process default is `none` so `apipi serve` can start without KVM.
+The worker default is `none` so `apipi worker` and `apipi dev` can start without KVM.
 Production operators set `APIPI_RUN_MODE=microvm` on computer workers
 and `APIPI_RUN_MODE=none` with `APIPI_WORKER_ACCEPTS=none` on text-only
 workers. Fleet layouts are in [sandbox workers](workers.md#placement).
@@ -40,16 +40,16 @@ If the
 microVM cannot launch, that process exits. Valid
 built-in names are `none` and `microvm`.
 
-Run production as `apipi serve --api-only` plus `apipi worker` on the
+Run production as `apipi serve` plus `apipi worker` on the worker
 host. Docker Compose can run the API without privileged mode. Nested
-microVM inside a container is a lab setup. Combined `apipi serve`
-(no `--api-only`) is a test and dev convenience only.
+microVM inside a container is a lab setup. For local development,
+`apipi dev` starts the API and one worker as two child processes.
 
 ## What to install
 
 Every mode needs Python 3.13, [uv](https://docs.astral.sh/uv/),
 the store, the Pi CLI (`pi --mode rpc`) on `PATH` at version 0.99.1, and
-`OPENAI_BASE_URL`. `apipi serve` exits if those are missing. See
+`OPENAI_BASE_URL`. `apipi worker` exits if those are missing. See
 [install](install.md). The extra OS packages differ by mode.
 
 ### `none`
@@ -184,7 +184,7 @@ and the wrong machine.
 | **Session** | Transcript: events, turns, items, artifact metadata | SQLite for one process; Postgres when the store is shared | Until the session is deleted. A session [export](api.md#export) is the thread. |
 | **Harness session cache** | Pi's conversation file so a new process can continue the thread | Bytes in `APIPI_ARTIFACT_STORE` under the same session prefix as artifacts. The session row holds `pi_session_id` and size. Not listed on `GET …/artifacts`. | Until the session is deleted. Reloaded into a fresh `/workspace` on the next turn from the blob store. |
 | **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. Guest cwd is `/workspace`. `none`: no files. | `openai_hosted` is ephemeral: sandbox TTL (default 1 hour) stops Pi and deletes scratch files, or the session is deleted. |
-| **Artifacts** | Named outputs the API can fetch | Metadata in the store. Bytes in `APIPI_ARTIFACT_STORE`: local files under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`, or an S3-compatible bucket with the same key layout. Hosted file and skill bytes use the same backend under `files` and `skills` namespaces. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
+| **Artifacts** | Named outputs the API can fetch | Metadata in the store. Bytes in `APIPI_ARTIFACT_STORE`: local files under `{APIPI_LOCAL_STORE_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`, or an S3-compatible bucket with the same key layout. Hosted file and skill bytes use the same backend under `files` and `skills` namespaces. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
 
 `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB) caps one `openai_hosted`
 directory. An oversized microvm pull is not unpacked onto the host.
@@ -210,16 +210,16 @@ with `artifacts/`. Those remain readable. New publishes use
 
 ## `none`
 
-Pi is a child of `apipi serve` or `apipi worker`. There is no namespace,
+Pi is a child of `apipi worker`. There is no namespace,
 cgroup, or guest. Host Pi (`none`) starts in its own process
 group. Idle reap, session end, and process shutdown send SIGTERM then
 SIGKILL to that group so MCP children started by Pi do not linger.
 Gateway-owned MCP is a sibling of Pi and is stopped separately.
 `APIPI_PI_MEM_MIB` is an optional soft ceiling for one host Pi (Node
 heap plus RSS kill). It is not a cgroup. Use this when a microvm
-cannot run. Combined `apipi serve` with `none` is local/dev only and
-logs a warning. Workers that accept `none` serve production
-text-only sessions without that warning.
+cannot run. A `none` worker logs a warning that this isolation is not
+suited for production. Workers that accept only `none` still serve
+production text-only sessions.
 
 ## `microvm`
 
@@ -330,13 +330,11 @@ module on `PYTHONPATH`.
 ## Production
 
 Production isolation is Firecracker on a **worker host**. The API
-process should be `apipi serve --api-only` and does not need KVM.
-Combined `apipi serve` (no `--api-only`) is the single-host embedded
-worker for test and dev only: it still probes the run mode and can create TAP devices on
-that box. Host sizing, overprovision, and drain are in
-[production](production.md). Combined serve still needs sticky routing
-when you run more than one process. API-only plus workers does not,
-for live Pi. See [multiple nodes](scale.md) and
+process is `apipi serve` and does not need KVM. For local development,
+`apipi dev` starts the API and one worker as two child processes. Host
+sizing, overprovision, and drain are in [production](production.md).
+API replicas do not need sticky routing, because Pi lives on the
+workers. See [multiple nodes](scale.md) and
 [workers](worker-concepts.md).
 
 A typical worker unit (KVM and TAP stay here):
@@ -371,13 +369,13 @@ install `deploy/systemd/apipi-worker-drain.conf` as
 
 Many operators run that unit as root so jailer can chroot Firecracker
 and the process can create TAP devices. Set `APIPI_WORKER_TOKEN_FILE` and `APIPI_API_URL` in
-the environment file. The API unit is `apipi serve --api-only` with
+the environment file. The API unit is `apipi serve` with
 no DeviceAllow for KVM.
 
 ## Docker
 
 The Compose file at the repo root starts Postgres and an API service
-that runs `apipi serve --api-only` without privileged mode, `/dev/kvm`,
+that runs `apipi serve` without privileged mode, `/dev/kvm`,
 or TAP. That is the supported container path. Firecracker stays on a
 host `apipi worker` unit (`deploy/systemd/apipi-worker.service`). Nested
 microVM inside Docker is a lab setup only.

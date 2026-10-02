@@ -200,7 +200,7 @@ async def upload_via_presign(
             raise DiskLimitError(message, code=code)
         if reply.get("unchanged") is True:
             # The API already holds these bytes; skip the PUT and the
-            # completed envelope, as combined `_persist_files` does.
+            # completed envelope.
             return {
                 "unchanged": True,
                 "size": len(data),

@@ -81,7 +81,7 @@ def microvm_settings(tmp_path: Path) -> Settings:
 async def microvm_client(
     microvm_settings: Settings, store: Store, tmp_path: Path
 ) -> AsyncIterator[AsyncClient]:
-    """Real `apipi serve --api-only` + microvm `apipi worker` processes."""
+    """Real `apipi serve` + microvm `apipi worker` processes."""
     env = {
         "APIPI_RUN_MODE": "microvm",
         "APIPI_MICROVM_KERNEL": microvm_settings.microvm_kernel or "",

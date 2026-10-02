@@ -18,15 +18,16 @@ def sessions_root(settings: Settings) -> Path:
 def store_root(settings: Settings) -> Path:
     """Root for local artifact, file, and skill bytes.
 
-    ``APIPI_LOCAL_STORE_DIR`` when set, otherwise the sessions root.
-    The API and every worker must mount this path at the same location;
+    ``APIPI_LOCAL_STORE_DIR``, which defaults to ``.apipi/store``. The
+    API and every worker must mount this path at the same location;
     per-worker ``APIPI_SESSIONS_DIR`` values stay separate workspaces.
     """
-    local_dir = getattr(settings, "local_store_dir", None)
-    if isinstance(local_dir, str) and local_dir.strip():
-        root = Path(local_dir.strip())
-    else:
-        root = sessions_root(settings)
+    local_dir = settings.local_store_dir
+    root = (
+        Path(local_dir.strip())
+        if local_dir and local_dir.strip()
+        else sessions_root(settings)
+    )
     root.mkdir(parents=True, exist_ok=True)
     return root
 

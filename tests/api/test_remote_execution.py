@@ -23,23 +23,13 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _api_settings(settings: Settings) -> Settings:
-    return Settings(
-        database_url=settings.database_url,
-        run_mode="none",
-        sessions_dir=settings.sessions_dir,
-        local_store_dir=settings.sessions_dir,
-        api_only=True,
-    )
-
-
-async def test_api_only_uses_remote_execution(settings: Settings, store: Store) -> None:
-    app = create_app(_api_settings(settings), store=store, harness=FakeHarness())
+async def test_api_uses_remote_execution(settings: Settings, store: Store) -> None:
+    app = create_app(settings, store=store)
     assert isinstance(app.state.execution, RemoteExecution)
 
 
-async def test_api_only_without_worker_is_429(settings: Settings, store: Store) -> None:
-    app = create_app(_api_settings(settings), store=store, harness=FakeHarness())
+async def test_without_worker_is_429(settings: Settings, store: Store) -> None:
+    app = create_app(settings, store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -168,7 +158,6 @@ async def test_remote_turn_records_metrics_and_spans_on_worker(
         run_mode="none",
         sessions_dir=settings.sessions_dir,
         local_store_dir=settings.sessions_dir,
-        api_only=True,
         metrics=True,
     )
     from tests.support.split_worker import split_client_for

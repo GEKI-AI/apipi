@@ -13,11 +13,10 @@ external computers. `self_hosted` is currently not supported
 a per-worker token, and the v2 messages below.
 
 Firecracker, jailer, TAP, and the guest live on the **worker**.
-`apipi serve --api-only` never probes `/dev/kvm` and never creates a
-TAP device. Combined `apipi serve` (no `--api-only`) is the
-single-host embedded worker: the same in-process adapter as today,
-for a laptop or one box. Production is API-only plus one or more
-`apipi worker` hosts. Fleet layouts (one worker type that does both,
+`apipi serve` is always the API: it never probes `/dev/kvm` and never
+creates a TAP device. Production is the API plus one or more
+`apipi worker` hosts. For a laptop or one box, `apipi dev` starts the
+API and one worker as two child processes. Fleet layouts (one worker type that does both,
 separate `microvm` and `none` workers, or `none`-only) are below.
 
 `apipi worker` reads its token from `APIPI_WORKER_TOKEN_FILE` and
@@ -25,17 +24,15 @@ probes the configured run mode before it connects. If
 `APIPI_RUN_MODE=microvm` cannot start, the worker exits. It does not
 fall back to `none`.
 
-`apipi serve --api-only` (or `APIPI_API_ONLY`) runs turns on a leased
-worker. The API persists events from the store and streams SSE without
-Pi on that node. If no worker can take a lease, the turn returns `429`
-with code `capacity`. Combined `apipi serve` still runs turns
-in-process.
+`apipi serve` runs every turn on a leased worker. The API persists
+events from the store and streams SSE without Pi on that node. If no
+worker can take a lease, the turn returns `429` with code `capacity`.
 
 Start everything through the ApiPi CLI:
 
 ```
 apipi serve
-apipi serve --api-only
+apipi dev
 apipi workers token create --name worker-1
 APIPI_WORKER_TOKEN_FILE=/run/apipi/worker.token APIPI_API_URL=http://api.example:8000 apipi worker
 apipi check --role api
@@ -44,9 +41,10 @@ apipi install --role api
 apipi install --role worker
 ```
 
-Combined `apipi serve` keeps today's single-host path. `--api-only`
-skips the KVM probe so the API can run without Firecracker.
-`apipi worker` is the sandbox process. It is not a tenant computer.
+`apipi dev` is the single-host path for local development. It runs
+`apipi migrate`, creates or reuses a dev worker token in
+`.apipi/dev-worker-token`, and starts `apipi serve` and `apipi worker`
+as two child processes. `apipi worker` is the sandbox process. It is not a tenant computer.
 
 ## Auth
 
@@ -265,8 +263,7 @@ Rejections and drops are counted in
 `turn.start`, `turn.continue`, and `sandbox.boot` carry a `context`
 object in the command payload. The API builds it from the database,
 the vault, and the object store; the worker holds it in memory only
-and never logs it. Combined serve builds the same context in-process,
-so both paths run the identical turn preparation. The schemas live in
+and never logs it. The schemas live in
 `src/apipi/worker/turn_context.py`, and the builder in
 `src/apipi/services/turn_context.py`.
 
@@ -282,11 +279,10 @@ so both paths run the identical turn preparation. The schemas live in
 File bytes never travel in the command. With `APIPI_ARTIFACT_STORE=s3`
 each file, skill, and Pi session blob becomes a presigned GET URL with
 a short TTL. With the filesystem store each reference becomes a path
-relative to the shared store root (`APIPI_LOCAL_STORE_DIR`, falling back
-to `APIPI_SESSIONS_DIR`), which the worker
+relative to the shared store root (`APIPI_LOCAL_STORE_DIR`, default `.apipi/store`), which the worker
 reads directly; the API and the worker must see the same filesystem.
 The worker fetches the bytes at turn start, provisions the workspace,
-and installs skills exactly as combined serve does.
+and installs skills from it.
 
 Commands with a context are validated before send and on receipt:
 file bytes are rejected, and payloads over 256 KiB are rejected with
@@ -303,26 +299,24 @@ after the lease TTL, and the turn is not moved to another worker.
 
 Artifact, input-image, workspace-file, skill, and Pi session bytes always
 go through the configured store; the socket carries only control and
-metadata messages. The split worker holds no object-store credentials
+metadata messages. The worker holds no object-store credentials
 and performs no artifact or file database writes: `LocalExecution` runs
 with no blobs or objects, and `OutboxSink` uploads through
 `artifact.presign` (outbox) -> reply -> PUT (S3, plain HTTPS with no
 credentials) or shared-root write (filesystem, to the reply `path`) ->
 `artifact.completed` (outbox) for `artifact`, `pi_session`, and
-`input_image` kinds, including the killed-process harvest. Combined
-serve keeps today's direct path through `DirectSink`. Quota failures
-raise today's codes so the turn fails the way direct writes do
+`input_image` kinds, including the killed-process harvest. Quota
+failures raise the usual codes so the turn fails
 (`artifact_store` fails the turn, other quota codes emit the session
-error event). Split uploads every changed file; the API keeps the latest
+error event). The worker uploads every changed file; the API keeps the latest
 version per path. Unchanged files never leave the worker: when the
 presigned digest matches the latest stored bytes for that path, the
-API answers `unchanged` before checking quotas (as in combined
-mode), and the worker skips the PUT and the `completed` envelope, so
+API answers `unchanged` before checking quotas and the worker skips the PUT and the `completed` envelope, so
 no new row is written. Pi sessions reuse the existing blob id, so
 every save overwrites the same object instead of leaking one new
 object per save. The total workspace limit (`workspace_too_large`)
 is enforced on the worker from settings in both harvest paths, with
-the same codes as combined mode.
+the same codes.
 
 With `APIPI_ARTIFACT_STORE=s3` (the recommended production setup)
 the worker sends durable `artifact.presign` with the session id, kind
@@ -444,10 +438,10 @@ defaults to `none`-only. Startup validation fails fast before register
 when `microvm` is in the list but the microVM backend cannot run
 (KVM, Firecracker, or images missing).
 
-Run one API-only gateway with the workers the fleet needs:
+Run one API with the workers the fleet needs:
 
 ```
-apipi serve --api-only
+apipi serve
 apipi workers token create --name none-1       # prints the secret once
 apipi workers token create --name computer-1
 APIPI_WORKER_ACCEPTS=none APIPI_WORKER_TOKEN_FILE=/run/apipi/none.token APIPI_API_URL=http://api.example:8000 apipi worker
@@ -456,7 +450,7 @@ APIPI_WORKER_ACCEPTS=microvm APIPI_WORKER_TOKEN_FILE=/run/apipi/computer.token A
 
 | Process | `APIPI_WORKER_ACCEPTS` | What it serves |
 | --- | --- | --- |
-| `apipi serve --api-only` | unused for Pi | HTTP, store, placement |
+| `apipi serve` | unused for Pi | HTTP, store, placement |
 | `none` worker | `none` | Light Pi on the host. No Firecracker. Teardown kills the Pi process group. |
 | `microvm` worker | `microvm` or `none,microvm` | One KVM guest per computer session, plus host Pi for `type=none` when both are accepted. |
 
@@ -490,8 +484,7 @@ warning; exports no longer carry it. Use
 ## Idle reap
 
 Idle Pi reap and hosted workspace wipe run on the process that holds
-Pi. Combined `apipi serve` starts those loops in the API process.
-`apipi worker` starts the same loops but never reads the database:
+Pi. `apipi worker` runs those loops and never reads the database:
 when the worker knows the session from a command context, the reaper
 uses the context's effective idle TTL measured from the last turn
 activity; when it does not (for example after a worker restart), the
@@ -547,8 +540,7 @@ cgroup. See [production](production.md#failure-and-drain).
 
 ## Lifecycle export
 
-The API owns the lifecycle export. Combined `apipi serve` and
-`apipi serve --api-only` both emit from the API process; `apipi
+The API owns the lifecycle export: `apipi serve` emits it, and `apipi
 worker` only reports. The worker sends session live start and stop
 as durable v2 envelopes (`lifecycle.start`, `lifecycle.stop`), so
 they survive disconnects and replay exactly once after reconnect,
@@ -556,7 +548,7 @@ and it sends its live set as the periodic `inventory`, from which
 the API derives the heartbeat export. The worker holds no export URL
 or token: `apipi worker` ignores `APIPI_LIFECYCLE_*` settings with a
 startup warning. The pool reporter tags each envelope with the
-`worker_id` from `hello`. Embedded serve leaves `worker_id` null.
+`worker_id` from `hello`.
 See
 [session lifecycle export](usage.md#session-lifecycle-export).
 
@@ -564,9 +556,8 @@ See
 
 | Process | Trust | Needs |
 | --- | --- | --- |
-| `apipi serve --api-only` | Operator control plane | Postgres, no KVM |
+| `apipi serve` | Operator control plane | Postgres, no KVM |
 | `apipi worker` | Operator sandbox host | Its token file, outbound to the API, the model host, the image store, and MCP upstreams. KVM and Firecracker only when it accepts `microvm`. No Postgres, no object-store credentials. |
-| Combined `apipi serve` | Lab / one box | Whatever the run mode needs, including KVM when `microvm` |
 
 The worker holds its running sessions in memory only and makes no
 database queries: turns run from the command context, results go

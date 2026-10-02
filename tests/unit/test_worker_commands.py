@@ -70,6 +70,9 @@ class _Execution:
         del kwargs
         self.turns.append((session_id, text))
 
+    def sink_for(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> None:
+        return None
+
     async def teardown(self, session_id: uuid.UUID) -> None:
         del session_id
         self.stops += 1

@@ -8,7 +8,7 @@ Pi (OpenAI's name for that field).
 
 ## Prerequisites
 
-Have the gateway running ([Install](install.md)): `apipi serve` is
+Have the gateway running ([Install](install.md)): `apipi dev` is
 enough locally (SQLite at `.apipi/apipi.db`). Live turns need Pi on `PATH` and
 `OPENAI_BASE_URL` on the gateway process (the **model** host that Pi
 calls). The client bearer is the model key unless

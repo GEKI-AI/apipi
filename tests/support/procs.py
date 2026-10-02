@@ -1,4 +1,4 @@
-"""Real `apipi serve --api-only` + `apipi worker` subprocesses for e2e tests.
+"""Real `apipi serve` + `apipi worker` subprocesses for e2e tests.
 
 One helper for every process-level e2e test: an ephemeral loopback port
 (no fixed ports), tmp dirs only, the test's own `Store` database shared
@@ -42,6 +42,17 @@ class SplitProcesses:
             text = path.read_text(errors="replace") if path.exists() else ""
             parts.append(f"--- {name} ---\n{text[-4000:]}")
         return "\n".join(parts)
+
+
+def fake_pi_shim(directory: Path) -> Path:
+    shim = directory / "pi"
+    shim.write_text(
+        "#!/bin/sh\n"
+        f'[ "$1" = "--version" ] && {{ echo {PINNED_PI}; exit 0; }}\n'
+        f'exec "{sys.executable}" "{FAKE_PI}" "$@"\n'
+    )
+    shim.chmod(0o755)
+    return shim
 
 
 def _free_port() -> int:
@@ -108,13 +119,7 @@ async def split_processes(
     database_url = store.engine.url.render_as_string(hide_password=False)
     # The worker probes `<pi> --version` against the pinned release, so the
     # fake Pi is wrapped in a shim that answers it.
-    shim = tmp_path / "pi"
-    shim.write_text(
-        "#!/bin/sh\n"
-        f'[ "$1" = "--version" ] && {{ echo {PINNED_PI}; exit 0; }}\n'
-        f'exec "{sys.executable}" "{FAKE_PI}" "$@"\n'
-    )
-    shim.chmod(0o755)
+    shim = fake_pi_shim(tmp_path)
     base = {
         key: value
         for key, value in os.environ.items()
@@ -157,7 +162,7 @@ async def split_processes(
     try:
         with api_log.open("wb") as api_out, worker_log.open("wb") as worker_out:
             for args, proc_env, out in (
-                (("serve", "--api-only"), api, api_out),
+                (("serve",), api, api_out),
                 (("worker", "--drain-timeout", "0.5"), worker, worker_out),
             ):
                 procs.append(

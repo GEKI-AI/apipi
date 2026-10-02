@@ -1,28 +1,21 @@
 # Multiple nodes
 
-How you load-balance depends on whether Pi lives in the API process.
-
-With `apipi serve --api-only` and `apipi worker`, a session is owned by
-a **worker lease**. API replicas are interchangeable for create,
+`apipi serve` is always the API, and Pi runs in `apipi worker`
+processes. A session is owned by a **worker lease**. API replicas are interchangeable for create,
 follow-up REST, and SSE. Stored events fan out over the event bus,
 so an SSE client on any replica sees commits from any other replica.
 You do not need sticky routing for live Pi.
 
-Combined `apipi serve` (no `--api-only`) still owns live Pi and local
-`openai_hosted` directories in that process. Follow-up must return
-to that node, or the next turn has no Pi.
-
 Scale by adding processes (systemd units or API containers), not
-uvicorn workers inside one process. The Pi pool lives in one process.
-Several processes share Postgres. Each combined process needs its own
-SQLite file if you are not on Postgres.
+uvicorn workers inside one process. Several API processes share
+Postgres. A SQLite file belongs to one API process.
 
 Why workers exist is in [workers](worker-concepts.md).
 
 ## Topology
 
-**Split (production).** N API processes, M workers, one Postgres, one
-load balancer. APIs run `apipi serve --api-only`. Workers run `apipi
+**Production.** N API processes, M workers, one Postgres, one
+load balancer. APIs run `apipi serve`. Workers run `apipi
 worker`; hosts that serve computer sessions use
 `APIPI_RUN_MODE=microvm` on KVM hosts, and hosts that serve only
 text-only sessions use `APIPI_RUN_MODE=none` with
@@ -42,8 +35,8 @@ session bytes go through the configured store, never over the worker
 socket. The recommended production setup is `APIPI_ARTIFACT_STORE=s3`:
 the API issues presigned PUT and GET URLs, the worker uploads and
 downloads directly, and store credentials exist only on the API. The
-filesystem store (`APIPI_ARTIFACT_STORE=local` with an explicit
-`APIPI_LOCAL_STORE_DIR`) is supported only when the API and every
+filesystem store (`APIPI_ARTIFACT_STORE=local` with `APIPI_LOCAL_STORE_DIR`, which
+defaults to `.apipi/store`) is supported only when the API and every
 worker mount the same store root at the same path (same machine or a
 shared network filesystem). How to share it is up to the operator.
 At register the API writes a nonce marker file into the root and
@@ -62,12 +55,8 @@ turn fails with `429` `capacity` and names the instance that holds the
 socket. Session create, follow-up REST, and SSE still work on any
 replica.
 
-**Combined.** N gateway hosts, each `apipi serve` with
-`APIPI_RUN_MODE=microvm`. Sticky hash on `session_id` so follow-up
-hits the node that holds Pi. Give each process its own
-`APIPI_SESSIONS_DIR`. Combined mode is a test and dev convenience
-only; production always runs split (`apipi serve --api-only` plus
-`apipi worker`).
+For a single host in development, `apipi dev` starts one API and one
+worker as two child processes. It is not a scaling topology.
 
 Set `APIPI_INSTANCE_ID` to a short name per API process (`node-a`).
 When set, HTTP responses except `/health` include `X-ApiPi-Instance`.
@@ -80,14 +69,8 @@ Official OpenAI clients put `session_id` in
 `/v1/agents/sessions/{session_id}/…`. They do not store cookies by
 default.
 
-For **API-only plus workers**, hash is optional. Any replica can
-stream SSE and accept the next message. Reconnect with `after_seq` to
-replay from the store.
-
-For **combined serve on Postgres**, SSE works on any replica through
-the shared event bus, but follow-up REST must still return to the
-node that owns Pi. Hash that path segment. On SQLite the bus is
-process-local, so SSE needs the same stickiness as follow-up.
+Session hashing is optional. Any replica can stream SSE and accept the
+next message. Reconnect with `after_seq` to replay from the store.
 
 There is no runner WebSocket. `self_hosted` is currently not supported (see [environments](environments.md)).
 
@@ -109,7 +92,7 @@ share SSE. Live `output_text.delta` batches are coalesced over about
 they are never stored. See [config](config.md) for the settings and
 [observability](observability.md) for the bus metrics.
 
-In split mode the worker does not publish deltas itself. It sends
+The worker does not publish deltas itself. It sends
 them as ephemeral `delta.text` envelopes over its worker socket (one
 per coalesced batch, at-most-once, never acked). The API replica that
 holds the socket checks that the session is leased to that worker,
@@ -122,10 +105,8 @@ only the worker socket itself stays pinned to one API process.
 Only the API writes turns, items, events, and usage: the worker
 buffers results in its outbox until the cumulative ack and replays
 after `hello.reply`, then the ingesting replica publishes the
-`EventBus` wake after commit. Turn context already arrives in
-commands, so the worker only needs the same database for artifacts
-and the workspace until later steps; keep pointing every worker at
-the same database as the API until then.
+`EventBus` wake after commit. Turn context arrives in commands, so the
+worker needs no database access.
 
 ## nginx
 
@@ -136,7 +117,7 @@ a worker unit. Keep API health successful while a turn is in flight.
 Long-lived SSE and WebSockets need buffering off and a long read
 timeout. One hour matches a long turn plus idle.
 
-API-only (no sticky Pi):
+The API needs no sticky routing:
 
 ```
 upstream apipi_api {
@@ -159,23 +140,6 @@ server {
 }
 ```
 
-Combined serve still needs a session hash. Example:
-
-```
-map $uri $apipi_session {
-    ~^/v1/agents/sessions/(?<sid>[0-9a-fA-F-]+) $sid;
-    default "";
-}
-
-upstream apipi_session {
-    hash $apipi_session consistent;
-    server 192.0.2.10:8000;
-    server 192.0.2.11:8000;
-}
-```
-
-Send `/v1/agents/sessions/…` to `apipi_session` in that mode.
-
 ## Tenant pools
 
 Some tenants get their own gateway pool: a separate Host name or load
@@ -185,5 +149,4 @@ bearers the auth callback accepts on that pool). The public Agents API
 does not change.
 
 Shared: Postgres, and artifact, file, skill, and Pi session bytes through the configured store (`s3` or one shared `APIPI_LOCAL_STORE_DIR`).
-Isolated: live Pi and per-worker `APIPI_SESSIONS_DIR` workspaces on the worker (or on the
-combined node).
+Isolated: live Pi and per-worker `APIPI_SESSIONS_DIR` workspaces on the worker.

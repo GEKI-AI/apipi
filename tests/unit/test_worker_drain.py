@@ -80,15 +80,16 @@ async def test_kill_unheld_skips_held_sessions() -> None:
 
 
 async def test_drain_reason_is_not_idle() -> None:
-    from apipi.services.lifecycle_export import attach_lifecycle
+    from apipi.services.lifecycle_export import OutboxLifecycleReporter
+    from apipi.worker.outbox import Outbox
 
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
-        lifecycle_export_url="http://export.test/life",
     )
     pool = PiPool(settings)
-    attach_lifecycle(pool, settings)
+    outbox = Outbox()
+    pool.lifecycle = OutboxLifecycleReporter(outbox)
     sid = uuid.uuid4()
     pool._procs[sid] = cast(PiProc, _Proc())
     pool._live[sid] = {
@@ -100,9 +101,9 @@ async def test_drain_reason_is_not_idle() -> None:
     }
     pool._born[sid] = 0.0
     await pool.kill_unheld(reason="drain")
-    assert pool.lifecycle is not None
-    event = pool.lifecycle.pending()[-1]
-    assert event["reason"] == "drain"
+    envelope = outbox.pending(sid)[-1]
+    assert envelope["type"] == "lifecycle.stop"
+    assert envelope["payload"]["reason"] == "drain"
     text = Path("src/apipi/worker/hub.py").read_text(encoding="utf-8")
     assert 'kill_unheld(reason="drain")' in text
     assert 'kill_unheld(reason="idle")' not in text

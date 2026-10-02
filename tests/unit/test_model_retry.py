@@ -2,22 +2,14 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import timedelta
-from typing import Any, cast
+from typing import Any
+
+from tests.support.worker_turn import new_session, run_worker_turn
 
 from apipi.config import Settings
-from apipi.services.runtime import EventHub, Harness, run_turn
 from apipi.store.engine import Store
-from apipi.store.repo import create_session, create_tenant, get_turn_log, list_events
+from apipi.store.repo import get_turn_log, list_events
 from apipi.worker.pi.map import map_pi_event
-
-
-async def _ready(store: Store) -> tuple[uuid.UUID, uuid.UUID]:
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(
-            db, tenant.id, model="m1", status="idle", environment={"type": "none"}
-        )
-        return tenant.id, row.id
 
 
 class Scripted:
@@ -67,7 +59,7 @@ def _mapped(*events: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
 async def test_recorded_retry_then_success_completes(
     store: Store, settings: Settings
 ) -> None:
-    tenant_id, session_id = await _ready(store)
+    tenant_id, session_id = await new_session(store)
     events = _mapped(
         _error_end("504: timeout", will_retry=True),
         {
@@ -88,14 +80,12 @@ async def test_recorded_retry_then_success_completes(
         },
     )
     events.append(("agent.session.turn.output_text.done", {"text": "ok"}))
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, Scripted(events)),
+        settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
+        Scripted(events),
         tenant_id,
         session_id,
-        "hello",
-        settings=settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
     )
     async with store.session() as db:
         stored = await list_events(db, tenant_id, session_id)
@@ -114,7 +104,7 @@ async def test_recorded_retry_then_success_completes(
 
 
 async def test_final_attempt_is_classified(store: Store, settings: Settings) -> None:
-    tenant_id, session_id = await _ready(store)
+    tenant_id, session_id = await new_session(store)
     events = _mapped(
         _error_end("429 Rate limit reached", will_retry=True),
         {
@@ -126,14 +116,12 @@ async def test_final_attempt_is_classified(store: Store, settings: Settings) -> 
         },
         _error_end("400 Invalid parameter", will_retry=False),
     )
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, Scripted(events)),
+        settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
+        Scripted(events),
         tenant_id,
         session_id,
-        "hello",
-        settings=settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
     )
     async with store.session() as db:
         stored = await list_events(db, tenant_id, session_id)
@@ -156,16 +144,14 @@ async def test_final_attempt_is_classified(store: Store, settings: Settings) -> 
 async def test_plain_400_fails_after_one_attempt(
     store: Store, settings: Settings
 ) -> None:
-    tenant_id, session_id = await _ready(store)
+    tenant_id, session_id = await new_session(store)
     events = _mapped(_error_end("400 Invalid parameter", will_retry=False))
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, Scripted(events)),
+        settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
+        Scripted(events),
         tenant_id,
         session_id,
-        "hello",
-        settings=settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
     )
     async with store.session() as db:
         stored = await list_events(db, tenant_id, session_id)
@@ -214,15 +200,13 @@ class _CancelInBackoff:
 async def test_cancel_during_backoff_is_not_upstream(
     store: Store, settings: Settings
 ) -> None:
-    tenant_id, session_id = await _ready(store)
-    await run_turn(
+    tenant_id, session_id = await new_session(store)
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, _CancelInBackoff()),
+        settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
+        _CancelInBackoff(),
         tenant_id,
         session_id,
-        "hello",
-        settings=settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
     )
     async with store.session() as db:
         stored = await list_events(db, tenant_id, session_id)
@@ -259,15 +243,13 @@ class _HangAfterRetry:
 async def test_turn_timeout_during_retry_records_attempts(
     store: Store, settings: Settings
 ) -> None:
-    tenant_id, session_id = await _ready(store)
-    await run_turn(
+    tenant_id, session_id = await new_session(store)
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, _HangAfterRetry()),
+        settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
+        _HangAfterRetry(),
         tenant_id,
         session_id,
-        "hello",
-        settings=settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
         turn_timeout=timedelta(milliseconds=30),
     )
     async with store.session() as db:

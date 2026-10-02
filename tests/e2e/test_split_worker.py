@@ -38,13 +38,11 @@ def _block_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("split worker must not construct storage clients")
 
-    import apipi.services.runtime as runtime
     import apipi.store.blobs as blobs
     import apipi.store.engine as engine
 
     monkeypatch.setattr(engine, "create_engine", _boom)
     monkeypatch.setattr(engine, "Store", _boom)
-    monkeypatch.setattr(runtime, "object_store", _boom)
     monkeypatch.setattr(blobs, "object_store", _boom)
     monkeypatch.setattr(blobs, "blob_store", _boom)
     monkeypatch.setattr(blobs, "S3Store", _boom)
@@ -128,16 +126,13 @@ def _worker_execution(
     hub: Any,
 ) -> Any:
     from apipi.worker.execution import LocalExecution
-    from apipi.worker.pi.isolation import load_isolation
     from apipi.worker.pi.pool import PiPool
 
     return LocalExecution(
         settings,
         pool=PiPool(settings),
         harness=harness,
-        isolation=load_isolation("none"),
         hub=hub,
-        store=None,
         outbox=outbox,
     )
 

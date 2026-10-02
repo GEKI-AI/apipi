@@ -80,7 +80,7 @@ def run_checks(
     skip_db: bool = False,
     skip_model: bool = False,
     fast: bool = False,
-    role: str = "all",
+    role: str,
     config_path: str | None = None,
 ) -> list[Check]:
     if role == "api":
@@ -206,7 +206,7 @@ def check_ready(
     skip_db: bool = False,
     skip_model: bool = False,
     fast: bool = False,
-    role: str = "all",
+    role: str,
     out: TextIO | None = None,
 ) -> int:
     stream: TextIO = sys.stdout if out is None else out

@@ -26,6 +26,7 @@ from apipi.store import events as store_events
 from apipi.store.engine import Store
 from apipi.store.repo import create_session, create_tenant
 from apipi.worker.execution import RemoteExecution, local_execution
+from apipi.worker.outbox import Outbox
 
 
 def test_event_hub_is_the_memory_bus() -> None:
@@ -307,24 +308,20 @@ async def test_postgres_publish_delivers_locally_when_down() -> None:
         await server.wait_closed()
 
 
-async def test_local_execution_picks_bus_from_store(
-    store: Store, tmp_path: Path
-) -> None:
-    sqlite_settings = Settings(
-        database_url="sqlite+aiosqlite:///:memory:",
-        run_mode="none",
-        sessions_dir=str(tmp_path / "sessions"),
-    )
-    execution = local_execution(sqlite_settings, store=store, harness=FakeHarness())
-    assert isinstance(execution.hub, InMemoryEventBus)
-    assert not isinstance(execution.hub, PostgresEventBus)
-    pg_settings = Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-        sessions_dir=str(tmp_path / "sessions"),
-    )
-    execution = local_execution(pg_settings, store=store, harness=FakeHarness())
-    assert isinstance(execution.hub, InMemoryEventBus)
+async def test_local_execution_default_bus_follows_settings(tmp_path: Path) -> None:
+    for url, event_bus in (
+        ("sqlite+aiosqlite:///:memory:", "auto"),
+        ("postgresql+asyncpg://apipi:apipi@localhost:5432/apipi", "memory"),
+    ):
+        settings = Settings(
+            database_url=url,
+            event_bus=event_bus,
+            run_mode="none",
+            sessions_dir=str(tmp_path / "sessions"),
+        )
+        execution = local_execution(settings, outbox=Outbox(), harness=FakeHarness())
+        assert isinstance(execution.hub, InMemoryEventBus)
+        assert not isinstance(execution.hub, PostgresEventBus)
 
 
 def test_event_bus_metrics_exist() -> None:
