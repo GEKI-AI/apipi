@@ -42,7 +42,8 @@ built-in names are `none` and `microvm`.
 
 Run production as `apipi serve --api-only` plus `apipi worker` on the
 host. Docker Compose can run the API without privileged mode. Nested
-microVM inside a container is a lab setup.
+microVM inside a container is a lab setup. Combined `apipi serve`
+(no `--api-only`) is a test and dev convenience only.
 
 ## What to install
 
@@ -331,7 +332,7 @@ module on `PYTHONPATH`.
 Production isolation is Firecracker on a **worker host**. The API
 process should be `apipi serve --api-only` and does not need KVM.
 Combined `apipi serve` (no `--api-only`) is the single-host embedded
-worker: it still probes the run mode and can create TAP devices on
+worker for test and dev only: it still probes the run mode and can create TAP devices on
 that box. Host sizing, overprovision, and drain are in
 [production](production.md). Combined serve still needs sticky routing
 when you run more than one process. API-only plus workers does not,

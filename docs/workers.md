@@ -116,6 +116,7 @@ The API answers with `hello.reply`:
 | `protocol` | Always `2`. |
 | `worker_id`, `generation` | The worker id and its generation. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
 | `sessions` | `{session_id: last_seq}`: the persisted sequence per running session. The worker replays everything after that seq. `last_seq` is the `sessions.worker_seq` cursor that ingest advances with every batch, so a reconnect resumes exactly where the API persisted. |
+| `store_check` | Only with `APIPI_ARTIFACT_STORE=local`: `{marker, nonce}`. The API writes `marker` into the shared store root containing `nonce`; the worker must read it back and answer with `store.proof`. Without the same filesystem the register is rejected with `filesystem store requires a shared path`. |
 
 A first message that is not `register` is rejected with
 `register required`. A bad register is rejected with
@@ -139,8 +140,9 @@ Worker to API:
 | `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `accepts` (optional), `arch` (optional), `drain` (optional bool), `images` (optional list) | Refresh `last_seen`. May update caps, advertised `run_mode` and accepts set, architecture, drain posture, and the image list. |
 | `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. |
+| `store.proof` | `marker`, `nonce` | Proof the worker sees the shared store root (filesystem store only). The worker reads the `hello` `store_check` marker file and echoes its nonce. A wrong proof closes the socket with `shared_store_required`. |
 | `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |
-| envelope (`v: 2`) | `session_id`, `turn_id`, `seq`, `type`, `payload` | Ephemeral delta (`delta.text`, `delta.reasoning`). See [Live deltas](#live-deltas). Durable types are accepted but not ingested yet; they land with the outbox step. |
+| envelope (`v: 2`) | `session_id`, `turn_id`, `seq`, `type`, `payload` | Ephemeral deltas (`delta.text`, `delta.reasoning`; see [Live deltas](#live-deltas)) and durable envelopes below. Artifact and file bytes never travel here, only ids, paths, sizes, and checksums. |
 
 The v2 envelope (`{v: 2, session_id, turn_id | null, seq, type,
 payload}`) and its message schemas are defined in
@@ -154,8 +156,9 @@ API to worker:
 
 | `type` | Fields | What |
 | --- | --- | --- |
-| `hello` | `ok`, `protocol`, `worker_id`, `generation`, `sessions` | Register succeeded. |
+| `hello` | `ok`, `protocol`, `worker_id`, `generation`, `sessions`, `store_check` | Register succeeded. `store_check` is present only for the filesystem store. |
 | `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key. |
+| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `upload_id`, `url`, `headers`, `expires_at`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix; the filesystem store carries no URL. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`). |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
 | error object | `ok: false`, `error` | Auth or register failed, then the socket closes. |
 
@@ -163,7 +166,7 @@ Message classes:
 
 | Class | Types | Delivery |
 | --- | --- | --- |
-| Durable | `item.added`, `item.done`, `turn.status`, `usage`, `event`, `session.status`, `artifact.completed`, `error`, `sandbox.status` | Kept in the worker outbox until the cumulative `ack{last_seq}`. Ingested idempotently. |
+| Durable | `item.added`, `item.done`, `turn.status`, `usage`, `event`, `session.status`, `artifact.presign`, `artifact.completed`, `error`, `sandbox.status` | Kept in the worker outbox until the cumulative `ack{last_seq}`. Ingested idempotently. |
 | Ephemeral | `delta.text`, `delta.reasoning` | At-most-once, never persisted, never acked. The final item is the source of truth. |
 
 `item.added` carries the full item (the API creates the row; the
@@ -174,8 +177,14 @@ record with the in-memory tool and MCP tallies. `event` carries any
 other public event with its data. `session.status` carries the
 session status change. `error` carries a worker-reported error.
 `artifact.completed` and `sandbox.status` are accepted on the wire
-but not applied yet: ingest rejects them (counted, and the worker
-keeps them buffered) until the steps that own them land.
+but only `artifact.completed` is applied yet: ingest rejects sandbox
+messages (counted, and the worker keeps them buffered) until the step
+that owns them lands. `artifact.presign` reserves the upload slot and
+returns its reply on the same socket; `artifact.completed` verifies the
+object (S3 `HEAD` size and checksum, or the shared-root file size and
+checksum) and then writes the artifact, file, or Pi session rows. A
+`completed` for a foreign `upload_id` or a path outside the session
+prefix is rejected, as is a checksum or size mismatch.
 
 The outbox is bounded (`APIPI_WORKER_OUTBOX_MAX_MESSAGES`, default
 10,000 messages, and `APIPI_WORKER_OUTBOX_MAX_BYTES`, default 64
@@ -231,7 +240,8 @@ so both paths run the identical turn preparation. The schemas live in
 File bytes never travel in the command. With `APIPI_ARTIFACT_STORE=s3`
 each file, skill, and Pi session blob becomes a presigned GET URL with
 a short TTL. With the filesystem store each reference becomes a path
-relative to the shared store root (`sessions_dir`), which the worker
+relative to the shared store root (`APIPI_LOCAL_STORE_DIR`, falling back
+to `APIPI_SESSIONS_DIR`), which the worker
 reads directly; the API and the worker must see the same filesystem.
 The worker fetches the bytes at turn start, provisions the workspace,
 and installs skills exactly as combined serve does.
@@ -246,6 +256,29 @@ environment type, model, MCP labels, file and skill counts).
 
 Losing the socket does not abort a turn. A session is orphaned only
 after the lease TTL, and the turn is not moved to another worker.
+
+## Artifacts
+
+Artifact, input-image, workspace-file, skill, and Pi session bytes always
+go through the configured store; the socket carries only control and
+metadata messages. The worker holds no object-store credentials. With
+`APIPI_ARTIFACT_STORE=s3` (the recommended production setup) the flow is:
+the worker sends durable `artifact.presign` with the session id, kind
+(`artifact`, `pi_session`, or `input_image`), filename, content type, size,
+and checksum; the API checks quotas (`max_workspace_bytes` and
+`max_artifact_bytes`) before issuing a short-lived presigned PUT URL bound
+to a key under the session prefix; the worker uploads with a plain PUT;
+then it sends durable `artifact.completed` with the `upload_id`, size, and
+checksum. The API verifies the object (`HEAD` size and checksum where
+available), writes the artifact, file, or Pi session pointer rows, and
+emits the existing public events. Reads use the presigned GET references
+in the command context, and downloads go through the existing routes.
+With the filesystem store the worker writes the bytes under the session
+prefix in the shared root and reports `artifact.completed` with the
+session-relative path; the API validates that the path stays inside the
+session prefix, checks size and checksum, and then writes the rows.
+Quotas are checked with a size-only `artifact.presign` (reply without a
+URL) before writing.
 
 A reconnect may go to any replica. The worker sends its running
 sessions with their `last_seq` in `register`; the API answers with

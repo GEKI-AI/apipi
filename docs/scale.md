@@ -35,7 +35,18 @@ its defaults, and the per-worker supervision (`APIPI_PI_MEM_MIB`,
 and every worker at the same `DATABASE_URL`. Workers set
 `APIPI_API_URL` and `APIPI_WORKER_TOKEN_FILE` (one token per worker,
 created with `apipi workers token create`). Give each worker its own
-`APIPI_SESSIONS_DIR`. Artifact bytes can be local on the worker or S3.
+`APIPI_SESSIONS_DIR` for its workspaces. Artifact, file, skill, and Pi
+session bytes go through the configured store, never over the worker
+socket. The recommended production setup is `APIPI_ARTIFACT_STORE=s3`:
+the API issues presigned PUT and GET URLs, the worker uploads and
+downloads directly, and store credentials exist only on the API. The
+filesystem store (`APIPI_ARTIFACT_STORE=local` with an explicit
+`APIPI_LOCAL_STORE_DIR`) is supported only when the API and every
+worker mount the same store root at the same path (same machine or a
+shared network filesystem). How to share it is up to the operator.
+At register the API writes a nonce marker file into the root and
+sends it in `hello.reply`; a worker that cannot read it back is
+rejected with `filesystem store requires a shared path`.
 
 The balancer can use least-conn (or round robin) for `/v1`. Workers
 advertise a session cap and a RAM budget. Placement prefers free RAM
@@ -52,7 +63,9 @@ replica.
 **Combined.** N gateway hosts, each `apipi serve` with
 `APIPI_RUN_MODE=microvm`. Sticky hash on `session_id` so follow-up
 hits the node that holds Pi. Give each process its own
-`APIPI_SESSIONS_DIR`.
+`APIPI_SESSIONS_DIR`. Combined mode is a test and dev convenience
+only; production always runs split (`apipi serve --api-only` plus
+`apipi worker`).
 
 Set `APIPI_INSTANCE_ID` to a short name per API process (`node-a`).
 When set, HTTP responses except `/health` include `X-ApiPi-Instance`.
@@ -169,6 +182,6 @@ tenant to the pool outside the gateway (DNS, balancer rule, or which
 bearers the auth callback accepts on that pool). The public Agents API
 does not change.
 
-Shared: Postgres, and artifact bytes when `APIPI_ARTIFACT_STORE=s3`.
-Isolated: live Pi and `APIPI_SESSIONS_DIR` on the worker (or on the
+Shared: Postgres, and artifact, file, skill, and Pi session bytes through the configured store (`s3` or one shared `APIPI_LOCAL_STORE_DIR`).
+Isolated: live Pi and per-worker `APIPI_SESSIONS_DIR` workspaces on the worker (or on the
 combined node).

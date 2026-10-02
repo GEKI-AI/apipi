@@ -9,10 +9,9 @@ dict that validates as `apipi.worker.turn_context.TurnContext`.
 File bytes never enter the context. With ``APIPI_ARTIFACT_STORE=s3``
 each file, skill and Pi session blob becomes a presigned GET URL with
 a short TTL. With the filesystem store each reference becomes a path
-relative to the shared store root (``sessions_dir``), which the worker
-reads directly; the API and the worker must see the same filesystem.
-The ``APIPI_LOCAL_STORE_DIR`` setting planned in #448 does not exist
-yet, so the existing local store root is used.
+relative to the shared store root (``APIPI_LOCAL_STORE_DIR``, falling
+back to ``APIPI_SESSIONS_DIR``), which the worker reads directly; the
+API and the worker must see the same filesystem.
 """
 
 from collections.abc import Mapping
@@ -39,7 +38,7 @@ from apipi.store.blobs import (
 )
 from apipi.store.engine import Store
 from apipi.store.repo import get_file, get_session, get_skill
-from apipi.worker.pi.dirs import sessions_root
+from apipi.worker.pi.dirs import store_root
 from apipi.worker.pi.idle import resolve_idle_ttl
 from apipi.worker.turn_context import TurnContext
 
@@ -54,7 +53,7 @@ def _store_error(message: str, *, operation: str, key: str = "") -> ObjectStoreE
 
 def local_ref_path(settings: Settings, local_path: str) -> Path:
     """Resolve a context relative path inside the shared store root."""
-    root = sessions_root(settings).resolve()
+    root = store_root(settings).resolve()
     candidate = (root / local_path).resolve()
     if candidate != root and root not in candidate.parents:
         raise _store_error(
@@ -117,7 +116,7 @@ def _store_ref(
             )
         url, _headers = presign("GET", namespace, object_id, expires=PRESIGN_TTL)
         return {"url": url, "local_path": None}
-    root = sessions_root(settings)
+    root = store_root(settings)
     relative = local_object_path(root, namespace, object_id).relative_to(root)
     return {"url": None, "local_path": str(relative)}
 

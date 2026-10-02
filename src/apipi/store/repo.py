@@ -9,6 +9,7 @@ from apipi.store.errors import NotFoundError
 from apipi.store.models import (
     Agent,
     Artifact,
+    ArtifactUploadRow,
     EnvironmentRow,
     Event,
     FileRow,
@@ -1333,5 +1334,46 @@ async def get_upload(
     return await db.scalar(
         select(UploadRow).where(
             UploadRow.tenant_id == tenant_id, UploadRow.id == upload_id
+        )
+    )
+
+
+async def create_artifact_upload(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    session_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    kind: str,
+    filename: str,
+    content_type: str,
+    declared_bytes: int,
+    sha256: str | None,
+    expires_at: datetime,
+) -> ArtifactUploadRow:
+    row = ArtifactUploadRow(
+        tenant_id=tenant_id,
+        session_id=session_id,
+        artifact_id=artifact_id,
+        kind=kind,
+        filename=filename,
+        content_type=content_type,
+        declared_bytes=declared_bytes,
+        sha256=sha256,
+        status="pending",
+        expires_at=expires_at,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def get_artifact_upload(
+    db: AsyncSession, tenant_id: uuid.UUID, upload_id: uuid.UUID
+) -> ArtifactUploadRow | None:
+    return await db.scalar(
+        select(ArtifactUploadRow).where(
+            ArtifactUploadRow.tenant_id == tenant_id,
+            ArtifactUploadRow.id == upload_id,
         )
     )

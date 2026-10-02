@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Artifacts via API-issued presigned PUT with no object-store credentials on workers (#448). The worker sends durable `artifact.presign` (session id, kind `artifact`/`pi_session`/`input_image`, filename, content type, size, checksum; never bytes) through the outbox; the API checks quotas (`max_workspace_bytes`, `max_artifact_bytes`) before issuing a short-lived presigned PUT URL bound to a key under the session prefix (S3) or reserving the write (shared filesystem), and answers with `artifact.presign.reply` on the same socket. The worker uploads with a plain PUT (S3) or writes under the session prefix in the shared root (filesystem), then sends durable `artifact.completed`. The API verifies the object (S3 `HEAD` size and checksum, or shared-root size and checksum), rejects a foreign `upload_id`, a path outside the session prefix, and checksum or size mismatches, then writes the artifact, file, or Pi session pointer rows. New `APIPI_LOCAL_STORE_DIR` is the dedicated local store root (defaults to `APIPI_SESSIONS_DIR`, so combined mode is unchanged); turn-context references now use it, and split mode with `local` and no explicit shared root fails fast with a message that points at `s3` or a shared root. At register the API writes a nonce marker into the root and sends it in `hello.reply`; a worker that cannot read it back is rejected with `filesystem store requires a shared path`. New `artifact_uploads` ledger (migration `0027`). Combined `apipi serve` is documented as test and dev only; production is `apipi serve --api-only` plus `apipi worker`. See `docs/workers.md`, `docs/scale.md`, `docs/production.md`, and `docs/config.md`.
 - Live delta relay over the worker socket (#445): in split mode the
   worker coalesces model text fragments over about 40ms per session
   and sends them as ephemeral v2 `delta.text` envelopes instead of
@@ -90,8 +91,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the lease, the turn binding, and size limits; violations drop the
   message, log `worker.event.rejected`, and count in
   `apipi_worker_protocol_total{event="envelope_rejected"}`.
-  `artifact.completed` and `sandbox.status` stay rejected until
-  #448/#449 apply them. After commit the API sends the ack, then
+  `artifact.completed` is now applied by #448; `sandbox.status` stays rejected until
+  #449 applies it. After commit the API sends the ack, then
   publishes the `EventBus` wake. The worker keeps the turn running
   across a dropped socket or an API restart within the lease TTL;
   a full outbox fails the turn with `worker_outbox_full`. Tool and

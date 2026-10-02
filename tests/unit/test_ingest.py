@@ -352,7 +352,7 @@ async def test_deferred_types_rejected_without_apply(store: Store, settings) -> 
     )
     assert [reason for _, _, reason in outcome.rejected] == [
         "not_implemented",
-        "not_implemented",
+        "invalid_envelope",
     ]
     assert outcome.acks == {session_id: 2}
 

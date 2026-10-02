@@ -50,6 +50,7 @@ DURABLE_MESSAGE_TYPES = frozenset(
         "usage",
         "event",
         "session.status",
+        "artifact.presign",
         "artifact.completed",
         "error",
         "sandbox.status",
@@ -124,6 +125,19 @@ class RegisterMessage(WireModel):
         return cleaned
 
 
+class StoreCheck(WireModel):
+    """Shared-filesystem proof the API issues in `hello.reply`.
+
+    Only present with `APIPI_ARTIFACT_STORE=local`. The API writes
+    `marker` under the shared store root containing `nonce`; the worker
+    must read it back and answer with `store.proof`. Without the same
+    filesystem the worker cannot prove it and the register is rejected.
+    """
+
+    marker: str
+    nonce: str
+
+
 class HelloReply(WireModel):
     type: Literal["hello"] = "hello"
     ok: Literal[True] = True
@@ -131,6 +145,7 @@ class HelloReply(WireModel):
     worker_id: uuid.UUID
     generation: int
     sessions: dict[uuid.UUID, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
+    store_check: StoreCheck | None = None
 
 
 class WorkerEnvelope(WireModel):
@@ -196,10 +211,40 @@ class UsagePayload(StrictPayload):
     failure: dict[str, Any] | None = None
 
 
+class ArtifactPresignPayload(StrictPayload):
+    """Worker asks the API for an artifact upload slot.
+
+    The socket carries only this metadata, never file bytes. The API
+    checks quotas before issuing a URL (S3) or reserving the write
+    (shared filesystem), and the key is bound under the session prefix.
+    """
+
+    request_id: uuid.UUID
+    kind: Literal["artifact", "pi_session", "input_image"] = "artifact"
+    filename: str | None = None
+    content_type: str | None = None
+    size: int = Field(ge=1)
+    sha256: str | None = None
+    turn_id: uuid.UUID | None = None
+
+
 class ArtifactCompletedPayload(StrictPayload):
-    artifact_id: uuid.UUID
+    """Worker reports an upload or shared-filesystem write is done.
+
+    S3: `upload_id` from `artifact.presign.reply`, plus the observed
+    size and checksum. Filesystem: `path` relative to the shared store
+    root, inside the session prefix. `artifact_id` stays for older
+    senders and is treated as the object suffix when present.
+    """
+
+    upload_id: uuid.UUID | None = None
+    artifact_id: uuid.UUID | None = None
+    path: str | None = None
     name: str | None = None
     size_bytes: int | None = Field(default=None, ge=0)
+    size: int | None = Field(default=None, ge=0)
+    sha256: str | None = None
+    turn_id: uuid.UUID | None = None
 
 
 class WorkerErrorPayload(StrictPayload):
@@ -243,6 +288,7 @@ PAYLOAD_MODELS: dict[str, type[StrictPayload]] = {
     "usage": UsagePayload,
     "event": WorkerEventPayload,
     "session.status": SessionStatusPayload,
+    "artifact.presign": ArtifactPresignPayload,
     "artifact.completed": ArtifactCompletedPayload,
     "error": WorkerErrorPayload,
     "sandbox.status": SandboxStatusPayload,
@@ -272,6 +318,29 @@ class CumulativeAck(WireModel):
     last_seq: int = Field(ge=0)
 
 
+class ArtifactPresignReply(WireModel):
+    """API to worker. Answer to one `artifact.presign` envelope.
+
+    S3 carries `url`, `headers`, and `expires_at` for a direct PUT with
+    no store credentials on the worker. The shared filesystem carries
+    no URL: the worker writes under the session prefix in the shared
+    root and then sends `artifact.completed`. Quota failures arrive as
+    `ok: False` with today's store codes (`artifact_store`,
+    `artifact_too_large`, `workspace_too_large`).
+    """
+
+    type: Literal["artifact.presign.reply"] = "artifact.presign.reply"
+    session_id: uuid.UUID
+    request_id: uuid.UUID
+    ok: bool = True
+    upload_id: uuid.UUID | None = None
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    expires_at: str | None = None
+    code: str | None = None
+    message: str | None = None
+
+
 class LeaseAck(WireModel):
     """Worker to API. Command receipt; retransmits of the same id are safe."""
 
@@ -286,6 +355,14 @@ class LeaseRelease(WireModel):
     type: Literal["lease.release"] = "lease.release"
     session_id: uuid.UUID
     lease_id: uuid.UUID
+
+
+class StoreProof(WireModel):
+    """Worker to API. Proof it sees the shared store root."""
+
+    type: Literal["store.proof"] = "store.proof"
+    marker: str
+    nonce: str
 
 
 class LeaseRevoke(WireModel):

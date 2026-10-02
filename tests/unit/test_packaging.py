@@ -46,4 +46,5 @@ def test_alembic_revisions_chain() -> None:
         "0024_drop_pi_session_uri.py",
         "0025_worker_tokens.py",
         "0026_worker_ingest.py",
+        "0027_artifact_uploads.py",
     ]

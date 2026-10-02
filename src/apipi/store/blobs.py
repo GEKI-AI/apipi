@@ -12,7 +12,7 @@ from typing import Any, Literal, NoReturn, Protocol
 from apipi.config import ConfigError, Settings
 from apipi.gateway.logutil import log_event
 from apipi.store.disposition import content_disposition, download_content_type
-from apipi.worker.pi.dirs import blob_user, sessions_root
+from apipi.worker.pi.dirs import blob_user, store_root
 
 Namespace = Literal["artifacts", "files", "skills", "templates"]
 
@@ -216,7 +216,7 @@ class ArtifactBlobs(Protocol):
 
 class LocalStore:
     def __init__(self, settings: Settings) -> None:
-        self._root = sessions_root(settings)
+        self._root = store_root(settings)
 
     def _path(self, namespace: Namespace, object_id: str) -> Path:
         return local_object_path(self._root, namespace, object_id)
