@@ -10,9 +10,12 @@ THINKING_KEY = "apipi.thinking"
 SYSTEM_PROMPT_KEY = "apipi.system_prompt"
 CODEMODE_KEY = "apipi.codemode"
 CODEMODE_MODES = frozenset({"off", "on", "only"})
+BUILTIN_TOOLS_KEY = "apipi.builtin_tools"
+BUILTIN_TOOLS_MODES = frozenset({"on", "off"})
 THINKING_HELP = "apipi.thinking must be off, minimal, low, medium, high, xhigh, or max"
 SYSTEM_PROMPT_HELP = "apipi.system_prompt must be a string"
 CODEMODE_HELP = "codemode must be off, on, or only"
+BUILTIN_TOOLS_HELP = "builtin_tools must be on or off"
 
 
 def parse_thinking(value: object) -> str | None:
@@ -58,10 +61,25 @@ def codemode_from_metadata(metadata: dict[str, Any] | None) -> str | None:
     return parse_codemode(metadata.get(CODEMODE_KEY))
 
 
+def parse_builtin_tools(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in BUILTIN_TOOLS_MODES:
+        raise ApiError("invalid_request", BUILTIN_TOOLS_HELP, code="invalid_request")
+    return value
+
+
+def builtin_tools_from_metadata(metadata: dict[str, Any] | None) -> str | None:
+    if not metadata or BUILTIN_TOOLS_KEY not in metadata:
+        return None
+    return parse_builtin_tools(metadata.get(BUILTIN_TOOLS_KEY))
+
+
 def validate_pi_metadata(metadata: dict[str, Any] | None) -> None:
     thinking_from_metadata(metadata)
     system_prompt_from_metadata(metadata)
     codemode_from_metadata(metadata)
+    builtin_tools_from_metadata(metadata)
 
 
 def reject_client_thinking_key(metadata: dict[str, Any] | None) -> None:
@@ -88,7 +106,7 @@ def copy_inline_pi_metadata(
 ) -> dict[str, Any]:
     out = dict(session_metadata or {})
     agent = agent_metadata or {}
-    for key in (THINKING_KEY, SYSTEM_PROMPT_KEY, CODEMODE_KEY):
+    for key in (THINKING_KEY, SYSTEM_PROMPT_KEY, CODEMODE_KEY, BUILTIN_TOOLS_KEY):
         if key not in out and key in agent:
             out[key] = agent[key]
     return out
@@ -210,6 +228,33 @@ def resolve_codemode(
     if agent is not None:
         return agent
     return "off"
+
+
+def resolve_builtin_tools(
+    session_metadata: dict[str, Any] | None,
+    agent_metadata: dict[str, Any] | None,
+) -> str:
+    session = builtin_tools_from_metadata(session_metadata)
+    if session is not None:
+        return session
+    agent = builtin_tools_from_metadata(agent_metadata)
+    if agent is not None:
+        return agent
+    return "on"
+
+
+def reject_codemode_without_builtin_tools(
+    session_metadata: dict[str, Any] | None,
+    agent_metadata: dict[str, Any] | None,
+) -> None:
+    if resolve_codemode(session_metadata, agent_metadata) == "off":
+        return
+    if resolve_builtin_tools(session_metadata, agent_metadata) == "off":
+        raise ApiError(
+            "invalid_request",
+            "codemode requires built-in tools",
+            code="builtin_tools",
+        )
 
 
 def resolve_system_prompt(

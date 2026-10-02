@@ -212,6 +212,78 @@ def test_pi_command_args_use_explicit_extensions(tmp_path: Path) -> None:
     assert "builtin:codemode" not in inert
 
 
+def test_pi_command_args_no_builtin_tools_flag(tmp_path: Path) -> None:
+    from apipi.mcp.http import McpHttpServer
+
+    bare = pi_command_args(_settings(tmp_path), tools=False)
+    assert "--no-tools" in bare
+    assert "--no-builtin-tools" not in bare
+    mcp = [McpHttpServer(server_label="docs", server_url="https://x/mcp", headers={})]
+    with_mcp = pi_command_args(_settings(tmp_path), tools=False, mcp_http=mcp)
+    assert "--no-builtin-tools" in with_mcp
+    assert "--no-tools" not in with_mcp
+    function_tools = [{"name": "echo", "description": "echo"}]
+    with_function = pi_command_args(
+        _settings(tmp_path), tools=False, function_tools=function_tools
+    )
+    assert "--no-builtin-tools" in with_function
+    assert "--no-tools" not in with_function
+    on = pi_command_args(_settings(tmp_path), tools=True)
+    assert "--no-builtin-tools" not in on
+    assert "--no-tools" not in on
+
+
+def test_pi_command_args_env_none_forces_builtin_off(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    from apipi.mcp.http import McpHttpServer
+
+    caplog.set_level(logging.WARNING, logger="apipi.worker.pi")
+    mcp = [McpHttpServer(server_label="docs", server_url="https://x/mcp", headers={})]
+    args = pi_command_args(
+        _settings(tmp_path),
+        tools=True,
+        mcp_http=mcp,
+        skill_dirs=["/workspace/.agents/skills/demo"],
+        codemode="on",
+        env_type="none",
+        session_id="session-1",
+    )
+    assert "--no-builtin-tools" in args
+    assert "--no-tools" not in args
+    assert "--tools" not in args
+    assert "builtin:codemode" not in args
+    assert args.count("--no-skills") == 1
+    assert "--skill" not in args
+    assert "builtin:mcp" in args
+    forced = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "pi.builtin_tools_forced_off"
+    ]
+    assert forced
+    assert getattr(forced[0], "session_id", None) == "session-1"
+
+
+def test_pi_command_args_env_none_quiet_when_already_off(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="apipi.worker.pi")
+    args = pi_command_args(
+        _settings(tmp_path), tools=False, codemode="off", env_type="none"
+    )
+    assert "--no-tools" in args
+    assert [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "pi.builtin_tools_forced_off"
+    ] == []
+
+
 def test_pi_env_sets_offline(tmp_path: Path) -> None:
     env = pi_env(_settings(tmp_path))
     assert env["PI_OFFLINE"] == "1"

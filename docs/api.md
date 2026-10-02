@@ -339,7 +339,8 @@ wins over the agent field. Stock clients can set
 `metadata` is a JSON object. Keys that start with `apipi.` are
 reserved. The gateway interprets
 `apipi.sandbox_image`,
-`apipi.system_prompt`, `apipi.codemode`, and `apipi.idle_ttl`, and it rejects
+`apipi.system_prompt`, `apipi.codemode`, `apipi.builtin_tools`, and
+`apipi.idle_ttl`, and it rejects
 `apipi.sandbox_size` and `apipi.thinking` with `400`. It
 stores `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`
 and does not branch on them. There is no top-level `actor_type`

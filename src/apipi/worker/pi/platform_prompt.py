@@ -50,6 +50,7 @@ def compose_instructions(
     image: str | None = None,
     vcpus: int | None = None,
     cwd: str | None = None,
+    builtin_tools: str = "on",
 ) -> str | None:
     from apipi.worker.pi.fragments import (
         cap_prompt,
@@ -62,6 +63,8 @@ def compose_instructions(
 
         raise ConfigError("compose_instructions needs settings")
     kind = _computer(env_type) or "none"
+    if builtin_tools == "off":
+        kind = "none"
     ttl = idle_ttl or _idle_label(settings)
     values = {
         "platform_name": settings.platform_name or "ApiPi",
@@ -78,7 +81,7 @@ def compose_instructions(
     }
     main = fragment_text(settings, f"main.{kind}", values, strict=False)
     extra = fragment_text(settings, f"additional.{kind}", values, strict=False)
-    if kind == "hosted" and settings.run_mode == "microvm":
+    if kind == "hosted" and builtin_tools != "off" and settings.run_mode == "microvm":
         _write_capability(cwd, capability_block(settings, values), settings, values)
     agent = agent_instructions or ""
     parts = [part for part in (main, extra, agent) if part]

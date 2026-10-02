@@ -566,11 +566,16 @@ class TemplateService:
             from apipi.env.spec import EnvironmentSpec, environment_payload
 
             environment_payload(EnvironmentSpec.model_validate(defaults["environment"]))
-        from apipi.services.env_none import is_env_none, reject_tools_for_env_none
+        from apipi.services.env_none import (
+            is_env_none,
+            reject_builtin_tools_for_env_none,
+            reject_tools_for_env_none,
+        )
         from apipi.worker.pi.idle import normalize_idle_ttl, validate_idle_metadata
         from apipi.worker.pi.sandbox import validate_sandbox_metadata
         from apipi.worker.pi.settings_json import (
             reject_client_thinking_key,
+            reject_codemode_without_builtin_tools,
             validate_pi_metadata,
         )
 
@@ -584,8 +589,10 @@ class TemplateService:
         if isinstance(defaults, dict):
             raw_env = defaults.get("environment")
             defaults_env = raw_env if isinstance(raw_env, dict) else None
+        reject_codemode_without_builtin_tools(body.get("metadata"), None)
         if is_env_none(defaults_env):
             reject_tools_for_env_none(body.get("tools"))
+            reject_builtin_tools_for_env_none(body.get("metadata"), None)
 
     def _stamp_provenance(self, agent_body: dict[str, Any], row: TemplateRow) -> None:
         metadata = agent_body.get("metadata")

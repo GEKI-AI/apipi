@@ -371,7 +371,25 @@ extensions, then `builtin:mcp` when the session has MCP servers, then
 `never`, so workspace `.pi/` project resources are never loaded.
 `apipi.codemode` (`off`, `on`, `only`, default `off`) on the agent or
 session enables the codemode script tool. The session value overrides
-the agent. It is inert without tools.
+the agent. Codemode needs built-in tools: `on` or `only` together with
+`apipi.builtin_tools=off` is `400` with code `builtin_tools` and the
+message `codemode requires built-in tools`.
+
+`apipi.builtin_tools` (`on`, `off`, default `on`) on the agent or
+session controls Pi's built-in shell and file tools (read, write,
+edit, bash). The session value overrides the agent. `off` starts Pi
+with `--no-builtin-tools` when MCP or function tools are present and
+`--no-tools` when neither is, plus `--no-skills`, so
+`capability_directories` and `environment.skills` are not loaded and
+no `capability.json` is written. The guest still boots: files,
+`environment.files`, packages, and setup commands still run, and
+artifacts from `outputs/` are still collected. The platform prompt
+uses the `none` fragment when built-in tools are off, so it names no
+working directory, no `outputs/` workflow, and no browser skill.
+`environment.type=none` sessions always run with built-in tools off:
+setting `apipi.builtin_tools=on` there is `400` with code
+`builtin_tools`. See [tools](tools.md) and
+[environments](environments.md#none).
 
 Thinking stays off until the resolved level is not `off`. ApiPi then
 passes `--thinking` to Pi, writes `defaultThinkingLevel` in

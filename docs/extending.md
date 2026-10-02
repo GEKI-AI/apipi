@@ -191,6 +191,8 @@ Unknown top-level fields are rejected.
 | `apipi.thinking` | Gateway (from `reasoning.effort`) | Removed as client input: sending it is `400`. Set `reasoning.effort` instead. The gateway still stores the resolved level under this key but strips it from public `metadata` in session/agent responses (the `reasoning` field shows the level), so echoing returned metadata back is safe. Bundles carry the level in `reasoning`. See [config](config.md#pi). |
 | `apipi.idle_ttl` | Client | Stock-SDK alias of the session `idle_ttl` field. The field wins when both are set. Same duration shape as the agent field. Session wins over agent, then the environment-type default. |
 | `apipi.system_prompt` | Client or agent | Replaces Pi's harness default. Session wins over agent, then `[pi].system_prompt`. Does not replace the platform prompt, instructions, context files, or skills. Drops Pi's tool list and all tool guidelines, including MCP guidance. The tools stay callable. See [config](config.md#pi). |
+| `apipi.codemode` | Client or agent | Opt-in script tool (`off`, `on`, `only`, default `off`). Session wins over agent. `on` or `only` with `apipi.builtin_tools=off` is `400` (`builtin_tools`). See [config](config.md#pi). |
+| `apipi.builtin_tools` | Client or agent | Built-in shell and file tools (`on`, `off`, default `on`). Session wins over agent. `off` runs Pi without those tools and without skills. Always off for `environment.type=none` (`on` there is `400`). See [config](config.md#pi). |
 | `apipi.session_kind` | Removed | Former chat marker. Ignored for placement now; bundle import drops it with a warning and exports no longer carry it. Use `environment.type=none` for text-only sessions. |
 | `apipi.actor_type` | Extender | Stored and returned. Not interpreted. |
 | `apipi.schedule_id` | Extender | Stored and returned. Not interpreted. |
@@ -200,7 +202,8 @@ Unknown top-level fields are rejected.
 
 Template export keeps host keys (anything that does not start with
 `apipi.`) and the portable agent keys `apipi.thinking`,
-`apipi.system_prompt`, and `apipi.idle_ttl`.
+`apipi.system_prompt`, `apipi.codemode`, `apipi.builtin_tools`, and
+`apipi.idle_ttl`.
 Other `apipi.` keys are dropped on export. On import, a non-portable
 `apipi.` key is ignored and listed in `warnings`. Sandbox size and
 image travel in `session_defaults`, not in metadata.

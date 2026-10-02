@@ -287,10 +287,13 @@ in the workspace before the turn. `none` rejects packages, setup commands, env, 
 
 ## `none`
 
-No computer. Pi still runs the loop. Function tools and HTTP MCP with
-`server_url` still work; anything else is `400`. There is no session
-directory and no shell. Pi for `type=none` always runs directly on the
-worker host. Saved agents that still carry
+No computer. Built-in tools are always off and cannot be turned on:
+`apipi.builtin_tools=on` on a `type=none` session is `400` with code
+`builtin_tools`, and so is `apipi.codemode` `on` or `only`. Pi still
+runs the loop. Function tools and HTTP MCP with `server_url` still
+work; anything else is `400` with code `tool_not_allowed`. There is no
+session directory and no shell. Pi for `type=none` always runs directly
+on the worker host. Saved agents that still carry
 `metadata.apipi.session_kind=chat` are ignored for placement now.
 See [sandbox workers](workers.md#placement).
 

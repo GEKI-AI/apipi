@@ -6,12 +6,34 @@ host computer). They do not exist when `environment.type` is
 `none`. Everything else is attached per agent: function tools, MCP
 servers, and skills.
 
-`environment.type=none` sessions have no computer, so bash and file tools stay off.
-Only function tools and HTTP MCP with `server_url` are allowed; anything else is `400`.
+`environment.type=none` sessions have no computer, so built-in tools
+are always off and cannot be turned on (`apipi.builtin_tools=on` is
+`400` with code `builtin_tools`). Only function tools and HTTP MCP
+with `server_url` are allowed; anything else is `400` with code
+`tool_not_allowed`. These checks run on agent create and update (when
+the agent's `session_defaults.environment.type` is `none`), on
+session create (using the effective environment, tools, and metadata),
+on session update (whenever metadata changes on a `type=none`
+session), and on template import. An agent saved for hosted use with
+tools or metadata that conflict with `type=none` cannot be used for a
+`type=none` session. The worker forces built-ins off for `type=none`
+even if a bad flag got through, and logs `pi.builtin_tools_forced_off`.
 See [API](api.md) and [environments](environments.md#none).
 
 Copy-paste configs live in `examples/` at the repo root (Tavily).
 The browser example is `examples/sessions/browser_screenshot.py`.
+
+## Built-in tools
+
+Pi's built-in tools are read, write, edit, and bash. They exist when
+the session has a computer and `apipi.builtin_tools` is not `off`.
+Set `apipi.builtin_tools` to `off` on the agent or session to run a
+microVM session without shell and file tools. The session value
+overrides the agent, and the default is `on`. With `off`, Pi starts
+with `--no-builtin-tools` (when MCP or function tools are present) or
+`--no-tools` (when neither is), and `--no-skills`, so skills are not
+loaded. The guest still boots and still collects `outputs/`
+artifacts. See [config](config.md#pi).
 
 ## Function tools
 
@@ -110,8 +132,10 @@ screenshots stay in `/workspace/.browser`. Copy a screenshot to
 
 Codemode is an opt-in script tool. Set `apipi.codemode` to `off`
 (default), `on`, or `only` on the agent or session. The session value
-overrides the agent. It is only effective when tools are enabled; on
-a computer-less session it is accepted but ignored.
+overrides the agent. Codemode needs built-in tools: `on` or `only`
+together with `apipi.builtin_tools=off` is `400` with code
+`builtin_tools`, including on `environment.type=none` sessions where
+built-ins are always off.
 
 The model writes JavaScript that runs in a QuickJS sandbox inside the
 Pi process and can only call the other enabled tools, for example in

@@ -68,6 +68,7 @@ from apipi.worker.pi.sandbox import (
     sandbox_size_of,
 )
 from apipi.worker.pi.settings_json import (
+    resolve_builtin_tools,
     resolve_codemode,
     resolve_system_prompt,
     resolve_thinking,
@@ -320,13 +321,34 @@ def _function_tools(tools: list[Any] | None) -> list[dict[str, Any]]:
 
 def _cwd_and_tools(
     environment: dict[str, Any],
+    builtin_tools: str = "on",
 ) -> tuple[str | None, bool]:
     env_type = environment.get("type")
     if env_type == "none":
         return None, False
     cwd = environment.get("directory")
     cwd_path = cwd if isinstance(cwd, str) else None
-    return cwd_path, True
+    return cwd_path, builtin_tools == "on"
+
+
+def _effective_builtin_tools(
+    environment: dict[str, Any] | None,
+    session_metadata: dict[str, Any] | None,
+    agent_metadata: dict[str, Any] | None,
+) -> str:
+    if isinstance(environment, dict) and environment.get("type") == "none":
+        return "off"
+    return resolve_builtin_tools(session_metadata, agent_metadata)
+
+
+def _effective_codemode(
+    builtin_tools: str,
+    session_metadata: dict[str, Any] | None,
+    agent_metadata: dict[str, Any] | None,
+) -> str:
+    if builtin_tools == "off":
+        return "off"
+    return resolve_codemode(session_metadata, agent_metadata)
 
 
 def _idle_spawn(
@@ -355,20 +377,27 @@ def _pi_spawn_overrides(
     settings: Settings | None,
     session_metadata: dict[str, Any] | None,
     agent_metadata: dict[str, Any] | None,
+    builtin_tools: str | None = None,
 ) -> dict[str, Any]:
     if settings is None:
         return {}
+    if builtin_tools is None:
+        builtin_tools = resolve_builtin_tools(session_metadata, agent_metadata)
     return {
         "thinking": resolve_thinking(settings, session_metadata, agent_metadata),
         "system_prompt": resolve_system_prompt(
             settings, session_metadata, agent_metadata
         ),
         "system_prompt_set": True,
-        "codemode": resolve_codemode(session_metadata, agent_metadata),
+        "codemode": _effective_codemode(
+            builtin_tools, session_metadata, agent_metadata
+        ),
     }
 
 
-def _skill_dirs(environment: dict[str, Any]) -> list[str]:
+def _skill_dirs(environment: dict[str, Any], builtin_tools: str = "on") -> list[str]:
+    if builtin_tools == "off":
+        return []
     cwd_path, _tools = _cwd_and_tools(environment)
     workspace = Path(cwd_path) if cwd_path is not None else None
     raw = environment.get("capability_directories")
@@ -1260,7 +1289,10 @@ async def load_boot_kwargs(
             await SkillService(store, backend, settings).install(
                 tenant_id, row.environment, Path(directory)
             )
-        cwd_path, tools = _cwd_and_tools(row.environment)
+        builtin = _effective_builtin_tools(
+            row.environment, session_metadata, agent_metadata
+        )
+        cwd_path, tools = _cwd_and_tools(row.environment, builtin)
         sandbox_size = sandbox_size_of(row.environment)
         stored_image = sandbox_image_of(row.environment)
         sandbox_image = stored_image or image_for_size(sandbox_size)
@@ -1271,12 +1303,13 @@ async def load_boot_kwargs(
             sandbox_size=sandbox_size,
             mem_mib=mem_mib_for_size(settings, sandbox_size),
             network=_network_access(row.environment),
+            builtin_tools=builtin,
         )
         kwargs: dict[str, Any] = {
             "cwd": cwd_path,
             "tools": tools,
             "mcp_http": mcp_http,
-            "skill_dirs": _skill_dirs(row.environment),
+            "skill_dirs": _skill_dirs(row.environment, builtin),
             "tenant_id": tenant_id,
             "model": model,
             "instructions": composed,
@@ -1289,7 +1322,9 @@ async def load_boot_kwargs(
             "user_id": row.user_id,
             "org_id": row.org_id,
         }
-        kwargs.update(_pi_spawn_overrides(settings, session_metadata, agent_metadata))
+        kwargs.update(
+            _pi_spawn_overrides(settings, session_metadata, agent_metadata, builtin)
+        )
         kwargs.update(
             _idle_spawn(
                 settings,
@@ -1486,7 +1521,10 @@ async def run_turn(
                     code="artifact_store",
                 )
                 return
-            cwd_path, tools = _cwd_and_tools(row.environment)
+            builtin_tools = _effective_builtin_tools(
+                row.environment, session_metadata, agent_metadata
+            )
+            cwd_path, tools = _cwd_and_tools(row.environment, builtin_tools)
             cache_error: ObjectStoreError | None = None
             if settings is not None and cwd_path:
                 try:
@@ -1496,7 +1534,7 @@ async def run_turn(
                         cache_error = exc
                     else:
                         raise
-            skill_dirs = _skill_dirs(row.environment)
+            skill_dirs = _skill_dirs(row.environment, builtin_tools)
             env_type = row.environment.get("type")
             network = _network_access(row.environment)
             sandbox_size = sandbox_size_of(row.environment)
@@ -1571,6 +1609,7 @@ async def run_turn(
             sandbox_size=sandbox_size,
             mem_mib=sandbox_mem,
             network=network,
+            builtin_tools=builtin_tools,
         )
         log.info(
             "turn start",
@@ -1618,7 +1657,9 @@ async def run_turn(
                     extra_env=extra_env,
                     turn_id=turn_id,
                     **spawn_ids,
-                    **_pi_spawn_overrides(settings, session_metadata, agent_metadata),
+                    **_pi_spawn_overrides(
+                        settings, session_metadata, agent_metadata, builtin_tools
+                    ),
                     **_idle_spawn(
                         settings,
                         env_type,
@@ -1919,7 +1960,11 @@ async def continue_turn(
                 db, hub, tenant_id, session_id, exc.message, code=exc.code or None
             )
             return
-        skill_dirs = _skill_dirs(row.environment)
+        builtin_tools = _effective_builtin_tools(
+            row.environment, session_metadata, agent_metadata
+        )
+        cwd_path, tools = _cwd_and_tools(row.environment, builtin_tools)
+        skill_dirs = _skill_dirs(row.environment, builtin_tools)
         env_type = row.environment.get("type")
         network = _network_access(row.environment)
         sandbox_size = sandbox_size_of(row.environment)
@@ -1944,6 +1989,7 @@ async def continue_turn(
             sandbox_size=sandbox_size,
             mem_mib=sandbox_mem,
             network=network,
+            builtin_tools=builtin_tools,
         )
         with start_span(
             tracing,
@@ -1981,7 +2027,9 @@ async def continue_turn(
                     extra_env=extra_env,
                     turn_id=turn_id,
                     **spawn_ids,
-                    **_pi_spawn_overrides(settings, session_metadata, agent_metadata),
+                    **_pi_spawn_overrides(
+                        settings, session_metadata, agent_metadata, builtin_tools
+                    ),
                     **_idle_spawn(
                         settings,
                         env_type,
