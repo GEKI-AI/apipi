@@ -74,6 +74,14 @@ def reject_client_thinking_key(metadata: dict[str, Any] | None) -> None:
         )
 
 
+def public_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict) or THINKING_KEY not in metadata:
+        return metadata
+    cleaned = dict(metadata)
+    cleaned.pop(THINKING_KEY, None)
+    return cleaned
+
+
 def copy_inline_pi_metadata(
     session_metadata: dict[str, Any] | None,
     agent_metadata: dict[str, Any] | None,

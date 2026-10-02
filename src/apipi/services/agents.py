@@ -34,7 +34,9 @@ from apipi.worker.pi.sandbox import (
     validate_sandbox_metadata,
 )
 from apipi.worker.pi.settings_json import (
+    THINKING_KEY,
     apply_reasoning_effort,
+    public_metadata,
     reasoning_body,
     reject_client_thinking_key,
     reject_reasoning_conflict,
@@ -204,7 +206,9 @@ def agent_body(agent: Agent) -> dict[str, Any]:
         "model": agent.model,
         "instructions": agent.instructions,
         "idle_ttl": agent.idle_ttl,
-        "metadata": mirror_sandbox_metadata(agent.metadata_json, defaults),
+        "metadata": public_metadata(
+            mirror_sandbox_metadata(agent.metadata_json, defaults)
+        ),
         "tools": agent.tools,
         "session_defaults": defaults,
         "reasoning": reasoning_body(agent.metadata_json),
@@ -382,6 +386,17 @@ class AgentService:
             )
             if "idle_ttl" in payload:
                 payload["idle_ttl"] = normalize_idle_ttl(payload.get("idle_ttl"))
+            if (
+                "metadata" in payload
+                and isinstance(payload["metadata"], dict)
+                and THINKING_KEY not in payload["metadata"]
+                and isinstance(existing.metadata_json, dict)
+                and THINKING_KEY in existing.metadata_json
+            ):
+                payload["metadata"] = {
+                    **payload["metadata"],
+                    THINKING_KEY: existing.metadata_json[THINKING_KEY],
+                }
             if (
                 "session_defaults" in payload
                 and payload["session_defaults"] is None

@@ -38,7 +38,7 @@ async def test_reasoning_update_keeps_other_metadata(client: AsyncClient) -> Non
     metadata = updated.json()["metadata"]
     assert metadata["team"] == "x"
     assert metadata["apipi.system_prompt"] == "hi"
-    assert metadata["apipi.thinking"] == "high"
+    assert "apipi.thinking" not in metadata
     assert updated.json()["reasoning"]["effort"] == "high"
     cleared = await client.post(
         f"/v1/agents/{agent_id}",
@@ -68,7 +68,8 @@ async def test_reasoning_update_keeps_other_metadata(client: AsyncClient) -> Non
     assert matched.status_code == 200
     live = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
     assert live.json()["metadata"]["team"] == "x"
-    assert live.json()["metadata"]["apipi.thinking"] == "high"
+    assert "apipi.thinking" not in live.json()["metadata"]
+    assert live.json()["reasoning"]["effort"] == "high"
 
 
 async def test_session_reasoning_update_replaces_effort(client: AsyncClient) -> None:
@@ -100,14 +101,14 @@ async def test_session_reasoning_update_replaces_effort(client: AsyncClient) -> 
     )
     assert raised.status_code == 200
     assert raised.json()["reasoning"]["effort"] == "high"
-    assert raised.json()["metadata"]["apipi.thinking"] == "high"
+    assert "apipi.thinking" not in raised.json()["metadata"]
     meta_only = await client.post(
         f"/v1/agents/sessions/{created.json()['id']}",
         headers=_auth(token),
         json={"metadata": {"team": "y"}},
     )
     assert meta_only.status_code == 200
-    assert meta_only.json()["metadata"]["apipi.thinking"] == "high"
+    assert "apipi.thinking" not in meta_only.json()["metadata"]
     assert meta_only.json()["reasoning"]["effort"] == "high"
     reset = await client.post(
         f"/v1/agents/sessions/{created.json()['id']}",
@@ -170,7 +171,7 @@ async def test_reasoning_effort_is_stored_as_thinking(client: AsyncClient) -> No
         json={"name": "bot", "model": "test", "reasoning": {"effort": "high"}},
     )
     assert created.status_code == 200
-    assert created.json()["metadata"]["apipi.thinking"] == "high"
+    assert "apipi.thinking" not in created.json()["metadata"]
     assert created.json()["reasoning"]["effort"] == "high"
     summary = await client.post(
         "/v1/agents",
@@ -230,3 +231,65 @@ async def test_metadata_update_replaces_title(client: AsyncClient) -> None:
     assert metadata == {"keep": 1}
     assert "apipi.title" not in metadata
     assert "apipi.title_status" not in metadata
+
+
+async def test_agent_metadata_round_trip_after_effort(client: AsyncClient) -> None:
+    token = "roundtrip-agent"
+    created = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={"name": "bot", "model": "test", "reasoning": {"effort": "high"}},
+    )
+    assert created.status_code == 200
+    agent_id = created.json()["id"]
+    assert "apipi.thinking" not in created.json()["metadata"]
+    got = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
+    assert got.status_code == 200
+    assert "apipi.thinking" not in got.json()["metadata"]
+    assert got.json()["reasoning"]["effort"] == "high"
+    echoed = dict(got.json()["metadata"])
+    echoed["team"] = "x"
+    updated = await client.post(
+        f"/v1/agents/{agent_id}",
+        headers=_auth(token),
+        json={"metadata": echoed},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["metadata"]["team"] == "x"
+    assert updated.json()["reasoning"]["effort"] == "high"
+
+
+async def test_session_metadata_round_trip_after_effort(client: AsyncClient) -> None:
+    token = "roundtrip-session"
+    agent = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={"name": "bot", "model": "test", "reasoning": {"effort": "low"}},
+    )
+    assert agent.status_code == 200
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent_id": agent.json()["id"],
+            "environment": {"type": "none"},
+            "agent": {"reasoning": {"effort": "high"}},
+        },
+    )
+    assert created.status_code == 200
+    session_id = created.json()["id"]
+    assert "apipi.thinking" not in created.json()["metadata"]
+    got = await client.get(f"/v1/agents/sessions/{session_id}", headers=_auth(token))
+    assert got.status_code == 200
+    assert "apipi.thinking" not in got.json()["metadata"]
+    assert got.json()["reasoning"]["effort"] == "high"
+    echoed = dict(got.json()["metadata"])
+    echoed["team"] = "y"
+    updated = await client.post(
+        f"/v1/agents/sessions/{session_id}",
+        headers=_auth(token),
+        json={"metadata": echoed},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["metadata"]["team"] == "y"
+    assert updated.json()["reasoning"]["effort"] == "high"

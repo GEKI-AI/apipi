@@ -154,7 +154,8 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     again = comparable_manifest(_manifest(exported.content))
     first = comparable_manifest(manifest)
     assert again["agent"]["name"] == first["agent"]["name"]
-    assert again["agent"]["metadata"]["apipi.thinking"] == "medium"
+    assert again["agent"]["reasoning"]["effort"] == "medium"
+    assert "apipi.thinking" not in again["agent"]["metadata"]
     assert "apipi.template_id" not in again["agent"].get("metadata", {})
     deleted = await client.delete(
         f"/v1/apipi/templates/{template_id}", headers=_auth(token)

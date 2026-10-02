@@ -40,6 +40,7 @@ _AGENT_FIELDS = frozenset(
         "instructions",
         "idle_ttl",
         "metadata",
+        "reasoning",
         "tools",
         "session_defaults",
     }
@@ -158,6 +159,9 @@ def redact_agent(
     for key in ("name", "model", "instructions", "idle_ttl"):
         if agent.get(key) is not None:
             out[key] = agent[key]
+    reasoning = agent.get("reasoning")
+    if isinstance(reasoning, dict) and reasoning.get("effort") is not None:
+        out["reasoning"] = {"effort": reasoning["effort"]}
     raw_metadata = agent.get("metadata")
     metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
     kept, dropped = _portable_metadata(metadata)

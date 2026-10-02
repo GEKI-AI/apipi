@@ -402,7 +402,10 @@ in the registry still pass the level through, and Pi may clamp it.
 `reasoning.effort`. `metadata["apipi.thinking"]` is removed as client input and is `400`.
 `none` is stored as `off`. On update,
 `reasoning.effort` replaces the stored level, and `null` clears it. The gateway keeps
-the resolved level in stored metadata under `apipi.thinking`. `summary` and
+the resolved level in stored metadata under `apipi.thinking` but strips it from
+public session/agent `metadata` (the `reasoning` field shows the level), so posting
+returned metadata back is safe. Template bundles carry the level in `reasoning`.
+`summary` and
 `text` are `not_implemented`. `service_tier` of `null` or `auto` is
 ignored. Any other tier is `not_implemented`. Resolve order is session,
 then agent, then the process default. Inline agents copy that key onto

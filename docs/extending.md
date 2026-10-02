@@ -189,7 +189,7 @@ Unknown top-level fields are rejected.
 | Key | Who writes it | What the gateway does |
 | --- | --- | --- |
 | `apipi.sandbox_image` | Client or agent | Stock-SDK path for `session_defaults.environment.sandbox_image`. Accepted on write and mirrored in responses. See [environments](environments.md). |
-| `apipi.thinking` | Gateway (from `reasoning.effort`) | Removed as client input: sending it is `400`. Set `reasoning.effort` instead. The gateway still stores the resolved level under this key and returns it in metadata. See [config](config.md#pi). |
+| `apipi.thinking` | Gateway (from `reasoning.effort`) | Removed as client input: sending it is `400`. Set `reasoning.effort` instead. The gateway still stores the resolved level under this key but strips it from public `metadata` in session/agent responses (the `reasoning` field shows the level), so echoing returned metadata back is safe. Bundles carry the level in `reasoning`. See [config](config.md#pi). |
 | `apipi.idle_ttl` | Client | Stock-SDK alias of the session `idle_ttl` field. The field wins when both are set. Same duration shape as the agent field. Session wins over agent, then the environment-type default. |
 | `apipi.system_prompt` | Client or agent | Replaces Pi's harness default. Session wins over agent, then `[pi].system_prompt`. Does not replace the platform prompt, instructions, context files, or skills. Drops Pi's tool list and all tool guidelines, including MCP guidance. The tools stay callable. See [config](config.md#pi). |
 | `apipi.session_kind` | Gateway on chat create, or the client on a saved agent | `chat` places the session on chat workers. |
