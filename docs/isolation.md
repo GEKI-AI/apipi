@@ -21,8 +21,7 @@ kernel.
 
 | Mode | What it is | When |
 | --- | --- | --- |
-| `none` | Pi is a child of the gateway process, in its own process group. | Laptops and CI. Logs a warning. Not for production. |
-| `chat` | Same host backend as `none`, labeled `chat`. Teardown kills the Pi process group. Crash restart reaps leftovers. | Dedicated chat worker pools. No production warning. |
+| `none` | Pi is a child of the process that holds it, in its own process group. Teardown kills the Pi process group. Crash restart reaps leftovers. | Laptops and CI, plus production workers that accept only `type=none` (no warning there). Combined `apipi serve` with `none` still warns. |
 | `microvm` | One [Firecracker](https://firecracker-microvm.github.io/) KVM guest per session. | Production when a computer is in use. |
 | `package.mod:Class` | An operator class behind the same isolation interface. | You already have a sandbox. |
 
@@ -143,8 +142,8 @@ The API never opens `/dev/kvm`. The worker does. See
 
 `environment.type=none` means “no files.” Isolation `none` means “no
 sandbox for Pi.” They are not the same setting. Worker placement for
-`environment.type=none` is `APIPI_ENV_NONE_PLACEMENT` (default `chat`).
-See [workers](workers.md).
+`environment.type=none` goes to any worker whose accepts set contains
+`none`. See [workers](workers.md#placement).
 
 ## Model attribution headers
 

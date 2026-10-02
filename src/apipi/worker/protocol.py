@@ -102,6 +102,22 @@ class RegisterMessage(WireModel):
             raise ValueError("run_mode is required")
         return stripped
 
+    @field_validator("accepts")
+    @classmethod
+    def _check_accepts(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned: list[str] = []
+        for item in value:
+            text = item.strip().lower() if isinstance(item, str) else ""
+            if text not in {"none", "microvm"}:
+                raise ValueError("accepts must be a list from none,microvm")
+            if text not in cleaned:
+                cleaned.append(text)
+        if not cleaned:
+            raise ValueError("accepts must be a list from none,microvm")
+        return cleaned
+
 
 class HelloReply(WireModel):
     type: Literal["hello"] = "hello"

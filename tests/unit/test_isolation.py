@@ -7,7 +7,6 @@ from tests.support.fake_isolation import FakeIsolation
 
 from apipi.config import ConfigError, Settings, require_run_mode
 from apipi.worker.pi.isolation import load_isolation
-from apipi.worker.pi.isolation.chat import ChatIsolation
 from apipi.worker.pi.isolation.microvm import MicrovmIsolation
 from apipi.worker.pi.isolation.none import NoneIsolation
 from apipi.worker.pi.proc import spawn_pi
@@ -26,18 +25,8 @@ def test_none_isolation_contract() -> None:
     assert isinstance(backend, NoneIsolation)
     assert backend.name == "none"
     assert backend.needs_probe is False
-    assert backend.warn_not_production is True
-    backend.require(_settings())
-
-
-def test_chat_isolation_is_none_alias() -> None:
-    backend = load_isolation("chat")
-    assert isinstance(backend, ChatIsolation)
-    assert isinstance(backend, NoneIsolation)
-    assert backend.name == "chat"
-    assert backend.needs_probe is False
     assert backend.warn_not_production is False
-    backend.require(_settings("chat"))
+    backend.require(_settings())
 
 
 def test_microvm_isolation_contract() -> None:
@@ -49,28 +38,18 @@ def test_microvm_isolation_contract() -> None:
 
 
 def test_host_and_jail_are_not_valid() -> None:
-    with pytest.raises(
-        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
-    ):
+    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
         load_isolation("host")
-    with pytest.raises(
-        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
-    ):
+    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
         load_isolation("jail")
-    with pytest.raises(
-        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
-    ):
+    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
         require_run_mode("host")
-    with pytest.raises(
-        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
-    ):
+    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
         require_run_mode("jail")
 
 
 def test_unknown_mode_without_import_path() -> None:
-    with pytest.raises(
-        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
-    ):
+    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
         load_isolation("gvisor")
 
 
@@ -134,7 +113,7 @@ async def test_custom_backend_probe_and_spawn(
     assert not proc.alive
 
 
-@pytest.mark.parametrize("run_mode", ["none", "chat"])
+@pytest.mark.parametrize("run_mode", ["none"])
 async def test_spawn_pi_none_starts_child(
     monkeypatch: pytest.MonkeyPatch, run_mode: str
 ) -> None:

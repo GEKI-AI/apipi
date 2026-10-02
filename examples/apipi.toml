@@ -42,5 +42,3 @@ egress_mbit = 50
 [sandbox.ttl]
 openai_hosted = "1h"
 
-[placement]
-env_none = "chat"

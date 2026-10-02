@@ -6,9 +6,9 @@ host computer). They do not exist when `environment.type` is
 `none`. Everything else is attached per agent: function tools, MCP
 servers, and skills.
 
-`/v1/chat` sessions have no computer, so bash and file tools stay off.
-Chat allows function tools and MCP only.
-See [Chat](api.md#chat).
+`environment.type=none` sessions have no computer, so bash and file tools stay off.
+Only function tools and HTTP MCP with `server_url` are allowed; anything else is `400`.
+See [API](api.md) and [environments](environments.md#none).
 
 Copy-paste configs live in `examples/` at the repo root (Tavily).
 The browser example is `examples/sessions/browser_screenshot.py`.

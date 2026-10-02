@@ -136,7 +136,7 @@ async def test_off_by_default_builds_nothing(
 
 
 def test_run_modes_filter_skips_events() -> None:
-    settings = _settings(run_mode="chat", lifecycle_run_modes="microvm")
+    settings = _settings(run_mode="none", lifecycle_run_modes="microvm")
     pool = PiPool(settings)
     assert attach_lifecycle(pool, settings) is None
 
@@ -317,7 +317,7 @@ async def test_environment_breakdown(monkeypatch: pytest.MonkeyPatch) -> None:
         env_type="openai_hosted",
         mem_mib=512,
     )
-    none_pool = _pool(_settings(run_mode="chat"))
+    none_pool = _pool(_settings(run_mode="none"))
     none_id = await _spawn(
         none_pool, monkeypatch, image=pulled, env_type="none", mem_mib=512
     )

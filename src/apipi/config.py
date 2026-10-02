@@ -29,26 +29,24 @@ S3Addressing = Literal["auto", "path", "virtual"]
 UsageStore = Literal["off", "rollups", "turns"]
 ModelList = Literal["probe", "turn", "off"]
 SandboxSize = Literal["S", "M", "L"]
-EnvNonePlacement = Literal["chat", "microvm", "reject"]
 ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 ErrorCodes = Literal["legacy", "specific"]
 THINKING_HELP = (
     "APIPI_PI_THINKING must be off, minimal, low, medium, high, xhigh, or max"
 )
-BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "chat", "microvm"})
+BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "microvm"})
 SANDBOX_SIZE_HELP = "APIPI_SANDBOX_DEFAULT_SIZE must be S, M, or L"
-ENV_NONE_PLACEMENT_HELP = "APIPI_ENV_NONE_PLACEMENT must be chat, microvm, or reject"
+WORKER_ACCEPTS_HELP = "APIPI_WORKER_ACCEPTS must be a comma list from none,microvm"
 
 NONE_MODE_WARNING = "APIPI_RUN_MODE=none is not suited for production"
 VAULT_MASTER_KEY_UNSET = (
     "APIPI_VAULT_MASTER_KEY is unset; using a local default. "
     "Set a 32-byte key in production."
 )
-CHAT_MODE_NOTE = "APIPI_RUN_MODE=chat runs Pi on the host without a microVM"
 SQLITE_WARNING = (
     "SQLite is for one process. Do not share the file across processes or nodes."
 )
-RUN_MODE_HELP = "APIPI_RUN_MODE must be none, chat, microvm, or package.mod:Class"
+RUN_MODE_HELP = "APIPI_RUN_MODE must be none, microvm, or package.mod:Class"
 USAGE_STORE_OFF = "usage store off"
 USAGE_STORE_ROLLUPS = "usage store rollups"
 USAGE_STORE_TURNS = "usage store turns"
@@ -161,8 +159,8 @@ _SANDBOX_NETWORK_TOML = {
 _SANDBOX_TTL_TOML = {
     "openai_hosted": "sandbox_ttl_openai_hosted",
 }
-_PLACEMENT_TOML = {
-    "env_none": "env_none_placement",
+_WORKER_TOML = {
+    "accepts": "worker_accepts",
 }
 _MCP_TOML = {
     "allow_hosts": "mcp_allow_hosts",
@@ -387,6 +385,29 @@ def parse_image_list(value: object) -> object:
     return value
 
 
+WORKER_ACCEPTS = frozenset({"none", "microvm"})
+
+
+def parse_worker_accepts(value: object) -> object:
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        parts = [part.strip().lower() for part in value.split(",") if part.strip()]
+    elif isinstance(value, list):
+        parts = [str(part).strip().lower() for part in value if str(part).strip()]
+    else:
+        return value
+    seen: list[str] = []
+    for part in parts:
+        if part not in WORKER_ACCEPTS:
+            raise ValueError(WORKER_ACCEPTS_HELP)
+        if part not in seen:
+            seen.append(part)
+    if not seen:
+        raise ValueError(WORKER_ACCEPTS_HELP)
+    return seen
+
+
 def parse_model_registry(value: object) -> object:
     if value is None or value == "":
         return {}
@@ -551,9 +572,11 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("APIPI_API_ONLY", "api_only"),
     )
-    env_none_placement: EnvNonePlacement = Field(
-        default="chat",
-        validation_alias=AliasChoices("APIPI_ENV_NONE_PLACEMENT", "env_none_placement"),
+    worker_accepts: Annotated[
+        list[str] | None, BeforeValidator(parse_worker_accepts)
+    ] = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_WORKER_ACCEPTS", "worker_accepts"),
     )
     auth: str | None = Field(
         default=None,
@@ -1225,13 +1248,18 @@ def _toml_values(path: Path) -> dict[str, Any]:
         nested.update(_flatten_pi(_require_table(raw.pop("pi"), "[pi]")))
     if "sandbox" in raw:
         nested.update(_flatten_sandbox(_require_table(raw.pop("sandbox"), "[sandbox]")))
-    if "placement" in raw:
+    if "worker" in raw:
         nested.update(
             _map_table(
-                _require_table(raw.pop("placement"), "[placement]"),
-                _PLACEMENT_TOML,
-                "placement",
+                _require_table(raw.pop("worker"), "[worker]"),
+                _WORKER_TOML,
+                "worker",
             )
+        )
+    if "placement" in raw:
+        raise ConfigError(
+            "[placement] was removed; type=none goes to any worker "
+            "whose accepts set contains none"
         )
     if "mcp" in raw:
         nested.update(
@@ -1276,8 +1304,17 @@ def _warn_removed_agent_versions_env() -> None:
         )
 
 
+def _warn_removed_env_none_env() -> None:
+    if os.environ.get("APIPI_ENV_NONE_PLACEMENT"):
+        _log.warning(
+            "APIPI_ENV_NONE_PLACEMENT was removed; type=none goes to any "
+            "worker whose accepts set contains none"
+        )
+
+
 def load_settings(*, config_path: str | None = None) -> Settings:
     _warn_removed_agent_versions_env()
+    _warn_removed_env_none_env()
     reject_legacy_worker_token()
     path = resolve_config_path(config_path)
     values = _toml_values(path) if path is not None else {}
@@ -1342,8 +1379,8 @@ def _settings_message(exc: ValidationError) -> str:
             return "DATABASE_URL must be Postgres or SQLite"
         if "run_mode" in loc:
             return RUN_MODE_HELP
-        if "env_none_placement" in loc or "APIPI_ENV_NONE_PLACEMENT" in loc:
-            return ENV_NONE_PLACEMENT_HELP
+        if "worker_accepts" in loc or "APIPI_WORKER_ACCEPTS" in loc:
+            return WORKER_ACCEPTS_HELP
         if "idle_ttl" in loc or "APIPI_IDLE_TTL" in loc:
             return "APIPI_IDLE_TTL must be like 15m"
         if (

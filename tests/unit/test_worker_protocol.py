@@ -52,7 +52,7 @@ def _register(**overrides: object) -> dict[str, object]:
         "type": "register",
         "protocol": PROTOCOL_VERSION,
         "capacity": 2,
-        "run_mode": "chat",
+        "run_mode": "none",
     }
     base.update(overrides)
     return base
@@ -60,17 +60,24 @@ def _register(**overrides: object) -> dict[str, object]:
 
 def test_parse_register_accepts_v2_with_accepts_room() -> None:
     register = parse_register(
-        _register(accepts=["chat"], running=[], capabilities={"note": "x"})
+        _register(accepts=["none", "microvm"], running=[], capabilities={"note": "x"})
     )
     assert register.protocol == PROTOCOL_VERSION
-    assert register.accepts == ["chat"]
+    assert register.accepts == ["none", "microvm"]
     assert register.running == []
     assert register.capacity == 2
 
 
+def test_parse_register_rejects_bad_accepts() -> None:
+    with pytest.raises(ValidationError):
+        parse_register(_register(accepts=["chat"]))
+    with pytest.raises(ValidationError):
+        parse_register(_register(accepts=[]))
+
+
 def test_parse_register_rejects_v1() -> None:
     with pytest.raises(UnsupportedProtocol) as exc:
-        parse_register({"type": "register", "capacity": 1, "run_mode": "chat"})
+        parse_register({"type": "register", "capacity": 1, "run_mode": "none"})
     assert exc.value.reason == UNSUPPORTED_PROTOCOL_REASON
     assert WORKER_CLOSE_CODE == 1008
 

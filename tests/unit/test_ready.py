@@ -35,7 +35,7 @@ def test_run_checks_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     assert by_name["pi"].detail == PINNED_PI
     assert by_name["database"].status == "ok"
     assert by_name["model host"].status == "ok"
-    assert "not for production" in by_name["run mode"].detail
+    assert by_name["run mode"].detail == "none"
     assert by_name["auth"].status == "skip"
     assert by_name["vault key"].detail == "unset (local default)"
     assert all(row.status != "fail" for row in rows)

@@ -429,7 +429,11 @@ async def spawn_pi(
 ) -> PiProc:
     from apipi.worker.pi.isolation import load_isolation
 
-    return await load_isolation(settings.run_mode).spawn(
+    if env_type == "none":
+        backend = load_isolation("none")
+    else:
+        backend = load_isolation(settings.run_mode)
+    return await backend.spawn(
         settings,
         cwd=cwd,
         tools=tools,

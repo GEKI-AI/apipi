@@ -12,66 +12,44 @@ from apipi.worker.hub import WorkerConnection, WorkerHub, _run_command
 from apipi.worker.placement import placement_for, worker_accepts
 
 
-def test_chat_session_kind_always_chat() -> None:
-    assert (
-        placement_for(
-            environment={"type": "openai_hosted"},
-            metadata={"apipi.session_kind": "chat"},
-            env_none="microvm",
-        )
-        == "chat"
-    )
-    assert (
-        placement_for(
-            environment={"type": "none"},
-            metadata={"apipi.session_kind": "chat"},
-            env_none="reject",
-        )
-        == "chat"
-    )
-
-
-@pytest.mark.parametrize("env_none", ["chat", "microvm"])
-def test_env_none_follows_config(env_none: str) -> None:
-    assert (
-        placement_for(
-            environment={"type": "none"},
-            metadata={},
-            env_none=env_none,
-        )
-        == env_none
-    )
-
-
-def test_env_none_reject() -> None:
-    assert (
-        placement_for(
-            environment={"type": "none"},
-            metadata={},
-            env_none="reject",
-        )
-        is None
-    )
+def test_env_none_places_none() -> None:
+    assert placement_for(environment={"type": "none"}) == "none"
 
 
 @pytest.mark.parametrize("env_type", ["openai_hosted", "hosted"])
 def test_computer_is_microvm(env_type: str) -> None:
+    assert placement_for(environment={"type": env_type}) == "microvm"
+
+
+def test_missing_environment_is_microvm() -> None:
+    assert placement_for(environment=None) == "microvm"
+    assert placement_for(environment={}) == "microvm"
+
+
+def test_session_kind_is_ignored() -> None:
     assert (
         placement_for(
-            environment={"type": env_type},
-            metadata={},
-            env_none="chat",
+            environment={"type": "openai_hosted"},
         )
         == "microvm"
     )
+    assert (
+        placement_for(
+            environment={"type": "none"},
+        )
+        == "none"
+    )
 
 
-def test_worker_accepts_same_mode() -> None:
-    assert worker_accepts("chat", "chat")
-    assert worker_accepts("microvm", "microvm")
-    assert not worker_accepts("microvm", "chat")
-    assert not worker_accepts("none", "microvm")
-    assert worker_accepts("none", "chat")
+def test_worker_accepts_set_membership() -> None:
+    assert worker_accepts({"none", "microvm"}, "none")
+    assert worker_accepts({"none", "microvm"}, "microvm")
+    assert worker_accepts({"microvm"}, "microvm")
+    assert not worker_accepts({"microvm"}, "none")
+    assert worker_accepts({"none"}, "none")
+    assert not worker_accepts({"none"}, "microvm")
+    assert not worker_accepts(set(), "none")
+    assert not worker_accepts(None, "none")
 
 
 async def test_session_stop_kills_the_guest() -> None:
@@ -93,12 +71,25 @@ async def test_session_stop_kills_the_guest() -> None:
     execution.teardown.assert_awaited()
 
 
-async def test_turn_start_rejects_microvm_on_none() -> None:
+def _execution(*, run_mode: str, accepts: list[str] | None = None) -> MagicMock:
+    from apipi.worker.accepts import resolved_worker_accepts
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode=run_mode,
+        **({"worker_accepts": accepts} if accepts is not None else {}),
+    )
+    assert resolved_worker_accepts(settings)
     execution = MagicMock()
-    execution.settings.run_mode = "none"
+    execution.settings = settings
     execution.store = None
     execution.hub = None
     execution.run_turn = AsyncMock()
+    return execution
+
+
+async def test_turn_start_rejects_microvm_on_none_only() -> None:
+    execution = _execution(run_mode="none")
     await _run_command(
         execution,
         "turn.start",
@@ -113,18 +104,14 @@ async def test_turn_start_rejects_microvm_on_none() -> None:
     execution.run_turn.assert_not_called()
 
 
-async def test_turn_start_rejects_chat_on_microvm() -> None:
-    execution = MagicMock()
-    execution.settings.run_mode = "microvm"
-    execution.store = None
-    execution.hub = None
-    execution.run_turn = AsyncMock()
+async def test_turn_start_rejects_none_on_microvm_only() -> None:
+    execution = _execution(run_mode="microvm", accepts=["microvm"])
     await _run_command(
         execution,
         "turn.start",
         uuid.uuid4(),
         uuid.uuid4(),
-        {"text": "hi", "run_mode": "chat"},
+        {"text": "hi", "run_mode": "none"},
         request_id=None,
         api_key=None,
         key_id=None,
@@ -133,24 +120,21 @@ async def test_turn_start_rejects_chat_on_microvm() -> None:
     execution.run_turn.assert_not_called()
 
 
-async def test_turn_start_none_accepts_chat() -> None:
-    execution = MagicMock()
-    execution.settings.run_mode = "none"
-    execution.run_turn = AsyncMock()
-    tenant_id = uuid.uuid4()
-    session_id = uuid.uuid4()
-    await _run_command(
-        execution,
-        "turn.start",
-        tenant_id,
-        session_id,
-        {"text": "hi", "run_mode": "chat"},
-        request_id=None,
-        api_key=None,
-        key_id=None,
-        user_id=None,
-    )
-    execution.run_turn.assert_awaited_once()
+async def test_turn_start_both_accepts_both() -> None:
+    for required in ("none", "microvm"):
+        execution = _execution(run_mode="microvm")
+        await _run_command(
+            execution,
+            "turn.start",
+            uuid.uuid4(),
+            uuid.uuid4(),
+            {"text": "hi", "run_mode": required},
+            request_id=None,
+            api_key=None,
+            key_id=None,
+            user_id=None,
+        )
+        execution.run_turn.assert_awaited_once()
 
 
 async def test_mismatched_turn_persists_error(store: Store) -> None:
@@ -163,7 +147,11 @@ async def test_mismatched_turn_persists_error(store: Store) -> None:
         tenant_id = tenant.id
         session_id = row.id
     execution = MagicMock()
-    execution.settings.run_mode = "microvm"
+    execution.settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="microvm",
+        worker_accepts=["microvm"],
+    )
     execution.store = store
     execution.hub = hub
     execution.run_turn = AsyncMock()
@@ -172,7 +160,7 @@ async def test_mismatched_turn_persists_error(store: Store) -> None:
         "turn.start",
         tenant_id,
         session_id,
-        {"text": "hi", "run_mode": "chat"},
+        {"text": "hi", "run_mode": "none"},
         request_id=None,
         api_key=None,
         key_id=None,
@@ -188,7 +176,7 @@ async def test_mismatched_turn_persists_error(store: Store) -> None:
     assert error.data["code"] == "placement"
 
 
-def test_pick_filters_run_mode() -> None:
+def test_pick_filters_accepts() -> None:
     hub = WorkerHub(
         Settings(
             database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
@@ -196,24 +184,47 @@ def test_pick_filters_run_mode() -> None:
             microvm_mem_mib=512,
         )
     )
-    chat = WorkerConnection(
+    none_only = WorkerConnection(
         worker_id=uuid.uuid4(),
         generation=1,
         websocket=MagicMock(),
         capacity=8,
         memory_mb=4096,
-        run_mode="chat",
+        run_mode="none",
+        accepts=frozenset({"none"}),
     )
-    microvm = WorkerConnection(
+    microvm_only = WorkerConnection(
         worker_id=uuid.uuid4(),
         generation=1,
         websocket=MagicMock(),
         capacity=8,
         memory_mb=8192,
         run_mode="microvm",
+        accepts=frozenset({"microvm"}),
     )
-    hub._conns[chat.worker_id] = chat
-    hub._conns[microvm.worker_id] = microvm
-    assert hub.pick(run_mode="chat") is chat
-    assert hub.pick(run_mode="microvm") is microvm
-    assert hub.pick(run_mode="none") is None
+    hub._conns[none_only.worker_id] = none_only
+    hub._conns[microvm_only.worker_id] = microvm_only
+    assert hub.pick(kind="none") is none_only
+    assert hub.pick(kind="microvm") is microvm_only
+
+
+def test_pick_both_worker_gets_both_kinds() -> None:
+    hub = WorkerHub(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="microvm",
+            microvm_mem_mib=512,
+        )
+    )
+    both = WorkerConnection(
+        worker_id=uuid.uuid4(),
+        generation=1,
+        websocket=MagicMock(),
+        capacity=8,
+        memory_mb=8192,
+        run_mode="microvm",
+        accepts=frozenset({"none", "microvm"}),
+    )
+    hub._conns[both.worker_id] = both
+    assert hub.pick(kind="none") is both
+    assert hub.pick(kind="microvm") is both

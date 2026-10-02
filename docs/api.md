@@ -63,9 +63,8 @@ vault ids are unions, agent first, with duplicates dropped. Type,
 sandbox size, sandbox image, capability directories, setup commands,
 and network replace as a whole. The agent's environment defaults apply
 only when the session omits `environment` or uses the same type (after
-the `hosted` alias). A different type, including chat sessions which
-force `none`, keeps the session environment and still applies sandbox
-size and image. The session row stores the merged environment. `environment.env`
+the `hosted` alias). A different type keeps the session environment
+and still applies sandbox size and image. The session row stores the merged environment. `environment.env`
 values are stored on the agent row in plain text. Use `vault_ids` for
 credentials.
 
@@ -227,7 +226,7 @@ store returns `400` with code `presign_unsupported`.
 
 Create takes `purpose` (`file`, `attachment`, or `skill`), `filename`,
 `bytes`, and optional `content_type`. `attachment` is the same store as
-`file` (chat attachments reuse Files). The response is a PUT URL and
+`file`. The response is a PUT URL and
 headers. PUT the bytes to object storage, then complete. Complete
 checks the object with `HeadObject`, enforces `APIPI_MAX_FILE_BYTES`,
 and writes Files or Skills metadata. Complete before PUT is `400` with
@@ -285,42 +284,6 @@ the host is unreachable, the response is `400` with code
 route returns `400` with type `not_implemented` and code
 `forward_models`.
 
-## Chat
-
-GEKI-native chat sessions. Not OpenAI `/v1/chat/completions`. The
-store is the same session and event log as Agents. Clients never set
-or see `environment`. The gateway stores `environment.type=none` and
-`metadata.apipi.session_kind=chat` so placement uses chat workers.
-Fleet layout and placement footguns are in [chat fleets](chat.md).
-
-To attach a computer later, create a new Agents session. Chat sessions
-do not upgrade in place.
-
-| Method | Path |
-| --- | --- |
-| `POST` | `/v1/apipi/chat/sessions` |
-| `GET` | `/v1/apipi/chat/sessions` |
-| `GET` | `/v1/apipi/chat/sessions/{session_id}` |
-| `POST` | `/v1/apipi/chat/sessions/{session_id}` |
-| `DELETE` | `/v1/apipi/chat/sessions/{session_id}` |
-| `POST` | `/v1/apipi/chat/sessions/{session_id}/events` |
-| `GET` | `/v1/apipi/chat/sessions/{session_id}/events` |
-| `GET` | `/v1/apipi/chat/sessions/{session_id}/turns` |
-| `GET` | `/v1/apipi/chat/sessions/{session_id}/turns/{turn_id}` |
-| `GET` | `/v1/apipi/chat/sessions/{session_id}/items` |
-| `GET` | `/v1/apipi/chat/sessions/{session_id}/export` |
-
-Create accepts `agent` or `agent_id`, `input`, `metadata`, `vault_ids`,
-and `stream`. `stream: true` returns SSE as soon as the session exists.
-An `environment` field is `400` with code
-`unknown_field`. List returns only chat sessions. An Agents session id
-on a chat path is `404`. Event types match Agents so one frontend can
-read both.
-
-Chat tools are an allowlist: function tools and MCP. workspace skills, and computer environments are rejected. A disallowed tool is `400` with code `chat_tool`. Saved
-agents used as chat profiles should set `metadata.apipi.session_kind`
-to `chat`; create and update then apply the same allowlist.
-
 ## Sessions
 
 | Method | Path |
@@ -375,7 +338,7 @@ wins over the agent field. Stock clients can set
 
 `metadata` is a JSON object. Keys that start with `apipi.` are
 reserved. The gateway interprets
-`apipi.sandbox_image`, `apipi.session_kind`,
+`apipi.sandbox_image`,
 `apipi.system_prompt`, `apipi.codemode`, and `apipi.idle_ttl`, and it rejects
 `apipi.sandbox_size` and `apipi.thinking` with `400`. It
 stores `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`
@@ -562,7 +525,7 @@ these. See [multiple nodes](scale.md).
 | --- | --- |
 | `openai_hosted` | **Default.** Session directory next to Pi. Not OpenAI's cloud. |
 | `hosted` | Alias for `openai_hosted`. Stored and returned as `openai_hosted`. |
-| `none` | No computer. MCP and chat only. |
+| `none` | No computer. Function tools and HTTP MCP only (anything else is `400`). |
 | `self_hosted` | Not supported for now. Requests return `400` with type `not_implemented` (`environment type self_hosted is not supported`). It may come back later on worker protocol v2. Use `openai_hosted`. |
 
 `environment.capability_directories`: paths on the computer that contain

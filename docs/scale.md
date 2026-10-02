@@ -22,7 +22,15 @@ Why workers exist is in [workers](worker-concepts.md).
 
 **Split (production).** N API processes, M workers, one Postgres, one
 load balancer. APIs run `apipi serve --api-only`. Workers run `apipi
-worker` with `APIPI_RUN_MODE=microvm` on KVM hosts. Point every API
+worker`; hosts that serve computer sessions use
+`APIPI_RUN_MODE=microvm` on KVM hosts, and hosts that serve only
+text-only sessions use `APIPI_RUN_MODE=none` with
+`APIPI_WORKER_ACCEPTS=none` and no KVM. The three fleet layouts are
+one worker type that does both (`none,microvm`), separate `microvm`
+and `none` workers, or `none`-only. See
+[sandbox workers](workers.md#placement) for `APIPI_WORKER_ACCEPTS`,
+its defaults, and the per-worker supervision (`APIPI_PI_MEM_MIB`,
+`KillMode=control-group`, the orphan reaper). Point every API
 and every worker at the same `DATABASE_URL`. Workers set
 `APIPI_API_URL` and `APIPI_WORKER_TOKEN_FILE` (one token per worker,
 created with `apipi workers token create`). Give each worker its own

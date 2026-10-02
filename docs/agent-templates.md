@@ -79,7 +79,7 @@ fail skill upload. Those failures store nothing.
 An unknown image id, or a size below that image's minimum, is a warning
 on upload and `400` when you create an agent. Other agent-write
 validation (bad `idle_ttl`, hosted-only fields on the wrong type, too
-many skills or files, disallowed chat tools) fails both upload and
+many skills or files, disallowed tools for `type=none`) fails both upload and
 create. A failed create stores no agent, skill, or file.
 
 An unknown model does not fail create. It is listed in

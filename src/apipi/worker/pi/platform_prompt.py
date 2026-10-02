@@ -3,8 +3,8 @@ from apipi.config import Settings
 _HOSTED = frozenset({"openai_hosted"})
 
 
-def _computer(env_type: str | None, chat: bool) -> str | None:
-    if chat or not env_type or env_type == "none":
+def _computer(env_type: str | None) -> str | None:
+    if not env_type or env_type == "none":
         return None
     if env_type in _HOSTED:
         return "hosted"
@@ -43,7 +43,6 @@ def compose_instructions(
     agent_instructions: str | None,
     *,
     env_type: str | None = None,
-    chat: bool = False,
     sandbox_size: str | None = None,
     mem_mib: int | None = None,
     network: str | None = None,
@@ -62,7 +61,7 @@ def compose_instructions(
         from apipi.config import ConfigError
 
         raise ConfigError("compose_instructions needs settings")
-    kind = _computer(env_type, chat) or "none"
+    kind = _computer(env_type) or "none"
     ttl = idle_ttl or _idle_label(settings)
     values = {
         "platform_name": settings.platform_name or "ApiPi",

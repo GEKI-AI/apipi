@@ -9,11 +9,11 @@ is `apipi serve --api-only` plus `apipi worker` on KVM. Combined
 ## Host selection
 
 Run production as `apipi serve --api-only` plus `apipi worker` on
-KVM hosts with `APIPI_RUN_MODE=microvm`. Combined `apipi serve` is the
+KVM hosts with `APIPI_RUN_MODE=microvm` for computer sessions, plus
+`APIPI_WORKER_ACCEPTS=none` workers where text-only sessions need
+capacity. Combined `apipi serve` is the
 single-host embedded worker. Nested Docker or nested KVM is a lab
-setup. Chat without a computer uses a second worker pool with
-`APIPI_RUN_MODE=chat` on the same API-only gateway. See
-[chat fleets](chat.md). The Compose file in this repo starts Postgres (and can run a
+setup. See [sandbox workers](workers.md#placement). The Compose file in this repo starts Postgres (and can run a
 rootless API). `systemctl stop` / `restart` on `apipi worker` sends
 SIGTERM. The worker heartbeats `"drain": true` (no new leases), waits
 until live Pi are gone, then exits 0. Install
@@ -139,7 +139,7 @@ needs sticky routing for Pi. Examples are in
 
 Count **live** Pi processes (or guests) on **workers**. The API
 process is cheap next to guest RAM. Idle TTL (default 15 minutes)
-kills the Pi process group on host workers (`none` / `chat`) and
+kills the Pi process group on host workers (`none`) and
 frees that RAM. The session row can outlive the process.
 `max_sessions` and `worker_memory_mb` do not count Postgres rows.
 
@@ -271,7 +271,7 @@ longer than `--drain-timeout`. A timeout exits 1; systemd then SIGKILLs
 the cgroup (`KillMode=control-group`). Keep API health successful while
 a turn is in flight. A live session stays on the node that owns it.
 
-Host workers (`none` / `chat`) stamp Pi and host MCP with
+Host workers (`none`) stamp Pi and host MCP with
 `APIPI_WORKER_PID`. After a crash, the next `apipi worker` or combined
 `apipi serve` start reaps processes whose stamped parent is dead. It
 does not kill another live worker's Pi, and it does not match on the

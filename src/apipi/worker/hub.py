@@ -86,6 +86,7 @@ class WorkerConnection:
     lease_mem: dict[uuid.UUID, int] = field(default_factory=dict)
     draining: bool = False
     images: dict[str, WorkerImage] = field(default_factory=dict)
+    accepts: frozenset[str] = frozenset({"none"})
 
 
 class WorkerHub:
@@ -145,14 +146,14 @@ class WorkerHub:
             counts[conn.run_mode] = counts.get(conn.run_mode, 0) + 1
             leases[conn.run_mode] = leases.get(conn.run_mode, 0) + len(conn.leases)
         self._metric_modes |= set(counts)
-        self._metric_modes |= {"chat", "microvm", "none"}
+        self._metric_modes |= {"microvm", "none"}
         metrics.set_workers(counts, leases, modes=self._metric_modes)
 
-    def has_image(self, run_mode: str, image: str | None) -> bool:
-        if image is None or run_mode != "microvm":
+    def has_image(self, kind: str, image: str | None) -> bool:
+        if image is None or kind != "microvm":
             return True
         return any(
-            conn.run_mode == run_mode and image in conn.images
+            kind in conn.accepts and image in conn.images
             for conn in self._conns.values()
         )
 
@@ -160,9 +161,13 @@ class WorkerHub:
         self,
         session_mem_mib: int | None = None,
         *,
-        run_mode: str,
+        run_mode: str | None = None,
+        kind: str | None = None,
         image: str | None = None,
     ) -> WorkerConnection | None:
+        required = kind if kind is not None else run_mode
+        if required is None:
+            raise ValueError("pick needs kind")
         session_mem = (
             session_mem_mib
             if session_mem_mib is not None
@@ -170,9 +175,9 @@ class WorkerHub:
         )
         ready = []
         for conn in self._conns.values():
-            if conn.run_mode != run_mode:
+            if required not in conn.accepts:
                 continue
-            if image is not None and run_mode == "microvm" and image not in conn.images:
+            if image is not None and required == "microvm" and image not in conn.images:
                 continue
             if conn.draining:
                 continue
@@ -231,37 +236,13 @@ class WorkerHub:
             session = await get_session(db, tenant_id, session_id)
         if session is None:
             return None
-        required = placement_for(
-            environment=session.environment,
-            metadata=session.metadata_json,
-            env_none=self.settings.env_none_placement,
-        )
-        if required is None:
-            request_id = (
-                payload.get("request_id") if isinstance(payload, dict) else None
-            )
-            log_event(
-                log,
-                logging.WARNING,
-                "worker assign failed",
-                event="worker.assign.failed",
-                error_code="placement",
-                tenant_id=tenant_id,
-                session_id=session_id,
-                request_id=request_id,
-            )
-            raise ApiError(
-                "invalid_request",
-                "environment.type=none is rejected by APIPI_ENV_NONE_PLACEMENT",
-                code="placement",
-                status_code=400,
-            )
+        required = placement_for(environment=session.environment)
         session_mem = mem_mib_for_size(
             self.settings, sandbox_size_of(session.environment)
         )
         image = _session_image(session.environment) if required == "microvm" else None
-        mode_live = any(conn.run_mode == required for conn in self._conns.values())
-        if image is not None and mode_live and not self.has_image(required, image):
+        kind_live = any(required in conn.accepts for conn in self._conns.values())
+        if image is not None and kind_live and not self.has_image(required, image):
             raise ApiError(
                 "api_error",
                 image_unavailable_message(self, image),
@@ -269,7 +250,7 @@ class WorkerHub:
                 status_code=503,
                 session_id=str(session_id),
             )
-        conn = self.pick(session_mem, run_mode=required, image=image)
+        conn = self.pick(session_mem, kind=required, image=image)
         if conn is None:
             request_id = (
                 payload.get("request_id") if isinstance(payload, dict) else None
@@ -336,11 +317,7 @@ class WorkerHub:
                 return None
             worker_id = row.worker_id
             lease_id = row.lease_id
-            required = placement_for(
-                environment=row.environment,
-                metadata=row.metadata_json,
-                env_none=self.settings.env_none_placement,
-            )
+            required = placement_for(environment=row.environment)
         conn = self._conns.get(worker_id)
         if conn is None or lease_id not in conn.leases:
             return None
@@ -555,7 +532,7 @@ def image_unavailable_message(hub: WorkerHub, image: str) -> str:
     arches = {
         conn.arch
         for conn in hub._conns.values()
-        if conn.run_mode == "microvm" and conn.arch and image not in conn.images
+        if "microvm" in conn.accepts and conn.arch and image not in conn.images
     }
     supported = recipe_archs(image)
     if arches and supported and arches.isdisjoint(supported):
@@ -564,11 +541,9 @@ def image_unavailable_message(hub: WorkerHub, image: str) -> str:
     return f'No worker has sandbox_image "{image}". Run apipi images pull on a worker.'
 
 
-def images_from_message(
-    message: dict[str, Any], run_mode: str
-) -> dict[str, WorkerImage]:
+def images_from_message(message: dict[str, Any], kind: str) -> dict[str, WorkerImage]:
     if "images" not in message:
-        if run_mode == "microvm":
+        if kind == "microvm":
             raw_arch = message.get("arch")
             arch = raw_arch if isinstance(raw_arch, str) else None
             return _legacy_images(arch)
@@ -620,6 +595,14 @@ class TokenBindingError(Exception):
         self.worker_id = worker_id
 
 
+def accepts_for_register(register: RegisterMessage) -> frozenset[str]:
+    if register.accepts is not None:
+        return frozenset(register.accepts)
+    if register.run_mode == "microvm":
+        return frozenset({"none", "microvm"})
+    return frozenset({"none"})
+
+
 async def register_worker(
     hub: WorkerHub,
     store: Store,
@@ -663,6 +646,7 @@ async def register_worker(
         token_id=token.id,
         images=images_for_register(register, run_mode),
         arch=register.arch,
+        accepts=accepts_for_register(register),
     )
     await hub.attach(conn)
     sessions = await hub.restore_leases(conn, store)
@@ -681,8 +665,9 @@ async def register_worker(
 def images_for_register(
     register: RegisterMessage, run_mode: str
 ) -> dict[str, WorkerImage]:
+    accepts = accepts_for_register(register)
     if register.images is None:
-        return _legacy_images(register.arch or None) if run_mode == "microvm" else {}
+        return _legacy_images(register.arch or None) if "microvm" in accepts else {}
     found: dict[str, WorkerImage] = {}
     for item in register.images:
         if not isinstance(item, dict):
@@ -738,11 +723,23 @@ async def heartbeat_worker(
     if parsed_mode is not None:
         conn.run_mode = parsed_mode
         hub._observe()
+    raw_accepts = message.get("accepts")
+    if isinstance(raw_accepts, list) and raw_accepts:
+        cleaned = {
+            str(item).strip().lower()
+            for item in raw_accepts
+            if isinstance(item, str)
+            and str(item).strip().lower() in {"none", "microvm"}
+        }
+        if cleaned:
+            conn.accepts = frozenset(cleaned)
+            hub._observe()
     raw_arch = message.get("arch")
     if isinstance(raw_arch, str) and raw_arch:
         conn.arch = raw_arch
     if "images" in message or parsed_mode is not None:
-        conn.images = images_from_message(message, conn.run_mode)
+        kind = "microvm" if "microvm" in conn.accepts else "none"
+        conn.images = images_from_message(message, kind)
     if message.get("drain") is True:
         conn.draining = True
         hub._observe()
@@ -837,6 +834,7 @@ async def _reject_mismatched_turn(
     hub = getattr(execution, "hub", None)
     if store is None or hub is None:
         return
+    message = f"Worker does not accept {required} sessions"
     async with store.session() as db:
         await persist_event(
             db,
@@ -845,11 +843,11 @@ async def _reject_mismatched_turn(
             session_id,
             type="agent.session.error",
             data=session_error_data(
-                failure_for("placement", "Worker run_mode does not match the session"),
+                failure_for("placement", message),
                 mode="legacy",
             ),
         )
-        placed = failure_for("placement", "Worker run_mode does not match the session")
+        placed = failure_for("placement", message)
         failed = turn_failed_data("", placed)
         failed.pop("turn_id", None)
         await persist_event(
@@ -976,22 +974,25 @@ async def _run_command(
 ) -> None:
     if op == "turn.start":
         required = payload.get("run_mode")
-        worker_mode = getattr(getattr(execution, "settings", None), "run_mode", None)
-        if (
-            isinstance(required, str)
-            and isinstance(worker_mode, str)
-            and not worker_accepts(worker_mode, required)
-        ):
-            await _reject_mismatched_turn(
-                execution,
-                tenant_id,
-                session_id,
-                required=required,
-                worker_mode=worker_mode,
-                request_id=request_id,
-            )
-            return
+        settings = getattr(execution, "settings", None)
+        if isinstance(required, str) and settings is not None:
+            from apipi.worker.accepts import resolved_worker_accepts
+
+            accepts = resolved_worker_accepts(settings)
+            if not worker_accepts(accepts, required):
+                await _reject_mismatched_turn(
+                    execution,
+                    tenant_id,
+                    session_id,
+                    required=required,
+                    worker_mode=",".join(sorted(accepts)),
+                    request_id=request_id,
+                )
+                return
         wanted = payload.get("sandbox_image")
+        worker_mode = (
+            getattr(settings, "run_mode", None) if settings is not None else None
+        )
         if (
             isinstance(wanted, str)
             and worker_mode == "microvm"
@@ -1100,7 +1101,9 @@ def worker_arch() -> str:
 
 
 def _heartbeat_images(settings: Settings) -> list[dict[str, str]]:
-    if settings.run_mode != "microvm":
+    from apipi.worker.accepts import resolved_worker_accepts
+
+    if "microvm" not in resolved_worker_accepts(settings):
         return []
     from apipi.worker.pi.image_pull import available_images
 
@@ -1116,11 +1119,14 @@ def _heartbeat_images(settings: Settings) -> list[dict[str, str]]:
 
 
 def worker_heartbeat(settings: Settings, *, drain: bool = False) -> dict[str, object]:
+    from apipi.worker.accepts import resolved_worker_accepts
+
     payload: dict[str, object] = {
         "type": "heartbeat",
         "capacity": settings.max_sessions,
         "memory_mb": settings.node_memory_mb(),
         "run_mode": settings.run_mode,
+        "accepts": sorted(resolved_worker_accepts(settings)),
         "arch": worker_arch(),
         "image_store_version": settings.image_store_version or "",
         "images": _heartbeat_images(settings),
@@ -1158,10 +1164,12 @@ async def run_worker(
     drain_timeout: float | None = None,
 ) -> int:
     from apipi.store.engine import Store, create_engine
+    from apipi.worker.accepts import require_worker_accepts, resolved_worker_accepts
     from apipi.worker.execution import local_execution, worker_observability
     from apipi.worker.protocol import PROTOCOL_VERSION
 
     reject_legacy_worker_token()
+    require_worker_accepts(settings)
     token = load_worker_token(settings.worker_token_file)
     base = url or settings.api_url or "http://127.0.0.1:8000"
     ws_url = worker_ws_url(base)
@@ -1218,6 +1226,7 @@ async def run_worker(
                         "type": "register",
                         "protocol": PROTOCOL_VERSION,
                         "capabilities": {},
+                        "accepts": sorted(resolved_worker_accepts(settings)),
                         "running": [],
                         "capacity": settings.max_sessions,
                         "memory_mb": settings.node_memory_mb(),

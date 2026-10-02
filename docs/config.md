@@ -75,7 +75,7 @@ hosted files and skills).
 | `APIPI_WORKER_LEASE_TTL` | `worker_lease_ttl` | `30s` | How long a session lease stays valid without a heartbeat. Expiry fails closed and emits `agent.session.error` with code `worker_lease_expired`. |
 | `APIPI_API_URL` | `api_url` | unset (`http://127.0.0.1:8000` for `apipi worker`) | Base URL the worker uses to open `/internal/worker`. |
 | `APIPI_API_ONLY` | `api_only` | off | Control plane only. Turns lease a worker. `apipi serve --api-only` sets this. |
-| `APIPI_ENV_NONE_PLACEMENT` | `[placement].env_none` | `chat` | Where Agents sessions with `environment.type=none` run on a mixed fleet: `chat` (chat workers), `microvm` (legacy computer workers), or `reject` (`400` code `placement`). Session metadata `apipi.session_kind=chat` always uses chat workers. Computer environments always use `microvm`. See [chat fleets](chat.md) and [workers](workers.md). |
+| `APIPI_WORKER_ACCEPTS` | `[worker].accepts` | backend default (`none,microvm` for a microVM backend, else `none`) | Comma list from `none`, `microvm`. What this worker runs. `none,microvm` does both on one worker (`type=none` on the host, the rest in microVMs), `microvm` is computer sessions only, `none` is text-only sessions only with no KVM. If `microvm` is listed but the microVM backend cannot run, the worker fails fast before it registers. See [workers](workers.md#placement). |
 | `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache success and `401` rejects by SHA-256 of the bearer, never the raw key. `429` rejects are not cached. |
 | `APIPI_AUTH_CACHE_MAX` | `auth_cache_max` | `10000` | Maximum auth cache entries with LRU eviction. `0` disables caching so every request calls the plugin. The tenant lookup memo uses the same bound. |
 | `APIPI_AUTHORIZE` | `authorize` | unset (allow all) | Import path `package.mod:func` for the optional authorization hook. See [auth](auth.md). |
@@ -350,7 +350,7 @@ Firecracker.
 | `APIPI_PI_COMPACTION_RESERVE_TOKENS` | `[pi].compaction_reserve_tokens` | unset (Pi default 16384) | `compaction.reserveTokens` in Pi `settings.json`. Tokens reserved for the model reply. Unset leaves Pi's default. |
 | `APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS` | `[pi].compaction_keep_recent_tokens` | unset (Pi default 20000) | `compaction.keepRecentTokens` in Pi `settings.json`. Recent tokens kept out of the summary. Unset leaves Pi's default. |
 | `APIPI_PI_THINKING` | `[pi].thinking` | `off` | Process default thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. A session or agent may override it. |
-| `APIPI_PI_MEM_MIB` | `[pi].mem_mib` | unset | Soft ceiling for one host Pi (`none` / `chat`) in MiB. Unset is off. Sets Node `NODE_OPTIONS=--max-old-space-size` and kills the process group when RSS goes over the limit (`apipi_pi_kill_total` reason `memory`). A turn in progress fails with `pi_memory`. Not a microVM hard cap. |
+| `APIPI_PI_MEM_MIB` | `[pi].mem_mib` | unset | Soft ceiling for one host Pi (`none`) in MiB. Unset is off. Sets Node `NODE_OPTIONS=--max-old-space-size` and kills the process group when RSS goes over the limit (`apipi_pi_kill_total` reason `memory`). A turn in progress fails with `pi_memory`. Not a microVM hard cap. |
 | `APIPI_PI_SYSTEM_PROMPT` | `[pi].system_prompt` | unset | Replaces Pi's harness default system prompt. Unset or empty keeps Pi's default. This does not replace the platform prompt, agent instructions, context files, or skills. It does drop Pi's tool list and all tool guidelines, including MCP guidance. The tools stay callable. |
 | `APIPI_PLATFORM_NAME` | `[pi].platform_name` | `ApiPi` | Name in the identity line and in `${platform_name}`. Does not replace Pi. |
 | `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | file in `src/apipi/worker/pi/prompts/` | Main platform prompt for every environment type that has no per-type override. Unset keeps the shipped file. Set to `""` to disable the main block. A non-empty value replaces the file entirely. Per-type overrides live in `[pi.prompts]`. |
@@ -497,8 +497,8 @@ browser.
 
 | Fragment | When it is appended |
 | --- | --- |
-| No-computer main prompt | Chat, or `environment.type` is `none` or omitted. No `/workspace`, size, or browser text. |
-| Hosted main prompt | `openai_hosted` and not chat. Names `/workspace`, an idle stop with no duration, `inputs/`, and `outputs/`. |
+| No-computer main prompt | `environment.type` is `none` or omitted. No `/workspace`, size, or browser text. |
+| Hosted main prompt | `openai_hosted`. Names `/workspace`, an idle stop with no duration, `inputs/`, and `outputs/`. |
 
 | Operator main prompt | `APIPI_PLATFORM_PROMPT` is set. Replaces the built-in main block. `""` drops it. |
 | Additional platform text | `APIPI_PLATFORM_PROMPT_ADDITIONAL` is non-empty. Always, after the main block. |
@@ -578,7 +578,7 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
-| `APIPI_RUN_MODE` | `[sandbox].backend` | `none` | `none` \| `chat` \| `microvm` \| `package.mod:Class`. `chat` is the same host backend as `none` with a distinct pool label. |
+| `APIPI_RUN_MODE` | `[sandbox].backend` | `none` | `none` \| `microvm` \| `package.mod:Class`. |
 | `APIPI_MICROVM_KERNEL` | `[sandbox].kernel` | unset | Dev-only guest kernel override. Leave unset to use the image store. When set, must be a `vmlinux` file. |
 | `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | unset | Dev-only guest rootfs override. Leave unset to use the image store. When set, must be an ext4 file. |
 | `APIPI_IMAGE_SOURCE` | `[sandbox].image_source` | unset | Base above the `v<version>/` prefixes. `s3://bucket/prefix`, `https://host/path`, or `file:///path`. `apipi images push` uses this when `--to` is omitted. |
@@ -750,8 +750,8 @@ egress_mbit = 50
 [sandbox.ttl]
 openai_hosted = "1h"
 
-[placement]
-env_none = "chat"
+[worker]
+accepts = "none,microvm"
 ```
 
 ## Compatibility

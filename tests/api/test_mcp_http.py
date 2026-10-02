@@ -100,13 +100,13 @@ async def test_mcp_http_starts_with_session(
     assert "static-secret" not in dumped
 
 
-async def test_mcp_http_on_chat_session(
+async def test_mcp_http_on_none_session(
     mcp_client: AsyncClient,
     mcp_harness: FakeHarness,
     mcp_server: tuple[str, dict[str, str]],
 ) -> None:
     mcp_url, _seen = mcp_server
-    token = "mcp-chat"
+    token = "mcp-none"
     agent_id = await _agent_with_mcp(
         mcp_client,
         token,
@@ -114,12 +114,16 @@ async def test_mcp_http_on_chat_session(
         headers={"Authorization": "Bearer static-secret"},
     )
     created = await mcp_client.post(
-        "/v1/apipi/chat/sessions",
+        "/v1/agents/sessions",
         headers=_auth(token),
-        json={"agent_id": agent_id, "input": "hello"},
+        json={
+            "agent_id": agent_id,
+            "environment": {"type": "none"},
+            "input": "hello",
+        },
     )
     assert created.status_code == 200
-    assert "environment" not in created.json()
+    assert created.json()["environment"]["type"] == "none"
     assert created.json()["status"] == "idle"
     assert mcp_harness.mcp_http is not None
     assert mcp_harness.mcp_http[0].server_label == "mock"

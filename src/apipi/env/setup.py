@@ -687,7 +687,7 @@ def provision_hosted(
     )
     policy = session_network_from(environment)
     if policy is not None and policy.access in {"disabled", "restricted"}:
-        if run_mode in {"none", "chat"}:
+        if run_mode == "none":
             raise SetupError("network needs microvm isolation")
         tap_policy_from(
             policy,
@@ -695,5 +695,5 @@ def provision_hosted(
             gateway_hosts=gateway_hosts,
             extra_hosts=package_egress_hosts(environment),
         )
-    if run_mode in {"none", "chat"}:
+    if run_mode == "none":
         run_host_setup(workspace, extra_env=session_env_from(environment))

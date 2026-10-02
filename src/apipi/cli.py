@@ -11,7 +11,6 @@ import uvicorn
 
 from apipi import __version__
 from apipi.config import (
-    CHAT_MODE_NOTE,
     LIFECYCLE_EXPORT_OFF,
     LIFECYCLE_EXPORT_ON,
     METRICS_OFF,
@@ -91,13 +90,14 @@ def prepare_serve(
     backend = load_isolation(resolved.run_mode)
     if os.environ.get("OPENAI_API_KEY"):
         log.warning(OPENAI_API_KEY_IGNORED)
-    if backend.name == "chat":
-        log.info(CHAT_MODE_NOTE)
+    if not resolved.api_only:
+        from apipi.worker.accepts import require_worker_accepts
+
+        require_worker_accepts(resolved)
+    if not resolved.api_only and resolved.run_mode == "none":
+        log.warning(NONE_MODE_WARNING)
     elif backend.warn_not_production:
-        if backend.name == "none":
-            log.warning(NONE_MODE_WARNING)
-        else:
-            log.warning(f"APIPI_RUN_MODE={backend.name} is not suited for production")
+        log.warning(f"APIPI_RUN_MODE={backend.name} is not suited for production")
     log.info(usage_store_log(resolved.usage_store))
     log.info(usage_retention_log(resolved.usage_retention))
     log.info(USAGE_EXPORT_ON if resolved.usage_export_url else USAGE_EXPORT_OFF)
@@ -131,13 +131,11 @@ def prepare_worker(
     validate_fragments(resolved)
     configure_logging(level=resolved.log_level, format=resolved.log_format)
     backend = load_isolation(resolved.run_mode)
-    if backend.name == "chat":
-        log.info(CHAT_MODE_NOTE)
-    elif backend.warn_not_production:
-        if backend.name == "none":
-            log.warning(NONE_MODE_WARNING)
-        else:
-            log.warning(f"APIPI_RUN_MODE={backend.name} is not suited for production")
+    if backend.warn_not_production:
+        log.warning(f"APIPI_RUN_MODE={backend.name} is not suited for production")
+    from apipi.worker.accepts import require_worker_accepts
+
+    require_worker_accepts(resolved)
     log.info("worker sandbox", extra={"run_mode": backend.name})
     _warn_model_retry(resolved)
     return resolved

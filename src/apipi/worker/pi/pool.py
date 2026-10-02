@@ -559,9 +559,9 @@ class PiPool:
         self.metrics.observe_pi_spawn(result)
 
     def _host_backend(self) -> bool:
-        from apipi.worker.pi.isolation import load_isolation
+        from apipi.worker.accepts import resolved_worker_accepts
 
-        return load_isolation(self.settings.run_mode).name in {"none", "chat"}
+        return "none" in resolved_worker_accepts(self.settings)
 
     def refresh_metrics(self) -> None:
         if self.metrics is None:

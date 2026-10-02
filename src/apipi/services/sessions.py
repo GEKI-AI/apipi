@@ -27,7 +27,7 @@ from apipi.mcp.http import (
     mcp_http_tools,
 )
 from apipi.services.agents import AgentWrite, definition_for_session
-from apipi.services.chat_tools import is_chat_profile, reject_disallowed_chat_tools
+from apipi.services.env_none import is_env_none, reject_tools_for_env_none
 from apipi.services.failures import error_extra
 from apipi.services.files import FileService
 from apipi.services.runtime import (
@@ -102,7 +102,6 @@ from apipi.worker.pi.settings_json import (
     thinking_to_effort,
     validate_pi_metadata,
 )
-from apipi.worker.placement import CHAT, SESSION_KIND_KEY
 
 log = logging.getLogger("apipi")
 
@@ -187,23 +186,6 @@ def _plain_vault_creds(settings: Settings, creds: list[Any]) -> list[_VaultPlain
             raise McpConnectError("vault credential decrypt failed") from exc
         plain.append(_VaultPlain(cred.id, cred.mcp_server_url, token))
     return plain
-
-
-def is_chat_session(row: SessionRow | dict[str, Any]) -> bool:
-    metadata = row.get("metadata") if isinstance(row, dict) else row.metadata_json
-    return is_chat_profile(metadata if isinstance(metadata, dict) else None)
-
-
-def chat_session_body(row: SessionRow | dict[str, Any]) -> dict[str, Any]:
-    body = session_body(row) if not isinstance(row, dict) else dict(row)
-    body.pop("environment", None)
-    return body
-
-
-def chat_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
-    out = dict(metadata) if metadata else {}
-    out[SESSION_KIND_KEY] = CHAT
-    return out
 
 
 def input_text(value: str | dict[str, Any] | None) -> str:
@@ -491,7 +473,6 @@ class SessionService:
         raw_tools: list[Any] = []
         model: str | None = None
         instructions: str | None = None
-        chat = is_chat_session({"metadata": metadata or {}})
         agent_metadata: dict[str, Any] | None = None
         async with self.store.session() as db:
             if agent_id is not None:
@@ -523,8 +504,8 @@ class SessionService:
                     metadata = apply_reasoning_effort(base, effort, reset=reset)
                     if agent_id is None:
                         agent_metadata = metadata
-            if chat:
-                reject_disallowed_chat_tools(raw_tools)
+            if is_env_none(env):
+                reject_tools_for_env_none(raw_tools)
             if agent_id is None:
                 metadata = copy_inline_pi_metadata(metadata, agent_metadata)
             validate_pi_metadata(metadata)

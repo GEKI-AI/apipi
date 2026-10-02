@@ -23,23 +23,22 @@ Pi and the computer always share one isolation boundary, and there is no split. 
 need a computer can use `environment.type=none`. That environment value
 means “no files.” Isolation `none` means “no sandbox for Pi.” They are
 not the same setting. On `apipi serve --api-only`, Agents sessions with
-`environment.type=none` are placed on workers that advertised `chat`
-unless you set `APIPI_ENV_NONE_PLACEMENT` to `microvm` or `reject`. See
-[workers](workers.md).
+`environment.type=none` go to any worker whose accepts set contains
+`none`. See [workers](workers.md#placement).
 
 | Mode | When to use | Isolation |
 | --- | --- | --- |
-| `none` | Local tests and laptops without a sandbox | Pi is a child of the gateway. Use `microvm` in production. Logs a production warning. |
-| `chat` | Dedicated chat worker pools | Same light Pi-on-host backend as `none`, with process name `chat` for placement and metrics. No production warning. |
+| `none` | Local tests, laptops without a sandbox, and `type=none` workers in production | Pi is a child of the process that holds it. `type=none` sessions have no shell, file, or workspace tools, so host Pi for them needs no sandbox. Combined `apipi serve` with `none` still logs a production warning because it cannot serve computer sessions. Workers that accept `none` do not warn. |
 | `microvm` | SaaS and enterprise production when a computer is in use | KVM guest with its own kernel. Protects the host from a hostile session. |
 | `package.mod:Class` | An operator-provided backend | Whatever that class implements. Missing import fails at startup. |
 
 The process default is `none` so `apipi serve` can start without KVM.
 Production operators set `APIPI_RUN_MODE=microvm` on computer workers
-and `APIPI_RUN_MODE=chat` on chat workers. Fleet layout is in
-[chat fleets](chat.md). If the
-microVM cannot launch, that process exits. `none` logs a warning. Valid
-built-in names are `none`, `chat`, and `microvm`.
+and `APIPI_RUN_MODE=none` with `APIPI_WORKER_ACCEPTS=none` on text-only
+workers. Fleet layouts are in [sandbox workers](workers.md#placement).
+If the
+microVM cannot launch, that process exits. Valid
+built-in names are `none` and `microvm`.
 
 Run production as `apipi serve --api-only` plus `apipi worker` on the
 host. Docker Compose can run the API without privileged mode. Nested
@@ -55,13 +54,9 @@ the store, the Pi CLI (`pi --mode rpc`) on `PATH` at version 0.99.1, and
 ### `none`
 
 Nothing beyond the gateway requirements. This mode is for development
-and CI that cannot start a microvm.
-
-### `chat`
-
-Same install as `none`. Use this on dedicated chat workers so they
-advertise `chat` for placement. Pi still runs as a child of the worker
-process.
+and CI that cannot start a microvm, and for production workers that
+serve only `environment.type=none` (`APIPI_WORKER_ACCEPTS=none`). Pi
+still runs as a child of the worker process.
 
 ### `microvm`
 
@@ -215,13 +210,15 @@ with `artifacts/`. Those remain readable. New publishes use
 ## `none`
 
 Pi is a child of `apipi serve` or `apipi worker`. There is no namespace,
-cgroup, or guest. Host Pi (`none` and `chat`) starts in its own process
+cgroup, or guest. Host Pi (`none`) starts in its own process
 group. Idle reap, session end, and process shutdown send SIGTERM then
 SIGKILL to that group so MCP children started by Pi do not linger.
 Gateway-owned MCP is a sibling of Pi and is stopped separately.
 `APIPI_PI_MEM_MIB` is an optional soft ceiling for one host Pi (Node
 heap plus RSS kill). It is not a cgroup. Use this when a microvm
-cannot run. Use `microvm` in production. The process logs a warning.
+cannot run. Combined `apipi serve` with `none` is local/dev only and
+logs a warning. Workers that accept `none` serve production
+text-only sessions without that warning.
 
 ## `microvm`
 
@@ -366,7 +363,7 @@ WantedBy=multi-user.target
 
 `KillMode=control-group` is required so `systemctl stop` and
 `Restart=on-failure` kill host Pi children, not only the worker PID.
-`KillMode=process` leaks Pi after a crash. Chat workers use the same
+`KillMode=process` leaks Pi after a crash. `none`-only workers use the same
 unit and omit the KVM `DeviceAllow` lines. For a drain wait on stop,
 install `deploy/systemd/apipi-worker-drain.conf` as
 `TimeoutStopSec=16min` so SIGTERM can empty live Pi before SIGKILL.

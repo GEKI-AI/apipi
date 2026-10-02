@@ -2,13 +2,11 @@ import asyncio
 import uuid
 from datetime import timedelta
 
-import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.errors import ApiError
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import FakeHarness
 from apipi.services.worker_tokens import create_token
@@ -113,7 +111,7 @@ async def test_worker_register_lease_command_event_and_expiry(
         assert command is not None
         assert command["type"] == "command"
         assert command["op"] == "turn.start"
-        assert command["payload"] == {"text": "hi", "run_mode": "chat"}
+        assert command["payload"] == {"text": "hi", "run_mode": "none"}
         incoming = await worker.receive_json()
         assert incoming["id"] == command["id"]
         assert incoming["lease_id"] == command["lease_id"]
@@ -217,7 +215,7 @@ async def test_draining_worker_is_not_scheduled(
         assert hello.get("ok") is True
         await draining.send_json({"type": "heartbeat", "drain": True})
         for _ in range(50):
-            if app.state.workers.pick(run_mode="chat") is None:
+            if app.state.workers.pick(kind="none") is None:
                 break
             await asyncio.sleep(0.02)
         command = await app.state.workers.acquire(
@@ -406,7 +404,7 @@ async def test_worker_register_requires_run_mode(
     await worker.close()
 
 
-async def test_pick_keeps_chat_and_microvm_apart(
+async def test_pick_keeps_none_and_microvm_apart(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
@@ -433,12 +431,16 @@ async def test_pick_keeps_chat_and_microvm_apart(
         )
         none_id = uuid.UUID(none_session.json()["id"])
         hosted_id = uuid.UUID(hosted_session.json()["id"])
-        chat_secret = (await create_token(store, name="chat")).secret
-        chat = FakeWorker(app, chat_secret)
-        chat_hello = await chat.connect(capacity=4, run_mode="chat")
+        none_secret = (await create_token(store, name="none")).secret
+        none_worker = FakeWorker(app, none_secret)
+        none_hello = await none_worker.connect(
+            capacity=4, run_mode="none", accepts=["none"]
+        )
         microvm_secret = (await create_token(store, name="microvm")).secret
         microvm = FakeWorker(app, microvm_secret)
-        microvm_hello = await microvm.connect(capacity=4, run_mode="microvm")
+        microvm_hello = await microvm.connect(
+            capacity=4, run_mode="microvm", accepts=["microvm"]
+        )
         none_cmd = await app.state.workers.acquire(
             store, tenant_id, none_id, op="turn.start"
         )
@@ -446,29 +448,23 @@ async def test_pick_keeps_chat_and_microvm_apart(
             store, tenant_id, hosted_id, op="turn.start"
         )
         assert none_cmd is not None
-        assert none_cmd["payload"]["run_mode"] == "chat"
+        assert none_cmd["payload"]["run_mode"] == "none"
         assert hosted_cmd is not None
         assert hosted_cmd["payload"]["run_mode"] == "microvm"
-        chat_conn = app.state.workers.get(uuid.UUID(str(chat_hello["worker_id"])))
+        none_conn = app.state.workers.get(uuid.UUID(str(none_hello["worker_id"])))
         microvm_conn = app.state.workers.get(uuid.UUID(str(microvm_hello["worker_id"])))
-        assert chat_conn is not None
+        assert none_conn is not None
         assert microvm_conn is not None
-        assert uuid.UUID(none_cmd["lease_id"]) in chat_conn.leases
+        assert uuid.UUID(none_cmd["lease_id"]) in none_conn.leases
         assert uuid.UUID(hosted_cmd["lease_id"]) in microvm_conn.leases
-        await chat.close()
+        await none_worker.close()
         await microvm.close()
 
 
-async def test_env_none_reject_is_placement_error(
+async def test_no_matching_worker_is_capacity(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    worker_settings = Settings(
-        database_url=settings.database_url,
-        run_mode="none",
-        sessions_dir=settings.sessions_dir,
-        env_none_placement="reject",
-    )
-    app = create_app(worker_settings, store=store, harness=FakeHarness())
+    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
     token = "t"
     tenant_id = _tenant(token)
     async with AsyncClient(
@@ -484,24 +480,21 @@ async def test_env_none_reject_is_placement_error(
         )
         session_id = uuid.UUID(created.json()["id"])
         worker = FakeWorker(app, worker_secret)
-        await worker.connect(capacity=2, run_mode="chat")
-        with pytest.raises(ApiError) as exc:
-            await app.state.workers.acquire(
-                store, tenant_id, session_id, op="turn.start"
-            )
-        assert exc.value.code == "placement"
-        assert exc.value.status_code == 400
+        await worker.connect(capacity=2, run_mode="microvm", accepts=["microvm"])
+        missed = await app.state.workers.acquire(
+            store, tenant_id, session_id, op="turn.start"
+        )
+        assert missed is None
         await worker.close()
 
 
-async def test_session_kind_chat_ignores_env_none_microvm(
+async def test_session_kind_is_ignored_for_placement(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     worker_settings = Settings(
         database_url=settings.database_url,
         run_mode="none",
         sessions_dir=settings.sessions_dir,
-        env_none_placement="microvm",
     )
     app = create_app(worker_settings, store=store, harness=FakeHarness())
     token = "t"
@@ -523,21 +516,21 @@ async def test_session_kind_chat_ignores_env_none_microvm(
         )
         session_id = uuid.UUID(created.json()["id"])
         microvm = FakeWorker(app, worker_secret)
-        await microvm.connect(capacity=4, run_mode="microvm")
+        await microvm.connect(capacity=4, run_mode="microvm", accepts=["microvm"])
         missed = await app.state.workers.acquire(
             store, tenant_id, session_id, op="turn.start"
         )
         assert missed is None
-        chat_secret = (await create_token(store, name="chat")).secret
-        chat = FakeWorker(app, chat_secret)
-        chat_hello = await chat.connect(capacity=4, run_mode="chat")
+        none_secret = (await create_token(store, name="none")).secret
+        none_worker = FakeWorker(app, none_secret)
+        none_hello = await none_worker.connect(capacity=4, run_mode="none")
         command = await app.state.workers.acquire(
             store, tenant_id, session_id, op="turn.start"
         )
         assert command is not None
-        assert command["payload"]["run_mode"] == "chat"
-        conn = app.state.workers.get(uuid.UUID(str(chat_hello["worker_id"])))
+        assert command["payload"]["run_mode"] == "none"
+        conn = app.state.workers.get(uuid.UUID(str(none_hello["worker_id"])))
         assert conn is not None
         assert uuid.UUID(command["lease_id"]) in conn.leases
-        await chat.close()
+        await none_worker.close()
         await microvm.close()

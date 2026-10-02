@@ -17,7 +17,6 @@ from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics, observe_turn
 from apipi.gateway.otel import Tracing, set_span, start_span
 from apipi.services.agents import definition_for_session
-from apipi.services.chat_tools import is_chat_profile
 from apipi.services.failures import (
     Failure,
     cancel_data,
@@ -1269,7 +1268,6 @@ async def load_boot_kwargs(
             settings,
             instructions,
             env_type="openai_hosted",
-            chat=is_chat_profile(session_metadata),
             sandbox_size=sandbox_size,
             mem_mib=mem_mib_for_size(settings, sandbox_size),
             network=_network_access(row.environment),
@@ -1500,7 +1498,6 @@ async def run_turn(
                         raise
             skill_dirs = _skill_dirs(row.environment)
             env_type = row.environment.get("type")
-            chat = is_chat_profile(session_metadata)
             network = _network_access(row.environment)
             sandbox_size = sandbox_size_of(row.environment)
             sandbox_mem = (
@@ -1571,7 +1568,6 @@ async def run_turn(
             settings,
             instructions,
             env_type=env_type if isinstance(env_type, str) else None,
-            chat=chat,
             sandbox_size=sandbox_size,
             mem_mib=sandbox_mem,
             network=network,
@@ -1925,7 +1921,6 @@ async def continue_turn(
             return
         skill_dirs = _skill_dirs(row.environment)
         env_type = row.environment.get("type")
-        chat = is_chat_profile(session_metadata)
         network = _network_access(row.environment)
         sandbox_size = sandbox_size_of(row.environment)
         sandbox_mem = (
@@ -1946,7 +1941,6 @@ async def continue_turn(
             settings,
             instructions,
             env_type=env_type if isinstance(env_type, str) else None,
-            chat=chat,
             sandbox_size=sandbox_size,
             mem_mib=sandbox_mem,
             network=network,
