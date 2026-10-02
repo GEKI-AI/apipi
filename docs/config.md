@@ -476,8 +476,8 @@ assistant operating inside pi`. The rest of Pi's prompt stays. If that
 line is missing, Pi's prompt is kept and a log line is written.
 Computer sessions (`openai_hosted`) use
 `identity-computer.txt`: `You are a ${platform_name} agent running in a
-sandbox using Pi as your harness.` Chat and `environment.type` `none`
-use `identity-none.txt`, the same line without `running in a sandbox`.
+sandbox using Pi as your harness.` `environment.type` `none`
+sessions use `identity-none.txt`, the same line without `running in a sandbox`.
 `${platform_name}` is `APIPI_PLATFORM_NAME`, default `ApiPi`.
 
 The built-in main prompt matches the session. A hosted computer is
@@ -490,8 +490,8 @@ A missing file is probably a sandbox restart. `outputs/` is for
 artifacts. Those files are collected after each turn and shared with
 the user. The copy in the sandbox is removed on restart. The agent
 should put a file there only when the user asked for it, or when it
-explicitly wants to share it. Chat and
-`environment.type` `none` are told there is no computer and no file or
+explicitly wants to share it. `environment.type`
+`none` sessions are told there is no computer and no file or
 shell tools. They are not told about `/workspace`, sandbox size, or a
 browser.
 

@@ -312,7 +312,7 @@ Status: `idle | in_progress | requires_action | failed`. That is the turn, not t
 
 `required_actions`: `function_call`. The next turn rebuilds the computer when it needs one.
 
-A hosted session (`openai_hosted`) has `environment.id`, `environment.status`, and `environment.sandbox`. `environment.status` is the OpenAI value: `provisioning` while the computer is starting, `connected` when Pi is ready, `disconnected` when it has not started or has stopped, `failed` when boot or setup failed. `environment.sandbox` is ApiPi detail: `state` (`none`, `starting`, `ready`, `stopped`, `failed`), `reason`, `since`, `image`, `image_version`, `size`, `cold_boots`, and `last_boot_ms`. It does not include a worker id. `none` sets `environment.sandbox` to null. Chat responses omit `environment`.
+A hosted session (`openai_hosted`) has `environment.id`, `environment.status`, and `environment.sandbox`. `environment.status` is the OpenAI value: `provisioning` while the computer is starting, `connected` when Pi is ready, `disconnected` when it has not started or has stopped, `failed` when boot or setup failed. `environment.sandbox` is ApiPi detail: `state` (`none`, `starting`, `ready`, `stopped`, `failed`), `reason`, `since`, `image`, `image_version`, `size`, `cold_boots`, and `last_boot_ms`. It does not include a worker id. `none` sets `environment.sandbox` to null.
 
 `GET /v1/agents/environments/{environment_id}` returns `id`, `type`, `status`, and `sandbox` for that session. Another tenant's id is `404`. There is no pause. A stop deletes the hosted workspace. Clients may label a stopped computer "paused" in the UI, but files do not survive.
 

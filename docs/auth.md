@@ -206,9 +206,10 @@ stays `404`; the hook runs only for resources that exist.
 | `usage.read` | `GET /v1/apipi/usage` |
 | `auth.invalidate` | `POST /v1/apipi/auth/invalidate` |
 
-Chat routes map to the same `agent.run`, `session.read` and
-`session.list` actions. Model listing and health are not authorized
-by the hook. Without a hook everything behaves as before.
+Sessions with `environment.type=none` map to the same `agent.run`,
+`session.read` and `session.list` actions. Model listing and health
+are not authorized by the hook. Without a hook everything behaves as
+before.
 
 ## Store
 

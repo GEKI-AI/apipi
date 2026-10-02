@@ -161,13 +161,10 @@ class WorkerHub:
         self,
         session_mem_mib: int | None = None,
         *,
-        run_mode: str | None = None,
-        kind: str | None = None,
+        kind: str,
         image: str | None = None,
     ) -> WorkerConnection | None:
-        required = kind if kind is not None else run_mode
-        if required is None:
-            raise ValueError("pick needs kind")
+        required = kind
         session_mem = (
             session_mem_mib
             if session_mem_mib is not None

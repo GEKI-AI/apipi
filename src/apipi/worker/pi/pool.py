@@ -208,7 +208,7 @@ class PiPool:
                 )
         except Exception as exc:
             self._observe_boot(size, "error", time.monotonic() - started)
-            self._observe_pi_spawn("error")
+            self._observe_pi_spawn("error", env_type=env_type)
             await self._finish_spawn(session_id, error=exc)
             raise
         boot_ms = int((time.monotonic() - started) * 1000)
@@ -548,20 +548,21 @@ class PiPool:
             return
         self.metrics.observe_sandbox_boot(size=size, result=result, seconds=seconds)
 
-    def _observe_pi_spawn(self, result: str, proc: PiProc | None = None) -> None:
+    def _observe_pi_spawn(
+        self,
+        result: str,
+        proc: PiProc | None = None,
+        *,
+        env_type: str | None = None,
+    ) -> None:
         if self.metrics is None:
             return
         if result == "ok":
             if proc is None or proc.vm_id is not None:
                 return
-        elif not self._host_backend():
+        elif env_type != "none":
             return
         self.metrics.observe_pi_spawn(result)
-
-    def _host_backend(self) -> bool:
-        from apipi.worker.accepts import resolved_worker_accepts
-
-        return "none" in resolved_worker_accepts(self.settings)
 
     def refresh_metrics(self) -> None:
         if self.metrics is None:

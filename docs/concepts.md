@@ -71,9 +71,9 @@ computer, or an operator override); then optional additional platform
 text; then, for a hosted microvm only, a size line and an optional
 network line; then `agent.instructions`. The extension replaces only
 Pi's intro line with an identity sentence that still names Pi as the
-harness. Computer sessions say they run in a sandbox. Chat and `none`
-do not. The name is `[pi].platform_name`. The rest of Pi's prompt
-stays. Chat and `none` do not get sandbox or `/workspace` text in the
+harness. Computer sessions say they run in a sandbox.
+`environment.type=none` sessions do not. The name is `[pi].platform_name`. The rest of Pi's prompt
+stays. `environment.type=none` sessions do not get sandbox or `/workspace` text in the
 main prompt. The hosted prompt does not state how long the sandbox
 stays up. It says the sandbox stops after some idle time, that
 user-provided files under `inputs/` are restored, and that other
