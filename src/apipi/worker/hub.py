@@ -8,6 +8,7 @@ import time
 import uuid
 from collections.abc import Collection
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -721,8 +722,13 @@ class WorkerHub:
         entries. Every reported session that is still leased also gets
         its effective reaper TTL, so a restarted worker learns idle
         TTLs without reading the database itself. On-disk workspaces
-        the worker reports as unleased get a TTL answer while leased
-        and a revoke (which tells the worker to wipe them) once free.
+        the worker reports as unleased get a TTL answer while their
+        session row is still alive — a released lease only means the
+        Pi stopped, while the workspace intentionally stays until its
+        idle TTL — and a revoke (which tells the worker to wipe them)
+        only once the row is gone. The TTL answer carries the idle
+        baseline (`idle_since_epoch`, the row's last touch) so the
+        reaper clock does not restart on every reply.
         """
         revoke: list[dict[str, str]] = []
         ttl: dict[str, dict[str, Any]] = {}
@@ -789,18 +795,29 @@ class WorkerHub:
                 if row is None:
                     from apipi.store.repo import get_session_by_id
 
-                    other = await get_session_by_id(db, session_id)
-                    if other is not None and other.lease_id is not None:
-                        ttl[str(session_id)] = await self._inventory_ttl(db, other)
-                    else:
-                        revoke.append({"session_id": str(session_id)})
+                    row = await get_session_by_id(db, session_id)
+                if row is None:
+                    # No session row anymore (a stopped session is
+                    # deleted): the directory is garbage, tell the
+                    # worker to wipe it.
+                    revoke.append({"session_id": str(session_id)})
                 else:
+                    # The row is alive: a released lease only means
+                    # the Pi stopped, while the workspace stays until
+                    # its idle TTL. Answer the TTL so the normal
+                    # reaper wipes it when the TTL runs out.
                     ttl[str(session_id)] = await self._inventory_ttl(db, row)
         self._observe()
         return revoke, ttl
 
     async def _inventory_ttl(self, db: Any, row: Any) -> dict[str, Any]:
-        """The effective reaper TTL answer for one leased session row."""
+        """The effective reaper TTL answer for one session row.
+
+        `idle_since_epoch` is the row's last touch, so the worker
+        reaper measures true idleness: re-answering the TTL on every
+        inventory must not restart the clock, or an idle workspace
+        would never be reaped.
+        """
         from apipi.worker.pi.idle import resolve_idle_ttl
 
         environment = row.environment if isinstance(row.environment, dict) else {}
@@ -825,6 +842,7 @@ class WorkerHub:
             if resolved is not None
             else None,
             "env_type": env_type,
+            "idle_since_epoch": _idle_since_epoch(row.updated_at),
         }
 
     async def resend_pending(self, conn: WorkerConnection) -> None:
@@ -2116,6 +2134,15 @@ async def _reconcile_hello(
     outbox.mark_dirty()
 
 
+def _idle_since_epoch(updated_at: Any) -> float | None:
+    """Unix baseline for the reaper idle clock (stable across replies)."""
+    if not isinstance(updated_at, datetime):
+        return None
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
+    return updated_at.timestamp()
+
+
 def _seed_reaper_ttl(execution: Any, ttl: Any) -> None:
     """Teach the reaper idle TTLs from an inventory reply (no DB read)."""
     remember = getattr(execution, "_context_ttl", None)
@@ -2135,10 +2162,15 @@ def _seed_reaper_ttl(execution: Any, ttl: Any) -> None:
             if isinstance(raw_seconds, (int, float)) and raw_seconds >= 0
             else None
         )
+        raw_since = entry.get("idle_since_epoch")
+        if isinstance(raw_since, (int, float)) and 0 < raw_since <= now:
+            last_seen = float(raw_since)
+        else:
+            last_seen = now
         env_type = entry.get("env_type")
         remember[session_id] = (
             seconds,
-            now,
+            last_seen,
             env_type if isinstance(env_type, str) else None,
         )
 
@@ -2257,9 +2289,10 @@ def _unleased_session_dirs(
 ) -> list[uuid.UUID]:
     """On-disk session workspaces the worker holds no lease for.
 
-    These ride along in the periodic inventory so the API answers with
-    a reaper TTL while leased and a revoke (which wipes them) once
-    free. Live or held guests are never reported.
+    These ride along in the periodic inventory so the API answers
+    with a reaper TTL while the session row is alive and a revoke
+    (which wipes them) only once the row is gone. Live or held
+    guests are never reported.
     """
     from apipi.worker.pi.dirs import sessions_root
 

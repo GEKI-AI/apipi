@@ -1,7 +1,7 @@
 """Inventory reconcile and API-owned lease takeover (#449)."""
 
 import uuid
-from datetime import timedelta
+from datetime import UTC, timedelta
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -292,3 +292,71 @@ async def test_reconcile_unleased_unknown_is_revoked(store: Store, settings) -> 
         assert ttl == {}
     finally:
         await bus.close()
+
+
+async def test_reconcile_unleased_released_session_gets_ttl_then_reaps(
+    store: Store, settings
+) -> None:
+    from datetime import datetime
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from apipi.store.repo import clear_session_lease
+    from apipi.worker.hub import _seed_reaper_ttl
+    from apipi.worker.pi.artifacts import reap_workspaces
+    from apipi.worker.pi.pool import PiPool
+
+    worker_id = uuid.uuid4()
+    async with store.session() as db:
+        tenant = await create_tenant(db, name="t")
+        row = await create_session(
+            db, tenant.id, environment={"type": "openai_hosted"}, metadata={}
+        )
+        await set_session_lease(
+            db,
+            tenant.id,
+            row.id,
+            worker_id=worker_id,
+            lease_id=uuid.uuid4(),
+            lease_until=utc_now() + timedelta(seconds=30),
+        )
+        tenant_id, session_id = tenant.id, row.id
+    # The Pi stopped so the lease is released, but the row (and the
+    # workspace) intentionally stay until the workspace idle TTL.
+    async with store.session() as db:
+        await clear_session_lease(db, tenant_id, session_id)
+    hub = _hub(settings)
+    bus = create_event_bus(settings, store=store)
+    try:
+        revoke, ttl = await hub.reconcile_inventory(
+            store, bus, worker_id, {}, [session_id]
+        )
+    finally:
+        await bus.close()
+    assert revoke == []
+    entry = ttl[str(session_id)]
+    assert isinstance(entry["idle_ttl_seconds"], (int, float))
+    assert isinstance(entry["idle_since_epoch"], float)
+    # Wire the answer through the worker seed: the row baseline
+    # sticks instead of restarting on every reply.
+    seeded: dict[str, tuple[float | None, float, str | None]] = {}
+    _seed_reaper_ttl(SimpleNamespace(_context_ttl=seeded), ttl)
+    assert seeded[str(session_id)][1] == entry["idle_since_epoch"]
+    workspace = Path(str(settings.sessions_dir)) / str(tenant_id) / str(session_id)
+    workspace.mkdir(parents=True)
+    (workspace / "file.txt").write_text("x")
+    pool = PiPool(settings)
+    ttl_seconds = float(entry["idle_ttl_seconds"])
+    since = entry["idle_since_epoch"]
+    before = datetime.fromtimestamp(since + ttl_seconds - 1, tz=UTC)
+    after = datetime.fromtimestamp(since + ttl_seconds + 1, tz=UTC)
+    kept = await reap_workspaces(
+        settings, None, pool, ttl_overrides=seeded, allow_db=False, now=before
+    )
+    assert kept == []
+    assert workspace.is_dir()
+    wiped = await reap_workspaces(
+        settings, None, pool, ttl_overrides=seeded, allow_db=False, now=after
+    )
+    assert wiped == [str(session_id)]
+    assert not workspace.exists()
