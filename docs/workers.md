@@ -573,7 +573,8 @@ database queries: turns run from the command context, results go
 through the outbox, sandbox and lifecycle state go over the socket,
 and the reaper learns TTLs from the context and the inventory reply.
 `apipi worker` refuses to start when `DATABASE_URL` is set in its
-environment: unset it on worker hosts, since only the API connects
+environment or `database_url` is set in its config file: unset it on
+worker hosts, since only the API connects
 to Postgres. With `APIPI_ARTIFACT_STORE=s3` the worker uploads and
 downloads bytes through API-issued presigned URLs and never sees
 store credentials; with the filesystem store it uses the shared

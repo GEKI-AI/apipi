@@ -77,7 +77,8 @@ WORKER_TOKEN_FILE_REQUIRED = (
 
 
 WORKER_DATABASE_URL_MESSAGE = (
-    "apipi worker no longer uses DATABASE_URL: unset it on worker hosts. "
+    "apipi worker no longer uses DATABASE_URL: unset it on worker hosts, "
+    "in the environment and in the config file. "
     "Only the API connects to Postgres; the worker gets everything it needs "
     "over /internal/worker."
 )
@@ -85,6 +86,19 @@ WORKER_DATABASE_URL_MESSAGE = (
 
 def reject_worker_database_url() -> None:
     if os.environ.get("DATABASE_URL"):
+        raise ConfigError(WORKER_DATABASE_URL_MESSAGE)
+
+
+def reject_worker_database_url_toml(config_path: str | None = None) -> None:
+    """Reject `database_url` in the worker's TOML config file.
+
+    Programmatic `Settings` are untouched: only a value that comes
+    from a config file is rejected, so embedding and tests keep
+    working."""
+    path = resolve_config_path(config_path)
+    if path is None:
+        return
+    if "database_url" in _toml_values(path):
         raise ConfigError(WORKER_DATABASE_URL_MESSAGE)
 
 

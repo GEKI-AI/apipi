@@ -93,6 +93,20 @@ def test_check_ready_invalid_config(tmp_path: Path) -> None:
     assert "config" in text
 
 
+def test_check_role_worker_refuses_toml_database_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "require_run_mode", lambda *_a, **_k: None)
+    path = tmp_path / "apipi.toml"
+    path.write_text('database_url = "postgresql+asyncpg://db/apipi"\n')
+    out = StringIO()
+    assert check_ready(config_path=str(path), role="worker", out=out) == 1
+    assert "no longer uses DATABASE_URL" in out.getvalue()
+
+
 def test_cli_check_skip(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

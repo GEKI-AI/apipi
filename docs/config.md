@@ -55,7 +55,7 @@ hosted files and skills).
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | `database_url` | `.apipi/apipi.db` (SQLite) | Store URL. Unset uses SQLite in the current directory. File SQLite uses WAL. One process only. Shared store: `postgresql+asyncpg://…`. API-only: every API process points at the same URL. Workers never use it: `apipi worker` refuses to start when `DATABASE_URL` is set. |
+| `DATABASE_URL` | `database_url` | `.apipi/apipi.db` (SQLite) | Store URL. Unset uses SQLite in the current directory. File SQLite uses WAL. One process only. Shared store: `postgresql+asyncpg://…`. API-only: every API process points at the same URL. Workers never use it: `apipi worker` refuses to start when `DATABASE_URL` is set in the environment or `database_url` is set in the worker config file. |
 | `APIPI_HOST` | `host` | `0.0.0.0` | Bind address. |
 | `APIPI_PORT` | `port` | `8000` | Bind port. |
 | `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |

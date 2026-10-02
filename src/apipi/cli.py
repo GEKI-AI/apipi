@@ -32,6 +32,7 @@ from apipi.config import (
     reject_legacy_worker_token,
     reject_prompt_body_logging,
     reject_worker_database_url,
+    reject_worker_database_url_toml,
     require_run_mode,
     usage_retention_log,
     usage_store_log,
@@ -114,9 +115,11 @@ def prepare_serve(
 def prepare_worker(
     settings: Settings | None = None, *, config_path: str | None = None
 ) -> Settings:
-    resolved = (
-        settings if settings is not None else load_settings(config_path=config_path)
-    )
+    if settings is None:
+        reject_worker_database_url_toml(config_path)
+        resolved = load_settings(config_path=config_path)
+    else:
+        resolved = settings
     reject_legacy_worker_token()
     reject_worker_database_url()
     load_worker_token(resolved.worker_token_file)

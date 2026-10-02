@@ -22,6 +22,7 @@ from apipi.config import (
     Settings,
     load_worker_token,
     reject_legacy_worker_token,
+    reject_worker_database_url,
 )
 from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
@@ -1923,6 +1924,7 @@ async def run_worker(
     from apipi.worker.tls import check_worker_mtls_files, require_worker_tls
 
     reject_legacy_worker_token()
+    reject_worker_database_url()
     require_worker_accepts(settings)
     ignored_lifecycle = worker_lifecycle_ignored()
     if ignored_lifecycle:

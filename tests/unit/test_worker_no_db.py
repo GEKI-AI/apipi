@@ -181,6 +181,37 @@ def test_prepare_worker_refuses_database_url(
         )
 
 
+def test_prepare_worker_refuses_toml_database_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from apipi.cli import prepare_worker
+    from apipi.config import ConfigError
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    config = tmp_path / "apipi.toml"
+    config.write_text('database_url = "postgresql+asyncpg://db/apipi"\n')
+    with pytest.raises(ConfigError, match="no longer uses DATABASE_URL"):
+        prepare_worker(config_path=str(config))
+
+
+def test_programmatic_settings_without_env_still_prepare(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, settings: Any
+) -> None:
+    from apipi.cli import prepare_worker
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr("apipi.cli.probe_model_host", lambda _settings: None)
+    monkeypatch.setattr("apipi.cli.probe_run_mode", lambda _settings: None)
+    token_file = tmp_path / "worker.token"
+    token_file.write_text("secret\n")
+    resolved = prepare_worker(
+        settings.model_copy(
+            update={"worker_token_file": str(token_file), "run_mode": "none"}
+        )
+    )
+    assert resolved.run_mode == "none"
+
+
 async def test_split_turn_needs_no_store_or_object_credentials(
     store: Any, settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

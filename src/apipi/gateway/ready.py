@@ -81,6 +81,7 @@ def run_checks(
     skip_model: bool = False,
     fast: bool = False,
     role: str = "all",
+    config_path: str | None = None,
 ) -> list[Check]:
     if role == "api":
         fast = True
@@ -161,6 +162,7 @@ def run_checks(
             load_worker_token,
             reject_legacy_worker_token,
             reject_worker_database_url,
+            reject_worker_database_url_toml,
         )
         from apipi.worker.tls import (
             check_worker_mtls_files,
@@ -171,6 +173,7 @@ def run_checks(
         try:
             reject_legacy_worker_token()
             reject_worker_database_url()
+            reject_worker_database_url_toml(config_path)
             load_worker_token(settings.worker_token_file)
             checks.append(Check("ok", "worker token", "file"))
         except ConfigError as exc:
@@ -214,7 +217,12 @@ def check_ready(
         print(_line(Check("fail", "config", str(exc))), file=stream)
         return 1
     checks = run_checks(
-        settings, skip_db=skip_db, skip_model=skip_model, fast=fast, role=role
+        settings,
+        skip_db=skip_db,
+        skip_model=skip_model,
+        fast=fast,
+        role=role,
+        config_path=config_path,
     )
     failed = False
     for item in checks:
