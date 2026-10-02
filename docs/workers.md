@@ -149,7 +149,7 @@ API to worker:
 | `type` | Fields | What |
 | --- | --- | --- |
 | `hello` | `ok`, `protocol`, `worker_id`, `generation`, `sessions` | Register succeeded. |
-| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.cancel`, `turn.continue`, or `session.stop`. The `id` is the idempotency key. |
+| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
 | error object | `ok: false`, `error` | Auth or register failed, then the socket closes. |
 
@@ -189,6 +189,38 @@ Rejections and drops are counted in
 `delta.rejected`, `delta.dropped_done`, `delta.rate_limited`,
 `delta.oversize`, `delta.reasoning_dropped`, `envelope.invalid`,
 `envelope.durable_deferred`).
+## Command context
+
+`turn.start`, `turn.continue`, and `sandbox.boot` carry a `context`
+object in the command payload. The API builds it from the database,
+the vault, and the object store; the worker holds it in memory only
+and never logs it. Combined serve builds the same context in-process,
+so both paths run the identical turn preparation. The schemas live in
+`src/apipi/worker/turn_context.py`, and the builder in
+`src/apipi/services/turn_context.py`.
+
+| Field | What |
+| --- | --- |
+| `session` | The resolved environment, metadata, `required_actions`, identity (`user_id`, `org_id`, `key_id`), status, and the effective idle TTL in seconds (resolved on the API, so the worker reaper needs no database read). |
+| `agent` | The resolved definition: model, instructions, function tools, metadata, `builtin_tools`, `codemode`, and the thinking level. |
+| `mcp` | The resolved HTTP MCP servers (`server_label`, `server_url`, vault-applied `headers`, `allowed_tools`). Rebuilt from the database and the vault on every turn, so a follow-up on another API replica works. |
+| `model` | The model base URL override (if any) and the model key. |
+| `files`, `skills` | References only, never bytes. |
+| `pi_session` | The cold-restore reference for the Pi session blob, if one exists. |
+
+File bytes never travel in the command. With `APIPI_ARTIFACT_STORE=s3`
+each file, skill, and Pi session blob becomes a presigned GET URL with
+a short TTL. With the filesystem store each reference becomes a path
+relative to the shared store root (`sessions_dir`), which the worker
+reads directly; the API and the worker must see the same filesystem.
+The worker fetches the bytes at turn start, provisions the workspace,
+and installs skills exactly as combined serve does.
+
+Commands with a context are validated before send and on receipt:
+file bytes are rejected, and payloads over 256 KiB are rejected with
+`payload_too_large`. Credentials in the context never appear in logs:
+the worker command log carries only a secret-free summary (operation,
+environment type, model, MCP labels, file and skill counts).
 
 ## Replay
 
@@ -301,8 +333,11 @@ warning; exports no longer carry it. Use
 Idle Pi reap and hosted workspace wipe run on the process that holds
 Pi. Combined `apipi serve` starts those loops in the API process.
 `apipi worker` starts the same loops. `apipi serve --api-only` does
-not kill idle guests; the worker that owns the session does. `none`
-use `APIPI_IDLE_TTL`. Hosted computers use
+not kill idle guests; the worker that owns the session does. When the
+worker knows the session from a command context, the reaper uses the
+context's effective idle TTL measured from the last turn activity, with
+no database read; otherwise it resolves the TTL from the session and
+agent rows as before. `none` use `APIPI_IDLE_TTL`. Hosted computers use
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED`. A host Pi kill increments
 `apipi_pi_kill_total` with reason `idle` on the worker metrics
 endpoint. A process that exits by itself is `crash`. Worker drain

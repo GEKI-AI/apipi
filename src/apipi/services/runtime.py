@@ -6,8 +6,10 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol
+from types import SimpleNamespace
+from typing import Any, Protocol, cast
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.config import CapacityError, Settings
@@ -33,7 +35,13 @@ from apipi.services.failures import (
 from apipi.services.files import FileService
 from apipi.services.payload_export import export_payload
 from apipi.services.skill_store import SkillService
-from apipi.services.skills import discover_skill_dirs
+from apipi.services.skills import discover_skill_dirs, unpack_skill_zip
+from apipi.services.turn_context import (
+    fetch_pi_session_bytes,
+    materialize_skill_zips,
+    materialize_workspace_files,
+    mcp_servers_from_context,
+)
 from apipi.services.usage import add_usage, empty_usage, usage_event, usage_from
 from apipi.services.usage_export import export_usage
 from apipi.store.blobs import ArtifactBlobs, ObjectStore, ObjectStoreError, object_store
@@ -57,6 +65,7 @@ from apipi.worker.pi.artifacts import (
     harvest_session,
     restore_pi_session,
 )
+from apipi.worker.pi.dirs import pi_session_file
 from apipi.worker.pi.idle import resolve_idle_ttl
 from apipi.worker.pi.model_host import note_pi_model, require_model
 from apipi.worker.pi.platform_prompt import compose_instructions
@@ -73,6 +82,11 @@ from apipi.worker.pi.settings_json import (
     resolve_codemode,
     resolve_system_prompt,
     resolve_thinking,
+)
+from apipi.worker.turn_context import (
+    ContextBytes,
+    TurnContext,
+    parse_turn_context,
 )
 
 log = logging.getLogger("apipi")
@@ -321,6 +335,44 @@ def _effective_codemode(
     if builtin_tools == "off":
         return "off"
     return resolve_codemode(session_metadata, agent_metadata)
+
+
+def _uuid_or_none(raw: str | None) -> uuid.UUID | None:
+    if raw is None:
+        return None
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return None
+
+
+def _parse_turn_context(raw: dict[str, Any] | None) -> TurnContext | None:
+    """Parse an optional command context; invalid contexts fail loudly."""
+    if raw is None:
+        return None
+    try:
+        return parse_turn_context(raw)
+    except (ContextBytes, ValidationError) as exc:
+        raise ApiError(
+            "invalid_request",
+            f"invalid turn context: {exc}",
+            code="invalid_request",
+        ) from exc
+
+
+def _idle_spawn_from_context(
+    settings: Settings | None, env_type: str | None, ctx: TurnContext
+) -> dict[str, Any]:
+    """Spawn idle TTL from the context's resolved effective TTL."""
+    if settings is None:
+        return {}
+    seconds = ctx.session.idle_ttl_seconds
+    ttl = (
+        timedelta(seconds=seconds)
+        if seconds is not None
+        else settings.pi_idle_ttl_for(env_type)
+    )
+    return {"idle_ttl": ttl, "idle_ttl_set": True}
 
 
 def _idle_spawn(
@@ -634,27 +686,36 @@ async def _write_turn_log(
     artifact_bytes: int = 0,
     user_id: str | None = None,
     failure: Failure | None = None,
+    turn_context: TurnContext | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is None:
         return
-    row = await get_session(db, tenant_id, session_id)
-    agent_id = row.agent_id if row is not None else None
-    key_id = row.key_id if row is not None else ""
-    environment_type = ""
-    if row is not None and isinstance(row.environment, dict):
-        raw_type = row.environment.get("type")
-        if isinstance(raw_type, str):
-            environment_type = raw_type
-    model: str | None = None
-    labels: list[str] = []
-    if row is not None and row.agent_id is not None:
-        definition = await definition_for_session(db, tenant_id, row)
-        if isinstance(definition, dict):
-            raw_model = definition.get("model")
-            model = raw_model if isinstance(raw_model, str) else None
-            raw_tools = definition.get("tools")
-            labels = _mcp_labels(raw_tools if isinstance(raw_tools, list) else [])
+    if turn_context is not None:
+        agent_id = _uuid_or_none(turn_context.session.agent_id)
+        key_id = turn_context.session.key_id
+        raw_type = turn_context.session.environment.get("type")
+        environment_type = raw_type if isinstance(raw_type, str) else ""
+        model = turn_context.agent.model
+        labels = [server.server_label for server in turn_context.mcp]
+    else:
+        row = await get_session(db, tenant_id, session_id)
+        agent_id = row.agent_id if row is not None else None
+        key_id = row.key_id if row is not None else ""
+        environment_type = ""
+        if row is not None and isinstance(row.environment, dict):
+            raw_type = row.environment.get("type")
+            if isinstance(raw_type, str):
+                environment_type = raw_type
+        model = None
+        labels = []
+        if row is not None and row.agent_id is not None:
+            definition = await definition_for_session(db, tenant_id, row)
+            if isinstance(definition, dict):
+                raw_model = definition.get("model")
+                model = raw_model if isinstance(raw_model, str) else None
+                raw_tools = definition.get("tools")
+                labels = _mcp_labels(raw_tools if isinstance(raw_tools, list) else [])
     stored = usage_from(usage)
     tool_names, tool_counts, mcp_names, mcp_counts = await _tool_mcp_for_turn(
         db, tenant_id, session_id, turn_id, labels
@@ -866,6 +927,7 @@ async def _complete_turn(
     proc: PiProc | None = None,
     user_id: str | None = None,
     blobs: ArtifactBlobs | None = None,
+    turn_context: TurnContext | None = None,
 ) -> None:
     await _emit_item(
         db,
@@ -906,6 +968,7 @@ async def _complete_turn(
                     settings=settings,
                     code="artifact_store",
                     user_id=user_id,
+                    turn_context=turn_context,
                 )
                 return
             await persist_event(
@@ -930,6 +993,7 @@ async def _complete_turn(
         settings=settings,
         artifact_bytes=published,
         user_id=user_id,
+        turn_context=turn_context,
     )
     await persist_event(
         db,
@@ -960,6 +1024,7 @@ async def _cancel_turn(
     tracing: Tracing | None = None,
     settings: Settings | None = None,
     user_id: str | None = None,
+    turn_context: TurnContext | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is not None:
@@ -979,6 +1044,7 @@ async def _cancel_turn(
         user_id=user_id,
         error_code=cancelled.code,
         failure=cancelled,
+        turn_context=turn_context,
     )
     await persist_event(
         db,
@@ -1081,6 +1147,7 @@ async def _fail_turn(
     code: str = "model_host_error",
     user_id: str | None = None,
     failure: Failure | None = None,
+    turn_context: TurnContext | None = None,
 ) -> None:
     resolved = failure or failure_for(code, message)
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
@@ -1100,6 +1167,7 @@ async def _fail_turn(
         user_id=user_id,
         error_code=resolved.code,
         failure=resolved,
+        turn_context=turn_context,
     )
     await persist_event(
         db,
@@ -1210,6 +1278,7 @@ async def load_boot_kwargs(
     session_id: uuid.UUID,
     *,
     mcp_http: list[Any] | None = None,
+    turn_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     from apipi.worker.pi.platform_prompt import compose_instructions
     from apipi.worker.pi.sandbox import (
@@ -1220,22 +1289,52 @@ async def load_boot_kwargs(
     )
 
     async with store.session() as db:
-        row = await get_session(db, tenant_id, session_id)
-        if row is None or not isinstance(row.environment, dict):
-            return None
-        if row.environment.get("type") != "openai_hosted":
-            return None
-        (
-            _function_tools,
-            model,
-            instructions,
-            _raw_tools,
-            agent_metadata,
-            agent_idle,
-        ) = await _agent_tools_and_model(db, tenant_id, row)
-        session_metadata = (
-            row.metadata_json if isinstance(row.metadata_json, dict) else {}
-        )
+        ctx = _parse_turn_context(turn_context)
+        row: Any
+        if ctx is None:
+            row = await get_session(db, tenant_id, session_id)
+            if row is None or not isinstance(row.environment, dict):
+                return None
+            if row.environment.get("type") != "openai_hosted":
+                return None
+            (
+                _function_tools,
+                model,
+                instructions,
+                _raw_tools,
+                agent_metadata,
+                agent_idle,
+            ) = await _agent_tools_and_model(db, tenant_id, row)
+            session_metadata = (
+                row.metadata_json if isinstance(row.metadata_json, dict) else {}
+            )
+            session_idle: str | None = row.idle_ttl
+            context_agent_idle: str | None = agent_idle
+        else:
+            environment = (
+                dict(ctx.session.environment)
+                if isinstance(ctx.session.environment, dict)
+                else {}
+            )
+            if environment.get("type") != "openai_hosted":
+                return None
+            session_metadata = dict(ctx.session.metadata)
+            agent_metadata = dict(ctx.agent.metadata)
+            model = ctx.agent.model
+            instructions = ctx.agent.instructions
+            session_idle = None
+            context_agent_idle = None
+            row = cast(
+                Any,
+                SimpleNamespace(
+                    environment=environment,
+                    metadata_json=session_metadata,
+                    key_id=ctx.session.key_id,
+                    agent_id=_uuid_or_none(ctx.session.agent_id),
+                    user_id=ctx.session.user_id,
+                    org_id=ctx.session.org_id,
+                ),
+            )
         ensure_openai_workspace(row.environment)
         gateway_allowlist = settings.microvm_egress_allowlist
         gateway_hosts: tuple[str, ...] = ()
@@ -1244,9 +1343,14 @@ async def load_boot_kwargs(
 
             gateway_hosts = tuple(microvm_egress_hosts(settings))
         backend = object_store(settings)
-        extra_files = await FileService(store, backend, settings).workspace_files(
-            tenant_id, row.environment
-        )
+        if ctx is None:
+            extra_files = await FileService(store, backend, settings).workspace_files(
+                tenant_id, row.environment
+            )
+        else:
+            extra_files = await materialize_workspace_files(
+                [ref.model_dump() for ref in ctx.files], settings
+            )
         await provision_hosted_async(
             row.environment,
             run_mode=settings.run_mode,
@@ -1258,11 +1362,23 @@ async def load_boot_kwargs(
         )
         directory = row.environment.get("directory")
         if isinstance(directory, str) and directory:
-            await SkillService(store, backend, settings).install(
-                tenant_id, row.environment, Path(directory)
-            )
-        builtin = _effective_builtin_tools(
-            row.environment, session_metadata, agent_metadata
+            if ctx is None:
+                await SkillService(store, backend, settings).install(
+                    tenant_id, row.environment, Path(directory)
+                )
+            else:
+                for blob in await materialize_skill_zips(
+                    [ref.model_dump() for ref in ctx.skills], settings
+                ):
+                    unpack_skill_zip(
+                        Path(directory),
+                        blob,
+                        max_bytes=int(settings.max_workspace_bytes),
+                    )
+        builtin = (
+            _effective_builtin_tools(row.environment, session_metadata, agent_metadata)
+            if ctx is None
+            else ctx.agent.builtin_tools
         )
         cwd_path, tools = _cwd_and_tools(row.environment, builtin)
         sandbox_size = sandbox_size_of(row.environment)
@@ -1277,10 +1393,17 @@ async def load_boot_kwargs(
             network=_network_access(row.environment),
             builtin_tools=builtin,
         )
+        resolved_boot_mcp = (
+            mcp_http
+            if mcp_http is not None
+            else (
+                mcp_servers_from_context(ctx.model_dump()) if ctx is not None else None
+            )
+        )
         kwargs: dict[str, Any] = {
             "cwd": cwd_path,
             "tools": tools,
-            "mcp_http": mcp_http,
+            "mcp_http": resolved_boot_mcp,
             "skill_dirs": _skill_dirs(row.environment, builtin),
             "tenant_id": tenant_id,
             "model": model,
@@ -1297,15 +1420,18 @@ async def load_boot_kwargs(
         kwargs.update(
             _pi_spawn_overrides(settings, session_metadata, agent_metadata, builtin)
         )
-        kwargs.update(
-            _idle_spawn(
-                settings,
-                "openai_hosted",
-                session_idle=row.idle_ttl,
-                session_metadata=session_metadata,
-                agent_idle=agent_idle,
+        if ctx is None:
+            kwargs.update(
+                _idle_spawn(
+                    settings,
+                    "openai_hosted",
+                    session_idle=session_idle,
+                    session_metadata=session_metadata,
+                    agent_idle=context_agent_idle,
+                )
             )
-        )
+        else:
+            kwargs.update(_idle_spawn_from_context(settings, "openai_hosted", ctx))
         return kwargs
 
 
@@ -1373,6 +1499,7 @@ async def run_turn(
     org_id: str | None = None,
     objects: ObjectStore | None = None,
     blobs: ArtifactBlobs | None = None,
+    turn_context: dict[str, Any] | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
     if pool is not None:
@@ -1422,22 +1549,72 @@ async def run_turn(
                 item_content = str(stored_parts[0].get("text") or text)
             elif stored_parts:
                 item_content = stored_parts
-        async with store.session() as db:
-            row = await get_session(db, tenant_id, session_id)
-            if row is None:
-                return
-            (
-                function_tools,
-                model,
-                instructions,
-                _raw_tools,
-                agent_metadata,
-                agent_idle,
-            ) = await _agent_tools_and_model(db, tenant_id, row)
-            session_metadata = (
-                row.metadata_json if isinstance(row.metadata_json, dict) else {}
+        ctx = _parse_turn_context(turn_context)
+        context_pi: bytes | None = None
+        resolved_key = (
+            api_key
+            if api_key is not None
+            else (ctx.model.api_key if ctx is not None else None)
+        )
+        resolved_mcp = (
+            mcp_http
+            if mcp_http is not None
+            else (
+                mcp_servers_from_context(ctx.model_dump()) if ctx is not None else None
             )
-            session_idle = row.idle_ttl
+        )
+        resolved_base_url = (
+            ctx.model.base_url if ctx is not None and ctx.model.base_url else None
+        )
+        async with store.session() as db:
+            context_pi_expected = False
+            row: Any
+            if ctx is None:
+                row = await get_session(db, tenant_id, session_id)
+                if row is None:
+                    return
+                (
+                    function_tools,
+                    model,
+                    instructions,
+                    _raw_tools,
+                    agent_metadata,
+                    agent_idle,
+                ) = await _agent_tools_and_model(db, tenant_id, row)
+                session_metadata = (
+                    row.metadata_json if isinstance(row.metadata_json, dict) else {}
+                )
+                session_idle: str | None = row.idle_ttl
+                context_agent_idle: str | None = agent_idle
+            else:
+                environment = (
+                    dict(ctx.session.environment)
+                    if isinstance(ctx.session.environment, dict)
+                    else {}
+                )
+                session_metadata = dict(ctx.session.metadata)
+                agent_metadata = dict(ctx.agent.metadata)
+                function_tools = [dict(item) for item in ctx.agent.function_tools]
+                model = ctx.agent.model
+                instructions = ctx.agent.instructions
+                session_idle = None
+                context_agent_idle = None
+                context_pi_expected = ctx.pi_session.present
+                row = cast(
+                    Any,
+                    SimpleNamespace(
+                        environment=environment,
+                        metadata_json=session_metadata,
+                        idle_ttl=None,
+                        key_id=ctx.session.key_id,
+                        tenant_id=tenant_id,
+                        id=session_id,
+                        pi_session_id=(session_id if ctx.pi_session.present else None),
+                        agent_id=_uuid_or_none(ctx.session.agent_id),
+                        user_id=ctx.session.user_id,
+                        org_id=ctx.session.org_id,
+                    ),
+                )
             ensure_openai_workspace(row.environment)
             try:
                 model = _bind_turn_model(settings, model)
@@ -1453,9 +1630,14 @@ async def run_turn(
                         gateway_hosts = tuple(microvm_egress_hosts(settings))
                     if backend is None:
                         backend = object_store(settings)
-                    extra_files = await FileService(
-                        store, backend, settings
-                    ).workspace_files(tenant_id, row.environment)
+                    if ctx is None:
+                        extra_files = await FileService(
+                            store, backend, settings
+                        ).workspace_files(tenant_id, row.environment)
+                    else:
+                        extra_files = await materialize_workspace_files(
+                            [ref.model_dump() for ref in ctx.files], settings
+                        )
                 await provision_hosted_async(
                     row.environment,
                     run_mode=settings.run_mode if settings is not None else "none",
@@ -1474,9 +1656,19 @@ async def run_turn(
                 if settings is not None and backend is not None:
                     directory = row.environment.get("directory")
                     if isinstance(directory, str) and directory:
-                        await SkillService(store, backend, settings).install(
-                            tenant_id, row.environment, Path(directory)
-                        )
+                        if ctx is None:
+                            await SkillService(store, backend, settings).install(
+                                tenant_id, row.environment, Path(directory)
+                            )
+                        else:
+                            for blob in await materialize_skill_zips(
+                                [ref.model_dump() for ref in ctx.skills], settings
+                            ):
+                                unpack_skill_zip(
+                                    Path(directory),
+                                    blob,
+                                    max_bytes=int(settings.max_workspace_bytes),
+                                )
             except (SetupError, ApiError) as exc:
                 code = exc.code if isinstance(exc, ApiError) and exc.code else None
                 await fail_environment(
@@ -1493,19 +1685,38 @@ async def run_turn(
                     code="artifact_store",
                 )
                 return
-            builtin_tools = _effective_builtin_tools(
-                row.environment, session_metadata, agent_metadata
+            builtin_tools = (
+                _effective_builtin_tools(
+                    row.environment, session_metadata, agent_metadata
+                )
+                if ctx is None
+                else ctx.agent.builtin_tools
             )
             cwd_path, tools = _cwd_and_tools(row.environment, builtin_tools)
             cache_error: ObjectStoreError | None = None
             if settings is not None and cwd_path:
-                try:
-                    await restore_pi_session(settings, row, Path(cwd_path), blobs=blobs)
-                except ObjectStoreError as exc:
-                    if _cache_expected(row):
-                        cache_error = exc
-                    else:
-                        raise
+                if ctx is None:
+                    try:
+                        await restore_pi_session(
+                            settings, row, Path(cwd_path), blobs=blobs
+                        )
+                    except ObjectStoreError as exc:
+                        if _cache_expected(row):
+                            cache_error = exc
+                        else:
+                            raise
+                else:
+                    if context_pi_expected:
+                        try:
+                            context_pi = await fetch_pi_session_bytes(
+                                ctx.pi_session.model_dump(), settings
+                            )
+                        except ObjectStoreError as exc:
+                            cache_error = exc
+                    if context_pi is not None:
+                        dest = pi_session_file(Path(cwd_path))
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        dest.write_bytes(context_pi)
             skill_dirs = _skill_dirs(row.environment, builtin_tools)
             env_type = row.environment.get("type")
             network = _network_access(row.environment)
@@ -1572,6 +1783,7 @@ async def run_turn(
                     settings=settings,
                     code="artifact_store",
                     user_id=user_id,
+                    turn_context=ctx,
                 )
                 return
         composed = compose_instructions(
@@ -1615,13 +1827,14 @@ async def run_turn(
                     cwd=cwd_path,
                     tools=tools,
                     function_tools=function_tools,
-                    mcp_http=mcp_http,
+                    mcp_http=resolved_mcp,
                     skill_dirs=skill_dirs,
                     abort=abort,
                     tenant_id=tenant_id,
                     model=model,
                     instructions=composed,
-                    api_key=api_key,
+                    api_key=resolved_key,
+                    base_url=resolved_base_url,
                     key_id=key_id,
                     env_type=env_type,
                     mem_mib=sandbox_mem,
@@ -1632,12 +1845,16 @@ async def run_turn(
                     **_pi_spawn_overrides(
                         settings, session_metadata, agent_metadata, builtin_tools
                     ),
-                    **_idle_spawn(
-                        settings,
-                        env_type,
-                        session_idle=session_idle,
-                        session_metadata=session_metadata,
-                        agent_idle=agent_idle,
+                    **(
+                        _idle_spawn(
+                            settings,
+                            env_type,
+                            session_idle=session_idle,
+                            session_metadata=session_metadata,
+                            agent_idle=context_agent_idle,
+                        )
+                        if ctx is None
+                        else _idle_spawn_from_context(settings, env_type, ctx)
                     ),
                 )
                 retry_state = _new_retry_state()
@@ -1693,6 +1910,7 @@ async def run_turn(
                             code=exc.code,
                             user_id=user_id,
                             failure=exc.failure,
+                            turn_context=ctx,
                         )
                     return
                 except TimeoutError:
@@ -1717,6 +1935,7 @@ async def run_turn(
                             code="turn_timeout",
                             user_id=user_id,
                             failure=timed_out,
+                            turn_context=ctx,
                         )
                     return
                 except OSError as exc:
@@ -1734,6 +1953,7 @@ async def run_turn(
                             settings=settings,
                             code="spawn_failed",
                             user_id=user_id,
+                            turn_context=ctx,
                         )
                     return
                 set_span(
@@ -1761,6 +1981,7 @@ async def run_turn(
                         tracing=tracing,
                         settings=settings,
                         user_id=user_id,
+                        turn_context=ctx,
                     )
                     return
                 if pending:
@@ -1798,6 +2019,7 @@ async def run_turn(
                     proc=pool.peek(session_id) if pool is not None else None,
                     user_id=user_id,
                     blobs=blobs,
+                    turn_context=ctx,
                 )
     finally:
         if pool is not None:
@@ -1829,6 +2051,7 @@ async def continue_turn(
     user_id: str | None = None,
     org_id: str | None = None,
     blobs: ArtifactBlobs | None = None,
+    turn_context: dict[str, Any] | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -1839,13 +2062,50 @@ async def continue_turn(
     instructions: str | None = None
     env_type: str | None
     spawn_ids = _spawn_identity_empty(user_id, org_id)
+    ctx = _parse_turn_context(turn_context)
+    context_pi: bytes | None = None
+    resolved_key = (
+        api_key
+        if api_key is not None
+        else (ctx.model.api_key if ctx is not None else None)
+    )
+    resolved_mcp = (
+        mcp_http
+        if mcp_http is not None
+        else (mcp_servers_from_context(ctx.model_dump()) if ctx is not None else None)
+    )
+    resolved_base_url = (
+        ctx.model.base_url if ctx is not None and ctx.model.base_url else None
+    )
     async with store.session() as db:
-        row = await get_session(db, tenant_id, session_id)
-        if row is None:
-            raise ApiError(
-                "invalid_request", "Not found", code="not_found", status_code=404
+        row: Any
+        if ctx is None:
+            row = await get_session(db, tenant_id, session_id)
+            if row is None:
+                raise ApiError(
+                    "invalid_request", "Not found", code="not_found", status_code=404
+                )
+            status = row.status
+            required_actions = row.required_actions
+        else:
+            status = ctx.session.status
+            required_actions = ctx.session.required_actions
+            row = cast(
+                Any,
+                SimpleNamespace(
+                    environment=(
+                        dict(ctx.session.environment)
+                        if isinstance(ctx.session.environment, dict)
+                        else {}
+                    ),
+                    metadata_json=dict(ctx.session.metadata),
+                    key_id=ctx.session.key_id,
+                    agent_id=_uuid_or_none(ctx.session.agent_id),
+                    user_id=ctx.session.user_id,
+                    org_id=ctx.session.org_id,
+                ),
             )
-        if row.status != "requires_action":
+        if status != "requires_action":
             raise ApiError(
                 "invalid_request",
                 "Session is not waiting for a tool result",
@@ -1857,7 +2117,11 @@ async def continue_turn(
                 "invalid_request", "Not found", code="not_found", status_code=404
             )
         actions = [
-            action for action in row.required_actions if isinstance(action, dict)
+            action
+            for action in (
+                required_actions if isinstance(required_actions, list) else []
+            )
+            if isinstance(action, dict)
         ]
         match = next(
             (
@@ -1893,38 +2157,77 @@ async def continue_turn(
         ensure_openai_workspace(row.environment)
         cwd_path, tools = _cwd_and_tools(row.environment)
         if settings is not None and cwd_path:
-            try:
-                await restore_pi_session(settings, row, Path(cwd_path), blobs=blobs)
-            except ObjectStoreError:
-                if _cache_expected(row):
-                    await _fail_turn(
-                        db,
-                        hub,
-                        tenant_id,
-                        session_id,
-                        turn_id,
-                        "Cannot read artifacts",
-                        request_id=request_id,
-                        metrics=metrics,
-                        tracing=tracing,
-                        settings=settings,
-                        code="artifact_store",
-                        user_id=user_id,
-                    )
-                    return
-                raise
-        (
-            function_tools,
-            model,
-            instructions,
-            _raw_tools,
-            agent_metadata,
-            agent_idle,
-        ) = await _agent_tools_and_model(db, tenant_id, row)
-        session_metadata = (
-            row.metadata_json if isinstance(row.metadata_json, dict) else {}
-        )
-        session_idle = row.idle_ttl
+            if ctx is None:
+                try:
+                    await restore_pi_session(settings, row, Path(cwd_path), blobs=blobs)
+                except ObjectStoreError:
+                    if _cache_expected(row):
+                        await _fail_turn(
+                            db,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            "Cannot read artifacts",
+                            request_id=request_id,
+                            metrics=metrics,
+                            tracing=tracing,
+                            settings=settings,
+                            code="artifact_store",
+                            user_id=user_id,
+                            turn_context=ctx,
+                        )
+                        return
+                    raise
+            else:
+                if ctx.pi_session.present:
+                    try:
+                        context_pi = await fetch_pi_session_bytes(
+                            ctx.pi_session.model_dump(), settings
+                        )
+                    except ObjectStoreError:
+                        await _fail_turn(
+                            db,
+                            hub,
+                            tenant_id,
+                            session_id,
+                            turn_id,
+                            "Cannot read artifacts",
+                            request_id=request_id,
+                            metrics=metrics,
+                            tracing=tracing,
+                            settings=settings,
+                            code="artifact_store",
+                            user_id=user_id,
+                            turn_context=ctx,
+                        )
+                        return
+                if context_pi is not None:
+                    dest = pi_session_file(Path(cwd_path))
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(context_pi)
+        if ctx is None:
+            (
+                function_tools,
+                model,
+                instructions,
+                _raw_tools,
+                agent_metadata,
+                agent_idle,
+            ) = await _agent_tools_and_model(db, tenant_id, row)
+            session_metadata = (
+                row.metadata_json if isinstance(row.metadata_json, dict) else {}
+            )
+            session_idle: str | None = row.idle_ttl
+            context_agent_idle: str | None = agent_idle
+        else:
+            function_tools = [dict(item) for item in ctx.agent.function_tools]
+            model = ctx.agent.model
+            instructions = ctx.agent.instructions
+            session_metadata = dict(ctx.session.metadata)
+            agent_metadata = dict(ctx.agent.metadata)
+            session_idle = None
+            context_agent_idle = None
         try:
             model = _bind_turn_model(settings, model)
         except ApiError as exc:
@@ -1932,8 +2235,10 @@ async def continue_turn(
                 db, hub, tenant_id, session_id, exc.message, code=exc.code or None
             )
             return
-        builtin_tools = _effective_builtin_tools(
-            row.environment, session_metadata, agent_metadata
+        builtin_tools = (
+            _effective_builtin_tools(row.environment, session_metadata, agent_metadata)
+            if ctx is None
+            else ctx.agent.builtin_tools
         )
         cwd_path, tools = _cwd_and_tools(row.environment, builtin_tools)
         skill_dirs = _skill_dirs(row.environment, builtin_tools)
@@ -1986,12 +2291,13 @@ async def continue_turn(
                     tools=tools,
                     function_tools=function_tools,
                     tool_result=result,
-                    mcp_http=mcp_http,
+                    mcp_http=resolved_mcp,
                     skill_dirs=skill_dirs,
                     tenant_id=tenant_id,
                     model=model,
                     instructions=composed,
-                    api_key=api_key,
+                    api_key=resolved_key,
+                    base_url=resolved_base_url,
                     key_id=key_id,
                     env_type=env_type,
                     mem_mib=sandbox_mem,
@@ -2002,12 +2308,16 @@ async def continue_turn(
                     **_pi_spawn_overrides(
                         settings, session_metadata, agent_metadata, builtin_tools
                     ),
-                    **_idle_spawn(
-                        settings,
-                        env_type,
-                        session_idle=session_idle,
-                        session_metadata=session_metadata,
-                        agent_idle=agent_idle,
+                    **(
+                        _idle_spawn(
+                            settings,
+                            env_type,
+                            session_idle=session_idle,
+                            session_metadata=session_metadata,
+                            agent_idle=context_agent_idle,
+                        )
+                        if ctx is None
+                        else _idle_spawn_from_context(settings, env_type, ctx)
                     ),
                 )
                 retry_state = _new_retry_state()
@@ -2049,6 +2359,7 @@ async def continue_turn(
                             code=exc.code,
                             user_id=user_id,
                             failure=exc.failure,
+                            turn_context=ctx,
                         )
                     return
                 except TimeoutError:
@@ -2072,6 +2383,7 @@ async def continue_turn(
                             code="turn_timeout",
                             user_id=user_id,
                             failure=timed_out,
+                            turn_context=ctx,
                         )
                     return
                 except OSError as exc:
@@ -2089,6 +2401,7 @@ async def continue_turn(
                             settings=settings,
                             code="spawn_failed",
                             user_id=user_id,
+                            turn_context=ctx,
                         )
                     return
                 except CapacityError as exc:
@@ -2146,6 +2459,7 @@ async def continue_turn(
                     proc=pool.peek(session_id) if pool is not None else None,
                     user_id=user_id,
                     blobs=blobs,
+                    turn_context=ctx,
                 )
     finally:
         if pool is not None:
