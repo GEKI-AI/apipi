@@ -4,22 +4,25 @@ Acceptance test for #441. One API-only app serves HTTP while a
 credential-less worker (no ``DATABASE_URL``, no object-store
 credentials, ``store=None``) connects over ``/internal/worker`` through
 the real worker protocol and runs turns from the command context. The
-``FakeWorker`` socket plus ``dispatch_command`` is the closest existing
-pattern to a separate worker process. A streaming fake model host emits
-several text chunks per turn, and the agent carries an HTTP MCP tool
-whose bearer comes from the vault.
+worker side is driven by the real worker connection loop
+(``_serve_connection``) over a small socket adapter around
+``FakeWorker``. A streaming fake model host emits several text chunks
+per turn and really calls the fake HTTP MCP server from the turn
+context (URL plus vault headers), building the ``mcp_call`` item from
+the live JSON-RPC result.
 
 The test asserts that the SSE client sees multiple
 ``agent.session.turn.output_text.delta`` events before
 ``output_text.done`` with the concatenated deltas equal to the final
-text, that an MCP call item with ``server_label`` and the tool name is
-stored on two consecutive turns, and that deltas are never stored
+text, that the MCP server saw the vault bearer on both turns and both
+``mcp_call`` items are stored, and that deltas are never stored
 (``after_seq`` replay and export are unchanged). With a Postgres test
 database a second API replica streams the same deltas over the shared
 event bus.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import uuid
@@ -27,6 +30,7 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
@@ -35,13 +39,12 @@ from apipi.api.sessions import _event_stream
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.event_bus import InMemoryEventBus
+from apipi.services.event_bus import InMemoryEventBus, PostgresEventBus
 from apipi.services.runtime import FakeHarness, usage_from
 from apipi.store.engine import Store
-from apipi.worker.artifact_upload import handle_presign_reply
 from apipi.worker.deltas import DeltaRelay, LiveRedirectBus
 from apipi.worker.execution import RemoteExecution, local_execution
-from apipi.worker.hub import dispatch_command
+from apipi.worker.hub import CommandDedupe, _serve_connection
 from apipi.worker.outbox import Outbox
 
 pytest_plugins = ["tests.support.mcp_http_server"]
@@ -87,27 +90,92 @@ def _parse_sse(text: str) -> list[dict[str, Any]]:
     return events
 
 
+def _server_entry(entry: Any) -> tuple[str, str, dict[str, str]] | None:
+    """Read an ``mcp_http`` turn-context entry as label, URL, headers."""
+    if isinstance(entry, dict):
+        label, url, headers = (
+            entry.get("server_label"),
+            entry.get("server_url"),
+            entry.get("headers"),
+        )
+    else:
+        label, url, headers = (
+            getattr(entry, "server_label", None),
+            getattr(entry, "server_url", None),
+            getattr(entry, "headers", None),
+        )
+    if isinstance(label, str) and isinstance(url, str) and isinstance(headers, dict):
+        return label, url, {str(key): str(value) for key, value in headers.items()}
+    return None
+
+
 class StreamingMcpHarness(FakeHarness):
-    """Fake model host: spaced text chunks plus scripted MCP calls."""
+    """Fake model host: spaced text chunks plus live MCP tool calls.
+
+    Scripted calls name a tool on an ``mcp_http`` server from the turn
+    context. The harness performs a JSON-RPC ``tools/call`` against
+    that server with the entry's URL and headers (so the vault bearer)
+    and builds the ``mcp_call`` item from the real result.
+    """
 
     def __init__(self, chunks: list[str]) -> None:
         super().__init__()
         self.chunks = list(chunks)
         self.mcp_http_turns: list[Any] = []
+        self.mcp_http_calls: list[dict[str, str]] = []
+
+    async def _call_tool(
+        self, server: tuple[str, str, dict[str, str]], name: str
+    ) -> Any:
+        label, url, headers = server
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                url,
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": {}},
+                },
+            )
+        assert response.status_code == 200, f"MCP {label} call failed"
+        body = response.json()
+        assert isinstance(body, dict) and body.get("result") is not None
+        self.mcp_http_calls.append(
+            {
+                "server_label": label,
+                "url": url,
+                "authorization": headers.get("Authorization", ""),
+            }
+        )
+        return body["result"]
 
     async def generate(self, text: str, **kwargs: object):  # type: ignore[override]
         raw_mcp = kwargs.get("mcp_http")
-        self.mcp_http = list(raw_mcp) if isinstance(raw_mcp, list) else None
+        entries = raw_mcp if isinstance(raw_mcp, list) else []
+        self.mcp_http = list(entries)
         self.mcp_http_turns.append(self.mcp_http)
         for call in self.mcp_calls:
             assert isinstance(call, dict)
+            server = None
+            for entry in entries:
+                parsed = _server_entry(entry)
+                if parsed is not None and parsed[0] == call.get("server_label"):
+                    server = parsed
+                    break
+            assert server is not None, (
+                f"no mcp_http server for {call.get('server_label')}"
+            )
+            result = await self._call_tool(server, str(call.get("name")))
             yield (
                 "agent.session.turn.item.added",
                 {
                     "item_type": "mcp_call",
                     "call_id": call.get("call_id"),
                     "name": call.get("name"),
-                    "server_label": call.get("server_label"),
+                    "server_label": server[0],
+                    "result": result,
                 },
             )
         self.mcp_calls = []
@@ -176,6 +244,35 @@ def _assert_streamed_text(raw: str, expected: str, minimum_deltas: int = 3) -> N
     assert "".join(str(delta["data"]["delta"]) for delta in deltas) == expected
 
 
+class _WorkerSocket:
+    """Adapt ``FakeWorker`` to the socket shape ``_serve_connection`` needs.
+
+    The real worker connection loop only uses ``send(str)`` and
+    ``recv()``; this adapter forwards both over the in-process ASGI
+    websocket and records ``delta.text`` payloads crossing the wire.
+    """
+
+    def __init__(self, worker: FakeWorker) -> None:
+        self._worker = worker
+        self.delta_texts: list[str] = []
+        self.hello_seen = asyncio.Event()
+
+    async def send(self, raw: str) -> None:
+        payload = json.loads(raw)
+        assert isinstance(payload, dict)
+        if payload.get("type") == "delta.text":
+            data = payload.get("payload")
+            if isinstance(data, dict):
+                self.delta_texts.append(str(data.get("text", "")))
+        await self._worker.send_json(payload)
+
+    async def recv(self) -> str:
+        message = await self._worker.receive_json(timeout=30)
+        if message.get("ok") and "worker_id" in message:
+            self.hello_seen.set()
+        return json.dumps(message)
+
+
 async def test_split_mode_deltas_and_http_mcp(
     settings: Settings,
     store: Store,
@@ -184,7 +281,7 @@ async def test_split_mode_deltas_and_http_mcp(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mcp_url, _seen = mcp_server
+    mcp_url, seen = mcp_server
     monkeypatch.delenv("DATABASE_URL", raising=False)
     assert os.environ.get("DATABASE_URL") is None
     api_settings = _api_settings(settings)
@@ -194,6 +291,11 @@ async def test_split_mode_deltas_and_http_mcp(
     worker_settings = Settings(
         run_mode="none",
         sessions_dir=str(tmp_path / "worker-sessions"),
+        # The shared local store root must be mounted at the same path as
+        # the API (production split-mode mounts one volume there); the
+        # worker answers the hello store challenge from it. The worker
+        # sessions dir stays separate: workspaces are per-worker.
+        local_store_dir=settings.sessions_dir,
         mcp_allow_hosts="127.0.0.1",
     )
     bus = InMemoryEventBus()
@@ -216,71 +318,41 @@ async def test_split_mode_deltas_and_http_mcp(
     _block_worker_storage(monkeypatch)
 
     worker = FakeWorker(app, worker_secret)
-    send_lock = asyncio.Lock()
-    socket_deltas: list[dict[str, Any]] = []
-
-    async def sock_send(payload: dict[str, Any]) -> None:
-        if payload.get("type") == "delta.text":
-            socket_deltas.append(payload)
-        async with send_lock:
-            await worker.send_json(payload)
-
-    relay.attach(sock_send)
-    stop = asyncio.Event()
-    ready = asyncio.Event()
-    command_tasks: set[asyncio.Task[None]] = set()
-
-    async def run_worker() -> None:
-        hello = await worker.connect(capacity=2)
-        assert hello.get("ok") is True
-        ready.set()
-        while not stop.is_set():
-            try:
-                message = await worker.receive_json(timeout=5)
-            except TimeoutError:
-                continue
-            kind = message.get("type")
-            if kind == "command":
-                await sock_send(
-                    {
-                        "type": "lease.ack",
-                        "id": message.get("id"),
-                        "lease_id": message.get("lease_id"),
-                    }
-                )
-                task = asyncio.create_task(dispatch_command(execution, message))
-                command_tasks.add(task)
-            elif kind == "ack":
-                try:
-                    outbox.acked(
-                        uuid.UUID(str(message.get("session_id"))),
-                        int(str(message.get("last_seq"))),
-                    )
-                except (ValueError, TypeError):
-                    continue
-            elif kind == "artifact.presign.reply":
-                handle_presign_reply(execution.presign_waiters, message)
-
-    async def pump_outbox() -> None:
-        sent: set[tuple[uuid.UUID, int]] = set()
-        while not stop.is_set():
-            for session_id in outbox.pending_sessions():
-                for envelope in outbox.pending(session_id):
-                    try:
-                        key = (session_id, int(envelope["seq"]))
-                    except (KeyError, ValueError, TypeError):
-                        continue
-                    if key in sent:
-                        continue
-                    sent.add(key)
-                    await sock_send(dict(envelope))
-            await asyncio.sleep(0.005)
+    await worker.ws.connect()
+    sock = _WorkerSocket(worker)
+    worker_tasks: set[asyncio.Task[None]] = set()
+    serve_task = asyncio.create_task(
+        _serve_connection(
+            worker_settings,
+            execution,
+            outbox,
+            relay,
+            sock,
+            session_leases={},
+            command_tasks=set(),
+            tasks=worker_tasks,
+            draining=asyncio.Event(),
+            drain_deadline=None,
+            wait=60.0,
+            heartbeat=1.0,
+            emitter=None,
+            dedupe=CommandDedupe(),
+        )
+    )
+    try:
+        async with asyncio.timeout(30):
+            await sock.hello_seen.wait()
+    except TimeoutError:
+        serve_task.cancel()
+        failure = serve_task.exception() if serve_task.done() else None
+        raise AssertionError(
+            f"worker never finished register/hello: {failure!r}"
+            if failure is not None
+            else "worker never finished register/hello"
+        ) from None
 
     token = "split-441"
     tenant_id = _tenant(token)
-    worker_task = asyncio.create_task(run_worker())
-    pump_task = asyncio.create_task(pump_outbox())
-    await ready.wait()
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
@@ -332,9 +404,13 @@ async def test_split_mode_deltas_and_http_mcp(
 
             second_raw: str | None = None
             if os.environ.get("APIPI_TEST_DATABASE_URL"):
+                assert isinstance(app.state.event_hub, PostgresEventBus), (
+                    "second-replica block needs the shared Postgres bus"
+                )
                 second_app = create_app(
                     api_settings, store=store, harness=FakeHarness()
                 )
+                assert isinstance(second_app.state.event_hub, PostgresEventBus)
                 await second_app.state.event_hub.start()
                 try:
                     second_stream = _event_stream(
@@ -393,10 +469,8 @@ async def test_split_mode_deltas_and_http_mcp(
             _assert_streamed_text(first_raw, TEXT_FIRST)
             if second_raw is not None:
                 _assert_streamed_text(second_raw, TEXT_FIRST)
-            assert socket_deltas, "worker sent no delta.text envelopes"
-            assert "".join(
-                str(item["payload"]["text"]) for item in socket_deltas
-            ).startswith(TEXT_FIRST)
+            assert sock.delta_texts, "worker sent no delta.text envelopes"
+            assert "".join(sock.delta_texts).startswith(TEXT_FIRST)
             assert harness.mcp_http_turns, "worker harness saw no turn"
             first_mcp = harness.mcp_http_turns[0]
             assert first_mcp is not None and first_mcp[0].server_label == "mock"
@@ -406,7 +480,7 @@ async def test_split_mode_deltas_and_http_mcp(
             harness.mcp_calls = [
                 {"call_id": "call-2", "name": "mock_tool", "server_label": "mock"}
             ]
-            before = len(socket_deltas)
+            before = len(sock.delta_texts)
             mid_stored = await client.get(
                 f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
             )
@@ -432,14 +506,17 @@ async def test_split_mode_deltas_and_http_mcp(
             assert follow_posted.status_code == 200
             follow_raw = await follow_collect
             _assert_streamed_text(follow_raw, TEXT_SECOND)
-            assert len(socket_deltas) > before
-            assert "".join(str(item["payload"]["text"]) for item in socket_deltas) == (
-                TEXT_FIRST + TEXT_SECOND
-            )
+            assert len(sock.delta_texts) > before
+            assert "".join(sock.delta_texts) == (TEXT_FIRST + TEXT_SECOND)
             assert len(harness.mcp_http_turns) >= 2
             second_mcp = harness.mcp_http_turns[-1]
             assert second_mcp is not None and second_mcp[0].server_label == "mock"
             assert second_mcp[0].headers == {"Authorization": "Bearer vault-secret"}
+            assert seen.get("Authorization") == "Bearer vault-secret"
+            assert [call["authorization"] for call in harness.mcp_http_calls] == [
+                "Bearer vault-secret",
+                "Bearer vault-secret",
+            ]
 
             stored = await client.get(
                 f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
@@ -461,6 +538,10 @@ async def test_split_mode_deltas_and_http_mcp(
             ]
             assert {item["data"]["server_label"] for item in mcp_items} == {"mock"}
             assert {item["data"]["name"] for item in mcp_items} == {"mock_tool"}
+            for item in mcp_items:
+                result = item["data"].get("result")
+                assert isinstance(result, dict)
+                assert result.get("serverInfo", {}).get("name") == "mock"
 
             last_seq = stored_events[-1]["seq"]
             replay_stream = _event_stream(
@@ -502,10 +583,10 @@ async def test_split_mode_deltas_and_http_mcp(
             assert "agent.session.turn.output_text.delta" not in export_types
             assert exported.json()["events"] == stored_events
     finally:
-        stop.set()
-        worker_task.cancel()
-        pump_task.cancel()
-        for task in command_tasks:
+        serve_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await serve_task
+        for task in list(worker_tasks):
             if not task.done():
                 task.cancel()
         relay.detach()
