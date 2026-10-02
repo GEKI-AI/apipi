@@ -1416,7 +1416,10 @@ async def _reject_missing_image(
     image: str,
     request_id: str | None,
 ) -> None:
+    store = getattr(execution, "store", None)
     hub = getattr(execution, "hub", None)
+    if hub is None:
+        return
     message = (
         image_unavailable_message(hub, image)
         if hub is not None
@@ -1434,13 +1437,10 @@ async def _reject_missing_image(
         session_id=session_id,
         request_id=request_id,
     )
-    store = getattr(execution, "store", None)
-    if store is None or hub is None:
-        return
     from apipi.services.sink import resolve_sink
 
     active = resolve_sink(_sink_for_execution(execution, tenant_id, session_id))
-    async with store.session() as db:
+    async with active.txn(store) as db:
         await active.append_event(
             db,
             hub,
@@ -1481,13 +1481,13 @@ async def _reject_mismatched_turn(
     )
     store = getattr(execution, "store", None)
     hub = getattr(execution, "hub", None)
-    if store is None or hub is None:
+    if hub is None:
         return
     message = f"Worker does not accept {required} sessions"
     from apipi.services.sink import resolve_sink
 
     active = resolve_sink(_sink_for_execution(execution, tenant_id, session_id))
-    async with store.session() as db:
+    async with active.txn(store) as db:
         await active.append_event(
             db,
             hub,
@@ -1577,13 +1577,13 @@ async def _report_escaped_turn(
 ) -> None:
     store = getattr(execution, "store", None)
     hub = getattr(execution, "hub", None)
-    if store is None or hub is None:
+    if hub is None:
         return
     from apipi.services.sink import resolve_sink
 
     active = resolve_sink(_sink_for_execution(execution, tenant_id, session_id))
-    async with store.session() as db:
-        row = await get_session(db, tenant_id, session_id)
+    async with active.txn(store) as db:
+        row = await get_session(db, tenant_id, session_id) if db is not None else None
         if row is not None and row.status == "failed":
             return
         if isinstance(exc, ApiError):
@@ -1900,14 +1900,18 @@ async def run_worker(
     url: str | None = None,
     drain_timeout: float | None = None,
 ) -> int:
-    from apipi.services.event_bus import create_event_bus
+    from apipi.services.event_bus import InMemoryEventBus
     from apipi.services.lifecycle_export import (
         OutboxLifecycleReporter,
         worker_lifecycle_ignored,
     )
-    from apipi.store.engine import Store, create_engine
     from apipi.worker.accepts import require_worker_accepts
     from apipi.worker.execution import local_execution, worker_observability
+    from apipi.worker.tls import (
+        check_worker_mtls_files,
+        require_worker_tls,
+        worker_ssl_context,
+    )
 
     reject_legacy_worker_token()
     require_worker_accepts(settings)
@@ -1922,21 +1926,20 @@ async def run_worker(
         )
     token = load_worker_token(settings.worker_token_file)
     base = url or settings.api_url or "http://127.0.0.1:8000"
-    ws_url = worker_ws_url(base)
+    ws_url = require_worker_tls(base)
+    check_worker_mtls_files(settings)
     heartbeat = min(10.0, max(1.0, settings.worker_lease_ttl.total_seconds() / 2))
-    store = Store(create_engine(settings.database_url, pool_size=settings.db_pool_size))
     metrics, tracing = worker_observability(settings)
-    # Turn context arrives in commands, so the worker only reads the
-    # database for artifacts and the workspace until later steps. Live
-    # deltas go over the socket instead: the relay coalesces them into
-    # ephemeral envelopes and the API fans them out to every replica.
-    # Durable results go through the outbox with a cumulative ack.
-    bus = create_event_bus(settings, store=store, metrics=metrics)
+    # A split worker holds no database and no object-store credentials.
+    # Turn context arrives in commands, live deltas go over the socket
+    # through the relay, and durable results go through the outbox
+    # with a cumulative ack, so the event bus is always in memory.
+    bus = InMemoryEventBus()
     relay = DeltaRelay()
     outbox = worker_outbox(settings)
     execution = local_execution(
         settings,
-        store=store,
+        store=None,
         hub=LiveRedirectBus(bus, relay),
         metrics=metrics,
         tracing=tracing,
@@ -2002,11 +2005,14 @@ async def run_worker(
     dedupe = CommandDedupe()
     status = 0
     backoff = 0.5
+    tls_context = worker_ssl_context(settings) if ws_url.startswith("wss") else None
     try:
         while True:
             try:
                 async with websockets.connect(
-                    ws_url, additional_headers={"Authorization": f"Bearer {token}"}
+                    ws_url,
+                    additional_headers={"Authorization": f"Bearer {token}"},
+                    ssl=tls_context,
                 ) as sock:
                     outcome, drain_deadline = await _serve_connection(
                         settings,
@@ -2049,7 +2055,6 @@ async def run_worker(
         if execution.tracing is not None:
             execution.tracing.shutdown()
         await bus.close()
-        await store.dispose()
     return status
 
 

@@ -4,7 +4,6 @@ import time
 import uuid
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -48,18 +47,6 @@ class _Connect:
         return False
 
 
-class _Store:
-    # No real database: the engine URL only tells create_event_bus to
-    # stay on the memory bus so run_worker never dials Postgres here.
-    engine = SimpleNamespace(url="sqlite+aiosqlite:///:memory:")
-
-    def __init__(self, *_args: object, **_kwargs: object) -> None:
-        return None
-
-    async def dispose(self) -> None:
-        return None
-
-
 class _Execution:
     tracing = None
     db_fallback = True
@@ -88,7 +75,6 @@ async def test_run_worker_reaps_idle_sessions(
     metrics = Metrics()
     (tmp_path / "worker.token").write_text("secret\n")
     settings = Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
         worker_token_file=str(tmp_path / "worker.token"),
         idle_ttl=timedelta(milliseconds=40),
@@ -112,10 +98,6 @@ async def test_run_worker_reaps_idle_sessions(
     monkeypatch.setattr(
         "apipi.worker.execution.worker_observability",
         lambda _settings: (None, None),
-    )
-    monkeypatch.setattr("apipi.store.engine.Store", _Store)
-    monkeypatch.setattr(
-        "apipi.store.engine.create_engine", lambda *_args, **_kwargs: object()
     )
     monkeypatch.setattr(
         "apipi.worker.hub.websockets.connect", lambda *_a, **_k: _Connect()
@@ -146,7 +128,6 @@ async def test_run_worker_reports_lifecycle_over_socket(
     (tmp_path / "worker.token").write_text("secret\n")
     monkeypatch.setenv("APIPI_LIFECYCLE_EXPORT_URL", "http://export.test/life")
     settings = Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
         worker_token_file=str(tmp_path / "worker.token"),
         lifecycle_heartbeat="off",
@@ -171,10 +152,6 @@ async def test_run_worker_reports_lifecycle_over_socket(
     monkeypatch.setattr(
         "apipi.worker.execution.worker_observability",
         lambda _settings: (None, None),
-    )
-    monkeypatch.setattr("apipi.store.engine.Store", _Store)
-    monkeypatch.setattr(
-        "apipi.store.engine.create_engine", lambda *_args, **_kwargs: object()
     )
     monkeypatch.setattr(
         "apipi.worker.hub.websockets.connect", lambda *_a, **_k: _Connect()

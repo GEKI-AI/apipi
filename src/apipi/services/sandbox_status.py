@@ -296,6 +296,10 @@ async def note_failed(
     data: dict[str, Any] = {"error": message}
     if code:
         data["code"] = code
+    if db is None:
+        # A split worker holds no database: the API applies the
+        # sandbox failure when it ingests the reported envelopes.
+        return data
     row = await get_session(db, tenant_id, session_id)
     if row is None or not is_hosted(row.environment):
         return data

@@ -143,3 +143,23 @@ def test_run_checks_role_worker_needs_token(monkeypatch: pytest.MonkeyPatch) -> 
     assert by_name["database"].status == "skip"
     assert by_name["model host"].status == "skip"
     assert by_name["worker token"].status == "fail"
+    assert by_name["worker TLS"].status == "ok"
+
+
+def test_run_checks_role_worker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ready, "require_pinned_pi", lambda _s: None)
+    monkeypatch.setattr(ready, "installed_pi_version", lambda _s: PINNED_PI)
+    monkeypatch.setattr(ready, "require_run_mode", lambda *_a, **_k: None)
+    settings = _settings()
+    rows = run_checks(settings, role="worker")
+    by_name = {row.name: row for row in rows}
+    assert by_name["worker TLS"].status == "ok"
+    remote = settings.model_copy(update={"api_url": "http://api.example:8000"})
+    rows = run_checks(remote, role="worker")
+    by_name = {row.name: row for row in rows}
+    assert by_name["worker TLS"].status == "fail"
+    assert "TLS" in by_name["worker TLS"].detail
+    secure = settings.model_copy(update={"api_url": "https://api.example"})
+    rows = run_checks(secure, role="worker")
+    by_name = {row.name: row for row in rows}
+    assert by_name["worker TLS"].status == "ok"

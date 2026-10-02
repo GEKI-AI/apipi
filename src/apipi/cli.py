@@ -24,7 +24,6 @@ from apipi.config import (
     SQLITE_WARNING,
     USAGE_EXPORT_OFF,
     USAGE_EXPORT_ON,
-    VAULT_MASTER_KEY_UNSET,
     ConfigError,
     Settings,
     is_sqlite_url,
@@ -32,6 +31,7 @@ from apipi.config import (
     load_worker_token,
     reject_legacy_worker_token,
     reject_prompt_body_logging,
+    reject_worker_database_url,
     require_run_mode,
     usage_retention_log,
     usage_store_log,
@@ -39,7 +39,6 @@ from apipi.config import (
 from apipi.gateway import create_app
 from apipi.gateway.logutil import configure_logging, uvicorn_log_config
 from apipi.gateway.ready import check_ready
-from apipi.services.vault_crypto import vault_master_key_unset
 from apipi.store.engine import Store
 from apipi.store.migrate import migrate
 from apipi.worker.pi.image_check import (
@@ -119,9 +118,10 @@ def prepare_worker(
         settings if settings is not None else load_settings(config_path=config_path)
     )
     reject_legacy_worker_token()
+    reject_worker_database_url()
     load_worker_token(resolved.worker_token_file)
-    if vault_master_key_unset(resolved.vault_master_key):
-        log.warning(VAULT_MASTER_KEY_UNSET)
+    # Workers never decrypt vaults: the API resolves MCP credentials into
+    # turn contexts, so no vault master key warning belongs here.
     require_run_mode(resolved.run_mode, resolved)
     probe_model_host(resolved)
     probe_run_mode(resolved)

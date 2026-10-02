@@ -157,14 +157,26 @@ def run_checks(
     else:
         checks.append(Check("skip", "images", "none local"))
     if role == "worker":
-        from apipi.config import load_worker_token, reject_legacy_worker_token
+        from apipi.config import (
+            load_worker_token,
+            reject_legacy_worker_token,
+            reject_worker_database_url,
+        )
+        from apipi.worker.tls import check_worker_mtls_files, require_worker_tls
 
         try:
             reject_legacy_worker_token()
+            reject_worker_database_url()
             load_worker_token(settings.worker_token_file)
             checks.append(Check("ok", "worker token", "file"))
         except ConfigError as exc:
             checks.append(Check("fail", "worker token", str(exc)))
+        try:
+            require_worker_tls(settings.api_url or "http://127.0.0.1:8000")
+            check_worker_mtls_files(settings)
+            checks.append(Check("ok", "worker TLS", "wss or loopback"))
+        except ConfigError as exc:
+            checks.append(Check("fail", "worker TLS", str(exc)))
     if vault_master_key_unset(settings.vault_master_key):
         checks.append(Check("ok", "vault key", "unset (local default)"))
     else:

@@ -75,7 +75,8 @@ def test_prepare_worker_none_skips_production_warning(
     assert settings.run_mode == "none"
     assert probed == ["none"]
     assert NONE_MODE_WARNING not in caplog.text
-    assert VAULT_MASTER_KEY_UNSET in caplog.text
+    # Workers never decrypt vaults, so the vault key warning is API-only.
+    assert VAULT_MASTER_KEY_UNSET not in caplog.text
 
 
 def test_prepare_serve_logs_default_observability(

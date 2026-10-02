@@ -3,6 +3,7 @@ import base64
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -458,7 +459,7 @@ def _note_retry(state: dict[str, Any], etype: str, data: dict[str, Any]) -> None
 
 
 async def _consume_generate(
-    store: Store,
+    store: Store | None,
     hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -978,7 +979,9 @@ async def _harvest_split(
                     "Cannot write artifacts", code="artifact_store"
                 )
     if limit_error is not None:
-        assert db is not None
+        # Every write below goes through the sink, which ignores the
+        # database handle on a split worker (OutboxSink buffers
+        # envelopes until the API ingests them).
         assert hub is not None
         if limit_error.code == "artifact_store":
             await _fail_turn(
@@ -1010,7 +1013,7 @@ async def _harvest_split(
 
 
 async def _complete_turn(
-    db: AsyncSession,
+    db: AsyncSession | None,
     hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -1066,6 +1069,9 @@ async def _complete_turn(
             if published is None:
                 return
         else:
+            # Combined mode writes artifacts directly. A split worker
+            # takes the outbox branch above and holds no database.
+            assert db is not None
             _row, limit_error = await harvest_session(
                 db,
                 settings,
@@ -1136,7 +1142,7 @@ async def _complete_turn(
 
 
 async def _cancel_turn(
-    db: AsyncSession,
+    db: AsyncSession | None,
     hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -1236,7 +1242,7 @@ async def fail_stale_in_progress(
 
 
 async def prepare_for_new_turn(
-    store: Store,
+    store: Store | None,
     hub: EventBus,
     harness: Harness,
     tenant_id: uuid.UUID,
@@ -1244,6 +1250,14 @@ async def prepare_for_new_turn(
     *,
     sink: ResultSink | None = None,
 ) -> None:
+    if store is None:
+        # A split worker holds no database: stop the in-memory turn
+        # when one is running. Stale-row recovery happens on the API.
+        abort = hub.turn_abort(session_id)
+        if abort is not None:
+            abort.set()
+            await harness.abort(session_id)
+        return
     async with store.session() as db:
         row = await get_session(db, tenant_id, session_id)
         if row is None or row.status != "in_progress":
@@ -1263,7 +1277,7 @@ async def prepare_for_new_turn(
 
 
 async def _fail_outbox_full(
-    store: Store,
+    store: Store | None,
     hub: EventBus,
     sink: ResultSink,
     tenant_id: uuid.UUID,
@@ -1283,7 +1297,7 @@ async def _fail_outbox_full(
     if abort is not None:
         abort.set()
     try:
-        async with sink.emergency_mode(), store.session() as db:
+        async with sink.emergency_mode(), sink.txn(store) as db:
             await _fail_turn(
                 db,
                 hub,
@@ -1312,7 +1326,7 @@ async def _fail_outbox_full(
 
 
 async def _fail_turn(
-    db: AsyncSession,
+    db: AsyncSession | None,
     hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -1400,7 +1414,7 @@ def _bind_turn_model(settings: Settings | None, model: str | None) -> str:
 
 
 async def fail_session(
-    db: AsyncSession,
+    db: AsyncSession | None,
     hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -1434,7 +1448,7 @@ async def fail_session(
 
 
 async def fail_environment(
-    db: AsyncSession,
+    db: AsyncSession | None,
     hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -1459,7 +1473,7 @@ async def fail_environment(
 
 
 async def load_boot_kwargs(
-    store: Store,
+    store: Store | None,
     settings: Settings,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -1475,10 +1489,21 @@ async def load_boot_kwargs(
         sandbox_size_of,
     )
 
-    async with store.session() as db:
-        ctx = _parse_turn_context(turn_context)
-        row: Any
-        if ctx is None:
+    ctx = _parse_turn_context(turn_context)
+    row: Any
+    stored_files: list[tuple[str, bytes]] | None = None
+    stored_backend: Any = None
+    if ctx is None:
+        # Combined mode reads the session and agent rows. A split
+        # worker always carries a context and holds no database.
+        if store is None:
+            raise ApiError(
+                "internal",
+                "Turn context is required on a worker without database access",
+                code="internal",
+                status_code=500,
+            )
+        async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None or not isinstance(row.environment, dict):
                 return None
@@ -1497,129 +1522,130 @@ async def load_boot_kwargs(
             )
             session_idle: str | None = row.idle_ttl
             context_agent_idle: str | None = agent_idle
-        else:
-            environment = (
-                dict(ctx.session.environment)
-                if isinstance(ctx.session.environment, dict)
-                else {}
-            )
-            if environment.get("type") != "openai_hosted":
-                return None
-            session_metadata = dict(ctx.session.metadata)
-            agent_metadata = dict(ctx.agent.metadata)
-            model = ctx.agent.model
-            instructions = ctx.agent.instructions
-            session_idle = None
-            context_agent_idle = None
-            row = cast(
-                Any,
-                SimpleNamespace(
-                    environment=environment,
-                    metadata_json=session_metadata,
-                    key_id=ctx.session.key_id,
-                    agent_id=_uuid_or_none(ctx.session.agent_id),
-                    user_id=ctx.session.user_id,
-                    org_id=ctx.session.org_id,
-                ),
-            )
-        ensure_openai_workspace(row.environment)
-        gateway_allowlist = settings.microvm_egress_allowlist
-        gateway_hosts: tuple[str, ...] = ()
-        if settings.run_mode == "microvm":
-            from apipi.worker.pi.microvm import microvm_egress_hosts
+        stored_backend = object_store(settings)
+        stored_files = await FileService(
+            store, stored_backend, settings
+        ).workspace_files(tenant_id, row.environment)
+    else:
+        environment = (
+            dict(ctx.session.environment)
+            if isinstance(ctx.session.environment, dict)
+            else {}
+        )
+        if environment.get("type") != "openai_hosted":
+            return None
+        session_metadata = dict(ctx.session.metadata)
+        agent_metadata = dict(ctx.agent.metadata)
+        model = ctx.agent.model
+        instructions = ctx.agent.instructions
+        session_idle = None
+        context_agent_idle = None
+        row = cast(
+            Any,
+            SimpleNamespace(
+                environment=environment,
+                metadata_json=session_metadata,
+                key_id=ctx.session.key_id,
+                agent_id=_uuid_or_none(ctx.session.agent_id),
+                user_id=ctx.session.user_id,
+                org_id=ctx.session.org_id,
+            ),
+        )
+    ensure_openai_workspace(row.environment)
+    gateway_allowlist = settings.microvm_egress_allowlist
+    gateway_hosts: tuple[str, ...] = ()
+    if settings.run_mode == "microvm":
+        from apipi.worker.pi.microvm import microvm_egress_hosts
 
-            gateway_hosts = tuple(microvm_egress_hosts(settings))
-        backend = object_store(settings)
+        gateway_hosts = tuple(microvm_egress_hosts(settings))
+    if ctx is None:
+        assert stored_files is not None
+        extra_files = stored_files
+    else:
+        extra_files = await materialize_workspace_files(
+            [ref.model_dump() for ref in ctx.files], settings
+        )
+    await provision_hosted_async(
+        row.environment,
+        run_mode=settings.run_mode,
+        max_bytes=settings.max_workspace_bytes,
+        gateway_allowlist=gateway_allowlist,
+        gateway_hosts=gateway_hosts,
+        extra_files=extra_files,
+        timeout=settings.turn_timeout.total_seconds(),
+    )
+    directory = row.environment.get("directory")
+    if isinstance(directory, str) and directory:
         if ctx is None:
-            extra_files = await FileService(store, backend, settings).workspace_files(
-                tenant_id, row.environment
+            assert store is not None and stored_backend is not None
+            await SkillService(store, stored_backend, settings).install(
+                tenant_id, row.environment, Path(directory)
             )
         else:
-            extra_files = await materialize_workspace_files(
-                [ref.model_dump() for ref in ctx.files], settings
-            )
-        await provision_hosted_async(
-            row.environment,
-            run_mode=settings.run_mode,
-            max_bytes=settings.max_workspace_bytes,
-            gateway_allowlist=gateway_allowlist,
-            gateway_hosts=gateway_hosts,
-            extra_files=extra_files,
-            timeout=settings.turn_timeout.total_seconds(),
-        )
-        directory = row.environment.get("directory")
-        if isinstance(directory, str) and directory:
-            if ctx is None:
-                await SkillService(store, backend, settings).install(
-                    tenant_id, row.environment, Path(directory)
+            for blob in await materialize_skill_zips(
+                [ref.model_dump() for ref in ctx.skills], settings
+            ):
+                unpack_skill_zip(
+                    Path(directory),
+                    blob,
+                    max_bytes=int(settings.max_workspace_bytes),
                 )
-            else:
-                for blob in await materialize_skill_zips(
-                    [ref.model_dump() for ref in ctx.skills], settings
-                ):
-                    unpack_skill_zip(
-                        Path(directory),
-                        blob,
-                        max_bytes=int(settings.max_workspace_bytes),
-                    )
-        builtin = (
-            _effective_builtin_tools(row.environment, session_metadata, agent_metadata)
-            if ctx is None
-            else ctx.agent.builtin_tools
-        )
-        cwd_path, tools = _cwd_and_tools(row.environment, builtin)
-        sandbox_size = sandbox_size_of(row.environment)
-        stored_image = sandbox_image_of(row.environment)
-        sandbox_image = stored_image or image_for_size(sandbox_size)
-        composed = compose_instructions(
-            settings,
-            instructions,
-            env_type="openai_hosted",
-            sandbox_size=sandbox_size,
-            mem_mib=mem_mib_for_size(settings, sandbox_size),
-            network=_network_access(row.environment),
-            builtin_tools=builtin,
-        )
-        resolved_boot_mcp = (
-            mcp_http
-            if mcp_http is not None
-            else (
-                mcp_servers_from_context(ctx.model_dump()) if ctx is not None else None
-            )
-        )
-        kwargs: dict[str, Any] = {
-            "cwd": cwd_path,
-            "tools": tools,
-            "mcp_http": resolved_boot_mcp,
-            "skill_dirs": _skill_dirs(row.environment, builtin),
-            "tenant_id": tenant_id,
-            "model": model,
-            "instructions": composed,
-            "key_id": row.key_id,
-            "env_type": "openai_hosted",
-            "mem_mib": mem_mib_for_size(settings, sandbox_size),
-            "image": sandbox_image,
-            "extra_env": session_env_from(row.environment),
-            "agent_id": str(row.agent_id) if row.agent_id else None,
-            "user_id": row.user_id,
-            "org_id": row.org_id,
-        }
+    builtin = (
+        _effective_builtin_tools(row.environment, session_metadata, agent_metadata)
+        if ctx is None
+        else ctx.agent.builtin_tools
+    )
+    cwd_path, tools = _cwd_and_tools(row.environment, builtin)
+    sandbox_size = sandbox_size_of(row.environment)
+    stored_image = sandbox_image_of(row.environment)
+    sandbox_image = stored_image or image_for_size(sandbox_size)
+    composed = compose_instructions(
+        settings,
+        instructions,
+        env_type="openai_hosted",
+        sandbox_size=sandbox_size,
+        mem_mib=mem_mib_for_size(settings, sandbox_size),
+        network=_network_access(row.environment),
+        builtin_tools=builtin,
+    )
+    resolved_boot_mcp = (
+        mcp_http
+        if mcp_http is not None
+        else (mcp_servers_from_context(ctx.model_dump()) if ctx is not None else None)
+    )
+    kwargs: dict[str, Any] = {
+        "cwd": cwd_path,
+        "tools": tools,
+        "mcp_http": resolved_boot_mcp,
+        "skill_dirs": _skill_dirs(row.environment, builtin),
+        "tenant_id": tenant_id,
+        "model": model,
+        "instructions": composed,
+        "key_id": row.key_id,
+        "env_type": "openai_hosted",
+        "mem_mib": mem_mib_for_size(settings, sandbox_size),
+        "image": sandbox_image,
+        "extra_env": session_env_from(row.environment),
+        "agent_id": str(row.agent_id) if row.agent_id else None,
+        "user_id": row.user_id,
+        "org_id": row.org_id,
+    }
+    kwargs.update(
+        _pi_spawn_overrides(settings, session_metadata, agent_metadata, builtin)
+    )
+    if ctx is None:
         kwargs.update(
-            _pi_spawn_overrides(settings, session_metadata, agent_metadata, builtin)
-        )
-        if ctx is None:
-            kwargs.update(
-                _idle_spawn(
-                    settings,
-                    "openai_hosted",
-                    session_idle=session_idle,
-                    session_metadata=session_metadata,
-                    agent_idle=context_agent_idle,
-                )
+            _idle_spawn(
+                settings,
+                "openai_hosted",
+                session_idle=session_idle,
+                session_metadata=session_metadata,
+                agent_idle=context_agent_idle,
             )
-        else:
-            kwargs.update(_idle_spawn_from_context(settings, "openai_hosted", ctx))
-        return kwargs
+        )
+    else:
+        kwargs.update(_idle_spawn_from_context(settings, "openai_hosted", ctx))
+    return kwargs
 
 
 def _model_span_attrs(
@@ -1663,8 +1689,24 @@ def _spawn_identity(
     }
 
 
+def _turn_session(
+    active: ResultSink, store: Store | None
+) -> AbstractAsyncContextManager[AsyncSession | None, Any]:
+    """Session for turn bodies.
+
+    Combined mode (`store` present) still reads session and agent
+    rows when the command carries no context, so it always opens a
+    real session. A split worker (`store` None) always carries a
+    turn context and only buffers outbox envelopes, so the sink
+    transaction (which yields None for an outbox sink) is enough.
+    """
+    if store is not None:
+        return store.session()
+    return active.txn(store)
+
+
 async def run_turn(
-    store: Store,
+    store: Store | None,
     hub: EventBus,
     harness: Harness,
     tenant_id: uuid.UUID,
@@ -1714,11 +1756,19 @@ async def run_turn(
         ordered = parts or []
         has_image = any(part.get("type") == "image" for part in ordered)
         ctx = _parse_turn_context(turn_context)
+        if ctx is None and store is None:
+            raise ApiError(
+                "internal",
+                "Turn context is required on a worker without database access",
+                code="internal",
+                status_code=500,
+            )
         if has_image and settings is not None:
             from apipi.services.sink import OutboxSink as _OutboxSink
 
             _image_sink = resolve_sink(sink)
             if not isinstance(_image_sink, _OutboxSink):
+                assert store is not None
                 if objects is not None:
                     files = FileService(store, objects, settings)
                     stored_parts: list[dict[str, Any]] = []
@@ -1799,10 +1849,13 @@ async def run_turn(
         resolved_base_url = (
             ctx.model.base_url if ctx is not None and ctx.model.base_url else None
         )
-        async with store.session() as db:
+        async with _turn_session(active, store) as db:
             context_pi_expected = False
             row: Any
             if ctx is None:
+                # Combined mode: the session and agent rows live in the
+                # database. A split worker always carries a context.
+                assert db is not None
                 row = await get_session(db, tenant_id, session_id)
                 if row is None:
                     return
@@ -1862,6 +1915,10 @@ async def run_turn(
 
                         gateway_hosts = tuple(microvm_egress_hosts(settings))
                     if ctx is None:
+                        # Combined mode reads workspace files from the
+                        # store. A split worker materializes the context
+                        # references below and holds no credentials.
+                        assert store is not None
                         if backend is None:
                             backend = object_store(settings)
                         extra_files = await FileService(
@@ -1891,6 +1948,7 @@ async def run_turn(
                     if isinstance(directory, str) and directory:
                         if ctx is None:
                             assert backend is not None
+                            assert store is not None
                             await SkillService(store, backend, settings).install(
                                 tenant_id, row.environment, Path(directory)
                             )
@@ -2136,7 +2194,7 @@ async def run_turn(
                     )
                     return
                 except CapacityError as exc:
-                    async with store.session() as db:
+                    async with _turn_session(active, store) as db:
                         await active.update_session(
                             db,
                             tenant_id,
@@ -2150,7 +2208,7 @@ async def run_turn(
                         status_code=429,
                     ) from exc
                 except TurnFailed as exc:
-                    async with store.session() as db:
+                    async with _turn_session(active, store) as db:
                         await _fail_turn(
                             db,
                             hub,
@@ -2176,7 +2234,7 @@ async def run_turn(
                         failure_for("turn_timeout", "Turn timed out"),
                         upstream_attempts=_attempts_so_far(retry_state),
                     )
-                    async with store.session() as db:
+                    async with _turn_session(active, store) as db:
                         await _fail_turn(
                             db,
                             hub,
@@ -2196,7 +2254,7 @@ async def run_turn(
                         )
                     return
                 except OSError as exc:
-                    async with store.session() as db:
+                    async with _turn_session(active, store) as db:
                         await _fail_turn(
                             db,
                             hub,
@@ -2226,7 +2284,7 @@ async def run_turn(
                         status="cancelled" if abort.is_set() else "completed",
                     ),
                 )
-            async with store.session() as db:
+            async with _turn_session(active, store) as db:
                 if abort.is_set():
                     await _cancel_turn(
                         db,
@@ -2288,7 +2346,7 @@ async def run_turn(
 
 
 async def continue_turn(
-    store: Store,
+    store: Store | None,
     hub: EventBus,
     harness: Harness,
     tenant_id: uuid.UUID,
@@ -2324,6 +2382,13 @@ async def continue_turn(
     env_type: str | None
     spawn_ids = _spawn_identity_empty(user_id, org_id)
     ctx = _parse_turn_context(turn_context)
+    if ctx is None and store is None:
+        raise ApiError(
+            "internal",
+            "Turn context is required on a worker without database access",
+            code="internal",
+            status_code=500,
+        )
     context_pi: bytes | None = None
     resolved_key = (
         api_key
@@ -2339,9 +2404,12 @@ async def continue_turn(
         ctx.model.base_url if ctx is not None and ctx.model.base_url else None
     )
     active = resolve_sink(sink)
-    async with store.session() as db:
+    async with _turn_session(active, store) as db:
         row: Any
         if ctx is None:
+            # Combined mode reads the session row. A split worker
+            # always carries a context and holds no database.
+            assert db is not None
             row = await get_session(db, tenant_id, session_id)
             if row is None:
                 raise ApiError(
@@ -2373,11 +2441,15 @@ async def continue_turn(
                 "Session is not waiting for a tool result",
                 code="invalid_request",
             )
-        turn = await get_session_turn(db, tenant_id, session_id, turn_id)
-        if turn is None or turn.status != "in_progress":
-            raise ApiError(
-                "invalid_request", "Not found", code="not_found", status_code=404
-            )
+        turn = None
+        if db is not None:
+            # Combined mode checks the turn row. A split worker holds
+            # no database and trusts the command context the API sent.
+            turn = await get_session_turn(db, tenant_id, session_id, turn_id)
+            if turn is None or turn.status != "in_progress":
+                raise ApiError(
+                    "invalid_request", "Not found", code="not_found", status_code=404
+                )
         actions = [
             action
             for action in (
@@ -2471,6 +2543,9 @@ async def continue_turn(
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(context_pi)
         if ctx is None:
+            # Combined mode reads the agent row. A split worker
+            # always carries a context and holds no database.
+            assert db is not None
             (
                 function_tools,
                 model,
@@ -2482,8 +2557,8 @@ async def continue_turn(
             session_metadata = (
                 row.metadata_json if isinstance(row.metadata_json, dict) else {}
             )
-            session_idle: str | None = row.idle_ttl
-            context_agent_idle: str | None = agent_idle
+            session_idle = row.idle_ttl
+            context_agent_idle = agent_idle
         else:
             function_tools = [dict(item) for item in ctx.agent.function_tools]
             model = ctx.agent.model
@@ -2631,7 +2706,7 @@ async def continue_turn(
                     )
                     return
                 except TurnFailed as exc:
-                    async with store.session() as db:
+                    async with _turn_session(active, store) as db:
                         await _fail_turn(
                             db,
                             hub,
@@ -2656,7 +2731,7 @@ async def continue_turn(
                         failure_for("turn_timeout", "Turn timed out"),
                         upstream_attempts=_attempts_so_far(retry_state),
                     )
-                    async with store.session() as db:
+                    async with _turn_session(active, store) as db:
                         await _fail_turn(
                             db,
                             hub,
@@ -2676,7 +2751,7 @@ async def continue_turn(
                         )
                     return
                 except OSError as exc:
-                    async with store.session() as db:
+                    async with _turn_session(active, store) as db:
                         await _fail_turn(
                             db,
                             hub,
@@ -2713,7 +2788,7 @@ async def continue_turn(
                         status="completed",
                     ),
                 )
-            async with store.session() as db:
+            async with _turn_session(active, store) as db:
                 if pending:
                     actions = pending
                     await active.update_session(

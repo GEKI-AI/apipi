@@ -2,7 +2,11 @@
 
 A worker is an operator process that runs Pi and the sandbox. It is
 not a tenant computer. Workers attach with a lease on `/internal/worker` over worker protocol v2. Workers use a different URL, a
-per-worker token, and versioned messages. Message shapes are in
+per-worker token, and versioned messages. The socket needs TLS for
+any non-loopback API URL, with optional mutual TLS, and the worker
+holds no database or object-store credentials: it gets everything it
+needs in the command context and reports back over the socket.
+Message shapes are in
 [sandbox workers](workers.md), and the contract is in
 [ADR 0015](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0015-worker-protocol-v2.md).
 
@@ -44,7 +48,7 @@ load balancer. A worker already registered.
        |                   append nothing yet
        |  lease a worker (durable on the session row)
        v
-  apipi worker
+  apipi worker             wss + per-worker token, no DB credentials
        |  Firecracker guest (or none)
        |  Pi talks to OPENAI_BASE_URL
        |  durable results buffered in the outbox, sent as v2 envelopes
@@ -123,7 +127,7 @@ apipi serve --api-only
 # KVM host
 apipi workers token create --name worker-1   # prints the secret once
 APIPI_WORKER_TOKEN_FILE=/run/apipi/worker.token \
-APIPI_API_URL=http://api.example:8000 \
+APIPI_API_URL=https://api.example \
 APIPI_RUN_MODE=microvm \
   apipi worker
 ```
