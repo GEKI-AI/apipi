@@ -94,6 +94,16 @@ share SSE. Live `output_text.delta` batches are coalesced over about
 they are never stored. See [config](config.md) for the settings and
 [observability](observability.md) for the bus metrics.
 
+In split mode the worker does not publish deltas itself. It sends
+them as ephemeral `delta.text` envelopes over its worker socket (one
+per coalesced batch, at-most-once, never acked). The API replica that
+holds the socket checks that the session is leased to that worker,
+applies size and rate limits, drops deltas for turns that already
+committed their final text, and publishes the rest as `live`
+messages on the bus. Reasoning deltas (`delta.reasoning`) are
+accepted but never fanned out. SSE clients can sit on any replica;
+only the worker socket itself stays pinned to one API process.
+
 Until durable worker ingest lands (#446), the worker still writes
 its events to the store itself, so the worker builds the same bus
 from its own `DATABASE_URL`. Point every worker at the same database

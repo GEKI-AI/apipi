@@ -39,6 +39,7 @@ from apipi.services.failures import (
 from apipi.services.runtime import (
     PUBLIC_EVENT_TYPES,
     fail_session,
+    live_event_body,
     persist_event,
 )
 from apipi.store.engine import Store
@@ -48,19 +49,57 @@ from apipi.store.repo import (
     clear_session_lease,
     extend_worker_leases,
     get_session,
+    get_session_by_id,
     get_session_by_lease,
     get_worker_token,
+    list_events,
     list_expired_leases,
     list_worker_leases,
     set_session_lease,
     touch_worker,
     upsert_worker,
 )
+from apipi.worker.deltas import DeltaRelay, LiveRedirectBus, relay_rate_allowed
 from apipi.worker.pi.sandbox import mem_mib_for_size, sandbox_size_of
 from apipi.worker.placement import placement_for, worker_accepts
-from apipi.worker.protocol import COMMAND_OPS, HelloReply, RegisterMessage
+from apipi.worker.protocol import (
+    COMMAND_OPS,
+    HelloReply,
+    RegisterMessage,
+    WorkerEnvelope,
+)
 
 WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})
+DELTA_RATE_LIMIT = 100
+DELTA_MAX_TEXT = 32_768
+DELTA_DONE_TYPE = "agent.session.turn.output_text.done"
+DELTA_TERMINAL_TYPES = frozenset(
+    {
+        "agent.session.turn.completed",
+        "agent.session.turn.failed",
+        "agent.session.turn.cancelled",
+    }
+)
+
+
+async def _turn_text_done(
+    db: Any, tenant_id: uuid.UUID, session_id: uuid.UUID, turn_id: uuid.UUID
+) -> bool:
+    """Say whether the turn already committed its final text.
+
+    A delta that arrives after ``output_text.done`` (or after the
+    turn reached a terminal state) is stale: the final item is the
+    source of truth, so the delta is dropped."""
+    wanted = str(turn_id)
+    for event in await list_events(db, tenant_id, session_id):
+        data = event.data
+        if not isinstance(data, dict) or data.get("turn_id") != wanted:
+            continue
+        if event.type == DELTA_DONE_TYPE or event.type in DELTA_TERMINAL_TYPES:
+            return True
+    return False
+
+
 log = logging.getLogger("apipi.worker")
 
 
@@ -102,6 +141,7 @@ class WorkerHub:
         self.tracing = tracing
         self._conns: dict[uuid.UUID, WorkerConnection] = {}
         self._unacked: dict[uuid.UUID, dict[str, Any]] = {}
+        self._delta_hits: dict[uuid.UUID, list[float]] = {}
         self._metric_modes: set[str] = set()
         self._lock = asyncio.Lock()
 
@@ -462,6 +502,95 @@ class WorkerHub:
             pending = self._unacked.get(lease_id)
             if pending is not None:
                 await _send(conn.websocket, pending)
+
+    async def handle_delta(
+        self,
+        store: Store,
+        bus: EventBus,
+        conn: WorkerConnection,
+        envelope: WorkerEnvelope,
+    ) -> bool:
+        """Validate one ephemeral envelope and fan out its delta.
+
+        Reasoning deltas are accepted but never published: thinking
+        deltas are not sent to clients. Text deltas need a live lease
+        on this connection, must fit the size and rate budgets, and
+        are dropped when the turn already committed its final text.
+        Accepted deltas are published as ``live`` bus messages and are
+        never written to the store. Returns whether a delta was
+        published."""
+        if envelope.type == "delta.reasoning":
+            self.observe_protocol("delta.reasoning_dropped")
+            return False
+        if envelope.type != "delta.text":
+            return False
+        try:
+            payload = envelope.parsed_payload()
+        except ValueError:
+            self.observe_protocol("delta.invalid")
+            return False
+        text = getattr(payload, "text", "")
+        turn_id = getattr(payload, "turn_id", None)
+        if not isinstance(text, str) or not text:
+            return False
+        if len(text) > DELTA_MAX_TEXT:
+            self.observe_protocol("delta.oversize")
+            log.warning(
+                "worker delta oversize",
+                extra={
+                    "event": "worker.delta.oversize",
+                    "worker_id": str(conn.worker_id),
+                    "session_id": str(envelope.session_id),
+                },
+            )
+            return False
+        if not relay_rate_allowed(
+            self._delta_hits.setdefault(envelope.session_id, []),
+            now=time.monotonic(),
+            limit=DELTA_RATE_LIMIT,
+        ):
+            self.observe_protocol("delta.rate_limited")
+            log.warning(
+                "worker delta rate limited",
+                extra={
+                    "event": "worker.delta.rate_limited",
+                    "worker_id": str(conn.worker_id),
+                    "session_id": str(envelope.session_id),
+                },
+            )
+            return False
+        async with store.session() as db:
+            row = await get_session_by_id(db, envelope.session_id)
+            if (
+                row is None
+                or row.worker_id != conn.worker_id
+                or row.lease_id not in conn.leases
+            ):
+                self.observe_protocol("delta.rejected")
+                log.warning(
+                    "worker delta for unleased session",
+                    extra={
+                        "event": "worker.delta.rejected",
+                        "worker_id": str(conn.worker_id),
+                        "session_id": str(envelope.session_id),
+                    },
+                )
+                return False
+            if turn_id is not None and await _turn_text_done(
+                db, row.tenant_id, row.id, turn_id
+            ):
+                self.observe_protocol("delta.dropped_done")
+                return False
+        await bus.publish(
+            envelope.session_id,
+            live_event_body(
+                envelope.session_id,
+                type="agent.session.turn.output_text.delta",
+                data={"delta": text, "turn_id": str(turn_id)},
+            ),
+        )
+        self.observe_protocol("delta.accepted")
+        return True
 
     async def handle_event(
         self,
@@ -1176,9 +1305,16 @@ async def run_worker(
     metrics, tracing = worker_observability(settings)
     # Until durable ingest (#446) the worker still writes events itself,
     # so it uses the configured bus and its commits NOTIFY like the API's.
+    # Live deltas go over the socket instead: the relay coalesces them
+    # into ephemeral envelopes and the API fans them out to every replica.
     bus = create_event_bus(settings, store=store, metrics=metrics)
+    relay = DeltaRelay()
     execution = local_execution(
-        settings, store=store, hub=bus, metrics=metrics, tracing=tracing
+        settings,
+        store=store,
+        hub=LiveRedirectBus(bus, relay),
+        metrics=metrics,
+        tracing=tracing,
     )
     await bus.start()
     tasks: set[asyncio.Task[None]] = set()
@@ -1280,6 +1416,11 @@ async def run_worker(
             raw_worker = hello.get("worker_id")
             if emitter is not None:
                 emitter.set_worker_id(str(raw_worker) if raw_worker else None)
+
+            async def send_envelope(envelope: dict[str, Any]) -> None:
+                await sock.send(json.dumps(envelope))
+
+            relay.attach(send_envelope)
 
             async def send_heartbeat() -> None:
                 await sock.send(

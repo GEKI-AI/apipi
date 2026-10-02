@@ -136,6 +136,7 @@ Worker to API:
 | `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. |
 | `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |
+| envelope (`v: 2`) | `session_id`, `turn_id`, `seq`, `type`, `payload` | Ephemeral delta (`delta.text`, `delta.reasoning`). See [Live deltas](#live-deltas). Durable types are accepted but not ingested yet; they land with the outbox step. |
 
 The v2 envelope (`{v: 2, session_id, turn_id | null, seq, type,
 payload}`) and its message schemas are defined in
@@ -162,6 +163,26 @@ Message classes:
 The outbox is bounded (10,000 messages). When it is full the worker
 pauses Pi output; if the turn cannot proceed it fails with
 `worker_outbox_full`. Envelopes are capped at 1 MiB.
+
+## Live deltas
+
+The worker coalesces model text fragments over about 40ms per
+session and sends each batch as one ephemeral `delta.text` envelope.
+Batches over 4000 characters are split so every envelope stays well
+under the `NOTIFY` payload limit. The API checks that the session is
+leased to the sending worker (otherwise the delta is rejected and
+logged), applies a 32 KiB size cap and a per-session rate budget
+(100 deltas per second; over-budget deltas are dropped and counted),
+and publishes accepted deltas as `live` bus messages without writing
+to the store. A delta for a turn whose `output_text.done` or
+terminal turn event already committed is dropped: the final item is
+the source of truth, and reconnect and export skip deltas.
+`delta.reasoning` envelopes are accepted but never fanned out.
+Rejections and drops are counted in
+`apipi_worker_protocol_total{event}` (`delta.accepted`,
+`delta.rejected`, `delta.dropped_done`, `delta.rate_limited`,
+`delta.oversize`, `delta.reasoning_dropped`, `envelope.invalid`,
+`envelope.durable_deferred`).
 
 ## Replay
 

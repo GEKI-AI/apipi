@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Live delta relay over the worker socket (#445): in split mode the
+  worker coalesces model text fragments over about 40ms per session
+  and sends them as ephemeral v2 `delta.text` envelopes instead of
+  publishing them itself. The API replica holding the socket checks
+  that the session is leased to that worker, applies a 32 KiB size
+  cap and a per-session rate budget (100 deltas per second), drops
+  deltas for turns that already committed `output_text.done` (the
+  final item stays the source of truth), and publishes the rest as
+  `live` messages on the event bus without any store write, so SSE
+  token streaming works on any replica with no sticky routing.
+  `delta.reasoning` envelopes are accepted but never fanned out.
+  Outcomes are counted in `apipi_worker_protocol_total`. See
+  `docs/workers.md` (Live deltas) and `docs/scale.md`.
 - Event bus with Postgres `LISTEN`/`NOTIFY` fan-out for session
   events. After the API commits stored events it publishes a wake
   (`session_id`, `seq`); SSE streams wait for wakes instead of
