@@ -392,7 +392,12 @@ with `after_seq`. Stored public events are written before SSE.
 `output_text.delta` is live SSE only and is not stored; reconnect and
 export skip those fragments. Full assistant text is on
 `output_text.done` and the assistant item. Thinking is stored as a
-short preview, not as live deltas. Behind more than one
+short preview, not as live deltas. In split mode the worker sends
+text fragments as ephemeral messages over its socket (coalesced over
+about 40ms), and the API fans them out over the event bus, so token
+streaming works on any replica with no sticky routing; a delta that
+arrives after its turn already committed `output_text.done` is
+dropped. In combined serve, behind more than one
 gateway process, the stream and the next turn must hit the node that
 owns Pi. See [multiple nodes](scale.md).
 

@@ -26,7 +26,9 @@ from apipi.worker.hub import (
 from apipi.worker.protocol import (
     UNSUPPORTED_PROTOCOL_REASON,
     WORKER_CLOSE_CODE,
+    UnknownMessageType,
     UnsupportedProtocol,
+    parse_envelope,
     parse_register,
 )
 
@@ -121,6 +123,9 @@ async def worker_socket(websocket: WebSocket) -> None:
             message = await websocket.receive_json()
             if not isinstance(message, dict):
                 continue
+            if message.get("v") == 2:
+                await _handle_envelope(hub, store, event_hub, conn, message)
+                continue
             msg_type = message.get("type")
             if msg_type not in WORKER_IN:
                 continue
@@ -197,3 +202,26 @@ def _uuid(value: object) -> uuid.UUID | None:
         return uuid.UUID(value)
     except ValueError:
         return None
+
+
+async def _handle_envelope(
+    hub: WorkerHub,
+    store: Store,
+    event_hub: EventBus,
+    conn: Any,
+    message: dict[str, Any],
+) -> None:
+    """Route one v2 worker envelope.
+
+    Ephemeral deltas are validated and fanned out over the event
+    bus, so SSE clients on any replica see token streaming. Durable
+    envelopes are counted and ignored until the ingest step lands."""
+    try:
+        envelope = parse_envelope(message)
+    except (ValidationError, UnknownMessageType):
+        hub.observe_protocol("envelope.invalid")
+        return
+    if envelope.message_class() == "durable":
+        hub.observe_protocol("envelope.durable_deferred")
+        return
+    await hub.handle_delta(store, event_hub, conn, envelope)

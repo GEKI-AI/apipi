@@ -39,6 +39,7 @@ from apipi.services.failures import (
 from apipi.services.runtime import (
     PUBLIC_EVENT_TYPES,
     fail_session,
+    live_event_body,
     persist_event,
 )
 from apipi.store.engine import Store
@@ -48,19 +49,59 @@ from apipi.store.repo import (
     clear_session_lease,
     extend_worker_leases,
     get_session,
+    get_session_by_id,
     get_session_by_lease,
     get_worker_token,
+    list_events,
     list_expired_leases,
     list_worker_leases,
     set_session_lease,
     touch_worker,
     upsert_worker,
 )
+from apipi.worker.deltas import DeltaRelay, LiveRedirectBus, relay_rate_allowed
 from apipi.worker.pi.sandbox import mem_mib_for_size, sandbox_size_of
 from apipi.worker.placement import placement_for, worker_accepts
-from apipi.worker.protocol import COMMAND_OPS, HelloReply, RegisterMessage
+from apipi.worker.protocol import (
+    COMMAND_OPS,
+    HelloReply,
+    RegisterMessage,
+    WorkerEnvelope,
+)
 
 WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})
+DELTA_RATE_LIMIT = 100
+DELTA_MAX_TEXT = 32_768
+DELTA_DONE_TYPE = "agent.session.turn.output_text.done"
+DELTA_TERMINAL_TYPES = frozenset(
+    {
+        "agent.session.turn.completed",
+        "agent.session.turn.failed",
+        "agent.session.turn.cancelled",
+    }
+)
+_DELTA_DONE_CAP = 256
+DELTA_LEASE_REFRESH = 30.0
+
+
+def _done_turns_in(events: list[Any]) -> set[str]:
+    """Collect turn ids whose final text already committed.
+
+    A delta for one of these turns is stale: the final item is the
+    source of truth, so the delta is dropped."""
+    done: set[str] = set()
+    for event in events:
+        data = event.data
+        if not isinstance(data, dict):
+            continue
+        turn_id = data.get("turn_id")
+        if not isinstance(turn_id, str) or not turn_id:
+            continue
+        if event.type == DELTA_DONE_TYPE or event.type in DELTA_TERMINAL_TYPES:
+            done.add(turn_id)
+    return done
+
+
 log = logging.getLogger("apipi.worker")
 
 
@@ -70,6 +111,24 @@ class WorkerImage:
     version: str
     digest: str
     min_size: str
+
+
+@dataclass
+class _DeltaLease:
+    """In-memory fast path for delta validation.
+
+    The replica holding the socket already knows which lease each
+    session holds, so most deltas skip the lease-row read. ``last_seq``
+    is the newest stored event seq seen so far; the drop-after-done
+    check only reads events after it. ``done`` caches turns already
+    known done, so those deltas need no read at all."""
+
+    worker_id: uuid.UUID
+    lease_id: uuid.UUID
+    tenant_id: uuid.UUID
+    last_seq: int = 0
+    done: set[str] = field(default_factory=set)
+    refreshed: float = field(default_factory=time.monotonic)
 
 
 @dataclass
@@ -102,6 +161,8 @@ class WorkerHub:
         self.tracing = tracing
         self._conns: dict[uuid.UUID, WorkerConnection] = {}
         self._unacked: dict[uuid.UUID, dict[str, Any]] = {}
+        self._delta_hits: dict[uuid.UUID, list[float]] = {}
+        self._delta_leases: dict[uuid.UUID, _DeltaLease] = {}
         self._metric_modes: set[str] = set()
         self._lock = asyncio.Lock()
 
@@ -135,6 +196,43 @@ class WorkerHub:
                 return
             del self._conns[worker_id]
         self._observe()
+        self._forget_worker_deltas(worker_id)
+
+    def _note_delta_lease(
+        self,
+        session_id: uuid.UUID,
+        *,
+        worker_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+    ) -> _DeltaLease:
+        """Record the live lease so deltas skip the lease-row read."""
+        known = self._delta_leases.get(session_id)
+        if known is None:
+            known = _DeltaLease(
+                worker_id=worker_id, lease_id=lease_id, tenant_id=tenant_id
+            )
+            self._delta_leases[session_id] = known
+            return known
+        known.worker_id = worker_id
+        known.lease_id = lease_id
+        known.tenant_id = tenant_id
+        known.refreshed = time.monotonic()
+        return known
+
+    def _forget_delta(self, session_id: uuid.UUID) -> None:
+        """Drop per-session delta state when its lease ends."""
+        self._delta_hits.pop(session_id, None)
+        self._delta_leases.pop(session_id, None)
+
+    def _forget_worker_deltas(self, worker_id: uuid.UUID) -> None:
+        """Drop per-session delta state when a connection closes."""
+        for session_id in [
+            session_id
+            for session_id, known in self._delta_leases.items()
+            if known.worker_id == worker_id
+        ]:
+            self._forget_delta(session_id)
 
     def _observe(self) -> None:
         metrics = self.metrics
@@ -279,6 +377,12 @@ class WorkerHub:
                 return None
         conn.leases.add(lease_id)
         conn.lease_mem[lease_id] = session_mem
+        self._note_delta_lease(
+            session_id,
+            worker_id=conn.worker_id,
+            lease_id=lease_id,
+            tenant_id=tenant_id,
+        )
         command = {
             "type": "command",
             "id": str(command_id),
@@ -318,6 +422,12 @@ class WorkerHub:
         conn = self._conns.get(worker_id)
         if conn is None or lease_id not in conn.leases:
             return None
+        self._note_delta_lease(
+            session_id,
+            worker_id=worker_id,
+            lease_id=lease_id,
+            tenant_id=tenant_id,
+        )
         follow_image = None
         if required == "microvm" and row is not None:
             follow_image = _session_image(row.environment)
@@ -376,10 +486,14 @@ class WorkerHub:
         self._unacked.pop(lease_id, None)
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
-            if row is None or row.lease_id != lease_id:
+            if row is None:
+                self._forget_delta(session_id)
+                return
+            if row.lease_id != lease_id:
                 return
             worker_id = row.worker_id
             await clear_session_lease(db, tenant_id, session_id)
+            self._forget_delta(session_id)
         if worker_id is not None:
             conn = self._conns.get(worker_id)
             if conn is not None:
@@ -417,6 +531,7 @@ class WorkerHub:
                     data=session_error_data(lease_failure, mode="legacy"),
                 )
                 expired.append(row.id)
+                self._forget_delta(row.id)
                 if lease_id is not None:
                     self._unacked.pop(lease_id, None)
                     conn = self._conns.get(worker_id) if worker_id is not None else None
@@ -454,6 +569,12 @@ class WorkerHub:
             conn.lease_mem[row.lease_id] = mem_mib_for_size(
                 self.settings, sandbox_size_of(row.environment)
             )
+            self._note_delta_lease(
+                row.id,
+                worker_id=conn.worker_id,
+                lease_id=row.lease_id,
+                tenant_id=row.tenant_id,
+            )
             sessions[row.id] = 0
         return sessions
 
@@ -462,6 +583,153 @@ class WorkerHub:
             pending = self._unacked.get(lease_id)
             if pending is not None:
                 await _send(conn.websocket, pending)
+
+    async def handle_delta(
+        self,
+        store: Store,
+        bus: EventBus,
+        conn: WorkerConnection,
+        envelope: WorkerEnvelope,
+    ) -> bool:
+        """Validate one ephemeral envelope and fan out its delta.
+
+        Reasoning deltas are accepted but never published: thinking
+        deltas are not sent to clients. Text deltas need a live lease
+        on this connection, must fit the size and rate budgets, and
+        are dropped when the turn already committed its final text.
+        The lease check reads from the socket's in-memory lease
+        state and only falls back to the lease row when that state
+        cannot answer; the drop-after-done check only reads events
+        stored after the last check, and cached done turns need no
+        read at all. Accepted deltas are published as ``live`` bus
+        messages and are never written to the store. Returns whether
+        a delta was published."""
+        if envelope.type == "delta.reasoning":
+            self.observe_protocol("delta.reasoning_dropped")
+            return False
+        if envelope.type != "delta.text":
+            return False
+        try:
+            payload = envelope.parsed_payload()
+        except ValueError:
+            self.observe_protocol("delta.invalid")
+            return False
+        text = getattr(payload, "text", "")
+        turn_id = getattr(payload, "turn_id", None)
+        if not isinstance(text, str) or not text:
+            return False
+        if len(text) > DELTA_MAX_TEXT:
+            self.observe_protocol("delta.oversize")
+            log.warning(
+                "worker delta oversize",
+                extra={
+                    "event": "worker.delta.oversize",
+                    "worker_id": str(conn.worker_id),
+                    "session_id": str(envelope.session_id),
+                },
+            )
+            return False
+        if not relay_rate_allowed(
+            self._delta_hits.setdefault(envelope.session_id, []),
+            now=time.monotonic(),
+            limit=DELTA_RATE_LIMIT,
+        ):
+            self.observe_protocol("delta.rate_limited")
+            log.warning(
+                "worker delta rate limited",
+                extra={
+                    "event": "worker.delta.rate_limited",
+                    "worker_id": str(conn.worker_id),
+                    "session_id": str(envelope.session_id),
+                },
+            )
+            return False
+        known = self._delta_leases.get(envelope.session_id)
+        if (
+            known is None
+            or known.worker_id != conn.worker_id
+            or known.lease_id not in conn.leases
+            or time.monotonic() - known.refreshed > DELTA_LEASE_REFRESH
+        ):
+            known = await self._refresh_delta_lease(store, conn, envelope.session_id)
+            if known is None:
+                self._forget_delta(envelope.session_id)
+                self.observe_protocol("delta.rejected")
+                log.warning(
+                    "worker delta for unleased session",
+                    extra={
+                        "event": "worker.delta.rejected",
+                        "worker_id": str(conn.worker_id),
+                        "session_id": str(envelope.session_id),
+                    },
+                )
+                return False
+        if turn_id is not None and str(turn_id) in known.done:
+            self.observe_protocol("delta.dropped_done")
+            return False
+        if turn_id is not None and await self._note_done_turns(
+            store, known, envelope.session_id, turn_id
+        ):
+            self.observe_protocol("delta.dropped_done")
+            return False
+        await bus.publish(
+            envelope.session_id,
+            live_event_body(
+                envelope.session_id,
+                type="agent.session.turn.output_text.delta",
+                data={"delta": text, "turn_id": str(turn_id)},
+            ),
+        )
+        self.observe_protocol("delta.accepted")
+        return True
+
+    async def _refresh_delta_lease(
+        self, store: Store, conn: WorkerConnection, session_id: uuid.UUID
+    ) -> _DeltaLease | None:
+        """Re-read the lease row when memory cannot validate a delta."""
+        async with store.session() as db:
+            row = await get_session_by_id(db, session_id)
+        if (
+            row is None
+            or row.worker_id != conn.worker_id
+            or row.lease_id not in conn.leases
+            or row.lease_id is None
+        ):
+            return None
+        return self._note_delta_lease(
+            session_id,
+            worker_id=conn.worker_id,
+            lease_id=row.lease_id,
+            tenant_id=row.tenant_id,
+        )
+
+    async def _note_done_turns(
+        self,
+        store: Store,
+        known: _DeltaLease,
+        session_id: uuid.UUID,
+        turn_id: uuid.UUID,
+    ) -> bool:
+        """Record newly committed final turns; say whether this one is done.
+
+        Only events stored after the last check are read, so the
+        per-delta cost stays bounded no matter how long the session
+        history grows."""
+        async with store.session() as db:
+            events = await list_events(
+                db,
+                known.tenant_id,
+                session_id,
+                after_seq=known.last_seq or None,
+            )
+        for event in events:
+            if event.seq > known.last_seq:
+                known.last_seq = event.seq
+        for done_turn in _done_turns_in(events):
+            if len(known.done) >= _DELTA_DONE_CAP:
+                known.done.clear()
+            known.done.add(done_turn)
+        return str(turn_id) in known.done
 
     async def handle_event(
         self,
@@ -1176,9 +1444,16 @@ async def run_worker(
     metrics, tracing = worker_observability(settings)
     # Until durable ingest (#446) the worker still writes events itself,
     # so it uses the configured bus and its commits NOTIFY like the API's.
+    # Live deltas go over the socket instead: the relay coalesces them
+    # into ephemeral envelopes and the API fans them out to every replica.
     bus = create_event_bus(settings, store=store, metrics=metrics)
+    relay = DeltaRelay()
     execution = local_execution(
-        settings, store=store, hub=bus, metrics=metrics, tracing=tracing
+        settings,
+        store=store,
+        hub=LiveRedirectBus(bus, relay),
+        metrics=metrics,
+        tracing=tracing,
     )
     await bus.start()
     tasks: set[asyncio.Task[None]] = set()
@@ -1260,6 +1535,7 @@ async def run_worker(
             session_leases: dict[uuid.UUID, str] = {}
 
             async def release_lease(session_id: uuid.UUID) -> None:
+                relay.forget(session_id)
                 lease_id = session_leases.pop(session_id, None)
                 if lease_id is None:
                     return
@@ -1280,6 +1556,11 @@ async def run_worker(
             raw_worker = hello.get("worker_id")
             if emitter is not None:
                 emitter.set_worker_id(str(raw_worker) if raw_worker else None)
+
+            async def send_envelope(envelope: dict[str, Any]) -> None:
+                await sock.send(json.dumps(envelope))
+
+            relay.attach(send_envelope)
 
             async def send_heartbeat() -> None:
                 await sock.send(
@@ -1362,6 +1643,7 @@ async def run_worker(
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
     finally:
+        relay.detach()
         for task in tasks:
             task.cancel()
         await execution.close()
