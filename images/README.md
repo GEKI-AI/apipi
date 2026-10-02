@@ -52,13 +52,11 @@ From a git checkout:
 ```
 
 `./scripts/microvm-rootfs` is a wrapper. `--flavor default` and
-`--flavor browser` call the same script. Output names stay
-`rootfs.ext4`, `rootfs-browser.ext4`, and `vmlinux` in
-`$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). Any other
-id writes `rootfs-<id>.ext4`. The script does not print
-`APIPI_MICROVM_ROOTFS` for that id. Copying that export would replace
-the default image. Use `apipi images build` or `apipi images pull`,
-then set `sandbox_image` to the id.
+`--flavor browser` call the same script. Direct `./images/build.sh`
+output goes to `$XDG_CACHE_HOME/apipi/image-build` by default. Prefer
+`apipi images build <id>`, which packages the output into a versioned
+build directory for `apipi images push --store-version <v>`. Then set
+`sandbox_image` to the id after `apipi images pull`.
 
 A local x86_64 `default` build used about 1.1 GiB of the 2048 MiB
 filesystem. Node under `/usr/local` was about 636 MiB. A local
@@ -75,9 +73,9 @@ and warns that the digest pin is not applied. `apipi install
 --microvm` runs it for you.
 
 `apipi images build <id>` writes a manifest and a zstd rootfs into the
-build directory. `apipi images push` uploads only the newest build of
-each id and arch to `APIPI_IMAGE_SOURCE`, or to `--to`. `apipi images
-publish` is the same command. Workers then run `apipi images pull`.
+build directory. `apipi images push --store-version <v>` uploads the
+newest build of
+each id and arch to `APIPI_IMAGE_SOURCE`, or to `--to`. Workers then run `apipi images pull`.
 `apipi images list --remote` shows whether the local copy matches the
 store. See [install](../docs/install.md).
 
@@ -141,5 +139,5 @@ It needs root or sudo for the mount.
 the TAP device. It boots the browser image at size `L`, opens a local
 page, checks `snapshot -i`, a screenshot under `/workspace/.browser`,
 a PDF, and that listeners are loopback-only. It also checks that Pi
-sees the `browser` skill and no `mcp_playwright_*` tools. It fails if
+sees the `browser` skill. It fails if
 Pi logs `pi.extension_error`.

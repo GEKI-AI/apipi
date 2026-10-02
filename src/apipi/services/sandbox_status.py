@@ -13,7 +13,7 @@ from apipi.store.repo import get_session, get_session_environment, update_enviro
 SEEN_INTERVAL = timedelta(seconds=5)
 STALE_AFTER = SEEN_INTERVAL * 3
 EAGER_KEY = "apipi.sandbox_eager_boot"
-HOSTED = frozenset({"openai_hosted", "hosted"})
+HOSTED = frozenset({"openai_hosted"})
 
 _OPENAI_STATUS = {
     "none": "disconnected",
@@ -55,18 +55,12 @@ def eager_boot_enabled(
     *,
     session_metadata: dict[str, Any] | None,
     agent_metadata: dict[str, Any] | None,
-    session_defaults: dict[str, Any] | None,
+    session_defaults: dict[str, Any] | None = None,
 ) -> bool:
     if isinstance(session_metadata, dict) and EAGER_KEY in session_metadata:
         return _as_bool(session_metadata.get(EAGER_KEY))
     if isinstance(agent_metadata, dict) and EAGER_KEY in agent_metadata:
         return _as_bool(agent_metadata.get(EAGER_KEY))
-    if isinstance(session_defaults, dict):
-        nested = session_defaults.get("metadata")
-        if isinstance(nested, dict) and EAGER_KEY in nested:
-            return _as_bool(nested.get(EAGER_KEY))
-        if EAGER_KEY in session_defaults:
-            return _as_bool(session_defaults.get(EAGER_KEY))
     return settings.sandbox_eager_boot
 
 

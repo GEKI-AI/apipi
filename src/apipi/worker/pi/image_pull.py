@@ -37,15 +37,11 @@ log = logging.getLogger("apipi.worker.pi")
 Store = FileImageStore | S3ImageStore | HttpImageStore
 
 
-def configured_images_dir(settings: Settings | None = None) -> Path:
+def configured_images_dir(settings: Settings) -> Path:
     from apipi.worker.pi.microvm import xdg_cache_home
 
-    if settings is not None and settings.images_dir:
+    if settings.images_dir:
         return Path(settings.images_dir)
-    if settings is None:
-        raw = os.environ.get("APIPI_IMAGES_DIR")
-        if raw:
-            return Path(raw)
     return xdg_cache_home() / "apipi" / "images"
 
 
@@ -59,9 +55,7 @@ def _host_arch() -> str:
 def _source(settings: Settings, source: str | None) -> str:
     uri = source or settings.image_source
     if not uri:
-        raise ConfigError(
-            "APIPI_IMAGE_SOURCE is unset. Set it, or pass --build to build locally."
-        )
+        raise ConfigError("APIPI_IMAGE_SOURCE is unset. Set it to pull guest images.")
     return uri
 
 
@@ -310,30 +304,9 @@ def list_images(
 
 
 def available_images(settings: Settings) -> list[LocalImage]:
-    from apipi.worker.pi.microvm import default_rootfs_browser_path, default_rootfs_path
     from apipi.worker.pi.sandbox import min_vcpus_for_image
 
     found = local_images(configured_images_dir(settings))
-    ids = {item.id for item in found}
-    legacy = (
-        ("default", default_rootfs_path()),
-        ("browser", default_rootfs_browser_path()),
-    )
-    for image_id, path in legacy:
-        if image_id in ids or not path.is_file():
-            continue
-        found.append(
-            LocalImage(
-                id=image_id,
-                version="legacy",
-                arch=_host_arch(),
-                digest="legacy",
-                min_size="M" if image_id == "browser" else "S",
-                min_vcpus=min_vcpus_for_image(image_id, settings),
-                rootfs=path,
-                manifest_path=path,
-            )
-        )
     for item in found:
         item.min_vcpus = min_vcpus_for_image(item.id, settings)
     return found

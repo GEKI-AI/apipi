@@ -49,13 +49,21 @@ def test_microvm_isolation_contract() -> None:
 
 
 def test_host_and_jail_are_not_valid() -> None:
-    with pytest.raises(ConfigError, match="APIPI_RUN_MODE=host is not valid"):
+    with pytest.raises(
+        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
+    ):
         load_isolation("host")
-    with pytest.raises(ConfigError, match="APIPI_RUN_MODE=jail is not valid"):
+    with pytest.raises(
+        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
+    ):
         load_isolation("jail")
-    with pytest.raises(ConfigError, match="APIPI_RUN_MODE=host is not valid"):
+    with pytest.raises(
+        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
+    ):
         require_run_mode("host")
-    with pytest.raises(ConfigError, match="APIPI_RUN_MODE=jail is not valid"):
+    with pytest.raises(
+        ConfigError, match=r"none, chat, microvm, or package\.mod:Class"
+    ):
         require_run_mode("jail")
 
 

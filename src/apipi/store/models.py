@@ -145,7 +145,6 @@ class SessionRow(Base):
         Uuid(as_uuid=True), nullable=True
     )
     pi_session_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    pi_session_uri: Mapped[str | None] = mapped_column(String, nullable=True)
     vault_ids: Mapped[list[Any]] = mapped_column(JSONType, default=list, nullable=False)
     tools: Mapped[list[Any] | None] = mapped_column(JSONType, nullable=True)
     sandbox_state: Mapped[str | None] = mapped_column(String(16), nullable=True)

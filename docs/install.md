@@ -76,26 +76,23 @@ business-document image.
 It needs sandbox size `M` or larger. See [run modes](run-modes.md).
 
 `--microvm` pulls a prebuilt image when `APIPI_IMAGE_SOURCE` is set.
-`--build` keeps the local recipe build for an air-gapped host.
+For an air-gapped host, build with `apipi images build` and push to a
+local store instead.
 `--dry-run` prints which of those it would run.
 
 The guest kernel is Linux 6.1.186, pinned in `images/kernel.env`.
-An existing cache `vmlinux` whose `vmlinux.version` does not match is
-replaced on the next `apipi install --microvm`. A pulled image set
-uses the kernel published with that set. Rebuild or pull after this
+A pulled image set
+uses the kernel published with that set. Pull after this
 change so guests are not still on the old 4.14 kernel.
 
 `--microvm` checks `/dev/kvm`, `ip`, `iptables`, and `tc` (it names
 the packages; it does not run apt). It downloads pinned Firecracker
 1.17.0 and jailer into `$XDG_DATA_HOME/apipi/firecracker` (or
 `~/.local/share/apipi/firecracker`). With `APIPI_IMAGE_SOURCE` set it
-pulls verified images into the images dir. Without that setting, and
-with `--build`, it builds from `images/<id>/` into
-`$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). The
-loop mount for a local build still needs sudo, the same way
-`./images/build.sh` does. `./scripts/microvm-rootfs` is a wrapper for
-that script. A pull prints the images dir. A build prints `export`
-lines for the kernel and rootfs. It does not write `.env` or
+pulls verified images into the images dir. Air-gapped hosts build with
+`apipi images build <id>` and push to a file store instead.
+A pull prints the images dir.
+It does not write `.env` or
 `apipi.toml`, and it does not set `APIPI_RUN_MODE`.
 
 The Firecracker tarball also contains `.debug` binaries. Install
@@ -105,10 +102,8 @@ exit 0 and report the pinned version. A missing or crashing jailer
 is replaced on the next `apipi install --microvm` without `--force`.
 `--force` still replaces binaries that already pass those checks.
 
-When those image paths are unset, `apipi serve` and
-`apipi microvm shell` use the cache files if they exist. Env, `.env`,
-and `[sandbox].kernel` / `rootfs` still override. Missing files fail
-with `apipi install` and the path that was looked at. Firecracker and
+When the image store is unset, `apipi serve` and
+`apipi microvm shell` fail with `apipi images pull <id>` and the path that was looked at. `APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` remain as dev-only overrides. Firecracker and
 jailer are found on `PATH`, then in that install prefix, then under
 `SUDO_USER` when the process is root.
 
@@ -158,10 +153,9 @@ plus `manifest.json` under the build directory (default
 mount, and packages as `./images/build.sh`. `--arch` only checks that
 you asked for this host. Cross-build is not supported.
 
-`apipi images push` uploads the newest local build of each image id
+`apipi images push --store-version <v>` uploads the newest local build of each image id
 and arch. Newest means the manifest `created_at`, not the file name.
-Older manifests left in the build directory are ignored. `apipi images
-publish` is the same command. `--to` is `s3://bucket/prefix` or
+Older manifests left in the build directory are ignored. `--to` is `s3://bucket/prefix` or
 `file:///path`. When `--to` is omitted, push uses `APIPI_IMAGE_SOURCE`
 or `[sandbox].image_source`. If neither is set, push exits with an
 error. `https://` is read-only and is rejected.
@@ -183,7 +177,7 @@ AWS credential chain is used, including the instance role. Keys are
 never read from TOML. Install the client with `uv sync --extra s3`.
 
 `apipi images push --store-version 0.12.0` writes a schema 2 prefix.
-Without that flag, push writes a deprecated schema 1 store and warns.
+`--store-version` is required.
 `apipi images pull` installs the pinned store version for this host's
 arch into the images directory. It checks the compressed sha256, decompresses as a
 stream, then checks the ext4 sha256. Peak RAM does not grow with the

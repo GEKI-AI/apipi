@@ -73,6 +73,10 @@ def _settings(
 
 
 def _published(tmp_path: Path) -> tuple[Path, bytes]:
+    from apipi import __version__
+    from apipi.worker.pi.image_catalog import version_prefix
+
+    version = version_prefix(__version__)
     work = tmp_path / "src"
     work.mkdir()
     rootfs = work / "rootfs.ext4"
@@ -89,8 +93,13 @@ def _published(tmp_path: Path) -> tuple[Path, bytes]:
         out_dir=out,
         arch="x86_64",
     )
-    store = tmp_path / "store"
-    publish_images(open_image_store(store.as_uri(), write=True), out, ids=["default"])
+    store = tmp_path / "store" / version
+    publish_images(
+        open_image_store(store.as_uri(), write=True),
+        out,
+        ids=["default"],
+        store_version=version,
+    )
     return store, payload
 
 
@@ -120,14 +129,16 @@ def test_pull_corrupt_leaves_no_partial(tmp_path: Path) -> None:
 
 
 def test_pull_s3(tmp_path: Path) -> None:
+    from apipi import __version__ as _v
+    from apipi.worker.pi.image_catalog import version_prefix
+
     _store, payload = _published(tmp_path)
     fake = FakeS3()
     out = tmp_path / "out"
-    s3 = open_image_store(
-        "s3://images/apipi", _settings(tmp_path), write=True, client=fake
-    )
-    publish_images(s3, out, ids=["default"])
-    settings = _settings(tmp_path, image_source="s3://images/apipi")
+    versioned = f"s3://images/apipi/{version_prefix(_v)}"
+    s3 = open_image_store(versioned, _settings(tmp_path), write=True, client=fake)
+    publish_images(s3, out, ids=["default"], store_version=version_prefix(_v))
+    settings = _settings(tmp_path, image_source=versioned)
     pull_images(settings, ids=["default"], client=fake)
     version = read_current(tmp_path / "images", "default")
     assert version is not None
@@ -136,6 +147,10 @@ def test_pull_s3(tmp_path: Path) -> None:
 
 
 def test_pull_https(tmp_path: Path) -> None:
+    import logging
+
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     store, payload = _published(tmp_path)
     files = {path.name: path.read_bytes() for path in store.iterdir() if path.is_file()}
 
@@ -146,8 +161,11 @@ def test_pull_https(tmp_path: Path) -> None:
         return httpx.Response(200, content=files[name])
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    settings = _settings(tmp_path, image_source="https://images.example/apipi")
-    pull_images(settings, ids=["default"], client=client)
+    try:
+        settings = _settings(tmp_path, image_source="https://images.example/apipi")
+        pull_images(settings, ids=["default"], client=client)
+    finally:
+        client.close()
     version = read_current(tmp_path / "images", "default")
     assert version is not None
     rootfs = tmp_path / "images" / "default" / version / "rootfs.ext4"
@@ -221,11 +239,6 @@ def test_images_dir_beats_legacy_cache(
     store, payload = _published(tmp_path)
     settings = _settings(tmp_path, image_source=store.as_uri())
     pull_images(settings, ids=["default"])
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    cache = tmp_path / "cache" / "apipi" / "microvm"
-    cache.mkdir(parents=True)
-    (cache / "vmlinux").write_bytes(b"old-kernel")
-    (cache / "rootfs.ext4").write_bytes(b"old-rootfs")
     _kernel, rootfs = microvm_images(settings, image="default")
     assert Path(rootfs).read_bytes() == payload
 
@@ -233,13 +246,15 @@ def test_images_dir_beats_legacy_cache(
 def test_pull_s3_uses_get_to_for_blobs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    from apipi import __version__ as _v
+    from apipi.worker.pi.image_catalog import version_prefix
+
     _store, payload = _published(tmp_path)
     fake = FakeS3()
     out = tmp_path / "out"
-    s3 = open_image_store(
-        "s3://images/apipi", _settings(tmp_path), write=True, client=fake
-    )
-    publish_images(s3, out, ids=["default"])
+    versioned = f"s3://images/apipi/{version_prefix(_v)}"
+    s3 = open_image_store(versioned, _settings(tmp_path), write=True, client=fake)
+    publish_images(s3, out, ids=["default"], store_version=version_prefix(_v))
     original = S3ImageStore.get
 
     def guarded(self: S3ImageStore, name: str) -> bytes:
@@ -248,7 +263,7 @@ def test_pull_s3_uses_get_to_for_blobs(
         return original(self, name)
 
     monkeypatch.setattr(S3ImageStore, "get", guarded)
-    settings = _settings(tmp_path, image_source="s3://images/apipi")
+    settings = _settings(tmp_path, image_source=versioned)
     pull_images(settings, ids=["default"], client=fake)
     assert any(key.endswith(".ext4.zst") for key in fake.downloads)
     assert any(key.endswith("vmlinux-x86_64.zst") for key in fake.downloads)

@@ -8,7 +8,6 @@ from apipi.gateway.errors import ApiError
 from apipi.store.repo import get_file, get_skill, get_vault
 from apipi.worker.pi.sandbox import (
     SANDBOX_IMAGE_KEY,
-    SANDBOX_SIZE_KEY,
     require_image_size,
     require_known_image,
     resolve_sandbox_image,
@@ -34,15 +33,11 @@ def sandbox_defaults_from_metadata(metadata: object) -> dict[str, Any] | None:
             return None
     if not isinstance(metadata, dict):
         return None
-    size = metadata.get(SANDBOX_SIZE_KEY)
     image = metadata.get(SANDBOX_IMAGE_KEY)
-    if not isinstance(size, str) and not isinstance(image, str):
+    if not isinstance(image, str):
         return None
     environment: dict[str, Any] = {"type": _HOSTED}
-    if isinstance(size, str):
-        environment["sandbox_size"] = size
-    if isinstance(image, str):
-        environment["sandbox_image"] = image
+    environment["sandbox_image"] = image
     return {"environment": environment}
 
 
@@ -53,17 +48,8 @@ def normalize_sandbox_aliases(
     meta = dict(metadata) if metadata else {}
     defaults = dict(session_defaults) if session_defaults else None
     env = _environment_dict(defaults)
-    meta_size = meta.get(SANDBOX_SIZE_KEY) if SANDBOX_SIZE_KEY in meta else None
     meta_image = meta.get(SANDBOX_IMAGE_KEY) if SANDBOX_IMAGE_KEY in meta else None
-    env_size = env.get("sandbox_size") if env else None
     env_image = env.get("sandbox_image") if env else None
-    if _both_differ(meta_size, env_size):
-        raise ApiError(
-            "invalid_request",
-            "apipi.sandbox_size does not match "
-            "session_defaults.environment.sandbox_size",
-            code="invalid_request",
-        )
     if _both_differ(meta_image, env_image):
         raise ApiError(
             "invalid_request",
@@ -71,18 +57,13 @@ def normalize_sandbox_aliases(
             "session_defaults.environment.sandbox_image",
             code="invalid_request",
         )
-    size = env_size if isinstance(env_size, str) else meta_size
     image = env_image if isinstance(env_image, str) else meta_image
-    if not isinstance(size, str) and not isinstance(image, str):
+    if not isinstance(image, str):
         return (meta or None) if metadata is not None else None, defaults
     if env is None:
         env = {"type": _HOSTED}
-    if isinstance(size, str):
-        env["sandbox_size"] = size
-        meta[SANDBOX_SIZE_KEY] = size
-    if isinstance(image, str):
-        env["sandbox_image"] = image
-        meta[SANDBOX_IMAGE_KEY] = image
+    env["sandbox_image"] = image
+    meta[SANDBOX_IMAGE_KEY] = image
     if defaults is None:
         defaults = {}
     defaults["environment"] = env
@@ -97,10 +78,7 @@ def mirror_sandbox_metadata(
     env = _environment_dict(session_defaults)
     if env is None:
         return meta
-    size = env.get("sandbox_size")
     image = env.get("sandbox_image")
-    if isinstance(size, str):
-        meta[SANDBOX_SIZE_KEY] = size
     if isinstance(image, str):
         meta[SANDBOX_IMAGE_KEY] = image
     return meta
@@ -108,7 +86,6 @@ def mirror_sandbox_metadata(
 
 def strip_sandbox_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     meta = dict(metadata or {})
-    meta.pop(SANDBOX_SIZE_KEY, None)
     meta.pop(SANDBOX_IMAGE_KEY, None)
     return meta
 
@@ -127,8 +104,6 @@ def validate_defaults_shape(
         environment_size=payload.get("sandbox_size")
         if isinstance(payload.get("sandbox_size"), str)
         else None,
-        session_metadata=None,
-        agent_metadata=None,
         default=settings.sandbox_default_size,
     )
     image = resolve_sandbox_image(

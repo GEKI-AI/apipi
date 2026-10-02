@@ -311,20 +311,6 @@ class HttpImageStore:
         self.put_bytes(name, b"")
 
 
-class ImageStore:
-    def exists(self, name: str) -> bool:
-        raise NotImplementedError
-
-    def get(self, name: str) -> bytes:
-        raise NotImplementedError
-
-    def put_bytes(self, name: str, data: bytes) -> None:
-        raise NotImplementedError
-
-    def put_file(self, name: str, source: Path) -> None:
-        raise NotImplementedError
-
-
 def open_image_store(
     uri: str,
     settings: Settings | None = None,

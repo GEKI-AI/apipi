@@ -188,10 +188,10 @@ def test_merged_skill_limit() -> None:
 
 
 def test_alias_conflict() -> None:
-    with pytest.raises(ApiError, match="sandbox_size"):
+    with pytest.raises(ApiError, match="sandbox_image"):
         normalize_sandbox_aliases(
-            {"apipi.sandbox_size": "S"},
-            {"environment": {"type": "openai_hosted", "sandbox_size": "L"}},
+            {"apipi.sandbox_image": "default"},
+            {"environment": {"type": "openai_hosted", "sandbox_image": "browser"}},
         )
 
 
@@ -209,27 +209,25 @@ def test_alias_copies_metadata_into_defaults() -> None:
 
 def test_metadata_copy_for_migration() -> None:
     copied = sandbox_defaults_from_metadata(
-        {"apipi.sandbox_size": "M", "apipi.sandbox_image": "browser", "other": 1}
+        {"apipi.sandbox_image": "browser", "other": 1}
     )
     assert copied == {
         "environment": {
             "type": "openai_hosted",
-            "sandbox_size": "M",
             "sandbox_image": "browser",
         }
     }
     assert sandbox_defaults_from_metadata({"other": 1}) is None
+    assert sandbox_defaults_from_metadata({"apipi.sandbox_size": "M"}) is None
 
 
 def test_sandbox_resolution_order() -> None:
     size = resolve_sandbox_size(
         environment_size=None,
-        session_metadata={"apipi.sandbox_size": "M"},
         agent_default="L",
-        agent_metadata={"apipi.sandbox_size": "S"},
         default="S",
     )
-    assert size == "M"
+    assert size == "L"
     image = resolve_sandbox_image(
         environment_image=None,
         session_metadata=None,
@@ -240,10 +238,8 @@ def test_sandbox_resolution_order() -> None:
     )
     assert image == "browser"
     legacy = resolve_sandbox_size(
-        environment_size=None,
-        session_metadata=None,
+        environment_size="L",
         agent_default=None,
-        agent_metadata={"apipi.sandbox_size": "L"},
         default="S",
     )
     assert legacy == "L"

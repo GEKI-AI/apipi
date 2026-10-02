@@ -542,8 +542,6 @@ class SessionService:
                 environment_size=env.get("sandbox_size")
                 if isinstance(env.get("sandbox_size"), str)
                 else None,
-                session_metadata=metadata,
-                agent_metadata=sandbox_agent_metadata,
                 agent_default=agent_size,
                 default=self.settings.sandbox_default_size,
             )

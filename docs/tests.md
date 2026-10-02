@@ -73,8 +73,8 @@ Need:
 | `/dev/kvm` readable and writable | member of group `kvm`; `ls -l /dev/kvm` |
 | `firecracker` and `jailer` on `PATH` | `firecracker --version` |
 | `ip`, `iptables`, and `tc` | `command -v ip iptables tc` |
-| Guest kernel | `APIPI_MICROVM_KERNEL` (a `vmlinux` file) |
-| Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4 with Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest`) |
+| Guest kernel | From the image store (`apipi images pull`). `APIPI_MICROVM_KERNEL` is a dev-only override (a `vmlinux` file). |
+| Guest rootfs | From the image store (`apipi images pull <id>`). `APIPI_MICROVM_ROOTFS` is a dev-only override (ext4 with Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest`). |
 | TAP | Permission to create a TAP device (`CAP_NET_ADMIN` or root) |
 | IP forward | `/proc/sys/net/ipv4/ip_forward` is `1`, or you can write it |
 
@@ -87,28 +87,19 @@ python3 -c "import os; print(os.access('/dev/kvm', os.R_OK | os.W_OK))"
 
 That must print `True`. TAP creation is the usual extra step after KVM
 works.
-`apipi install --microvm` downloads Firecracker and jailer and builds
-guest images. You can still install Firecracker from the
+`apipi install --microvm` downloads Firecracker and jailer and pulls
+guest images from the image store. You can still install Firecracker from the
 [Firecracker release](https://github.com/firecracker-microvm/firecracker/releases)
-and build images with `./images/build.sh`. The distro stays out
-of git. Unset `APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` use the
-cache files when they exist:
+and build images with `apipi images build`. The distro stays out
+of git. Pull images before running microvm tests:
 
 ```
 uv run apipi install --microvm
 uv run pytest -m microvm
 ```
 
-```
-./images/build.sh default
-uv run pytest -m microvm
-```
-
-`./images/build.sh` needs `curl`, `tar`, `mkfs.ext4`, `mount`, and
-root (or `sudo`) for the loop mount. Pass a directory argument to
-write the images somewhere else. `./images/build.sh browser` writes
-`rootfs-browser.ext4` next to the default image.
-`./scripts/microvm-rootfs --flavor browser` is the same build. How to install
+`apipi images build <id>` needs `curl`, `tar`, `mkfs.ext4`, `mount`, and
+root (or `sudo`) for the loop mount. How to install
 Firecracker and what the rootfs must contain are in
 [run modes](run-modes.md).
 

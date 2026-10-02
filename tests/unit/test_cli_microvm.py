@@ -38,7 +38,7 @@ def test_cli_microvm_shell_image_and_workspace(
     captured: dict[str, object] = {}
 
     async def fake_run(settings: Settings, *, cwd: str | None = None) -> int:
-        captured["image"] = settings.microvm_image
+        captured["image"] = settings.sandbox_default_image
         captured["cwd"] = cwd
         return 0
 
@@ -49,7 +49,7 @@ def test_cli_microvm_shell_image_and_workspace(
         "apipi.cli.load_settings",
         lambda config_path=None: Settings(
             database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-            microvm_image="default",
+            sandbox_default_image="default",
         ),
     )
     assert (

@@ -1127,7 +1127,7 @@ async def _fail_turn(
 
 
 def _cache_expected(row: SessionRow) -> bool:
-    return row.pi_session_id is not None or bool(row.pi_session_uri)
+    return row.pi_session_id is not None
 
 
 def request_cancel(

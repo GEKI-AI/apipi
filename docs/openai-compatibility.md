@@ -123,13 +123,13 @@ New extension fields are grouped. Older flat fields stay flat.
 | Field | `idle_ttl` | Agent and session. Flat. |
 | Field | `user_id`, `org_id` | Session response. Flat. |
 | Field | `session_defaults` | Agent. |
-| Field | `environment.sandbox_size` | `S` / `M` / `L`. Alias of OpenAI `container_size`. |
+| Field | `environment.sandbox_size` | `S` / `M` / `L`. ApiPi extension. OpenAI `container_size` (`small` / `medium` / `large`) is the input and is stored as `sandbox_size`. |
 | Field | `environment.container_size` | OpenAI `small` / `medium` / `large`. Stored as `sandbox_size`. |
 | Field | `environment.sandbox_image` | Guest image id. |
 | Field | `environment.sandbox` | Hosted runtime status. Null for `none`. |
 | Field | `environment.directory` | Stored for the worker. Not returned on public session responses. |
-| Metadata | `apipi.sandbox_size`, `apipi.sandbox_image` | Stock SDK inputs. |
-| Metadata | `apipi.sandbox_eager_boot` | Overrides eager boot. |
+| Metadata | `apipi.sandbox_image` | Stock SDK input. |
+| Metadata | `apipi.sandbox_eager_boot` | Session or agent metadata override for eager boot. |
 | Metadata | `apipi.thinking`, `apipi.system_prompt`, `apipi.idle_ttl` | Pi and idle overrides. `reasoning.effort` is the same thinking level. `none` is `off`. On update, `reasoning.effort` replaces the stored level and `null` clears it. A 400 happens only when the same request also sets a different `apipi.thinking`. |
 | Metadata | `apipi.session_kind` | `chat` for chat sessions. |
 | Event data | `data.sandbox` | Hosted `environment.*` events. |
@@ -167,7 +167,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | `type`: `openai_hosted`, `hosted`, `none` | Same shape, different backend for hosted; same API for `none`. `self_hosted` is currently not supported (`not_implemented`, may return on worker protocol v2). |
 | `capability_directories` | Same API (skills on the computer) |
 | `packages`, `setup_commands` | Same API on `openai_hosted` only; `400` on `none` |
-| `sandbox_size` | ApiPi extension (`S` \| `M` \| `L`). Stock SDKs can set `metadata["apipi.sandbox_size"]`. Top-level session `sandbox_size` is `unknown_field`. |
+| `sandbox_size` | ApiPi extension (`S` \| `M` \| `L`). Set `environment.container_size` (`small` \| `medium` \| `large`) or `environment.sandbox_size`. Top-level session `sandbox_size` is `unknown_field`. |
 | `sandbox_image` | ApiPi extension. Stock SDKs can set `metadata["apipi.sandbox_image"]`. Top-level session `sandbox_image` is `unknown_field`. |
 | `environment.sandbox` | ApiPi extension on hosted sessions: `state`, `reason`, `since`, `image`, `image_version`, `size`, `cold_boots`, `last_boot_ms`. Null for `none`. |
 | `metadata["apipi.sandbox_eager_boot"]` | ApiPi extension. Overrides `APIPI_SANDBOX_EAGER_BOOT` for that agent or session. |

@@ -6,7 +6,7 @@ is Pi's four tools (read, write, edit, bash) plus whatever you attach.
 Extend with:
 
 - **Function tools** -- caller returns the result (`requires_action`)
-- **MCP** -- HTTP (OpenAI shape) or stdio (local servers)
+- **MCP** -- HTTP (OpenAI shape)
 - **Skills** -- `SKILL.md` directories on the computer, same as the
   [Agent Skills](https://agentskills.io/home) standard and OpenAI's
   `environment.capability_directories`. Hosted packs upload to

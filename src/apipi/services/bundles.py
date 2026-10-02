@@ -6,7 +6,6 @@ import stat
 import zipfile
 from typing import Any
 
-from apipi.env.spec import EnvironmentSpec
 from apipi.gateway.errors import ApiError
 from apipi.services.skills import inspect_skill_zip
 
@@ -618,9 +617,3 @@ def _is_symlink(info: zipfile.ZipInfo) -> bool:
 
 def _has_drive(name: str) -> bool:
     return len(name) > 2 and name[1] == ":"
-
-
-def env_spec_or_none(value: object) -> EnvironmentSpec | None:
-    if not isinstance(value, dict):
-        return None
-    return EnvironmentSpec.model_validate(value)

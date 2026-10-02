@@ -58,11 +58,11 @@ created. File tools (read, write, edit, bash) run against that folder.
 ### Sandbox size
 
 Session create may include `environment.sandbox_size` with value `S`,
-`M`, or `L`. That field is an ApiPi extension. Official OpenAI clients
-that reject unknown environment keys can set
-`metadata["apipi.sandbox_size"]` instead. Other `metadata` keys stay
+`M`, or `L`. That field is an ApiPi extension. OpenAI clients set
+`environment.container_size` (`small` / `medium` / `large`) instead,
+which is stored as `sandbox_size`. Other `metadata` keys stay
 opaque tags. The `apipi.` prefix is reserved. The gateway reads
-`apipi.sandbox_size` (this page) and `apipi.session_kind` (placement).
+`apipi.sandbox_image` and `apipi.session_kind` (placement).
 Extenders may set `apipi.actor_type`, `apipi.schedule_id`, and
 `apipi.source`. The gateway stores those keys and does not schedule
 from them. The full list is in
@@ -70,11 +70,9 @@ from them. The full list is in
 
 Resolution, highest wins:
 
-1. `environment.sandbox_size` on the session
-2. Session create `metadata["apipi.sandbox_size"]`
-3. Agent `session_defaults.environment.sandbox_size`
-4. Agent `metadata["apipi.sandbox_size"]` (deprecated alias)
-5. Gateway `APIPI_SANDBOX_DEFAULT_SIZE` / `[sandbox].default_size`
+1. `environment.sandbox_size` or `environment.container_size` on the session
+2. Agent `session_defaults.environment.sandbox_size`
+3. Gateway `APIPI_SANDBOX_DEFAULT_SIZE` / `[sandbox].default_size`
    (shipped default `S`)
 
 The resolved size is stored on the session `environment` and is fixed

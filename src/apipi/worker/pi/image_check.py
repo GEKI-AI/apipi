@@ -85,7 +85,6 @@ mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$mnt/dev/shm"
 mount -t devpts devpts "$mnt/dev/pts"
 chroot "$mnt" /bin/sh -c "
   set -eu
-  test ! -e /opt/apipi/playwright-mcp
   test -x /opt/chrome-headless-shell/chrome-headless-shell
   test -f /etc/apipi/browser.env
   grep -q AGENT_BROWSER_NO_WEBMCP=1 /etc/apipi/browser.env
@@ -232,11 +231,10 @@ def check_image_rootfs(image_id: str, rootfs: Path) -> None:
         )
 
 
-def parse_check_tar(blob: bytes) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def parse_check_tar(blob: bytes) -> dict[str, Any] | None:
     if not blob:
-        return None, None
+        return None
     browser: dict[str, Any] | None = None
-    tools: dict[str, Any] | None = None
     try:
         with tarfile.open(fileobj=io.BytesIO(blob), mode="r") as tar:
             for member in tar.getmembers():
@@ -250,13 +248,9 @@ def parse_check_tar(blob: bytes) -> tuple[dict[str, Any] | None, dict[str, Any] 
                     loaded = json.loads(extracted.read().decode())
                     if isinstance(loaded, dict):
                         browser = loaded
-                elif name.endswith("image-check.json"):
-                    loaded = json.loads(extracted.read().decode())
-                    if isinstance(loaded, dict):
-                        tools = loaded
     except tarfile.TarError:
-        return None, None
-    return browser, tools
+        return None
+    return browser
 
 
 async def check_browser_boot(settings: Settings) -> None:
@@ -274,7 +268,6 @@ async def check_browser_boot(settings: Settings) -> None:
             tools=True,
             mem_mib=settings.sandbox_l_mem_mib,
             image="browser",
-            extra_env={"APIPI_IMAGE_CHECK": "1"},
         )
         errors: list[str] = []
 
@@ -286,7 +279,6 @@ async def check_browser_boot(settings: Settings) -> None:
         task = asyncio.create_task(watch())
         deadline = time.monotonic() + BOOT_TIMEOUT_SEC
         browser: dict[str, Any] | None = None
-        tools: dict[str, Any] | None = None
         try:
             while time.monotonic() < deadline:
                 if errors:
@@ -299,19 +291,17 @@ async def check_browser_boot(settings: Settings) -> None:
                         blob = await asyncio.wait_for(pull(), timeout=5)
                     except (OSError, TimeoutError, ConfigError):
                         blob = b""
-                found_browser, found_tools = parse_check_tar(blob)
+                found_browser = parse_check_tar(blob)
                 if found_browser is not None:
                     browser = found_browser
-                if found_tools is not None:
-                    tools = found_tools
-                if browser is not None and tools is not None:
+                if browser is not None:
                     break
                 await asyncio.sleep(1)
         finally:
             task.cancel()
         if errors:
             raise ConfigError(errors[0])
-        if browser is None or tools is None:
+        if browser is None:
             raise ConfigError("browser boot check timed out")
         raw_error = browser.get("error")
         if isinstance(raw_error, str) and raw_error:
@@ -327,15 +317,6 @@ async def check_browser_boot(settings: Settings) -> None:
             raise ConfigError("browser boot check pdf failed")
         if not browser.get("loopback_only"):
             raise ConfigError("browser boot check found a non-loopback listener")
-        names = tools.get("tools")
-        listed = names if isinstance(names, list) else []
-        if any(
-            isinstance(name, str) and name.startswith("mcp_playwright_")
-            for name in listed
-        ):
-            raise ConfigError("browser boot check still registered mcp_playwright_*")
-        if not tools.get("skill"):
-            raise ConfigError("browser boot check did not see the browser skill")
         print("browser boot check ok")
     finally:
         if proc is not None:

@@ -27,8 +27,14 @@ def _auth(token: str) -> dict[str, str]:
 
 
 def _image_paths() -> tuple[str | None, str | None]:
+    from apipi.config import load_settings
+
     try:
-        return microvm_images()
+        settings = load_settings()
+    except Exception:
+        return None, None
+    try:
+        return microvm_images(settings)
     except ConfigError:
         return None, None
 

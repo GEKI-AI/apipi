@@ -1,7 +1,6 @@
 import logging
 import os
 import subprocess
-import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -25,7 +24,6 @@ from apipi.worker.pi.images import (
     image_version,
     kernel_artifact_name,
     kernel_version,
-    load_index,
     load_manifest,
     manifest_name,
     recipe_sha256,
@@ -223,17 +221,6 @@ def build_image(
     )
 
 
-def _load_store_index(
-    store: FileImageStore | S3ImageStore | HttpImageStore,
-) -> ImageIndex:
-    if not store.exists("index.json"):
-        return ImageIndex(schema_version=1, kernels=[], images=[])
-    try:
-        return load_index(store.get("index.json"))
-    except ImageFormatError as exc:
-        raise ConfigError(str(exc)) from exc
-
-
 def _built_manifests(source: Path, ids: list[str]) -> list[ImageManifest]:
     found: list[ImageManifest] = []
     for path in sorted(source.glob("*.json")):
@@ -271,75 +258,6 @@ def _newest_manifests(source: Path, ids: list[str]) -> list[ImageManifest]:
     return list(newest.values())
 
 
-def _index_entry(index: ImageIndex, manifest: ImageManifest) -> ImageIndexEntry | None:
-    for item in index.images:
-        if (
-            item.id == manifest.id
-            and item.version == manifest.version
-            and item.arch == manifest.arch
-        ):
-            return item
-    return None
-
-
-def _blob_matches(
-    store: FileImageStore | S3ImageStore | HttpImageStore,
-    manifest: ImageManifest,
-    zst: Path,
-) -> bool:
-    name = manifest_name(manifest.id, manifest.version, manifest.arch)
-    if not store.exists(name):
-        return False
-    try:
-        remote = load_manifest(store.get(name))
-    except ImageFormatError:
-        return False
-    except ConfigError as exc:
-        text = str(exc)
-        if "does not exist" in text:
-            raise
-        if "missing" in text:
-            return False
-        raise
-    return remote.rootfs.compressed_sha256 == sha256_file(zst)
-
-
-def _mark_latest(index: ImageIndex, manifest: ImageManifest, name: str) -> bool:
-    changed = False
-    for item in index.images:
-        if (
-            item.id == manifest.id
-            and item.arch == manifest.arch
-            and item.version != manifest.version
-            and item.latest
-        ):
-            item.latest = False
-            changed = True
-    existing = _index_entry(index, manifest)
-    if existing is None:
-        index.images.append(
-            ImageIndexEntry(
-                id=manifest.id,
-                version=manifest.version,
-                arch=manifest.arch,
-                manifest=name,
-                latest=True,
-            )
-        )
-        return True
-    if not existing.latest:
-        existing.latest = True
-        changed = True
-    if existing.manifest != name:
-        existing.manifest = name
-        changed = True
-    return changed
-
-
-def _skip_line(manifest: ImageManifest) -> str:
-    return f"skip {manifest.id} {manifest.version} {manifest.arch} (identical)"
-
-
 def publish_images(
     store: FileImageStore | S3ImageStore | HttpImageStore,
     source: Path,
@@ -349,75 +267,13 @@ def publish_images(
     dry_run: bool = False,
     store_version: str | None = None,
 ) -> list[str]:
-    if store_version:
-        if force:
-            raise ConfigError("push --force is refused for a versioned store prefix")
-        return publish_versioned(
-            store, source, version=store_version, ids=ids, dry_run=dry_run
-        )
-    warnings.warn(
-        "push without --store-version writes a deprecated schema 1 store",
-        DeprecationWarning,
-        stacklevel=2,
+    if not store_version:
+        raise ConfigError("push requires --store-version")
+    if force:
+        raise ConfigError("push --force is refused for a versioned store prefix")
+    return publish_versioned(
+        store, source, version=store_version, ids=ids, dry_run=dry_run
     )
-    wanted = ids or []
-    manifests = _newest_manifests(source, wanted)
-    index = _load_store_index(store)
-    planned: list[str] = []
-    changed = False
-    for manifest in manifests:
-        name = manifest_name(manifest.id, manifest.version, manifest.arch)
-        zst = source / manifest.rootfs.path
-        man = source / name
-        if not zst.is_file() or not man.is_file():
-            raise ConfigError(f"build dir is missing {zst.name} or {man.name}")
-        existing = _index_entry(index, manifest)
-        if existing is not None and not force:
-            if _blob_matches(store, manifest, zst):
-                planned.append(_skip_line(manifest))
-                if _mark_latest(index, manifest, name):
-                    changed = True
-                continue
-            raise ConfigError(
-                f"image {manifest.id} {manifest.version} {manifest.arch} "
-                "is already published; pass --force to replace it"
-            )
-        planned.extend([zst.name, man.name])
-        if not dry_run:
-            store.put_file(zst.name, zst)
-            store.put_file(man.name, man)
-        _mark_latest(index, manifest, name)
-        changed = True
-    archs = {item.arch for item in manifests}
-    for arch in sorted(archs):
-        meta_path = source / f"vmlinux-{arch}.json"
-        if not meta_path.is_file():
-            raise ConfigError(f"build dir is missing {meta_path.name}")
-        kernel = KernelIndexEntry.model_validate_json(meta_path.read_text())
-        blob = source / kernel.path
-        if not blob.is_file():
-            raise ConfigError(f"build dir is missing {kernel.path}")
-        already = any(
-            item.arch == kernel.arch and item.version == kernel.version
-            for item in index.kernels
-        )
-        if not already or force:
-            planned.append(kernel.path)
-            if not dry_run:
-                store.put_file(kernel.path, blob)
-            index.kernels = [
-                item
-                for item in index.kernels
-                if not (item.arch == kernel.arch and item.version == kernel.version)
-            ]
-            index.kernels.append(kernel)
-            changed = True
-    if changed:
-        planned.append("index.json")
-        if not dry_run:
-            index.schema_version = 1
-            store.put_bytes("index.json", dump_index(index).encode())
-    return planned
 
 
 def publish_versioned(

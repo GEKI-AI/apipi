@@ -31,7 +31,7 @@ log = logging.getLogger("apipi.worker.pi")
 
 
 def _hosted(env_type: str | None) -> bool:
-    return env_type in {"openai_hosted", "hosted"}
+    return env_type == "openai_hosted"
 
 
 def _consume_future(future: asyncio.Future[Any]) -> None:

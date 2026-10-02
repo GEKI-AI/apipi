@@ -20,10 +20,6 @@ def isolation_name(mode: str) -> str:
 
 
 def _resolve(mode: str) -> Isolation:
-    if mode == "host":
-        raise ConfigError("APIPI_RUN_MODE=host is not valid")
-    if mode == "jail":
-        raise ConfigError("APIPI_RUN_MODE=jail is not valid")
     if mode == "none":
         from apipi.worker.pi.isolation.none import NoneIsolation
 

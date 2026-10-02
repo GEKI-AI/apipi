@@ -12,7 +12,7 @@ into ApiPi Postgres is rejected at startup. Payload bodies, if you
 need them, go to an optional external HTTPS export.
 
 Postgres is the **hot** store: recent turns and daily rollups for
-quotas and `GET /v1/apipi/usage`. Long-term analytics go through an optional
+`GET /v1/apipi/usage`. Long-term analytics go through an optional
 HTTPS usage export. Prometheus and OpenTelemetry traces are local
 exports of the same non-text facts. How operators collect those
 signals is in [observability](observability.md).
@@ -213,8 +213,8 @@ network. They enqueue a dict and return.
 An image has no tag. Consumers identify a guest image by `sandbox_image`
 (the image id), `image_version`, and `image_digest`. The version is the
 computed `<pi_version>-<hash>` recorded in `<id>/current` at spawn. The
-digest is `rootfs.sha256` from that version's `manifest.json`. An
-explicit or legacy rootfs reports `legacy` for both version and digest.
+digest is `rootfs.sha256` from that version's `manifest.json`. A dev
+rootfs override reports null for both version and digest.
 `none` and non-microvm run modes send null for all three image fields.
 `sandbox_size` is still set, because it drives the memory budget in
 every run mode. Chat sessions are `environment_type: "none"` with
