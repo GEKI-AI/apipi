@@ -77,7 +77,6 @@ from apipi.worker.turn_context import (
     parse_turn_context,
     summarize_context,
 )
-)
 
 WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})
 DELTA_RATE_LIMIT = 100

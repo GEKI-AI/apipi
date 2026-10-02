@@ -203,7 +203,9 @@ async def test_reap_workspaces_override_none_ttl_keeps_workspace(
         settings,
         store,
         pool,
-        ttl_overrides={str(session_id): (None, time.time() - 10_000.0, "openai_hosted")},
+        ttl_overrides={
+            str(session_id): (None, time.time() - 10_000.0, "openai_hosted")
+        },
     )
     assert directory.is_dir()
 
