@@ -47,7 +47,7 @@ OVERSIZE = "oversize"
 INVALID_ENVELOPE = "invalid_envelope"
 UNKNOWN_SESSION = "unknown_session"
 
-DEFERRED_TYPES = frozenset({"artifact.completed", "sandbox.status"})
+DEFERRED_TYPES = frozenset({"sandbox.status"})
 
 
 @dataclass
@@ -61,6 +61,7 @@ class IngestOutcome:
     acks: dict[uuid.UUID, int] = field(default_factory=dict)
     wakes: list[tuple[uuid.UUID, dict[str, Any]]] = field(default_factory=list)
     rejected: list[tuple[uuid.UUID, int, str]] = field(default_factory=list)
+    presign_replies: list[dict[str, Any]] = field(default_factory=list)
 
 
 class IngestBatcher:
@@ -202,6 +203,28 @@ async def _validate(
         return NOT_LEASED
     if envelope.type in DEFERRED_TYPES:
         return NOT_IMPLEMENTED
+    if envelope.type == "artifact.presign":
+        raw_request = envelope.payload.get("request_id")
+        if not isinstance(raw_request, str) or not raw_request:
+            return INVALID_ENVELOPE
+        try:
+            uuid.UUID(raw_request)
+        except ValueError:
+            return INVALID_ENVELOPE
+        raw_declared = envelope.payload.get("size")
+        if not isinstance(raw_declared, int) or raw_declared < 1:
+            return INVALID_ENVELOPE
+        return None
+    if envelope.type == "artifact.completed":
+        payload = envelope.payload
+        raw_upload = payload.get("upload_id")
+        if not isinstance(raw_upload, str) or not raw_upload:
+            return INVALID_ENVELOPE
+        try:
+            uuid.UUID(raw_upload)
+        except ValueError:
+            return INVALID_ENVELOPE
+        return None
     if envelope.type == "event":
         from apipi.services.sink import LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES
 
@@ -276,6 +299,8 @@ async def _apply(
     metrics: Any,
     wakes: list[tuple[uuid.UUID, dict[str, Any]]],
     turn_cache: _TurnCache,
+    presign_replies: list[dict[str, Any]] | None = None,
+    objects: Any | None = None,
 ) -> None:
     from apipi.services.failures import failure_from_dict
     from apipi.services.usage import usage_from
@@ -428,6 +453,120 @@ async def _apply(
             changes["required_actions"] = payload["required_actions"]
         await update_session(db, tenant_id, session_id, changes=changes)
         return
+    if envelope.type == "artifact.presign":
+        from apipi.services.worker_artifacts import issue_artifact_presign
+        from apipi.store.blobs import object_store as _object_store
+
+        request_id = uuid.UUID(str(payload["request_id"]))
+        kind = str(payload.get("kind") or "artifact")
+        filename = payload.get("filename")
+        content_type = payload.get("content_type")
+        raw_size = payload.get("size")
+        if not isinstance(raw_size, int):
+            raise _Reject(INVALID_ENVELOPE)
+        size = raw_size
+        sha256 = payload.get("sha256")
+        replies = presign_replies if presign_replies is not None else []
+        try:
+            blobs = _blobs_for(settings, objects)
+            used = await blobs.used_bytes(tenant_id, row.key_id, session_id)
+            issued = await issue_artifact_presign(
+                db,
+                settings,
+                tenant_id,
+                session_id,
+                kind=kind,
+                filename=filename if isinstance(filename, str) else None,
+                content_type=content_type if isinstance(content_type, str) else None,
+                size=size,
+                sha256=sha256 if isinstance(sha256, str) else None,
+                key_id=row.key_id,
+                used_bytes=used,
+                objects=objects if objects is not None else _object_store(settings),
+                blobs=blobs,
+            )
+        except Exception as exc:
+            code, message = _artifact_error(exc)
+            replies.append(
+                {
+                    "type": "artifact.presign.reply",
+                    "session_id": str(session_id),
+                    "request_id": str(request_id),
+                    "ok": False,
+                    "code": code,
+                    "message": message,
+                }
+            )
+            raise _Reject(code) from exc
+        if issued.get("unchanged") is True:
+            replies.append(
+                {
+                    "type": "artifact.presign.reply",
+                    "session_id": str(session_id),
+                    "request_id": str(request_id),
+                    "ok": True,
+                    "unchanged": True,
+                }
+            )
+            return
+        replies.append(
+            {
+                "type": "artifact.presign.reply",
+                "session_id": str(session_id),
+                "request_id": str(request_id),
+                "ok": True,
+                "upload_id": str(issued["upload_id"]),
+                "artifact_id": str(issued["artifact_id"]),
+                "url": issued.get("url"),
+                "headers": issued.get("headers") or {},
+                "expires_at": issued.get("expires_at"),
+                "path": issued.get("path"),
+                "object_id": issued.get("object_id"),
+                "file_id": issued.get("file_id"),
+            }
+        )
+        return
+    if envelope.type == "artifact.completed":
+        from apipi.services.worker_artifacts import complete_artifact_upload
+        from apipi.store.blobs import object_store as _object_store2
+
+        raw_upload = payload.get("upload_id")
+        raw_path = payload.get("path")
+        raw_size = payload.get("size")
+        sha256 = payload.get("sha256")
+        name = payload.get("name")
+        raw_turn = payload.get("turn_id")
+        turn_id = None
+        if isinstance(raw_turn, str) and raw_turn:
+            try:
+                turn_id = uuid.UUID(raw_turn)
+            except ValueError as exc:
+                raise _Reject(INVALID_ENVELOPE) from exc
+        if not isinstance(raw_upload, str) or not raw_upload:
+            raise _Reject(INVALID_ENVELOPE)
+        try:
+            upload_id = uuid.UUID(raw_upload)
+        except ValueError as exc:
+            raise _Reject(INVALID_ENVELOPE) from exc
+        try:
+            await complete_artifact_upload(
+                db,
+                settings,
+                tenant_id,
+                session_id,
+                upload_id=upload_id,
+                size=int(raw_size) if isinstance(raw_size, int) else None,
+                sha256=sha256 if isinstance(sha256, str) else None,
+                path=raw_path if isinstance(raw_path, str) else None,
+                name=name if isinstance(name, str) else None,
+                turn_id=turn_id,
+                key_id=row.key_id,
+                objects=objects if objects is not None else _object_store2(settings),
+            )
+        except Exception as exc:
+            code, _message = _artifact_error(exc)
+            raise _Reject(code) from exc
+        return
     if envelope.type == "error":
         wakes.append(
             (
@@ -479,6 +618,37 @@ def classify_incoming(data: Any) -> tuple[str, WorkerEnvelope | None, int]:
     return "envelope", envelope, raw_size
 
 
+def _artifact_error(exc: BaseException) -> tuple[str, str]:
+    from apipi.config import DiskLimitError
+    from apipi.store.blobs import ObjectStoreError
+
+    if isinstance(exc, _Reject):
+        return exc.reason, str(exc)
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code, str(exc)
+    if isinstance(exc, (DiskLimitError, ObjectStoreError)):
+        return "artifact_store", str(exc)
+    return "ingest_error", str(exc)
+
+
+def _blobs_for(settings: Any, objects: Any | None) -> Any:
+    if objects is not None:
+        if hasattr(objects, "delete_session"):
+            return objects
+        from apipi.store.blobs import ArtifactAdapter
+
+        return ArtifactAdapter(objects)
+    from apipi.store.blobs import blob_store as _blob_store
+
+    try:
+        return _blob_store(settings)
+    except Exception:
+        from apipi.store.blobs import MemoryBlobs
+
+        return MemoryBlobs()
+
+
 async def flush_batch(
     store: Store,
     queued: list[QueuedEnvelope],
@@ -486,6 +656,7 @@ async def flush_batch(
     worker_id: uuid.UUID,
     settings: Any,
     metrics: Any,
+    objects: Any | None = None,
 ) -> IngestOutcome:
     """Apply one batch in a single transaction; returns acks and wakes."""
     outcome = IngestOutcome()
@@ -545,6 +716,8 @@ async def flush_batch(
                             metrics=metrics,
                             wakes=outcome.wakes,
                             turn_cache=turn_cache,
+                            presign_replies=outcome.presign_replies,
+                            objects=objects,
                         )
                 except _Duplicate:
                     pass

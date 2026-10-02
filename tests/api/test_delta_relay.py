@@ -31,6 +31,7 @@ def _api_settings(settings: Settings) -> Settings:
         database_url=settings.database_url,
         run_mode="none",
         sessions_dir=settings.sessions_dir,
+        local_store_dir=settings.sessions_dir,
         api_only=True,
     )
 

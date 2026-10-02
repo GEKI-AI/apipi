@@ -79,7 +79,9 @@ from apipi.worker.turn_context import (
     summarize_context,
 )
 
-WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})
+WORKER_IN = frozenset(
+    {"register", "heartbeat", "lease.ack", "lease.release", "event", "store.proof"}
+)
 DELTA_RATE_LIMIT = 100
 DELTA_MAX_TEXT = 32_768
 DELTA_DONE_TYPE = "agent.session.turn.output_text.done"
@@ -156,6 +158,7 @@ class WorkerConnection:
     draining: bool = False
     images: dict[str, WorkerImage] = field(default_factory=dict)
     accepts: frozenset[str] = frozenset({"none"})
+    store_proof: tuple[str, str] | None = None
 
 
 class WorkerHub:
@@ -909,6 +912,54 @@ def accepts_for_register(register: RegisterMessage) -> frozenset[str]:
     return frozenset({"none"})
 
 
+def _store_check_for(settings: Any) -> dict[str, str] | None:
+    """Issue a shared-root challenge for filesystem stores, else None."""
+    if getattr(settings, "artifact_store", "local") != "local":
+        return None
+    from apipi.services.worker_artifacts import write_store_check
+    from apipi.worker.pi.dirs import store_root
+
+    root = store_root(settings)
+    marker, nonce = write_store_check(root)
+    return {"marker": marker, "nonce": nonce}
+
+
+def verify_store_proof(
+    settings: Any, marker: str, nonce: str, *, expected: tuple[str, str] | None
+) -> bool:
+    """Check a worker `store.proof` against the issued challenge."""
+    if expected is None:
+        return True
+    if (marker, nonce) != expected:
+        return False
+    from apipi.services.worker_artifacts import read_store_check
+    from apipi.worker.pi.dirs import store_root
+
+    return read_store_check(store_root(settings), marker, nonce)
+
+
+def answer_store_check(settings: Any, hello: dict[str, Any]) -> dict[str, str] | None:
+    """Build the `store.proof` reply for a hello challenge, if any.
+
+    Raises ConfigError with the documented shared-path message when the
+    worker cannot read the marker back.
+    """
+    from apipi.config import ConfigError
+    from apipi.services.worker_artifacts import SHARED_STORE_ERROR, read_store_check
+    from apipi.worker.pi.dirs import store_root
+
+    raw = hello.get("store_check")
+    if not isinstance(raw, dict):
+        return None
+    marker = raw.get("marker")
+    nonce = raw.get("nonce")
+    if not isinstance(marker, str) or not isinstance(nonce, str):
+        return None
+    if not read_store_check(store_root(settings), marker, nonce):
+        raise ConfigError(SHARED_STORE_ERROR)
+    return {"type": "store.proof", "marker": marker, "nonce": nonce}
+
+
 async def register_worker(
     hub: WorkerHub,
     store: Store,
@@ -956,12 +1007,16 @@ async def register_worker(
     )
     await hub.attach(conn)
     sessions = await hub.restore_leases(conn, store, register.running)
+    store_check = _store_check_for(hub.settings)
+    if store_check is not None:
+        conn.store_proof = (store_check["marker"], store_check["nonce"])
     await _send(
         websocket,
         HelloReply(
             worker_id=conn.worker_id,
             generation=conn.generation,
             sessions=sessions,
+            store_check=store_check,
         ).model_dump(mode="json"),
     )
     await hub.resend_pending(conn)
@@ -1787,6 +1842,9 @@ async def _serve_connection(
     if not isinstance(hello, dict) or not hello.get("ok"):
         error = hello.get("error") if isinstance(hello, dict) else "unauthorized"
         raise ConfigError(f"worker register failed: {error}")
+    proof = answer_store_check(settings, hello if isinstance(hello, dict) else {})
+    if proof is not None:
+        await send_json(proof)
     sessions = hello.get("sessions")
     hello_sessions = sessions if isinstance(sessions, dict) else {}
     log.info(
@@ -1861,6 +1919,13 @@ async def _serve_connection(
                 except (ValueError, TypeError):
                     continue
                 outbox.acked(ack_session, ack_seq)
+                continue
+            if message.get("type") == "artifact.presign.reply":
+                from apipi.worker.artifact_upload import handle_presign_reply
+
+                waiters = getattr(execution, "presign_waiters", None)
+                if isinstance(waiters, dict):
+                    handle_presign_reply(waiters, message)
                 continue
             if message.get("type") == "command":
                 raw_lease = message.get("lease_id")

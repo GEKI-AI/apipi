@@ -93,6 +93,7 @@ async def _flush_envelopes(
     settings: Any,
     metrics: Any,
     websocket: WebSocket,
+    objects: Any | None = None,
 ) -> None:
     queued = batcher.take()
     if not queued:
@@ -103,6 +104,7 @@ async def _flush_envelopes(
         worker_id=conn.worker_id,
         settings=settings,
         metrics=metrics,
+        objects=objects,
     )
     for session_id, last_seq in sorted(
         outcome.acks.items(), key=lambda item: str(item[0])
@@ -112,6 +114,8 @@ async def _flush_envelopes(
                 mode="json"
             )
         )
+    for reply in outcome.presign_replies:
+        await websocket.send_json(reply)
     for session_id, body in outcome.wakes:
         await event_hub.publish(session_id, body)
 
@@ -200,7 +204,14 @@ async def worker_socket(websocket: WebSocket) -> None:
             if message is None or batcher.should_flush(window):
                 if len(batcher):
                     await _flush_envelopes(
-                        store, event_hub, conn, batcher, settings, metrics, websocket
+                        store,
+                        event_hub,
+                        conn,
+                        batcher,
+                        settings,
+                        metrics,
+                        websocket,
+                        websocket.app.state.objects,
                     )
                 if message is None:
                     continue
@@ -211,7 +222,14 @@ async def worker_socket(websocket: WebSocket) -> None:
                 batcher.add(envelope, raw_size)
                 if batcher.should_flush(window):
                     await _flush_envelopes(
-                        store, event_hub, conn, batcher, settings, metrics, websocket
+                        store,
+                        event_hub,
+                        conn,
+                        batcher,
+                        settings,
+                        metrics,
+                        websocket,
+                        websocket.app.state.objects,
                     )
                 continue
             if kind == "ephemeral" and envelope is not None:
@@ -223,6 +241,33 @@ async def worker_socket(websocket: WebSocket) -> None:
                 continue
             msg_type = message.get("type")
             if msg_type not in WORKER_IN:
+                continue
+            if msg_type == "store.proof":
+                from apipi.worker.hub import verify_store_proof
+
+                marker = message.get("marker")
+                nonce = message.get("nonce")
+                if not isinstance(marker, str) or not isinstance(nonce, str):
+                    continue
+                if not verify_store_proof(
+                    settings, marker, nonce, expected=conn.store_proof
+                ):
+                    hub.observe_protocol("invalid_register")
+                    log.warning(
+                        "worker shared store proof failed",
+                        extra={
+                            "event": "worker.store.rejected",
+                            "worker_id": str(conn.worker_id),
+                        },
+                    )
+                    await websocket.send_json(
+                        {"ok": False, "error": "shared_store_required"}
+                    )
+                    await websocket.close(
+                        code=WORKER_CLOSE_CODE, reason="shared_store_required"
+                    )
+                    return
+                conn.store_proof = None
                 continue
             if msg_type == "heartbeat":
                 if conn.token_id is not None and await token_revoked(

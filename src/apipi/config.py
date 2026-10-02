@@ -952,6 +952,10 @@ class Settings(BaseSettings):
         default="local",
         validation_alias=AliasChoices("APIPI_ARTIFACT_STORE", "artifact_store"),
     )
+    local_store_dir: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_LOCAL_STORE_DIR", "local_store_dir"),
+    )
     s3_bucket: OtelEndpoint = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_S3_BUCKET", "s3_bucket"),
@@ -1123,6 +1127,17 @@ class Settings(BaseSettings):
             self.s3_bucket and self.s3_bucket.strip()
         ):
             raise ValueError("APIPI_S3_BUCKET is required")
+        if (
+            self.artifact_store == "local"
+            and (self.local_store_dir is None or not self.local_store_dir.strip())
+            and self.api_only
+        ):
+            raise ValueError(
+                "APIPI_ARTIFACT_STORE is local in split mode without "
+                "APIPI_LOCAL_STORE_DIR: set APIPI_ARTIFACT_STORE=s3, or set "
+                "APIPI_LOCAL_STORE_DIR to a store root the API and every "
+                "worker mounts at the same path"
+            )
         try:
             self.database_url = store_url(self.database_url)
         except ConfigError as exc:

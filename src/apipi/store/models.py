@@ -630,3 +630,41 @@ class UploadRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
+
+
+class ArtifactUploadRow(Base):
+    """One API-issued artifact upload slot for a worker (#448)."""
+
+    __tablename__ = "artifact_uploads"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        CheckConstraint(
+            "kind IN ('artifact', 'pi_session', 'input_image')",
+            name="artifact_uploads_kind_check",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'complete')",
+            name="artifact_uploads_status_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    artifact_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    declared_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )

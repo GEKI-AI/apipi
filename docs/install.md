@@ -411,8 +411,8 @@ a warning that this isolation is meant for laptops and CI:
 APIPI_RUN_MODE=none apipi serve
 ```
 
-`apipi serve` is the combined path: API plus a local sandbox in one
-process. `apipi serve --api-only` is the control plane only. It does
+`apipi serve` is the combined path for test and dev only: API plus a local sandbox in one
+process. Production always runs split. `apipi serve --api-only` is the control plane only. It does
 not probe KVM or start Firecracker, so it can run in rootless Docker.
 `apipi worker` connects outbound to that API (`APIPI_API_URL`,
 `--url`, or `http://127.0.0.1:8000`) with its token file (`APIPI_WORKER_TOKEN_FILE`). See

@@ -30,6 +30,7 @@ def _api_settings(settings: Settings) -> Settings:
         database_url=settings.database_url,
         run_mode="none",
         sessions_dir=settings.sessions_dir,
+        local_store_dir=settings.sessions_dir,
         api_only=True,
     )
 
@@ -235,6 +236,7 @@ async def test_remote_turn_records_metrics_and_spans_on_worker(
         database_url=settings.database_url,
         run_mode="none",
         sessions_dir=settings.sessions_dir,
+        local_store_dir=settings.sessions_dir,
         api_only=True,
         metrics=True,
     )

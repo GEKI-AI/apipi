@@ -70,9 +70,11 @@ class LocalExecution:
         self.metrics = metrics
         self.tracing = tracing
         self.outbox = outbox
+        self.presign_waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
         self._sinks: dict[tuple[uuid.UUID, uuid.UUID], ResultSink] = {}
         self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
         self._context_ttl: dict[str, tuple[float | None, float, str | None]] = {}
+        self._session_dirs: dict[str, str] = {}
         if pool.on_kill is None:
             pool.on_kill = self._harvest_killed
         if pool.on_transition is None:
@@ -90,13 +92,17 @@ class LocalExecution:
         if isinstance(raw, (int, float)) and raw >= 0:
             seconds = float(raw)
         environment = session.get("environment")
-        env_type = (
-            environment.get("type")
-            if isinstance(environment, dict)
-            and isinstance(environment.get("type"), str)
-            else None
-        )
+        env = environment if isinstance(environment, dict) else {}
+        raw_type = env.get("type")
+        env_type = raw_type if isinstance(raw_type, str) else None
         self._context_ttl[str(session_id)] = (seconds, time.time(), env_type)
+        # Remember the hosted workspace directory too, so the killed
+        # harvest can find it without any database read.
+        raw_dir = env.get("directory")
+        if env_type == "openai_hosted" and isinstance(raw_dir, str) and raw_dir:
+            self._session_dirs[str(session_id)] = raw_dir
+        else:
+            self._session_dirs.pop(str(session_id), None)
 
     def refresh_context_seen(self, session_id: uuid.UUID) -> None:
         """Restart the reaper idle clock after turn activity."""
@@ -108,6 +114,7 @@ class LocalExecution:
 
     def _forget_context(self, session_id: str) -> None:
         self._context_ttl.pop(session_id, None)
+        self._session_dirs.pop(session_id, None)
 
     def sink_for(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> ResultSink:
         """Per-session result sink; outbox-backed on a split worker."""
@@ -122,6 +129,7 @@ class LocalExecution:
                     settings=self.settings,
                     metrics=self.metrics,
                     tracing=self.tracing,
+                    waiters=self.presign_waiters,
                 )
             else:
                 sink = DirectSink()
@@ -525,6 +533,9 @@ class LocalExecution:
 
     async def _harvest_killed(self, session_id: uuid.UUID, proc: PiProc | None) -> None:
         try:
+            if self.outbox is not None:
+                await self._harvest_killed_split(session_id, proc)
+                return
             store = self.store
             if store is None:
                 return
@@ -547,6 +558,87 @@ class LocalExecution:
             if note is not None:
                 await note(session_id)
 
+    async def _harvest_killed_split(
+        self, session_id: uuid.UUID, proc: PiProc | None
+    ) -> None:
+        """Split-mode killed harvest: presign uploads, no DB access.
+
+        Tenant identity comes from the live sinks and the workspace
+        directory from the remembered turn context; nothing here reads
+        or writes the database.
+        """
+        from pathlib import Path as _Path
+
+        from apipi.worker.artifact_upload import upload_via_presign
+        from apipi.worker.pi.artifacts import (
+            _hosted_files,
+            read_pi_session_bytes,
+        )
+
+        tenant_id: uuid.UUID | None = None
+        for tenant, sid in list(self._sinks.keys()):
+            if sid == session_id:
+                tenant_id = tenant
+                break
+        if tenant_id is None:
+            return
+        dest: Any | None = None
+        raw_dir = self._session_dirs.get(str(session_id))
+        if raw_dir:
+            dest = _Path(raw_dir)
+        files: list[tuple[str, bytes]] = []
+        try:
+            hosted, _workspace_error = await _hosted_files(
+                proc,
+                dest,
+                sync_workspace=False,
+                max_workspace_bytes=self.settings.max_workspace_bytes,
+            )
+            files = hosted
+            if not files and dest is not None:
+                from apipi.worker.pi.artifacts import (
+                    read_workspace_artifacts as _read_ws,
+                )
+
+                try:
+                    files = _read_ws(dest)
+                except Exception:
+                    files = []
+        except Exception:
+            files = []
+        for rel, data in files:
+            try:
+                await upload_via_presign(
+                    self.outbox,
+                    self.presign_waiters,
+                    self.settings,
+                    session_id,
+                    kind="artifact",
+                    filename=rel,
+                    content_type=None,
+                    data=data,
+                )
+            except Exception:
+                return
+        try:
+            pi_data = await read_pi_session_bytes(proc, dest)
+        except Exception:
+            pi_data = b""
+        if pi_data:
+            try:
+                await upload_via_presign(
+                    self.outbox,
+                    self.presign_waiters,
+                    self.settings,
+                    session_id,
+                    kind="pi_session",
+                    filename="pi-session.jsonl",
+                    content_type="application/octet-stream",
+                    data=pi_data,
+                )
+            except Exception:
+                return
+
 
 def local_execution(
     settings: Settings,
@@ -564,6 +656,7 @@ def local_execution(
     attach_lifecycle(pool, settings, metrics)
     isolation = load_isolation(settings.run_mode)
     resolved_harness = harness if harness is not None else PiHarness(pool)
+    split = outbox is not None
     return LocalExecution(
         settings,
         pool=pool,
@@ -573,8 +666,8 @@ def local_execution(
         if hub is not None
         else create_event_bus(settings, store=store, metrics=metrics),
         store=store,
-        blobs=blob_store(settings),
-        objects=object_store(settings),
+        blobs=None if split else blob_store(settings),
+        objects=None if split else object_store(settings),
         metrics=metrics,
         tracing=tracing,
         outbox=outbox,

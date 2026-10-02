@@ -35,11 +35,13 @@ overhead is small (~5 MiB per guest). Pi alone is modest. Chrome
 inside the browser image needs hundreds of MiB extra, so raise
 guest RAM rather than packing more 512 MiB guests.
 
-Leave disk for `APIPI_SESSIONS_DIR`: each `openai_hosted` directory is
+Leave disk for per-worker `APIPI_SESSIONS_DIR` workspaces: each `openai_hosted` directory is
 capped at `APIPI_MAX_WORKSPACE_BYTES` (default 1 GiB) and lasts until
 sandbox TTL. Local artifact
 bytes add up to `APIPI_MAX_ARTIFACT_BYTES` (default 512 MiB) per
-session unless you set `APIPI_ARTIFACT_STORE=s3`.
+session under the shared `APIPI_LOCAL_STORE_DIR` unless you set `APIPI_ARTIFACT_STORE=s3`.
+Production split mode should use `s3`: the API issues presigned PUT and GET URLs,
+the worker uploads and downloads directly, and store credentials exist only on the API.
 
 Keeping the store off the worker host leaves more RAM for guests when
 you use Postgres. One `apipi worker` (or one combined `apipi serve`)
@@ -125,7 +127,7 @@ instead.
 | Shape | When | What stays on the node | What is shared |
 | --- | --- | --- | --- |
 | Combined, one host | You fit in `max_sessions` on one box | Pi, SSE, WebSockets, `openai_hosted` directories, local artifacts | SQLite or Postgres |
-| API-only + workers | Production. API in Docker or several replicas | Guests and workspaces on **workers**. API is stateless for Pi | Postgres, per-worker tokens. Artifact bytes too when `APIPI_ARTIFACT_STORE=s3` |
+| API-only + workers | Production. API in Docker or several replicas | Guests and workspaces on **workers**. API is stateless for Pi | Postgres, per-worker tokens, and artifact bytes through the store (`s3` recommended, or one shared `APIPI_LOCAL_STORE_DIR`) |
 | Combined, several hosts | You have not split workers yet | Same as combined one host, plus each process has its own `APIPI_SESSIONS_DIR` | Postgres, auth callback. Sticky for live Pi. See [multiple nodes](scale.md) |
 | External artifact store | Clients read artifacts from any API node | Live workspace still on the worker (or combined node) | Postgres, S3-compatible bucket |
 
@@ -231,7 +233,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_DB_POOL_SIZE` | Postgres connections from this process (default 5). |
 | `APIPI_MAX_REQUEST_BYTES` | HTTP body cap (`413` `payload_too_large`). |
 | `APIPI_MAX_WORKSPACE_BYTES` / `APIPI_MAX_ARTIFACT_BYTES` | Directory and published-artifact caps. |
-| `APIPI_ARTIFACT_STORE` | `local` or `s3`. Use `s3` when more than one node serves artifact, hosted file, or skill bytes. |
+| `APIPI_ARTIFACT_STORE` | `local` or `s3`. Production split mode uses `s3` so workers hold no store credentials. `local` needs one shared `APIPI_LOCAL_STORE_DIR` on the API and every worker. |
 | `APIPI_MICROVM_EGRESS_ALLOWLIST` / `HOSTS` / `MBIT` | Optional destination allowlist (off by default) and 50 Mbit TAP rate. Private IPv4 ranges are always rejected. |
 | `APIPI_INSTANCE_ID` | Sets `X-ApiPi-Instance` so you can confirm stickiness. |
 | `APIPI_VAULT_MASTER_KEY` | Encrypts MCP vault tokens at rest. Put a 32-byte key in the process environment or a k8s secret. Unset uses a local default and logs a warning; do not leave that in production. Same key on every API process that writes or injects vault secrets. |
@@ -253,9 +255,9 @@ a separate Host name or load-balancer backend group. Auth still
 returns `tenant_id`. You map that tenant to the pool outside the
 gateway. The public Agents API does not change.
 
-Isolated in a dedicated pool: Pi and `APIPI_SESSIONS_DIR`. Shared
-across pools: Postgres, and object-store bytes (artifacts, hosted files,
-skills) when the store is `s3`.
+Isolated in a dedicated pool: Pi and per-worker `APIPI_SESSIONS_DIR` workspaces. Shared
+across pools: Postgres, and artifact, file, skill, and Pi session bytes through the
+configured store (`s3` or one shared `APIPI_LOCAL_STORE_DIR`).
 Sticky rules still apply inside the pool. See
 [tenant pools](scale.md#tenant-pools).
 
