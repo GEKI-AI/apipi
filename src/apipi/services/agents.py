@@ -9,7 +9,11 @@ from apipi.config import Settings
 from apipi.env.spec import EnvironmentSpec
 from apipi.gateway.auth import not_found
 from apipi.gateway.schemas import StrictModel
-from apipi.services.env_none import is_env_none, reject_tools_for_env_none
+from apipi.services.env_none import (
+    is_env_none,
+    reject_builtin_tools_for_env_none,
+    reject_tools_for_env_none,
+)
 from apipi.services.session_defaults import (
     mirror_sandbox_metadata,
     normalize_sandbox_aliases,
@@ -39,6 +43,7 @@ from apipi.worker.pi.settings_json import (
     public_metadata,
     reasoning_body,
     reject_client_thinking_key,
+    reject_codemode_without_builtin_tools,
     reject_reasoning_conflict,
     require_thinking_supported,
     thinking_from_metadata,
@@ -334,8 +339,10 @@ class AgentService:
         validate_idle_metadata(payload.get("metadata"))
         validate_sandbox_metadata(self.settings, payload.get("metadata"))
         validate_defaults_shape(self.settings, payload.get("session_defaults"))
+        reject_codemode_without_builtin_tools(payload.get("metadata"), None)
         if is_env_none(_defaults_environment(payload.get("session_defaults"))):
             reject_tools_for_env_none(payload.get("tools"))
+            reject_builtin_tools_for_env_none(payload.get("metadata"), None)
         if check_model:
             await require_saved_model(self.settings, payload.get("model"), api_key)
         async with self.store.session() as db:
@@ -446,8 +453,13 @@ class AgentService:
             env = _defaults_environment(
                 effective_defaults if isinstance(effective_defaults, dict) else None
             )
+            if "metadata" in payload:
+                reject_codemode_without_builtin_tools(payload.get("metadata"), None)
+            else:
+                reject_codemode_without_builtin_tools(stored, None)
             if is_env_none(env):
                 reject_tools_for_env_none(tools if isinstance(tools, list) else None)
+                reject_builtin_tools_for_env_none(stored, None)
             agent = await update_agent(db, tenant_id, agent_id, changes=payload)
             if agent is None:
                 not_found()

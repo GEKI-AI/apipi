@@ -84,6 +84,7 @@ class PiPool:
         cwd: str | None,
         tools: bool,
         mcp_http: list[McpHttpServer] | None = None,
+        function_tools: list[dict[str, Any]] | None = None,
         skill_dirs: list[str] | None = None,
         tenant_id: uuid.UUID | None = None,
         model: str | None = None,
@@ -193,6 +194,7 @@ class PiPool:
                     cwd=cwd,
                     tools=tools,
                     mcp_http=mcp_http,
+                    function_tools=function_tools,
                     skill_dirs=skill_dirs,
                     model=model,
                     instructions=instructions,
@@ -205,6 +207,7 @@ class PiPool:
                     system_prompt_set=True,
                     codemode=codemode,
                     env_type=env_type,
+                    session_id=str(session_id),
                 )
         except Exception as exc:
             self._observe_boot(size, "error", time.monotonic() - started)

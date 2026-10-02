@@ -1297,6 +1297,7 @@ async def start_microvm(
     cwd: str | None,
     tools: bool,
     mcp_http: list[McpHttpServer] | None = None,
+    function_tools: list[dict[str, Any]] | None = None,
     skill_dirs: list[str] | None = None,
     model: str | None = None,
     instructions: str | None = None,
@@ -1311,6 +1312,7 @@ async def start_microvm(
     system_prompt_set: bool = False,
     codemode: str = "off",
     env_type: str | None = None,
+    session_id: str | None = None,
 ) -> StartedMicrovm:
     require_microvm(settings)
     firecracker, jailer = microvm_binaries()
@@ -1449,6 +1451,7 @@ async def start_microvm(
                 settings,
                 tools=tools,
                 mcp_http=mcp_http,
+                function_tools=function_tools,
                 skill_dirs=guest_skills,
                 extra_skill_dirs=browser_skills,
                 model=model,
@@ -1457,6 +1460,8 @@ async def start_microvm(
                 extension=[GUEST_APIPI_EXTENSION, GUEST_MCP_EXTENSION],
                 thinking=level,
                 codemode=code,
+                env_type=env_type,
+                session_id=session_id,
             ),
             net=net,
             extra_dirs=extra_dirs,
@@ -1529,6 +1534,7 @@ async def spawn_microvm_pi(
     cwd: str | None,
     tools: bool,
     mcp_http: list[McpHttpServer] | None = None,
+    function_tools: list[dict[str, Any]] | None = None,
     skill_dirs: list[str] | None = None,
     model: str | None = None,
     instructions: str | None = None,
@@ -1541,12 +1547,14 @@ async def spawn_microvm_pi(
     system_prompt_set: bool = False,
     codemode: str = "off",
     env_type: str | None = None,
+    session_id: str | None = None,
 ) -> PiProc:
     started = await start_microvm(
         settings,
         cwd=cwd,
         tools=tools,
         mcp_http=mcp_http,
+        function_tools=function_tools,
         skill_dirs=skill_dirs,
         model=model,
         instructions=instructions,
@@ -1559,6 +1567,7 @@ async def spawn_microvm_pi(
         system_prompt_set=system_prompt_set,
         codemode=codemode,
         env_type=env_type,
+        session_id=session_id,
     )
     process = started.process
     try:

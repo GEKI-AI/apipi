@@ -360,6 +360,7 @@ def pi_command_args(
     *,
     tools: bool,
     mcp_http: list[McpHttpServer] | None = None,
+    function_tools: list[dict[str, Any]] | None = None,
     skill_dirs: list[str] | None = None,
     extra_skill_dirs: list[str] | None = None,
     model: str | None = None,
@@ -368,12 +369,31 @@ def pi_command_args(
     extension: str | list[str] | None = None,
     thinking: str | None = None,
     codemode: str = "off",
+    env_type: str | None = None,
+    session_id: str | None = None,
 ) -> list[str]:
     from apipi.worker.pi.model_host import PI_PROVIDER
 
+    effective_tools = tools
+    effective_codemode = codemode
+    effective_skills = skill_dirs
+    if env_type == "none":
+        if tools or codemode in ("on", "only"):
+            log_event(
+                log,
+                logging.WARNING,
+                "pi built-in tools forced off for type=none",
+                event="pi.builtin_tools_forced_off",
+                session_id=session_id,
+                requested_tools=tools,
+                requested_codemode=codemode,
+            )
+        effective_tools = False
+        effective_codemode = "off"
+        effective_skills: list[str] | None = []
     command = settings.pi_command.split()
     args = [*command, "--mode", "rpc", "--no-extensions"]
-    codemode_on = codemode in ("on", "only")
+    codemode_on = effective_codemode in ("on", "only")
     if session_file:
         args.extend(["--session", session_file])
     else:
@@ -385,13 +405,14 @@ def pi_command_args(
     level = thinking if thinking is not None else settings.pi_thinking
     if level != "off":
         args.extend(["--thinking", level])
-    if not tools:
-        args.append("--no-builtin-tools" if mcp_http else "--no-tools")
-    if codemode_on and tools:
+    if not effective_tools:
+        has_custom = bool(mcp_http) or bool(function_tools)
+        args.append("--no-builtin-tools" if has_custom else "--no-tools")
+    if codemode_on and effective_tools:
         args.extend(["--tools", "read,bash,edit,write,codemode"])
-    if skill_dirs is not None:
+    if effective_skills is not None:
         args.append("--no-skills")
-        for path in skill_dirs:
+        for path in effective_skills:
             args.extend(["--skill", path])
     for path in extra_skill_dirs or []:
         args.extend(["--skill", path])
@@ -403,7 +424,7 @@ def pi_command_args(
                 args.extend(["--extension", path])
     if mcp_http:
         args.extend(["--extension", "builtin:mcp"])
-    if codemode_on and tools:
+    if codemode_on and effective_tools:
         args.extend(["--extension", "builtin:codemode"])
     return args
 
@@ -414,6 +435,7 @@ async def spawn_pi(
     cwd: str | None,
     tools: bool,
     mcp_http: list[McpHttpServer] | None = None,
+    function_tools: list[dict[str, Any]] | None = None,
     skill_dirs: list[str] | None = None,
     model: str | None = None,
     instructions: str | None = None,
@@ -426,6 +448,7 @@ async def spawn_pi(
     system_prompt_set: bool = False,
     codemode: str = "off",
     env_type: str | None = None,
+    session_id: str | None = None,
 ) -> PiProc:
     from apipi.worker.pi.isolation import load_isolation
 
@@ -438,6 +461,7 @@ async def spawn_pi(
         cwd=cwd,
         tools=tools,
         mcp_http=mcp_http,
+        function_tools=function_tools,
         skill_dirs=skill_dirs,
         model=model,
         instructions=instructions,
@@ -450,4 +474,5 @@ async def spawn_pi(
         system_prompt_set=system_prompt_set,
         codemode=codemode,
         env_type=env_type,
+        session_id=session_id,
     )

@@ -106,6 +106,39 @@ def test_hosted_prompt_names_workspace() -> None:
     assert "/workspace" in text
 
 
+def test_builtin_tools_off_uses_none_fragment() -> None:
+    text = compose_instructions(
+        _settings(),
+        None,
+        env_type="openai_hosted",
+        sandbox_size="L",
+        mem_mib=2048,
+        builtin_tools="off",
+    )
+    assert text == _main("none")
+    assert text is not None
+    assert "/workspace" not in text
+    assert "outputs/" not in text
+
+
+def test_builtin_tools_off_skips_capability_file(tmp_path: Path) -> None:
+    text = compose_instructions(
+        _settings(run_mode="microvm"),
+        None,
+        env_type="openai_hosted",
+        sandbox_size="M",
+        mem_mib=1024,
+        network="enabled",
+        image="work",
+        vcpus=2,
+        cwd=str(tmp_path),
+        builtin_tools="off",
+    )
+    assert text is not None
+    assert "/workspace" not in text
+    assert not (tmp_path / ".pi" / "agent" / "capability.json").exists()
+
+
 def test_capability_file_has_no_date(tmp_path: Path) -> None:
     text = compose_instructions(
         _settings(run_mode="microvm"),

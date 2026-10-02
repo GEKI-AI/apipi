@@ -131,6 +131,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | Metadata | `apipi.sandbox_image` | Stock SDK input. |
 | Metadata | `apipi.sandbox_eager_boot` | Session or agent metadata override for eager boot. |
 | Metadata | `apipi.system_prompt`, `apipi.idle_ttl` | Pi and idle overrides. Thinking is `reasoning.effort` (`none` is `off`); `metadata["apipi.thinking"]` is removed as client input (`400`) and stripped from response metadata. On update, `reasoning.effort` replaces the stored level and `null` clears it. |
+| Metadata | `apipi.codemode`, `apipi.builtin_tools` | Codemode (`off`, `on`, `only`, default `off`) and built-in tools (`on`, `off`, default `on`). Session wins over agent. `apipi.builtin_tools=off` runs Pi without shell and file tools and without skills. Codemode `on` or `only` with built-ins off is `400` (`builtin_tools`). Built-ins are always off for `environment.type=none`. |
 | Metadata | `apipi.session_kind` | Removed former chat marker. Ignored now; use `environment.type=none`. |
 | Event data | `data.sandbox` | Hosted `environment.*` events. |
 | Route | `/v1/apipi/agents/{id}/export` | Agent zip. |

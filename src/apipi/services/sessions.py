@@ -27,7 +27,11 @@ from apipi.mcp.http import (
     mcp_http_tools,
 )
 from apipi.services.agents import AgentWrite, definition_for_session
-from apipi.services.env_none import is_env_none, reject_tools_for_env_none
+from apipi.services.env_none import (
+    is_env_none,
+    reject_builtin_tools_for_env_none,
+    validate_env_none,
+)
 from apipi.services.failures import error_extra
 from apipi.services.files import FileService
 from apipi.services.runtime import (
@@ -95,6 +99,7 @@ from apipi.worker.pi.settings_json import (
     public_metadata,
     reasoning_body,
     reject_client_thinking_key,
+    reject_codemode_without_builtin_tools,
     reject_reasoning_conflict,
     require_thinking_supported,
     resolve_thinking,
@@ -504,12 +509,14 @@ class SessionService:
                     metadata = apply_reasoning_effort(base, effort, reset=reset)
                     if agent_id is None:
                         agent_metadata = metadata
-            if is_env_none(env):
-                reject_tools_for_env_none(raw_tools)
             if agent_id is None:
                 metadata = copy_inline_pi_metadata(metadata, agent_metadata)
             validate_pi_metadata(metadata)
             validate_pi_metadata(agent_metadata)
+            if is_env_none(env):
+                validate_env_none(metadata, agent_metadata, raw_tools)
+            else:
+                reject_codemode_without_builtin_tools(metadata, agent_metadata)
             require_thinking_supported(
                 self.settings,
                 model,
@@ -853,6 +860,21 @@ class SessionService:
             ):
                 validate_pi_metadata(merged)
                 validate_idle_metadata(merged)
+                agent_meta: dict[str, Any] | None = None
+                if current.agent_id is not None:
+                    definition = await definition_for_session(db, tenant_id, current)
+                    if isinstance(definition, dict) and isinstance(
+                        definition.get("metadata"), dict
+                    ):
+                        agent_meta = definition["metadata"]
+                if is_env_none(
+                    current.environment
+                    if isinstance(current.environment, dict)
+                    else None
+                ):
+                    reject_builtin_tools_for_env_none(merged, agent_meta)
+                else:
+                    reject_codemode_without_builtin_tools(merged, agent_meta)
                 model = changes.get("model", current.model)
                 if not isinstance(model, str) and current.agent_id is not None:
                     definition = await definition_for_session(db, tenant_id, current)

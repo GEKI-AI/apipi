@@ -198,6 +198,60 @@ def test_codemode_validates_and_resolves() -> None:
     assert exc.value.message == "codemode must be off, on, or only"
 
 
+def test_builtin_tools_validates_and_resolves() -> None:
+    from apipi.worker.pi.settings_json import (
+        builtin_tools_from_metadata,
+        copy_inline_pi_metadata,
+        reject_codemode_without_builtin_tools,
+        resolve_builtin_tools,
+    )
+
+    assert builtin_tools_from_metadata(None) is None
+    assert builtin_tools_from_metadata({}) is None
+    assert builtin_tools_from_metadata({"apipi.builtin_tools": "on"}) == "on"
+    assert builtin_tools_from_metadata({"apipi.builtin_tools": "off"}) == "off"
+    assert (
+        resolve_builtin_tools(
+            {"apipi.builtin_tools": "off"}, {"apipi.builtin_tools": "on"}
+        )
+        == "off"
+    )
+    assert resolve_builtin_tools({}, {"apipi.builtin_tools": "off"}) == "off"
+    assert resolve_builtin_tools({}, {}) == "on"
+    validate_pi_metadata({"apipi.builtin_tools": "off"})
+    with pytest.raises(ApiError) as exc:
+        validate_pi_metadata({"apipi.builtin_tools": "sometimes"})
+    assert exc.value.message == "builtin_tools must be on or off"
+    assert exc.value.code == "invalid_request"
+    copied = copy_inline_pi_metadata({}, {"apipi.builtin_tools": "off"})
+    assert copied["apipi.builtin_tools"] == "off"
+    kept = copy_inline_pi_metadata(
+        {"apipi.builtin_tools": "on"}, {"apipi.builtin_tools": "off"}
+    )
+    assert kept["apipi.builtin_tools"] == "on"
+    reject_codemode_without_builtin_tools({"apipi.codemode": "on"}, None)
+    reject_codemode_without_builtin_tools(
+        {}, {"apipi.builtin_tools": "on", "apipi.codemode": "only"}
+    )
+    reject_codemode_without_builtin_tools({"apipi.builtin_tools": "off"}, None)
+    with pytest.raises(ApiError) as exc:
+        reject_codemode_without_builtin_tools(
+            {"apipi.codemode": "on", "apipi.builtin_tools": "off"}, None
+        )
+    assert exc.value.code == "builtin_tools"
+    with pytest.raises(ApiError) as exc:
+        reject_codemode_without_builtin_tools(
+            {"apipi.builtin_tools": "off"}, {"apipi.codemode": "only"}
+        )
+    assert exc.value.code == "builtin_tools"
+    assert exc.value.message == "codemode requires built-in tools"
+    with pytest.raises(ApiError) as exc:
+        reject_codemode_without_builtin_tools(
+            {}, {"apipi.builtin_tools": "off", "apipi.codemode": "on"}
+        )
+    assert exc.value.code == "builtin_tools"
+
+
 def test_settings_payload_writes_codemode() -> None:
     payload = settings_payload(_settings(), thinking="off", codemode="on")
     assert payload["codemode"] == {"mode": "on"}

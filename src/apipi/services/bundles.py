@@ -19,6 +19,8 @@ _PORTABLE = frozenset(
     {
         "apipi.thinking",
         "apipi.system_prompt",
+        "apipi.codemode",
+        "apipi.builtin_tools",
         "apipi.idle_ttl",
     }
 )
@@ -570,7 +572,12 @@ def _apply_defaults(
             {"type": "skill_reference", "skill_id": skill_id}
             for skill_id in skill_ids.values()
         ]
-        copied["files"] = file_specs
+        if not copied["skills"]:
+            copied.pop("skills", None)
+        if file_specs:
+            copied["files"] = file_specs
+        else:
+            copied.pop("files", None)
         out["environment"] = copied
     vault_ids = out.get("vault_ids")
     if isinstance(vault_ids, list):
