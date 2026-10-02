@@ -14,6 +14,7 @@ back to ``APIPI_SESSIONS_DIR``), which the worker reads directly; the
 API and the worker must see the same filesystem.
 """
 
+import logging
 from collections.abc import Mapping
 from datetime import timedelta
 from pathlib import Path
@@ -22,7 +23,9 @@ from typing import Any
 from apipi.config import Settings
 from apipi.env.setup import file_id_refs_from, skill_refs_from
 from apipi.gateway.auth import not_found
+from apipi.gateway.logutil import log_event
 from apipi.services.agents import definition_for_session
+from apipi.services.search import SearchResolver, web_search_tool
 from apipi.store.blobs import (
     NS_ARTIFACTS,
     NS_FILES,
@@ -43,6 +46,8 @@ from apipi.worker.pi.idle import resolve_idle_ttl
 from apipi.worker.turn_context import TurnContext
 
 PRESIGN_TTL = timedelta(minutes=15)
+
+log = logging.getLogger("apipi.search")
 
 
 def _store_error(message: str, *, operation: str, key: str = "") -> ObjectStoreError:
@@ -134,6 +139,7 @@ async def build_turn_context(
     org_id: str | None = None,
     base_url: str | None = None,
     objects: ObjectStore | None = None,
+    search: SearchResolver | None = None,
 ) -> dict[str, Any]:
     """Resolve one turn's context from the database and the object store."""
     from apipi.services.runtime import (
@@ -156,11 +162,13 @@ async def build_turn_context(
         instructions = row.instructions
         function_tools: list[dict[str, Any]] = []
         agent_idle: str | None = None
+        effective_tools: Any = row.tools
         if row.agent_id is not None:
             definition = await definition_for_session(db, tenant_id, row)
             if definition is not None:
                 raw_tools = definition.get("tools")
                 raw = raw_tools if isinstance(raw_tools, list) else []
+                effective_tools = raw
                 function_tools = _function_tools(raw)
                 raw_model = definition.get("model")
                 model = raw_model if isinstance(raw_model, str) else model
@@ -174,6 +182,26 @@ async def build_turn_context(
                 agent_metadata = meta if isinstance(meta, dict) else {}
                 raw_idle = definition.get("idle_ttl")
                 agent_idle = raw_idle if isinstance(raw_idle, str) else None
+        web_search = False
+        if web_search_tool(effective_tools) is not None:
+            resolver = search if search is not None else SearchResolver(settings)
+            target = await resolver.resolve(
+                tenant_id,
+                user_id if user_id is not None else row.user_id,
+                org_id if org_id is not None else row.org_id,
+            )
+            web_search = target is not None
+            if target is None:
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "web_search tool not loaded for this turn",
+                    event="search.denied",
+                    error_code="search_denied",
+                    session_id=str(session_id),
+                    tenant_id=str(tenant_id),
+                    reason="resolver",
+                )
         builtin_tools = _effective_builtin_tools(
             environment, session_metadata, agent_metadata
         )
@@ -255,6 +283,7 @@ async def build_turn_context(
                     builtin_tools, session_metadata, agent_metadata
                 ),
                 "thinking": thinking,
+                "web_search": web_search,
             },
             "model": {
                 "base_url": (

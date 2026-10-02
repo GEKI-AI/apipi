@@ -18,6 +18,7 @@ The explanation of the system is under [Concepts](concepts.md):
            |
            +-- local files        next to Pi
            +-- HTTP MCP           e.g. Tavily
+           +-- web_search         via the API, e.g. Tavily or Staan
 ```
 
 | | What it controls |

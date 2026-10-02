@@ -1,8 +1,8 @@
 # Usage and observability
 
 ApiPi records **agent-layer** usage: sessions, turns, tools, MCP,
-environment, run mode, latency, artifact bytes, and turn-level token
-totals when the harness reports them. It does not trace individual LLM
+web searches, environment, run mode, latency, artifact bytes, and
+turn-level token totals when the harness reports them. It does not trace individual LLM
 API calls. That belongs on the model host. It does not store USD.
 Operators convert tokens and counters later.
 
@@ -81,6 +81,9 @@ on, POSTs the full object.
 | `tool_counts` | Calls per function tool |
 | `mcp_names` | MCP server labels used |
 | `mcp_counts` | Calls per MCP server |
+| `search_calls` | Built-in `web_search` calls the provider charged this turn. See [Search](#search). |
+| `search_units` | Provider units charged for those calls (credits for Tavily, requests for Staan) |
+| `search_counts` | Search calls and units per provider and key source, for example `{"tavily/operator": {"calls": 2, "units": 2}}` |
 | `environment_type` | `none` \| `openai_hosted` |
 | `run_mode` | `none` \| `microvm` \| custom backend `name` |
 | `instance_id` | Process name, if set |
@@ -102,6 +105,50 @@ low-cardinality: `tenant` is allowed; `user_id` and `session_id` are
 not Prometheus labels. Per-user and per-agent totals come from the
 HTTPS usage export (or extra sinks), not from `GET /v1/apipi/usage`. That
 query is tenant-scoped session, turn, or day rollups only.
+
+## Search
+
+The built-in [`web_search` tool](tools.md#web-search) is counted by the
+API, because the API makes the provider call. The count never comes
+from the worker `usage` envelope, so a worker cannot change it.
+
+| Counter | What |
+| --- | --- |
+| `search_calls` | Search calls the provider charged for. |
+| `search_units` | Units the provider charged for those calls. Tavily reports credits (`basic` is 1, `advanced` is 2). Staan charges 1 for each request. |
+| `search_counts` | The same two numbers per `<provider>/<key_source>`. `key_source` is `operator` for the key in the API config. A later per-tenant key will be `tenant`, so an operator can bill only the operator-key searches. |
+
+The rule is simple: only calls the provider charged are counted. A
+successful call is counted. A failed call is counted only when the
+provider says it charged for it. A timeout, a transport error, and a
+provider `4xx` or `5xx` response are not counted. A search that is
+denied or invalid before a provider call is not counted. These are
+counters, not USD. Convert units to money outside ApiPi.
+
+The numbers appear in several places.
+
+| Where | What |
+| --- | --- |
+| Turn log | `search_calls`, `search_units`, and `search_counts` for each turn (store depth `turns`). |
+| Daily rollup | `search_calls` and `search_units` per tenant per UTC day. |
+| `GET /v1/apipi/usage` | `search_calls` and `search_units` for `session_id`, `turn_id`, or `day`. |
+| Usage event | `search_calls`, `search_units`, and `search_counts`. The HTTPS export and extra sinks get them with `user_id` and `org_id`, so search can be billed per subject. |
+
+The API records a search when it answers the request, which is before
+the turn ends. When the turn row is written later, it takes the
+counts already recorded for that turn. If the turn row already exists
+when a search is recorded, the counts are added to that row and to the
+day's rollup. Either order gives the same totals. Logs for a search
+carry the query length, the provider, the status, and the latency.
+They never carry the query text or the key.
+
+The per-turn search counts are kept even when `APIPI_USAGE_STORE` is
+`off`, because the usage event and the export need them. They are
+removed with the turn logs after `APIPI_USAGE_RETENTION`. With the
+`rollups` store depth there is no turn row to mark a finished turn, so
+a search recorded after the turn's usage was written is not added to
+the rollup. The API refuses a search for a turn that is no longer
+running, so this does not happen in normal use.
 
 ## Request ids
 
@@ -131,6 +178,7 @@ are never logged.
 | `worker.command.failed` | warning or error | A worker command raised. Caller errors are warning. Internal faults are error. Fields include `session_id`, `tenant_id`, and `request_id`. Turn commands also emit a session failure event unless the session is already `failed`. |
 | `worker.assign.failed` | warning | No worker capacity (`capacity` or `capacity_tenant`). |
 | `worker.lease.expired` | error | A worker lease TTL elapsed. `error_code` is `worker_lease_expired`. |
+| `search.denied` | warning | An agent has the `web_search` tool but search is not allowed for the session, so the tool was not loaded for the turn, or a `search.request` arrived for such a session. Carries no query text. The turn does not fail. |
 | `usage.export.dropped` | warning | Usage HTTPS export or sink dropped the event. |
 | `payload.export.dropped` | warning | Payload HTTPS export or sink dropped the event. |
 
@@ -143,8 +191,9 @@ and connection errors. Do not page on each `upstream_rate_limited`.
 
 ## Query
 
-Tenant-scoped. Wrong tenant is `404`. Tokens and turn counts, not USD.
-The numbers come from whatever hot data the store still has.
+Tenant-scoped. Wrong tenant is `404`. Tokens, turn counts, and search
+counters, not USD. The numbers come from whatever hot data the store
+still has.
 
 | Method | Path |
 | --- | --- |
@@ -168,13 +217,16 @@ Missing or more than one param is `400`. Unknown `session_id` or
   "cache_read_tokens": 0,
   "cache_write_tokens": 0,
   "total_tokens": 0,
-  "turns": 0
+  "turns": 0,
+  "search_calls": 0,
+  "search_units": 0
 }
 ```
 
 `turns` is the number of turn log rows still in Postgres, or the
-rollup count for `day`. Missing token counts are `0`. No USD. No
-message text.
+rollup count for `day`. `search_calls` and `search_units` are the sums
+of the same rows (see [Search](#search)). Missing counts are `0`. No
+USD. No message text.
 
 ## Usage export
 

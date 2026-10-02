@@ -31,6 +31,8 @@ ModelList = Literal["probe", "turn", "off"]
 SandboxSize = Literal["S", "M", "L"]
 ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 ErrorCodes = Literal["legacy", "specific"]
+SearchProviderName = Literal["tavily", "staan"]
+TavilyDepth = Literal["basic", "advanced"]
 EventBusMode = Literal["auto", "memory", "postgres"]
 THINKING_HELP = (
     "APIPI_PI_THINKING must be off, minimal, low, medium, high, xhigh, or max"
@@ -46,6 +48,9 @@ VAULT_MASTER_KEY_UNSET = (
 )
 SQLITE_WARNING = (
     "SQLite is for one process. Do not share the file across processes or nodes."
+)
+SEARCH_KEY_REQUIRED = (
+    "APIPI_SEARCH_API_KEY is required when APIPI_SEARCH_PROVIDER is set"
 )
 RUN_MODE_HELP = "APIPI_RUN_MODE must be none, microvm, or package.mod:Class"
 USAGE_STORE_OFF = "usage store off"
@@ -199,6 +204,14 @@ _WORKER_TOML = {
 }
 _MCP_TOML = {
     "allow_hosts": "mcp_allow_hosts",
+}
+_SEARCH_TOML = {
+    "provider": "search_provider",
+    "base_url": "search_base_url",
+    "timeout": "search_timeout",
+    "max_results": "search_max_results",
+    "tavily_depth": "search_tavily_depth",
+    "staan_market": "search_staan_market",
 }
 
 
@@ -601,6 +614,41 @@ class Settings(BaseSettings):
     mcp_allow_hosts: HostList = Field(
         default="",
         validation_alias=AliasChoices("APIPI_MCP_ALLOW_HOSTS", "mcp_allow_hosts"),
+    )
+    search_provider: SearchProviderName | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_SEARCH_PROVIDER", "search_provider"),
+    )
+    search_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_SEARCH_API_KEY", "search_api_key"),
+    )
+    search_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_SEARCH_BASE_URL", "search_base_url"),
+    )
+    search_timeout: IdleTtl = Field(
+        default=timedelta(seconds=15),
+        validation_alias=AliasChoices("APIPI_SEARCH_TIMEOUT", "search_timeout"),
+    )
+    search_max_results: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        validation_alias=AliasChoices("APIPI_SEARCH_MAX_RESULTS", "search_max_results"),
+    )
+    search_tavily_depth: TavilyDepth = Field(
+        default="basic",
+        validation_alias=AliasChoices(
+            "APIPI_SEARCH_TAVILY_DEPTH", "search_tavily_depth"
+        ),
+    )
+    search_staan_market: str = Field(
+        default="en-us",
+        min_length=2,
+        validation_alias=AliasChoices(
+            "APIPI_SEARCH_STAAN_MARKET", "search_staan_market"
+        ),
     )
     worker_lease_ttl: IdleTtl = Field(
         default=timedelta(seconds=30),
@@ -1192,6 +1240,16 @@ class Settings(BaseSettings):
                 "APIPI_LIFECYCLE_USER_ID_KEY is required when "
                 "APIPI_LIFECYCLE_USER_ID=hash"
             )
+        if self.search_provider is not None and not (
+            self.search_api_key and self.search_api_key.strip()
+        ):
+            raise ValueError(SEARCH_KEY_REQUIRED)
+        if self.search_base_url is not None and not self.search_base_url.startswith(
+            ("http://", "https://")
+        ):
+            raise ValueError("APIPI_SEARCH_BASE_URL must be an http URL")
+        if self.search_timeout.total_seconds() <= 0:
+            raise ValueError("APIPI_SEARCH_TIMEOUT must be like 15s")
         return self
 
     def sandbox_mem_mib(self, size: str) -> int:
@@ -1357,6 +1415,14 @@ def _toml_values(path: Path) -> dict[str, Any]:
         raise ConfigError(
             "[placement] was removed; type=none goes to any worker "
             "whose accepts set contains none"
+        )
+    if "search" in raw:
+        nested.update(
+            _map_table(
+                _require_table(raw.pop("search"), "[search]"),
+                _SEARCH_TOML,
+                "search",
+            )
         )
     if "mcp" in raw:
         nested.update(
@@ -1637,6 +1703,24 @@ def _settings_message(exc: ValidationError) -> str:
             )
         if "vault_master_key" in loc or "APIPI_VAULT_MASTER_KEY" in loc:
             return "APIPI_VAULT_MASTER_KEY must be 32 bytes (base64 or hex)"
+        if "APIPI_SEARCH_BASE_URL" in msg:
+            return "APIPI_SEARCH_BASE_URL must be an http URL"
+        if SEARCH_KEY_REQUIRED in msg:
+            return SEARCH_KEY_REQUIRED
+        if (
+            "APIPI_SEARCH_TIMEOUT" in msg
+            or "search_timeout" in loc
+            or "APIPI_SEARCH_TIMEOUT" in loc
+        ):
+            return "APIPI_SEARCH_TIMEOUT must be like 15s"
+        if "search_provider" in loc or "APIPI_SEARCH_PROVIDER" in loc:
+            return "APIPI_SEARCH_PROVIDER must be tavily or staan"
+        if "search_max_results" in loc or "APIPI_SEARCH_MAX_RESULTS" in loc:
+            return "APIPI_SEARCH_MAX_RESULTS must be 1-20"
+        if "search_tavily_depth" in loc or "APIPI_SEARCH_TAVILY_DEPTH" in loc:
+            return "APIPI_SEARCH_TAVILY_DEPTH must be basic or advanced"
+        if "search_staan_market" in loc or "APIPI_SEARCH_STAAN_MARKET" in loc:
+            return "APIPI_SEARCH_STAAN_MARKET must be a market like en-us"
     return "invalid configuration"
 
 

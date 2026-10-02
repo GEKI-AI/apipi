@@ -58,6 +58,7 @@ class NoneIsolation:
         codemode: str = "off",
         env_type: str | None = None,
         session_id: str | None = None,
+        web_search: bool = False,
     ) -> PiProc:
         del mem_mib, image
         session_file = None
@@ -97,11 +98,12 @@ class NoneIsolation:
             model=model,
             instructions=instructions,
             session_file=session_file,
-            extension=host_mcp_extension(settings, cwd),
+            extension=host_mcp_extension(settings, cwd, web_search=web_search),
             thinking=level,
             codemode=code,
             env_type=env_type,
             session_id=session_id,
+            web_search=web_search,
         )
         broker = await start_broker(
             settings,
@@ -117,6 +119,7 @@ class NoneIsolation:
                 api_key=api_key,
                 broker=broker,
                 extra_env=extra_env,
+                web_search=web_search,
             )
             agent_dir = agent_root / ".pi" / "agent"
             agent_dir.mkdir(parents=True, exist_ok=True)

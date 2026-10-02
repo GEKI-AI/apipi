@@ -139,8 +139,8 @@ New extension fields are grouped. Older flat fields stay flat.
 | Route | `/v1/apipi/sessions/{id}/artifacts/{artifact_id}/download` | Artifact download. |
 | Route | `/v1/apipi/templates` | Agent templates. |
 | Route | `/v1/apipi/uploads` | Presigned uploads. |
-| Route | `/v1/apipi/usage` | Usage totals. |
-| Route | `/v1/agents/sessions` with `"environment": {"type": "none"}` | Text-only sessions. Function tools and HTTP MCP only. |
+| Route | `/v1/apipi/usage` | Usage totals, including search calls and units. |
+| Route | `/v1/agents/sessions` with `"environment": {"type": "none"}` | Text-only sessions. Function tools, HTTP MCP, and `web_search` only. |
 
 ## Agent fields and tools
 
@@ -157,7 +157,12 @@ New extension fields are grouped. Older flat fields stay flat.
 | stdio MCP | Removed |
 | `service_tier` `null` or `auto` | Ignored. ApiPi has no tiers. Any other value is `not_implemented`. |
 | `multi_agent`, `tool_search`, `programmatic_tool_calling` | Error (`not_implemented`) |
-| First-party `web_search` | Error; use MCP (example: Tavily) |
+| `tools` type `web_search` | Same shape. Needs a search provider on the API, otherwise `400` with code `search_not_configured`. Search over MCP still works (example: Tavily). |
+| `web_search` fields `type`, `filters.allowed_domains` | Supported. At most 10 domains. |
+| `web_search` fields `search_context_size`, `user_location` | Error (`not_implemented`) |
+| `web_search_preview` | Error (`not_implemented`) |
+| Other `web_search` fields | Error (`unknown_field`) |
+| Output item `web_search_call` | Same idea. `status` is `in_progress`, `completed`, or `failed`. `action` is `{"type": "search", "query": "..."}`. A failed call also has a short `error`. |
 | First-party browser | Error; use the `browser` guest image and the built-in `browser` skill |
 | Unknown JSON keys | Error (`unknown_field`) |
 

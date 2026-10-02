@@ -97,6 +97,7 @@ class ContextAgent(BaseModel):
     builtin_tools: str = "on"
     codemode: str = "off"
     thinking: str | None = None
+    web_search: bool = False
 
 
 class TurnContext(BaseModel):

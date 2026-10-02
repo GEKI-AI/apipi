@@ -41,6 +41,7 @@ from apipi.services.files import FileService
 from apipi.services.lifecycle_export import LifecycleEmitter, create_lifecycle
 from apipi.services.models import ModelsService
 from apipi.services.payload_export import load_payload_sinks
+from apipi.services.search import SearchResolver, SearchService
 from apipi.services.sessions import SessionService
 from apipi.services.skill_store import SkillService
 from apipi.services.templates import TemplateService
@@ -119,6 +120,8 @@ class Gateway:
         self.files = FileService(store, objects, settings)
         self.skill_store = SkillService(store, objects, settings)
         self.uploads = UploadService(store, objects, settings)
+        self.search_resolver = SearchResolver(settings)
+        self.search = SearchService(store, settings, self.search_resolver)
         self.sessions = SessionService(
             settings=settings,
             store=store,
@@ -129,8 +132,9 @@ class Gateway:
             skill_store=self.skill_store,
             tracing=tracing,
             metrics=metrics,
+            search=self.search_resolver,
         )
-        self.agents = AgentService(store, settings)
+        self.agents = AgentService(store, settings, self.search_resolver)
         self.templates = TemplateService(
             store,
             objects,
@@ -296,6 +300,7 @@ class Gateway:
         app.state.tracing = self.tracing
         app.state.store = self.store
         app.state.sessions = self.sessions
+        app.state.search = self.search
         app.state.authenticate = self.authenticate
         app.state.authorize = self.authorize
         app.state.auth_cache = self._auth_cache
@@ -337,6 +342,7 @@ class Gateway:
         if self.lifecycle is not None:
             await self.lifecycle.close()
         await self.sessions.cancel_turns()
+        await self.search.aclose()
         await self.event_hub.close()
         if isinstance(self.tracing, Tracing):
             self.tracing.shutdown()

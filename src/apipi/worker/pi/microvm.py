@@ -32,11 +32,12 @@ from apipi.mcp.http import McpHttpServer
 from apipi.worker.pi.dirs import PI_SESSION_REL, pi_session_file
 from apipi.worker.pi.extension import (
     APIPI_EXTENSION_REL,
-    GUEST_APIPI_EXTENSION,
-    GUEST_MCP_EXTENSION,
     MCP_EXTENSION_REL,
+    WEB_SEARCH_EXTENSION_REL,
     apipi_extension_source,
+    guest_extensions,
     mcp_extension_source,
+    web_search_extension_source,
 )
 from apipi.worker.pi.model_host import pi_agent_dir
 from apipi.worker.pi.proc import PiProc, pi_command_args, pi_env
@@ -546,6 +547,7 @@ _GUEST_FILE_KEYS = frozenset(
         "NODE_OPTIONS",
         "APIPI_PINNED_PI",
         "APIPI_MCP_SERVERS",
+        "APIPI_SEARCH_URL",
     }
 )
 _MCP_HTTP_FIELDS = frozenset({"LABEL", "URL", "ALLOWED"})
@@ -557,6 +559,7 @@ _EXTRA_NEVER = frozenset(
         "DATABASE_URL",
         "PI_CODING_AGENT_DIR",
         "NODE_OPTIONS",
+        "APIPI_SEARCH_URL",
         "PATH",
         "HOME",
         "LD_PRELOAD",
@@ -595,6 +598,7 @@ def guest_env(
     api_key: str | None = None,
     broker: object | None = None,
     extra_env: dict[str, str] | None = None,
+    web_search: bool = False,
 ) -> dict[str, str]:
     built = pi_env(
         settings,
@@ -602,6 +606,7 @@ def guest_env(
         api_key=api_key,
         broker=broker,
         extra_env=extra_env,
+        web_search=web_search,
     )
     guest: dict[str, str] = {
         "PI_CODING_AGENT_DIR": f"{GUEST_WORKSPACE}/.pi/agent",
@@ -622,6 +627,8 @@ def guest_env(
             _take(guest, built, f"APIPI_MCP_{index}_LABEL")
             _take(guest, built, f"APIPI_MCP_{index}_URL")
             _take(guest, built, f"APIPI_MCP_{index}_ALLOWED")
+    if web_search:
+        _take(guest, built, "APIPI_SEARCH_URL")
     if extra_env:
         for key, value in extra_env.items():
             if key in guest or key in _EXTRA_NEVER or not _guest_file_key(key):
@@ -702,6 +709,7 @@ def write_workspace_image(
     models_json: bytes | None = None,
     settings_json: bytes | None = None,
     system_md: bytes | None = None,
+    web_search: bool = False,
 ) -> None:
     guest_py = Path(__file__).with_name("guest.py").read_bytes()
     guest_sh = Path(__file__).with_name("guest.sh").read_bytes()
@@ -726,6 +734,13 @@ def write_workspace_image(
             _add_bytes(tar, ".pi/agent/SYSTEM.md", system_md, mode=0o644)
         _add_bytes(tar, APIPI_EXTENSION_REL, apipi_extension_source(), mode=0o644)
         _add_bytes(tar, MCP_EXTENSION_REL, mcp_extension_source(), mode=0o644)
+        if web_search:
+            _add_bytes(
+                tar,
+                WEB_SEARCH_EXTENSION_REL,
+                web_search_extension_source(),
+                mode=0o644,
+            )
         _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
         if shell:
             _add_bytes(tar, ".apipi/shell", b"", mode=0o644)
@@ -1313,6 +1328,7 @@ async def start_microvm(
     codemode: str = "off",
     env_type: str | None = None,
     session_id: str | None = None,
+    web_search: bool = False,
 ) -> StartedMicrovm:
     require_microvm(settings)
     firecracker, jailer = microvm_binaries()
@@ -1446,6 +1462,7 @@ async def start_microvm(
                 api_key=api_key,
                 broker=broker,
                 extra_env=extra_env,
+                web_search=web_search,
             ),
             pi_args=pi_command_args(
                 settings,
@@ -1457,11 +1474,12 @@ async def start_microvm(
                 model=model,
                 instructions=instructions,
                 session_file=PI_SESSION_REL if cwd else None,
-                extension=[GUEST_APIPI_EXTENSION, GUEST_MCP_EXTENSION],
+                extension=guest_extensions(web_search),
                 thinking=level,
                 codemode=code,
                 env_type=env_type,
                 session_id=session_id,
+                web_search=web_search,
             ),
             net=net,
             extra_dirs=extra_dirs,
@@ -1471,6 +1489,7 @@ async def start_microvm(
             ),
             settings_json=settings_json_text(pi_settings).encode(),
             system_md=system_md,
+            web_search=web_search,
         )
         config = microvm_config(
             kernel="vmlinux",
@@ -1548,6 +1567,7 @@ async def spawn_microvm_pi(
     codemode: str = "off",
     env_type: str | None = None,
     session_id: str | None = None,
+    web_search: bool = False,
 ) -> PiProc:
     started = await start_microvm(
         settings,
@@ -1568,6 +1588,7 @@ async def spawn_microvm_pi(
         codemode=codemode,
         env_type=env_type,
         session_id=session_id,
+        web_search=web_search,
     )
     process = started.process
     try:

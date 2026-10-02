@@ -60,8 +60,10 @@ fallback. `host` and `jail` are not valid. OpenAI-compatible
 ## Do not
 
 - A second harness in this version
-- First-party search or a browser engine in the gateway. The guest
-  browser is a skill in the browser image, not Playwright MCP.
+- A search engine or a browser engine in the gateway. Routing the
+  built-in `web_search` tool to a configured external provider is
+  allowed. The guest browser is a skill in the browser image, not
+  Playwright MCP.
 - Silent fallback between run modes
 - ChatKit, workflow canvases, `/v1/runners`
 - Pi types in HTTP

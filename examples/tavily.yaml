@@ -1,3 +1,6 @@
+# For one operator key on the API and central usage counting, use the
+# built-in tool instead: tools: [{type: web_search}] (docs/tools.md).
+#
 # Web search via Tavily. The Tavily key lives in a vault credential,
 # not in the tool headers: the gateway never expands ${ENV} there.
 # https://docs.tavily.com/documentation/mcp

@@ -15,6 +15,7 @@ from apipi.store.models import (
     Event,
     FileRow,
     Item,
+    SearchTurnCount,
     SessionRow,
     SkillRow,
     TemplateRow,
@@ -593,6 +594,9 @@ async def append_turn_log(
     tool_counts: dict[str, int] | None = None,
     mcp_names: list[str] | None = None,
     mcp_counts: dict[str, int] | None = None,
+    search_calls: int = 0,
+    search_units: int = 0,
+    search_counts: dict[str, dict[str, int]] | None = None,
     key_id: str = "",
     environment_type: str = "",
     run_mode: str = "",
@@ -623,6 +627,13 @@ async def append_turn_log(
         tool_counts=dict(tool_counts) if tool_counts is not None else {},
         mcp_names=list(mcp_names) if mcp_names is not None else [],
         mcp_counts=dict(mcp_counts) if mcp_counts is not None else {},
+        search_calls=search_calls,
+        search_units=search_units,
+        search_counts=(
+            {key: dict(value) for key, value in search_counts.items()}
+            if search_counts is not None
+            else {}
+        ),
         key_id=key_id,
         environment_type=environment_type,
         run_mode=run_mode,
@@ -673,6 +684,8 @@ async def usage_totals(
         func.coalesce(func.sum(TurnLog.cache_write_tokens), 0),
         func.coalesce(func.sum(TurnLog.total_tokens), 0),
         func.count(TurnLog.id),
+        func.coalesce(func.sum(TurnLog.search_calls), 0),
+        func.coalesce(func.sum(TurnLog.search_units), 0),
     ).where(TurnLog.tenant_id == tenant_id)
     if session_id is not None:
         stmt = stmt.where(TurnLog.session_id == session_id)
@@ -690,6 +703,8 @@ async def usage_totals(
         "cache_write_tokens": int(row[3]),
         "total_tokens": int(row[4]),
         "turns": int(row[5]),
+        "search_calls": int(row[6]),
+        "search_units": int(row[7]),
     }
 
 
@@ -705,6 +720,8 @@ async def add_usage_rollup(
     total_tokens: int = 0,
     turns: int = 1,
     artifact_bytes: int = 0,
+    search_calls: int = 0,
+    search_units: int = 0,
 ) -> UsageRollup:
     row = await db.scalar(
         select(UsageRollup).where(
@@ -722,6 +739,8 @@ async def add_usage_rollup(
             total_tokens=total_tokens,
             turns=turns,
             artifact_bytes=artifact_bytes,
+            search_calls=search_calls,
+            search_units=search_units,
         )
         db.add(row)
         await db.flush()
@@ -733,6 +752,8 @@ async def add_usage_rollup(
     row.total_tokens += total_tokens
     row.turns += turns
     row.artifact_bytes += artifact_bytes
+    row.search_calls += search_calls
+    row.search_units += search_units
     await db.flush()
     return row
 
@@ -753,6 +774,8 @@ async def usage_day(
             "cache_write_tokens": row.cache_write_tokens,
             "total_tokens": row.total_tokens,
             "turns": row.turns,
+            "search_calls": row.search_calls,
+            "search_units": row.search_units,
         }
     start = datetime(day.year, day.month, day.day, tzinfo=UTC)
     return await usage_totals(
@@ -771,7 +794,114 @@ async def artifact_bytes_for_turn(
     return int(value or 0)
 
 
+async def lock_turn(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID, turn_id: uuid.UUID
+) -> bool:
+    found = await db.scalar(
+        select(Turn.id)
+        .where(
+            Turn.tenant_id == tenant_id,
+            Turn.session_id == session_id,
+            Turn.id == turn_id,
+        )
+        .with_for_update()
+    )
+    return found is not None
+
+
+async def search_usage_for_turn(
+    db: AsyncSession, tenant_id: uuid.UUID, turn_id: uuid.UUID
+) -> tuple[int, int, dict[str, dict[str, int]]]:
+    rows = await db.scalars(
+        select(SearchTurnCount)
+        .where(
+            SearchTurnCount.tenant_id == tenant_id, SearchTurnCount.turn_id == turn_id
+        )
+        .order_by(SearchTurnCount.provider, SearchTurnCount.key_source)
+    )
+    calls = 0
+    units = 0
+    counts: dict[str, dict[str, int]] = {}
+    for row in rows:
+        calls += row.calls
+        units += row.units
+        counts[f"{row.provider}/{row.key_source}"] = {
+            "calls": row.calls,
+            "units": row.units,
+        }
+    return calls, units, counts
+
+
+async def record_search_usage(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    *,
+    provider: str,
+    key_source: str,
+    calls: int,
+    units: int,
+) -> None:
+    if calls < 0 or units < 0:
+        raise ValueError("search usage cannot be negative")
+    if not await lock_turn(db, tenant_id, session_id, turn_id):
+        raise NotFoundError("turn not found")
+    row = await db.scalar(
+        select(SearchTurnCount).where(
+            SearchTurnCount.tenant_id == tenant_id,
+            SearchTurnCount.turn_id == turn_id,
+            SearchTurnCount.provider == provider,
+            SearchTurnCount.key_source == key_source,
+        )
+    )
+    if row is None:
+        db.add(
+            SearchTurnCount(
+                tenant_id=tenant_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                provider=provider,
+                key_source=key_source,
+                calls=calls,
+                units=units,
+            )
+        )
+    else:
+        row.calls += calls
+        row.units += units
+    await db.flush()
+    log_row = await get_turn_log(db, tenant_id, turn_id)
+    if log_row is None:
+        return
+    key = f"{provider}/{key_source}"
+    counts = {name: dict(value) for name, value in log_row.search_counts.items()}
+    current = counts.get(key, {"calls": 0, "units": 0})
+    counts[key] = {
+        "calls": int(current.get("calls", 0)) + calls,
+        "units": int(current.get("units", 0)) + units,
+    }
+    log_row.search_counts = counts
+    log_row.search_calls += calls
+    log_row.search_units += units
+    await db.flush()
+    logged = log_row.created_at
+    if logged.tzinfo is not None:
+        logged = logged.astimezone(UTC)
+    await add_usage_rollup(
+        db,
+        tenant_id,
+        logged.date(),
+        turns=0,
+        search_calls=calls,
+        search_units=units,
+    )
+
+
 async def purge_turn_logs(db: AsyncSession, older_than: datetime) -> int:
+    await db.execute(
+        delete(SearchTurnCount).where(SearchTurnCount.created_at < older_than)
+    )
     result = await db.execute(delete(TurnLog).where(TurnLog.created_at < older_than))
     await db.flush()
     return int(getattr(result, "rowcount", 0) or 0)

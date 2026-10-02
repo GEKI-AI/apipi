@@ -44,7 +44,11 @@ worker process environment is not copied into the guest. Guest
 `.apipi/env` holds the broker URL, a dummy `OPENAI_API_KEY`, that
 session's MCP settings, and `environment.env`. It does not hold
 worker token files, database settings, `OPENAI_API_KEY_OVERWRITE`,
-or other worker secrets.
+or other worker secrets. The built-in `web_search` tool also goes
+through this broker: the broker hands the call to the worker, the
+worker forwards it to the API, and the API calls the search provider.
+The guest reaches only the broker, and the provider name and key never
+enter the guest or the worker.
 
 ```
   API / worker process          never enters the guest

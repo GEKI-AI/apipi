@@ -23,7 +23,7 @@ The example file in this repo is `examples/apipi.toml`. Copy
 Environment variables win. `.env` wins over TOML. Unknown TOML keys
 fail at startup. Nested tables are `[pi]`, `[sandbox]`,
 `[sandbox.resources]`, `[sandbox.network]`, `[sandbox.ttl]`, `[mcp]`,
-and `[placement]`. A setting that would
+`[search]`, and `[placement]`. A setting that would
 store prompt or completion bodies is rejected at startup.
 
 `load_settings()` is the CLI path and still reads the process
@@ -345,6 +345,40 @@ serve` and `apipi worker` exit before they listen. `turn` and `off`
 do not call `/models` at start. A host without that route must use
 `off`, or agent writes in `turn` mode fail with
 `model_host_unreachable`.
+
+## Search
+
+The `[search]` table configures the provider behind the built-in
+[`web_search` tool](tools.md#web-search). Only `apipi serve` reads it.
+Workers and guests never need these settings and never see the provider
+name or the key. Unset `provider` means no search: agents with a
+`web_search` tool are rejected with `400` and code
+`search_not_configured`. A provider without a key fails at startup. A
+key without a provider is fine and is ignored. Unknown `[search]` keys
+fail at startup.
+
+| Env | TOML | Default | What |
+| --- | --- | --- | --- |
+| `APIPI_SEARCH_PROVIDER` | `[search].provider` | unset | `tavily` or `staan`. Unset turns the `web_search` tool off for every tenant. |
+| `APIPI_SEARCH_API_KEY` | none | unset | The provider key. Environment or `.env` only, never TOML, like other secrets. It stays in the API process. |
+| `APIPI_SEARCH_BASE_URL` | `[search].base_url` | provider default | Base URL of the provider API. Use it for a proxy or a test double. |
+| `APIPI_SEARCH_TIMEOUT` | `[search].timeout` | `15s` | Timeout for one provider call. A timeout is a tool error for the model, and the call is not counted in usage. |
+| `APIPI_SEARCH_MAX_RESULTS` | `[search].max_results` | `5` | Cap for the `max_results` the model asks for. |
+| `APIPI_SEARCH_TAVILY_DEPTH` | `[search].tavily_depth` | `basic` | Tavily `search_depth`: `basic` or `advanced`. `advanced` costs 2 credits for each search. |
+| `APIPI_SEARCH_STAAN_MARKET` | `[search].staan_market` | `en-us` | Staan `market`, for example `de-de`. |
+
+```toml
+[search]
+provider = "tavily"
+timeout = "15s"
+max_results = 5
+```
+
+```
+APIPI_SEARCH_API_KEY=tvly-...
+```
+
+Usage for search is in [usage](usage.md#search).
 
 ## Pi
 
@@ -739,11 +773,12 @@ backend = "none"
 OPENAI_BASE_URL=https://api.openai.com/v1
 # OPENAI_API_KEY_OVERWRITE=...
 # APIPI_VAULT_MASTER_KEY=...
+# APIPI_SEARCH_API_KEY=...
 ```
 
 A production microVM host looks like this. Keep
 `OPENAI_API_KEY_OVERWRITE` (if you use it), `APIPI_VAULT_MASTER_KEY`,
-and any export tokens in `/etc/apipi.env`, not in the committed TOML
+`APIPI_SEARCH_API_KEY`, and any export tokens in `/etc/apipi.env`, not in the committed TOML
 file:
 
 ```toml

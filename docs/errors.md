@@ -79,7 +79,8 @@ after a disconnect today. That mode is not implemented.
 | `cancelled` | user | Cancel input. Event is `turn.cancelled`, not `turn.failed` | no | info |
 | `client_disconnected` | user | Reserved. Not emitted today | no | info |
 | `invalid_request` | user | Request rejected. Specific codes such as `model_required` and `model_not_found` keep their names | no | warning |
-| `tool_not_allowed` | user | Tool type not allowed for `environment.type=none` (only function tools and HTTP MCP with `server_url`) | no | warning |
+| `tool_not_allowed` | user | Tool type not allowed for `environment.type=none` (only function tools, HTTP MCP with `server_url`, and `web_search`) | no | warning |
+| `search_not_configured` | user | Agent create or update with a `web_search` tool, and the operator has not configured search for the caller. Returned as `400` | no | warning |
 | `builtin_tools` | user | `apipi.builtin_tools=on` for `environment.type=none`, or `apipi.codemode` `on`/`only` with built-in tools off | no | warning |
 | `turn_timeout` | internal | `turn_timeout` exceeded | yes | error |
 | `pi_exited` | internal | Pi stream ended without `agent_settled` | yes | error |

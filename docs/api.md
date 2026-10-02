@@ -36,7 +36,7 @@ agents until you create one.
 | `GET` | `/v1/apipi/agents/{agent_id}/export` |
 
 Fields: `id`, `name`, `model`, `instructions`, `idle_ttl`, `metadata`,
-`tools` (function, mcp), `session_defaults`,
+`tools` (function, mcp, web_search), `session_defaults`,
 `created_at`, `updated_at`. Writing an unknown field such as `revision`
 is `unknown_field`.
 `idle_ttl` is an ApiPi extension: a duration such as `30m` or `1h`,
@@ -78,6 +78,14 @@ availability is not checked until a session is created. See
 [environments](environments.md).
 
 Rejected: `multi_agent`, `tool_search`, `programmatic_tool_calling`.
+
+`tools` accepts `{"type": "web_search"}` with an optional
+`filters.allowed_domains` list (at most 10 domains). It turns on the
+built-in search tool. When the operator has not configured a search
+provider for the caller, create and update return `400` with code
+`search_not_configured`. The tool is never dropped silently.
+`search_context_size`, `user_location`, and the `web_search_preview`
+type return `not_implemented`. See [tools](tools.md#web-search).
 
 `GET /v1/apipi/agents/{agent_id}/export` downloads a template bundle for that
 agent without storing a template. The zip is the same format as
@@ -431,8 +439,15 @@ log line.
 | `agent.session.environment.failed` | Could not attach, or hosted setup failed. Hosted `data.sandbox.state` is `failed`. |
 
 Item types: `message`, `function_call`, `mcp_call`,
-`mcp_list_tools`, `command_execution`. Thinking is not an item. `GET /items` does not
+`mcp_list_tools`, `command_execution`, `web_search_call`. Thinking is not an item. `GET /items` does not
 list it.
+
+A `web_search_call` item is one call of the built-in `web_search`
+tool. It arrives in `agent.session.turn.item.added` and
+`agent.session.turn.item.done` like other items. `data` has `status`
+(`in_progress`, `completed`, or `failed`) and `action`, which is
+`{"type": "search", "query": "..."}`. A failed call also has a short
+`error` text. The result list the model saw is not stored in the item.
 
 `agent.session.turn.thinking.completed` carries `item_id`,
 `content_index`, `duration_ms`, `reasoning_tokens`, `preview`, and
@@ -506,7 +521,8 @@ thread if the gateway disappears.
 
 Tenant-scoped totals from hot usage data (turn log and/or daily
 rollups). Filter by exactly one of `session_id`, `turn_id`, or `day`.
-Tokens and turn counts, not USD. See [usage](usage.md).
+The response has token totals, `turns`, `search_calls`, and
+`search_units`. Counters, not USD. See [usage](usage.md#query).
 
 ## Request ids
 
@@ -529,7 +545,7 @@ these. See [multiple nodes](scale.md).
 | --- | --- |
 | `openai_hosted` | **Default.** Session directory next to Pi. Not OpenAI's cloud. |
 | `hosted` | Alias for `openai_hosted`. Stored and returned as `openai_hosted`. |
-| `none` | No computer. Function tools and HTTP MCP only (anything else is `400`). |
+| `none` | No computer. Function tools, HTTP MCP, and `web_search` only (anything else is `400`). |
 | `self_hosted` | Not supported for now. Requests return `400` with type `not_implemented` (`environment type self_hosted is not supported`). It may come back later on worker protocol v2. Use `openai_hosted`. |
 
 `environment.capability_directories`: paths on the computer that contain

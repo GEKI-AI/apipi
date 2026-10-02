@@ -93,6 +93,9 @@ def usage_event(
     retryable: bool | None = None,
     legacy_code: str | None = None,
     upstream_attempts: int | None = None,
+    search_calls: int = 0,
+    search_units: int = 0,
+    search_counts: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     stored = usage_from(usage)
     return {
@@ -114,6 +117,11 @@ def usage_event(
         "tool_counts": dict(tool_counts),
         "mcp_names": list(mcp_names),
         "mcp_counts": dict(mcp_counts),
+        "search_calls": search_calls,
+        "search_units": search_units,
+        "search_counts": {
+            key: dict(value) for key, value in (search_counts or {}).items()
+        },
         "environment_type": environment_type,
         "run_mode": run_mode,
         "instance_id": instance_id,

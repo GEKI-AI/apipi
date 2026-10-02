@@ -6,7 +6,9 @@ from apipi.worker.pi.settings_json import (
     resolve_codemode,
 )
 
-ENV_NONE_TOOL_HELP = "type=none sessions allow function tools and HTTP MCP only"
+ENV_NONE_TOOL_HELP = (
+    "type=none sessions allow function tools, web_search and HTTP MCP only"
+)
 ENV_NONE_BUILTIN_HELP = "built-in tools are not available for environment.type=none"
 ENV_NONE_CODEMODE_HELP = "codemode requires built-in tools"
 
@@ -20,7 +22,7 @@ def reject_tools_for_env_none(tools: list[Any] | None) -> None:
                 code="tool_not_allowed",
             )
         kind = tool.get("type")
-        if kind == "function":
+        if kind in ("function", "web_search"):
             continue
         if kind == "mcp" and tool.get("server_url"):
             continue

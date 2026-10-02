@@ -31,15 +31,44 @@ from apipi.store.repo import (
     get_worker,
 )
 from apipi.worker.pi.artifacts import reap_workspace_loop
+from apipi.worker.pi.broker import SearchHookError
 from apipi.worker.pi.harness import PiHarness
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
+from apipi.worker.protocol import SearchRequest
 
 log = logging.getLogger("apipi.worker")
 
 # How long a follow-up waits for a worker to acknowledge a cancel with
 # events before treating the stale turn as abandoned.
 CANCEL_GRACE = timedelta(seconds=5)
+
+SEARCH_TIMEOUT = 30.0
+
+SearchSender = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+def context_web_search(turn_context: dict[str, Any] | None) -> bool:
+    if not isinstance(turn_context, dict):
+        return False
+    agent = turn_context.get("agent")
+    return isinstance(agent, dict) and agent.get("web_search") is True
+
+
+class _SearchHarness:
+    """Adds the search flag and hook to every generate call of one turn."""
+
+    def __init__(self, inner: Any, search: Any) -> None:
+        self._inner = inner
+        self._search = search
+
+    def generate(self, *args: Any, **kwargs: Any) -> Any:
+        return self._inner.generate(
+            *args, web_search=True, search=self._search, **kwargs
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
 
 
 class LocalExecution:
@@ -64,6 +93,9 @@ class LocalExecution:
         self.tracing = tracing
         self.outbox = outbox
         self.presign_waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
+        self.search_waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
+        self.search_sender: SearchSender | None = None
+        self.search_timeout = SEARCH_TIMEOUT
         self._sinks: dict[tuple[uuid.UUID, uuid.UUID], ResultSink] = {}
         self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
         self.seen_hook: Callable[[list[uuid.UUID]], Awaitable[None]] | None = None
@@ -109,6 +141,79 @@ class LocalExecution:
     def _forget_context(self, session_id: str) -> None:
         self._context_ttl.pop(session_id, None)
         self._session_dirs.pop(session_id, None)
+
+    def _turn_harness(self, turn_context: dict[str, Any] | None) -> Any:
+        if context_web_search(turn_context):
+            return _SearchHarness(self.harness, self.search)
+        return self.harness
+
+    async def search(
+        self,
+        session_id: str,
+        turn_id: str,
+        query: str,
+        max_results: int | None,
+    ) -> dict[str, Any]:
+        """Send one `search.request` and wait for its `search.reply`.
+
+        It never queues and never replays: no socket, a lost socket or a
+        timeout raises `SearchHookError`, which the broker turns into a
+        tool error for the model.
+        """
+        sender = self.search_sender
+        if sender is None:
+            raise SearchHookError(
+                "search_unavailable", "Web search is not available right now"
+            )
+        request_id = uuid.uuid4()
+        try:
+            session_uuid = uuid.UUID(session_id)
+        except ValueError:
+            raise SearchHookError(
+                "invalid_request", "Web search request is invalid"
+            ) from None
+        await self.outbox.wait_acked(
+            session_uuid, self.outbox.high_water(session_uuid), timeout=5.0
+        )
+        future: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self.search_waiters[request_id] = future
+        try:
+            request = SearchRequest(
+                request_id=request_id,
+                session_id=uuid.UUID(session_id),
+                turn_id=uuid.UUID(turn_id),
+                query=query,
+                max_results=max_results,
+            )
+            try:
+                await sender(request.model_dump(mode="json"))
+            except Exception as exc:
+                raise SearchHookError(
+                    "search_unavailable", "Web search is not available right now"
+                ) from exc
+            try:
+                return await asyncio.wait_for(future, timeout=self.search_timeout)
+            except TimeoutError as exc:
+                raise SearchHookError("search_timeout", "Web search timed out") from exc
+        finally:
+            self.search_waiters.pop(request_id, None)
+
+    def handle_search_reply(self, message: dict[str, Any]) -> None:
+        try:
+            request_id = uuid.UUID(str(message.get("request_id")))
+        except ValueError:
+            return
+        future = self.search_waiters.get(request_id)
+        if future is not None and not future.done():
+            future.set_result(message)
+
+    def fail_search_waiters(self, message: str = "Worker connection lost") -> None:
+        for future in list(self.search_waiters.values()):
+            if not future.done():
+                future.set_exception(SearchHookError("search_unavailable", message))
+        self.search_waiters.clear()
 
     def sink_for(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> ResultSink:
         """Per-session result sink backed by the worker outbox."""
@@ -164,7 +269,7 @@ class LocalExecution:
         try:
             await run_turn(
                 self.hub,
-                self.harness,
+                self._turn_harness(turn_context),
                 tenant_id,
                 session_id,
                 text,
@@ -210,7 +315,7 @@ class LocalExecution:
         try:
             await continue_turn(
                 self.hub,
-                self.harness,
+                self._turn_harness(turn_context),
                 tenant_id,
                 session_id,
                 turn_id=turn_id,
@@ -454,6 +559,8 @@ class LocalExecution:
                 return
             if kwargs is None:
                 return
+            if context_web_search(turn_context):
+                kwargs["web_search"] = True
             try:
                 await self.pool.get(session_id, **kwargs)
             except CapacityError as exc:

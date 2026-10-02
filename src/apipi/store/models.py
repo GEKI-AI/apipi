@@ -330,6 +330,11 @@ class TurnLog(Base):
     mcp_counts: Mapped[dict[str, Any]] = mapped_column(
         JSONType, default=dict, nullable=False
     )
+    search_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    search_units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    search_counts: Mapped[dict[str, Any]] = mapped_column(
+        JSONType, default=dict, nullable=False
+    )
     key_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     environment_type: Mapped[str] = mapped_column(
         String(32), nullable=False, default=""
@@ -360,6 +365,41 @@ class UsageRollup(Base):
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     turns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     artifact_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    search_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    search_units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class SearchTurnCount(Base):
+    __tablename__ = "search_turn_counts"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "turn_id", "provider", "key_source"),
+        ForeignKeyConstraint(
+            ["tenant_id", "session_id"],
+            ["sessions.tenant_id", "sessions.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "turn_id"],
+            ["turns.tenant_id", "turns.id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    turn_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    key_source: Mapped[str] = mapped_column(String(16), nullable=False)
+    calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
 
 
 class Item(Base):
@@ -378,7 +418,7 @@ class Item(Base):
         ),
         CheckConstraint(
             "type IN ('message', 'function_call', 'mcp_call', "
-            "'mcp_list_tools', 'command_execution')",
+            "'mcp_list_tools', 'command_execution', 'web_search_call')",
             name="items_type_check",
         ),
     )

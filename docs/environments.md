@@ -18,8 +18,9 @@ It is **not** OpenAI's cloud VM. `hosted` means the same folder. You
 can override the type per session. If you omit `environment` on
 create, the gateway uses `openai_hosted`.
 
-Search and browser are not environments. Attach them as MCP. See
-[tools](tools.md).
+Search and browser are not environments. Search is the built-in
+`web_search` tool or an MCP server, and the browser is a skill in the
+`browser` image. See [tools](tools.md).
 
 ## Local directory (`openai_hosted`)
 
@@ -292,11 +293,26 @@ No computer. Built-in tools are always off and cannot be turned on:
 `apipi.builtin_tools=on` on a `type=none` session is `400` with code
 `builtin_tools`, and so is `apipi.codemode` `on` or `only`. Pi still
 runs the loop. Function tools and HTTP MCP with `server_url` still
-work; anything else is `400` with code `tool_not_allowed`. There is no
-session directory and no shell. Pi for `type=none` always runs directly
+work, and so does the built-in `web_search` tool; anything else is
+`400` with code `tool_not_allowed`. There is no session directory and
+no shell. Pi for `type=none` always runs directly
 on the worker host. Saved agents that still carry
 `metadata.apipi.session_kind=chat` are ignored for placement now.
 See [sandbox workers](workers.md#placement).
+
+## Web search
+
+The built-in `web_search` tool works on `type=none` and on
+`openai_hosted` sessions in every run mode. It needs no computer and
+no guest network. On `none` Pi runs on the worker host and calls the
+session broker on loopback. In a microVM the guest calls the same
+per-session broker on the TAP host IP, so the guest reaches only the
+broker, as it does for the model and for HTTP MCP. The worker forwards
+the call to the API over its socket. The provider name and key never
+enter the guest or the worker. The per-session `environment.network`
+policy needs no search host, because the guest never connects to the
+provider. See [tools](tools.md#web-search) and
+[workers](workers.md#messages).
 
 ## `self_hosted`
 
