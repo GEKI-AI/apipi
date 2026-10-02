@@ -90,11 +90,6 @@ class _Pump:
             metrics=None,
             objects=self._objects,
         )
-        if outcome.rejected:
-            for envelope in queued:
-                print("ENVELOPE", envelope.envelope.seq, envelope.envelope.type)
-            print("REJECTED", outcome.rejected)
-            print("REPLIES", outcome.presign_replies)
         assert outcome.rejected == []
         for reply in outcome.presign_replies:
             handle_presign_reply(waiters, reply)
