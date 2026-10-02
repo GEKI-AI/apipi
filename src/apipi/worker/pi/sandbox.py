@@ -208,9 +208,31 @@ def min_vcpus_for_image(image_id: str | None, settings: Settings | None = None) 
     return floor
 
 
+REMOVED_SIZE_KEY = "apipi.sandbox_size"
+
+
+def reject_removed_size_key(metadata: dict[str, Any] | None) -> None:
+    if isinstance(metadata, dict) and REMOVED_SIZE_KEY in metadata:
+        raise ApiError(
+            "invalid_request",
+            "apipi.sandbox_size was removed; set environment.container_size "
+            "(small, medium, or large) or environment.sandbox_size (S, M, or L)",
+            code="invalid_request",
+        )
+
+
+def strip_removed_size_key(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict) or REMOVED_SIZE_KEY not in metadata:
+        return metadata
+    cleaned = dict(metadata)
+    cleaned.pop(REMOVED_SIZE_KEY, None)
+    return cleaned
+
+
 def validate_sandbox_metadata(
     settings: Settings, metadata: dict[str, Any] | None
 ) -> None:
+    reject_removed_size_key(metadata)
     if not metadata or SANDBOX_IMAGE_KEY not in metadata:
         return
     image = resolve_sandbox_image(

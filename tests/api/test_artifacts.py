@@ -343,7 +343,7 @@ async def test_later_turn_publishes_new_artifact_for_same_path(
     assert second.content == b"two"
 
 
-async def test_workspace_ttl_wipes_dir_keeps_artifacts(
+async def test_sandbox_ttl_openai_hosted_wipes_dir_keeps_artifacts(
     client: AsyncClient, store: Store, settings: Settings
 ) -> None:
     token = _token()

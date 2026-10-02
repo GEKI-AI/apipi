@@ -155,7 +155,7 @@ async def test_idle_ttl_kills_pi_session_stays(
         json={"name": "bot", "model": "test"},
     )
     pool = none_app.state.pi_pool
-    pool.settings.workspace_ttl = timedelta(seconds=0)
+    pool.settings.sandbox_ttl_openai_hosted = timedelta(seconds=0)
     created = await none_client.post(
         "/v1/agents/sessions",
         headers=_auth(token),

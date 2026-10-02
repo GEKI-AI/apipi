@@ -398,11 +398,11 @@ thinking_levels = { high = "high", minimal = null }
 For a model in the registry, an unsupported level is `400`. Models not
 in the registry still pass the level through, and Pi may clamp it.
 `off` does not pass `--thinking`. The process default is
-`[pi].thinking`. A session may set `metadata["apipi.thinking"]` or
-`reasoning.effort`. A saved agent may set the same key or
-`reasoning.effort`. `none` is stored as `off`. On update,
-`reasoning.effort` replaces the stored level. A `400` happens only when
-the same request also sets a different `apipi.thinking`. `summary` and
+`[pi].thinking`. A session may set `reasoning.effort`; a saved agent may set
+`reasoning.effort`. `metadata["apipi.thinking"]` is removed as client input and is `400`.
+`none` is stored as `off`. On update,
+`reasoning.effort` replaces the stored level, and `null` clears it. The gateway keeps
+the resolved level in stored metadata under `apipi.thinking`. `summary` and
 `text` are `not_implemented`. `service_tier` of `null` or `auto` is
 ignored. Any other tier is `not_implemented`. Resolve order is session,
 then agent, then the process default. Inline agents copy that key onto

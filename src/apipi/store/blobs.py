@@ -8,7 +8,6 @@ from collections.abc import MutableMapping
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal, NoReturn, Protocol
-from urllib.parse import unquote, urlparse
 
 from apipi.config import ConfigError, Settings
 from apipi.gateway.logutil import log_event
@@ -97,39 +96,6 @@ def s3_prefix_key(settings: Settings, namespace: Namespace, prefix: str) -> str:
     if head:
         return f"{head}/"
     return body
-
-
-def artifact_blob_uri(
-    settings: Settings,
-    tenant_id: uuid.UUID,
-    key_id: str,
-    session_id: uuid.UUID,
-    artifact_id: uuid.UUID,
-) -> str:
-    object_id = blob_key(tenant_id, key_id, session_id, artifact_id)
-    if settings.artifact_store == "s3":
-        bucket = (settings.s3_bucket or "").strip()
-        key = s3_object_key(settings, NS_ARTIFACTS, object_id)
-        return f"s3://{bucket}/{key}"
-    path = local_object_path(sessions_root(settings), NS_ARTIFACTS, object_id).resolve()
-    return path.as_uri()
-
-
-async def read_blob_uri(settings: Settings, uri: str) -> bytes | None:
-    parsed = urlparse(uri)
-    if parsed.scheme == "file":
-        path = Path(unquote(parsed.path))
-        if not path.is_file():
-            return None
-        return path.read_bytes()
-    if parsed.scheme == "s3":
-        bucket = parsed.netloc
-        key = unquote(parsed.path.lstrip("/"))
-        if not bucket or not key:
-            return None
-        store = S3Store(settings)
-        return await store.get_raw(bucket, key)
-    return None
 
 
 def _operator_ids() -> tuple[int, int] | None:

@@ -128,7 +128,7 @@ _SANDBOX_NETWORK_TOML = {
     "egress_mbit": "microvm_egress_mbit",
 }
 _SANDBOX_TTL_TOML = {
-    "openai_hosted": "workspace_ttl",
+    "openai_hosted": "sandbox_ttl_openai_hosted",
 }
 _PLACEMENT_TOML = {
     "env_none": "env_none_placement",
@@ -464,7 +464,7 @@ class Settings(BaseSettings):
         default=timedelta(minutes=15),
         validation_alias=AliasChoices("APIPI_IDLE_TTL", "idle_ttl"),
     )
-    workspace_ttl: OptionalTtl = Field(
+    sandbox_ttl_openai_hosted: OptionalTtl = Field(
         default=timedelta(hours=1),
         validation_alias=AliasChoices(
             "APIPI_SANDBOX_TTL_OPENAI_HOSTED",
@@ -1051,12 +1051,12 @@ class Settings(BaseSettings):
 
     def sandbox_ttl_for(self, env_type: str | None) -> timedelta | None:
         if env_type == "openai_hosted":
-            return self.workspace_ttl
+            return self.sandbox_ttl_openai_hosted
         return None
 
     def pi_idle_ttl_for(self, env_type: str | None) -> timedelta | None:
         if env_type == "openai_hosted":
-            return self.workspace_ttl
+            return self.sandbox_ttl_openai_hosted
         return self.idle_ttl
 
 
@@ -1300,8 +1300,7 @@ def _settings_message(exc: ValidationError) -> str:
         if "idle_ttl" in loc or "APIPI_IDLE_TTL" in loc:
             return "APIPI_IDLE_TTL must be like 15m"
         if (
-            "workspace_ttl" in loc
-            or "sandbox_ttl_openai_hosted" in loc
+            "sandbox_ttl_openai_hosted" in loc
             or "APIPI_SANDBOX_TTL_OPENAI_HOSTED" in loc
         ):
             return "APIPI_SANDBOX_TTL_OPENAI_HOSTED must be like 15m or 0"

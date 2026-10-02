@@ -375,8 +375,9 @@ wins over the agent field. Stock clients can set
 
 `metadata` is a JSON object. Keys that start with `apipi.` are
 reserved. The gateway interprets
-`apipi.sandbox_image`, `apipi.session_kind`, `apipi.thinking`,
-`apipi.system_prompt`, `apipi.codemode`, and `apipi.idle_ttl`. It
+`apipi.sandbox_image`, `apipi.session_kind`,
+`apipi.system_prompt`, `apipi.codemode`, and `apipi.idle_ttl`, and it rejects
+`apipi.sandbox_size` and `apipi.thinking` with `400`. It
 stores `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`
 and does not branch on them. There is no top-level `actor_type`
 field. See [reserved metadata](extending.md#reserved-metadata).
@@ -477,7 +478,8 @@ in items, and not in logs. There is no admin API that returns it.
 Pi's session cache may still hold the full text. That cache is not
 the public transcript. Thinking deltas are not sent to clients.
 Enable thinking with `APIPI_PI_THINKING`, or override it per session
-with `metadata["apipi.thinking"]` or `reasoning.effort`. `none` means
+with `reasoning.effort`. `metadata["apipi.thinking"]` is removed as client
+input and is `400`. `none` means
 off. See [Pi](config.md#pi).
 
 Compaction events are optional. A Pi build that does not emit

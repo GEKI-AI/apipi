@@ -49,13 +49,3 @@ def artifact_blob_dir(
     )
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def artifact_blob_path(
-    settings: Settings,
-    tenant_id: uuid.UUID,
-    session_id: uuid.UUID,
-    artifact_id: uuid.UUID,
-    key_id: str = "",
-) -> Path:
-    return artifact_blob_dir(settings, tenant_id, session_id, key_id) / str(artifact_id)

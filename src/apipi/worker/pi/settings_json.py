@@ -64,6 +64,16 @@ def validate_pi_metadata(metadata: dict[str, Any] | None) -> None:
     codemode_from_metadata(metadata)
 
 
+def reject_client_thinking_key(metadata: dict[str, Any] | None) -> None:
+    if isinstance(metadata, dict) and THINKING_KEY in metadata:
+        raise ApiError(
+            "invalid_request",
+            "apipi.thinking was removed; set reasoning.effort "
+            "(none, minimal, low, medium, high, xhigh, or max)",
+            code="invalid_request",
+        )
+
+
 def copy_inline_pi_metadata(
     session_metadata: dict[str, Any] | None,
     agent_metadata: dict[str, Any] | None,

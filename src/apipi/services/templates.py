@@ -571,10 +571,16 @@ class TemplateService:
             reject_disallowed_chat_tools,
         )
         from apipi.worker.pi.idle import normalize_idle_ttl, validate_idle_metadata
-        from apipi.worker.pi.settings_json import validate_pi_metadata
+        from apipi.worker.pi.sandbox import validate_sandbox_metadata
+        from apipi.worker.pi.settings_json import (
+            reject_client_thinking_key,
+            validate_pi_metadata,
+        )
 
         validate_pi_metadata(body.get("metadata"))
         validate_idle_metadata(body.get("metadata"))
+        validate_sandbox_metadata(self.settings, body.get("metadata"))
+        reject_client_thinking_key(body.get("metadata"))
         if isinstance(body.get("idle_ttl"), str):
             normalize_idle_ttl(body["idle_ttl"])
         if is_chat_profile(body.get("metadata")):

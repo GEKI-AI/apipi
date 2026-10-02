@@ -184,17 +184,17 @@ def test_pi_mem_mib_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
         load_settings()
 
 
-def test_workspace_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sandbox_ttl_openai_hosted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_SANDBOX_TTL_OPENAI_HOSTED", "2h")
-    assert Settings().workspace_ttl == timedelta(hours=2)
+    assert Settings().sandbox_ttl_openai_hosted == timedelta(hours=2)
 
 
 def test_sandbox_ttl_openai_hosted_alias(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_SANDBOX_TTL_OPENAI_HOSTED", "45m")
     settings = Settings()
-    assert settings.workspace_ttl == timedelta(minutes=45)
+    assert settings.sandbox_ttl_openai_hosted == timedelta(minutes=45)
     assert settings.sandbox_ttl_for("openai_hosted") == timedelta(minutes=45)
 
 
@@ -202,13 +202,13 @@ def test_sandbox_ttl_zero_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_SANDBOX_TTL_OPENAI_HOSTED", "0")
     settings = Settings()
-    assert settings.workspace_ttl is None
+    assert settings.sandbox_ttl_openai_hosted is None
     assert settings.sandbox_ttl_for("openai_hosted") is None
     assert settings.pi_idle_ttl_for("openai_hosted") is None
     assert settings.pi_idle_ttl_for("none") == timedelta(minutes=15)
 
 
-def test_workspace_ttl_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_sandbox_ttl_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "none")
@@ -407,7 +407,7 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.microvm_egress_allowlist is False
     assert settings.microvm_egress_hosts == ""
     assert settings.microvm_egress_mbit == 50
-    assert settings.workspace_ttl == timedelta(hours=1)
+    assert settings.sandbox_ttl_openai_hosted == timedelta(hours=1)
     assert settings.usage_store == "turns"
     assert settings.env_none_placement == "chat"
     assert settings.usage_retention == timedelta(days=15)
@@ -675,7 +675,7 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.microvm_egress_allowlist is False
     assert settings.microvm_egress_hosts == "mcp.example.com"
     assert settings.microvm_egress_mbit == 25
-    assert settings.workspace_ttl == timedelta(minutes=45)
+    assert settings.sandbox_ttl_openai_hosted == timedelta(minutes=45)
     assert not hasattr(settings, "sandbox_auto_playwright")
 
 

@@ -56,8 +56,8 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
             "model": "test",
             "instructions": "look it up",
             "idle_ttl": "30m",
+            "reasoning": {"effort": "medium"},
             "metadata": {
-                "apipi.thinking": "medium",
                 "apipi.system_prompt": "be brief",
                 "host.keep": "yes",
                 "apipi.title": "drop-me",

@@ -354,14 +354,6 @@ async def create_item(
     return item
 
 
-async def get_item(
-    db: AsyncSession, tenant_id: uuid.UUID, item_id: uuid.UUID
-) -> Item | None:
-    return await db.scalar(
-        select(Item).where(Item.tenant_id == tenant_id, Item.id == item_id)
-    )
-
-
 async def list_turns(
     db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
 ) -> list[Turn] | None:

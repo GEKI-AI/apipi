@@ -61,7 +61,7 @@ async def test_reasoning_update_keeps_other_metadata(client: AsyncClient) -> Non
         f"/v1/agents/{agent_id}",
         headers=_auth(token),
         json={
-            "metadata": {"team": "x", "apipi.thinking": "high"},
+            "metadata": {"team": "x"},
             "reasoning": {"effort": "high"},
         },
     )
@@ -79,7 +79,7 @@ async def test_session_reasoning_update_replaces_effort(client: AsyncClient) -> 
         json={
             "name": "b",
             "model": "test",
-            "metadata": {"apipi.thinking": "medium"},
+            "reasoning": {"effort": "medium"},
         },
     )
     created = await client.post(
@@ -181,12 +181,12 @@ async def test_reasoning_effort_is_stored_as_thinking(client: AsyncClient) -> No
     assert summary.json()["error"]["type"] == "not_implemented"
 
 
-async def test_session_thinking_overrides_agent(client: AsyncClient) -> None:
-    token = "pi-thinking-ok"
+async def test_thinking_metadata_key_is_rejected(client: AsyncClient) -> None:
+    token = "pi-thinking-removed"
     agent = await client.post(
         "/v1/agents",
         headers=_auth(token),
-        json={"name": "bot", "model": "test", "metadata": {"apipi.thinking": "low"}},
+        json={"name": "bot", "model": "test", "reasoning": {"effort": "low"}},
     )
     assert agent.status_code == 200
     created = await client.post(
@@ -198,8 +198,8 @@ async def test_session_thinking_overrides_agent(client: AsyncClient) -> None:
             "metadata": {"apipi.thinking": "high"},
         },
     )
-    assert created.status_code == 200
-    assert created.json()["metadata"]["apipi.thinking"] == "high"
+    assert created.status_code == 400
+    assert "reasoning.effort" in created.json()["error"]["message"]
 
 
 async def test_metadata_update_replaces_title(client: AsyncClient) -> None:

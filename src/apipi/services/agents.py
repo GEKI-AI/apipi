@@ -28,10 +28,15 @@ from apipi.store.repo import (
 )
 from apipi.worker.pi.idle import normalize_idle_ttl, validate_idle_metadata
 from apipi.worker.pi.model_host import require_saved_model
-from apipi.worker.pi.sandbox import validate_sandbox_metadata
+from apipi.worker.pi.sandbox import (
+    reject_removed_size_key,
+    strip_removed_size_key,
+    validate_sandbox_metadata,
+)
 from apipi.worker.pi.settings_json import (
     apply_reasoning_effort,
     reasoning_body,
+    reject_client_thinking_key,
     reject_reasoning_conflict,
     require_thinking_supported,
     thinking_from_metadata,
@@ -299,6 +304,10 @@ class AgentService:
         check_model: bool = True,
     ) -> dict[str, Any]:
         payload = write_payload(body)
+        incoming_meta = payload.get("metadata")
+        if isinstance(incoming_meta, dict):
+            reject_removed_size_key(incoming_meta)
+            reject_client_thinking_key(incoming_meta)
         fold_reasoning(payload, body, None)
         if "idle_ttl" in payload:
             payload["idle_ttl"] = normalize_idle_ttl(payload.get("idle_ttl"))
@@ -354,6 +363,10 @@ class AgentService:
         api_key: str | None = None,
     ) -> dict[str, Any]:
         payload = write_payload(body)
+        incoming_meta = payload.get("metadata")
+        if isinstance(incoming_meta, dict):
+            reject_removed_size_key(incoming_meta)
+            reject_client_thinking_key(incoming_meta)
         if "model" in payload:
             await require_saved_model(self.settings, payload.get("model"), api_key)
         async with self.store.session() as db:
@@ -384,6 +397,7 @@ class AgentService:
             )
             metadata = payload.get("metadata", existing.metadata_json)
             stored = metadata if isinstance(metadata, dict) else None
+            stored = strip_removed_size_key(stored)
             validate_pi_metadata(stored)
             model = payload.get("model", existing.model)
             require_thinking_supported(
@@ -429,6 +443,7 @@ class AgentService:
             def_source if isinstance(def_source, dict) else None,
         )
         if meta is not None:
+            meta = strip_removed_size_key(meta)
             payload["metadata"] = meta
         if defaults is not None:
             payload["session_defaults"] = defaults

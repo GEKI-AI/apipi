@@ -440,7 +440,7 @@ async def reap_workspaces(
 
 
 async def reap_workspace_loop(settings: Settings, store: Store, pool: PiPool) -> None:
-    ttl = settings.workspace_ttl
+    ttl = settings.sandbox_ttl_openai_hosted
     seconds = ttl.total_seconds() if ttl is not None else 15.0
     interval = min(1.0, max(0.02, seconds / 5))
     while True:

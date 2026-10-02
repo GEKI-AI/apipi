@@ -11,7 +11,6 @@ from apipi.worker.pi.images import ImageIndex, ImageManifest, sha256_bytes
 log = logging.getLogger("apipi.worker.pi")
 
 OFFICIAL_IMAGE_BASE = "https://github.com/GEKI-AI/apipi/releases/download"
-PART_LIMIT = 1536 * 1024 * 1024
 ZSTD_WINDOW_LOG = 27
 _VERSION_DIR = re.compile(r"^v[0-9]")
 SIGSTORE_ISSUER = "https://token.actions.githubusercontent.com"
@@ -60,30 +59,6 @@ def parse_checksums(text: str) -> dict[str, str]:
             raise ConfigError("SHA256SUMS has a bad line")
         found[name] = digest
     return found
-
-
-def split_bytes(data: bytes, limit: int = PART_LIMIT) -> list[bytes]:
-    if limit < 1:
-        raise ConfigError("split limit must be at least 1")
-    if len(data) <= limit:
-        return [data]
-    return [data[index : index + limit] for index in range(0, len(data), limit)]
-
-
-def verify_checksums(files: dict[str, bytes], sums: str) -> None:
-    expected = parse_checksums(sums)
-    for name, digest in expected.items():
-        blob = files.get(name)
-        if blob is None:
-            raise ConfigError(f"SHA256SUMS lists missing file {name}")
-        actual = sha256_bytes(blob)
-        if actual != digest:
-            raise ConfigError(f"sha256 mismatch for {name}")
-    for name in files:
-        if name in {"SHA256SUMS", "SHA256SUMS.sigstore.json"}:
-            continue
-        if name not in expected:
-            raise ConfigError(f"SHA256SUMS is missing {name}")
 
 
 OFFICIAL_IMAGE_IDS = ("default", "browser")

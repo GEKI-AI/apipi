@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 
 from apipi.config import Settings
-from apipi.store.blobs import LocalBlobs, MemoryBlobs, artifact_blob_uri
+from apipi.store.blobs import LocalBlobs, MemoryBlobs
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow
 from apipi.store.repo import create_session, create_tenant
@@ -91,19 +91,3 @@ async def test_persist_sets_s3_blob_id(store: Store, tmp_path: Path) -> None:
         row = await create_session(db, tenant.id, key_id="user")
         await persist_pi_session(db, settings, row, None, dest, blobs=MemoryBlobs())
         assert row.pi_session_id is not None
-
-
-def test_artifact_blob_uri_s3_layout(tmp_path: Path) -> None:
-    settings = _settings(
-        tmp_path,
-        artifact_store="s3",
-        s3_bucket="bucket",
-        s3_prefix="apipi/artifacts",
-    )
-    tenant_id = uuid.uuid4()
-    session_id = uuid.uuid4()
-    blob_id = uuid.uuid4()
-    uri = artifact_blob_uri(settings, tenant_id, "user", session_id, blob_id)
-    assert uri == (
-        f"s3://bucket/apipi/artifacts/{tenant_id}/user/{session_id}/{blob_id}"
-    )

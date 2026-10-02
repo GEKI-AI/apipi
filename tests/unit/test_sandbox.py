@@ -150,8 +150,9 @@ def _none_settings(sandbox_images: list[str] | None = None) -> Settings:
     )
 
 
-def test_validate_sandbox_metadata_ignores_bad_size() -> None:
-    validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_size": "xl"})
+def test_validate_sandbox_metadata_rejects_bad_size_key() -> None:
+    with pytest.raises(ApiError, match=r"apipi\.sandbox_size was removed"):
+        validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_size": "xl"})
 
 
 def test_validate_sandbox_metadata_rejects_unknown_image() -> None:
@@ -168,8 +169,9 @@ def test_validate_sandbox_metadata_accepts_browser() -> None:
     )
 
 
-def test_validate_sandbox_metadata_ignores_size_key() -> None:
-    validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_size": "L"})
+def test_validate_sandbox_metadata_rejects_size_key() -> None:
+    with pytest.raises(ApiError, match=r"apipi\.sandbox_size was removed"):
+        validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_size": "L"})
 
 
 def test_validate_sandbox_metadata_image_only_uses_default_size() -> None:
