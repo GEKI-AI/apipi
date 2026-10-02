@@ -9,6 +9,7 @@ from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import FakeHarness
+from apipi.services.worker_tokens import create_token
 from apipi.store.engine import Store
 
 
@@ -25,7 +26,6 @@ def _worker_settings(settings: Settings) -> Settings:
         database_url=settings.database_url,
         run_mode="none",
         sessions_dir=settings.sessions_dir,
-        worker_token="worker-secret",
     )
 
 
@@ -54,6 +54,7 @@ async def _agent(client: AsyncClient, token: str) -> str:
 async def test_placement_matrix(
     settings: Settings,
     store: Store,
+    worker_secret: str,
     kind: str,
     pools: str,
     want: str | None,
@@ -90,11 +91,12 @@ async def test_placement_matrix(
         session_id = uuid.UUID(created.json()["id"])
         workers: list[FakeWorker] = []
         if pools in {"chat", "both"}:
-            chat = FakeWorker(app, "worker-secret")
+            chat = FakeWorker(app, worker_secret)
             await chat.connect(capacity=4, run_mode="chat")
             workers.append(chat)
         if pools in {"microvm", "both"}:
-            microvm = FakeWorker(app, "worker-secret")
+            microvm_secret = (await create_token(store, name="microvm")).secret
+            microvm = FakeWorker(app, microvm_secret)
             await microvm.connect(capacity=4, run_mode="microvm")
             workers.append(microvm)
         command = await app.state.workers.acquire(

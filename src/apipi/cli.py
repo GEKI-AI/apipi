@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,8 @@ from apipi.config import (
     Settings,
     is_sqlite_url,
     load_settings,
+    load_worker_token,
+    reject_legacy_worker_token,
     reject_prompt_body_logging,
     require_run_mode,
     usage_retention_log,
@@ -38,6 +41,7 @@ from apipi.gateway import create_app
 from apipi.gateway.logutil import configure_logging, uvicorn_log_config
 from apipi.gateway.ready import check_ready
 from apipi.services.vault_crypto import vault_master_key_unset
+from apipi.store.engine import Store
 from apipi.store.migrate import migrate
 from apipi.worker.pi.image_check import (
     image_check_needs_sudo,
@@ -114,8 +118,8 @@ def prepare_worker(
     resolved = (
         settings if settings is not None else load_settings(config_path=config_path)
     )
-    if resolved.worker_token is None or resolved.worker_token == "":
-        raise ConfigError("APIPI_WORKER_TOKEN is required")
+    reject_legacy_worker_token()
+    load_worker_token(resolved.worker_token_file)
     if vault_master_key_unset(resolved.vault_master_key):
         log.warning(VAULT_MASTER_KEY_UNSET)
     require_run_mode(resolved.run_mode, resolved)
@@ -144,6 +148,75 @@ def _warn_model_retry(settings: Settings) -> None:
 
     for note in model_retry_warnings(settings):
         log.warning(note)
+
+
+def _workers_token_command(args: argparse.Namespace) -> int:
+    from apipi.services.worker_tokens import create_token, list_tokens
+    from apipi.store.engine import create_engine
+
+    settings = load_settings(config_path=args.config)
+    store = Store(create_engine(settings.database_url, pool_size=settings.db_pool_size))
+    try:
+        if args.token_command == "create":
+            worker_id = _parse_uuid(args.worker_id, "--worker-id")
+            created = asyncio.run(
+                create_token(store, name=args.name or "", worker_id=worker_id)
+            )
+            print(created.secret)
+            print(
+                f"created worker token {created.row.id} "
+                f"({created.row.name or 'unnamed'})",
+                file=sys.stderr,
+            )
+            return 0
+        if args.token_command == "list":
+            rows = asyncio.run(list_tokens(store))
+            print("id\tname\tworker_id\tcreated\tlast_used\trevoked")
+            for row in rows:
+                print(
+                    f"{row.id}\t{row.name}\t{row.worker_id or ''}"
+                    f"\t{row.created_at.isoformat()}"
+                    f"\t{row.last_used_at.isoformat() if row.last_used_at else ''}"
+                    f"\t{row.revoked_at.isoformat() if row.revoked_at else ''}"
+                )
+            return 0
+        if args.token_command == "revoke":
+            target = asyncio.run(_revoke_worker_token(store, args.token))
+            if target is None:
+                print(f"unknown worker token: {args.token}", file=sys.stderr)
+                return 1
+            print(f"revoked worker token {target}", file=sys.stderr)
+            return 0
+    finally:
+        asyncio.run(store.dispose())
+    return 1
+
+
+def _parse_uuid(raw: str | None, flag: str) -> uuid.UUID | None:
+    if raw is None:
+        return None
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        raise ConfigError(f"{flag} must be a UUID") from None
+
+
+async def _revoke_worker_token(store: Store, raw: str) -> uuid.UUID | None:
+    from apipi.services.worker_tokens import list_tokens as _list
+    from apipi.services.worker_tokens import revoke_token as _revoke
+
+    try:
+        token_id = uuid.UUID(raw)
+    except ValueError:
+        token_id = None
+    if token_id is not None:
+        row = await _revoke(store, token_id)
+        return row.id if row is not None else None
+    rows = [row for row in await _list(store) if row.name == raw]
+    if len(rows) != 1:
+        return None
+    revoked = await _revoke(store, rows[0].id)
+    return revoked.id if revoked is not None else None
 
 
 def microvm_shell(
@@ -441,6 +514,23 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         help="Seconds to wait after SIGTERM for live Pi to empty (default: idle TTL)",
     )
+    workers_parser = sub.add_parser("workers", help="Manage sandbox workers")
+    workers_parser.add_argument("--config", default=None, help="TOML config file")
+    workers_sub = workers_parser.add_subparsers(dest="workers_command", required=True)
+    token_parser = workers_sub.add_parser("token", help="Per-worker tokens")
+    token_sub = token_parser.add_subparsers(dest="token_command", required=True)
+    token_create = token_sub.add_parser(
+        "create", help="Create a per-worker token (prints the secret once)"
+    )
+    token_create.add_argument("--name", default="", help="Token label")
+    token_create.add_argument(
+        "--worker-id",
+        default=None,
+        help="Bind the token to this worker id now (default: bind on first register)",
+    )
+    token_sub.add_parser("list", help="List per-worker tokens")
+    token_revoke = token_sub.add_parser("revoke", help="Revoke a per-worker token")
+    token_revoke.add_argument("token", help="Token id or exact name")
     microvm_parser = sub.add_parser("microvm", help="Operator microVM tools")
     microvm_sub = microvm_parser.add_subparsers(dest="microvm_command", required=True)
     shell_parser = microvm_sub.add_parser(
@@ -572,6 +662,8 @@ def main(argv: list[str] | None = None) -> int:
                     drain_timeout=args.drain_timeout,
                 )
             )
+        if args.command == "workers" and args.workers_command == "token":
+            return _workers_token_command(args)
         if args.command == "microvm" and args.microvm_command == "shell":
             return microvm_shell(
                 config_path=args.config,

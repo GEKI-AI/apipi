@@ -1,11 +1,18 @@
 import asyncio
+import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, WebSocket
+from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
 from apipi.services.runtime import EventHub
+from apipi.services.worker_tokens import (
+    authenticate_token,
+    is_revoked_secret,
+    token_revoked,
+)
 from apipi.store.engine import Store
 from apipi.store.repo import clear_worker_api_instance, get_session_by_lease
 from apipi.worker.hub import (
@@ -14,6 +21,14 @@ from apipi.worker.hub import (
     heartbeat_worker,
     register_worker,
 )
+from apipi.worker.protocol import (
+    UNSUPPORTED_PROTOCOL_REASON,
+    WORKER_CLOSE_CODE,
+    UnsupportedProtocol,
+    parse_register,
+)
+
+log = logging.getLogger("apipi.worker")
 
 router = APIRouter()
 
@@ -29,9 +44,9 @@ def _bearer(websocket: WebSocket) -> str | None:
     return token or None
 
 
-async def _reject(websocket: WebSocket, error: str) -> None:
+async def _reject(websocket: WebSocket, error: str, *, reason: str) -> None:
     await websocket.send_json({"ok": False, "error": error})
-    await websocket.close(code=1008)
+    await websocket.close(code=WORKER_CLOSE_CODE, reason=reason)
 
 
 @router.websocket("/internal/worker")
@@ -40,22 +55,53 @@ async def worker_socket(websocket: WebSocket) -> None:
     hub: WorkerHub = websocket.app.state.workers
     store: Store = websocket.app.state.store
     event_hub: EventHub = websocket.app.state.event_hub
-    if not hub.authorized(_bearer(websocket)):
-        await _reject(websocket, "unauthorized")
+    raw_token = _bearer(websocket)
+    token = (
+        await authenticate_token(store, raw_token) if raw_token is not None else None
+    )
+    if token is None:
+        if raw_token is not None and await is_revoked_secret(store, raw_token):
+            hub.observe_protocol("revoked")
+            log.warning("worker token revoked", extra={"event": "worker.auth.revoked"})
+            await _reject(websocket, "revoked", reason="revoked")
+        else:
+            hub.observe_protocol("unauthorized")
+            await _reject(websocket, "unauthorized", reason="unauthorized")
         return
     try:
         raw: Any = await asyncio.wait_for(websocket.receive_json(), timeout=15)
     except TimeoutError:
-        await websocket.close(code=1008)
+        await websocket.close(code=WORKER_CLOSE_CODE)
         return
     except WebSocketDisconnect:
         return
     if not isinstance(raw, dict) or raw.get("type") != "register":
-        await _reject(websocket, "register required")
+        hub.observe_protocol("invalid_register")
+        await _reject(websocket, "register required", reason="register_required")
         return
-    conn = await register_worker(hub, store, websocket, raw)
+    try:
+        register = parse_register(raw)
+    except UnsupportedProtocol:
+        hub.observe_protocol("unsupported_protocol")
+        log.warning(
+            "worker protocol rejected",
+            extra={
+                "event": "worker.protocol.rejected",
+                "reason": "unsupported_protocol",
+            },
+        )
+        await _reject(
+            websocket, "unsupported_protocol", reason=UNSUPPORTED_PROTOCOL_REASON
+        )
+        return
+    except ValidationError:
+        hub.observe_protocol("invalid_register")
+        await _reject(websocket, "invalid register", reason="invalid_register")
+        return
+    conn = await register_worker(hub, store, websocket, register, token)
     if conn is None:
-        await _reject(websocket, "invalid register")
+        hub.observe_protocol("invalid_register")
+        await _reject(websocket, "invalid register", reason="invalid_register")
         return
     try:
         while True:
@@ -66,6 +112,19 @@ async def worker_socket(websocket: WebSocket) -> None:
             if msg_type not in WORKER_IN:
                 continue
             if msg_type == "heartbeat":
+                if conn.token_id is not None and await token_revoked(
+                    store, conn.token_id
+                ):
+                    hub.observe_protocol("revoked")
+                    log.warning(
+                        "worker token revoked",
+                        extra={
+                            "event": "worker.auth.revoked",
+                            "worker_id": str(conn.worker_id),
+                        },
+                    )
+                    await websocket.close(code=WORKER_CLOSE_CODE, reason="revoked")
+                    return
                 await heartbeat_worker(hub, store, conn, message)
                 continue
             if msg_type == "lease.ack":

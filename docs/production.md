@@ -125,7 +125,7 @@ instead.
 | Shape | When | What stays on the node | What is shared |
 | --- | --- | --- | --- |
 | Combined, one host | You fit in `max_sessions` on one box | Pi, SSE, WebSockets, `openai_hosted` directories, local artifacts | SQLite or Postgres |
-| API-only + workers | Production. API in Docker or several replicas | Guests and workspaces on **workers**. API is stateless for Pi | Postgres, worker token. Artifact bytes too when `APIPI_ARTIFACT_STORE=s3` |
+| API-only + workers | Production. API in Docker or several replicas | Guests and workspaces on **workers**. API is stateless for Pi | Postgres, per-worker tokens. Artifact bytes too when `APIPI_ARTIFACT_STORE=s3` |
 | Combined, several hosts | You have not split workers yet | Same as combined one host, plus each process has its own `APIPI_SESSIONS_DIR` | Postgres, auth callback. Sticky for live Pi. See [multiple nodes](scale.md) |
 | External artifact store | Clients read artifacts from any API node | Live workspace still on the worker (or combined node) | Postgres, S3-compatible bucket |
 
@@ -235,6 +235,16 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_MICROVM_EGRESS_ALLOWLIST` / `HOSTS` / `MBIT` | Optional destination allowlist (off by default) and 50 Mbit TAP rate. Private IPv4 ranges are always rejected. |
 | `APIPI_INSTANCE_ID` | Sets `X-ApiPi-Instance` so you can confirm stickiness. |
 | `APIPI_VAULT_MASTER_KEY` | Encrypts MCP vault tokens at rest. Put a 32-byte key in the process environment or a k8s secret. Unset uses a local default and logs a warning; do not leave that in production. Same key on every API process that writes or injects vault secrets. |
+
+## Worker token rotation
+
+Each worker has its own token, and only the hash is stored. The
+secret is shown once by `apipi workers token create` and never again.
+To rotate without downtime, create a second token for the worker,
+roll the new secret out to `APIPI_WORKER_TOKEN_FILE`, then revoke the
+old token with `apipi workers token revoke`. Several active tokens per
+worker are normal. A revoked token closes live sockets on the next
+heartbeat and is rejected on reconnect. See [workers](workers.md).
 
 ## Tenant-aware deployments
 

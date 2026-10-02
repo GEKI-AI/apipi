@@ -3,6 +3,7 @@ import json
 import time
 import uuid
 from datetime import timedelta
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -76,13 +77,14 @@ class _Execution:
 
 
 async def test_run_worker_reaps_idle_sessions(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     metrics = Metrics()
+    (tmp_path / "worker.token").write_text("secret\n")
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
-        worker_token="secret",
+        worker_token_file=str(tmp_path / "worker.token"),
         idle_ttl=timedelta(milliseconds=40),
     )
     pool = PiPool(settings, metrics=metrics)
@@ -131,14 +133,15 @@ async def test_run_worker_reaps_idle_sessions(
 
 
 async def test_run_worker_sets_lifecycle_worker_id(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from apipi.services.lifecycle_export import LifecycleEmitter
 
+    (tmp_path / "worker.token").write_text("secret\n")
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
-        worker_token="secret",
+        worker_token_file=str(tmp_path / "worker.token"),
         lifecycle_export_url="http://export.test/life",
         lifecycle_heartbeat="off",
     )

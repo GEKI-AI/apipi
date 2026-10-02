@@ -24,6 +24,7 @@ from apipi.store.models import (
     Vault,
     VaultCredential,
     WorkerRow,
+    WorkerToken,
     utc_now,
 )
 
@@ -791,6 +792,59 @@ async def clear_worker_api_instance(
     if row.api_instance_id == instance_id:
         row.api_instance_id = None
         await db.flush()
+
+
+async def create_worker_token(
+    db: AsyncSession,
+    *,
+    name: str,
+    token_hash: str,
+    worker_id: uuid.UUID | None = None,
+) -> WorkerToken:
+    row = WorkerToken(name=name, token_hash=token_hash, worker_id=worker_id)
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def list_worker_tokens(db: AsyncSession) -> list[WorkerToken]:
+    result = await db.scalars(select(WorkerToken).order_by(WorkerToken.created_at))
+    return list(result)
+
+
+async def get_worker_token(db: AsyncSession, token_id: uuid.UUID) -> WorkerToken | None:
+    return await db.scalar(select(WorkerToken).where(WorkerToken.id == token_id))
+
+
+async def find_worker_token(db: AsyncSession, token_hash: str) -> WorkerToken | None:
+    return await db.scalar(
+        select(WorkerToken).where(WorkerToken.token_hash == token_hash)
+    )
+
+
+async def bind_worker_token(
+    db: AsyncSession, row: WorkerToken, worker_id: uuid.UUID
+) -> WorkerToken:
+    row.worker_id = worker_id
+    await db.flush()
+    return row
+
+
+async def touch_worker_token(db: AsyncSession, row: WorkerToken) -> WorkerToken:
+    row.last_used_at = utc_now()
+    await db.flush()
+    return row
+
+
+async def revoke_worker_token(
+    db: AsyncSession, token_id: uuid.UUID
+) -> WorkerToken | None:
+    row = await get_worker_token(db, token_id)
+    if row is None or row.revoked_at is not None:
+        return row
+    row.revoked_at = utc_now()
+    await db.flush()
+    return row
 
 
 async def set_session_lease(

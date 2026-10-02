@@ -45,7 +45,7 @@ credential broker on the TAP host IP (or loopback in `none`). The
 worker process environment is not copied into the guest. Guest
 `.apipi/env` holds the broker URL, a dummy `OPENAI_API_KEY`, that
 session's MCP settings, and `environment.env`. It does not hold
-`APIPI_WORKER_TOKEN`, database settings, `OPENAI_API_KEY_OVERWRITE`,
+worker token files, database settings, `OPENAI_API_KEY_OVERWRITE`,
 or other worker secrets.
 
 ```

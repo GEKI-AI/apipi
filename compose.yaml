@@ -23,7 +23,6 @@ services:
       DATABASE_URL: postgresql+asyncpg://apipi:apipi@postgres:5432/apipi
       APIPI_API_ONLY: "true"
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      APIPI_WORKER_TOKEN: ${APIPI_WORKER_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy

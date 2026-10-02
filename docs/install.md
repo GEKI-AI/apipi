@@ -251,13 +251,12 @@ or TAP. Workers stay on Linux hosts:
 
 ```
 export OPENAI_BASE_URL=http://your-model-host/v1
-export APIPI_WORKER_TOKEN=secret
 docker compose up --build
 ```
 
 That publishes Postgres on `5432` and the API on `8000` at
-`0.0.0.0`. Set `OPENAI_BASE_URL` or serve exits. Put
-`APIPI_WORKER_TOKEN` in the environment so workers can connect.
+`0.0.0.0`. Set `OPENAI_BASE_URL` or serve exits. Create one token per
+worker with `apipi workers token create` before they connect.
 Workers attach to `/internal/worker` on the
 API; they are not the worker.
 
@@ -265,7 +264,8 @@ On a KVM host:
 
 ```
 apipi install --role worker
-APIPI_API_URL=http://api.example:8000 APIPI_WORKER_TOKEN=secret \
+apipi workers token create --name worker-1   # prints the secret once
+APIPI_API_URL=http://api.example:8000 APIPI_WORKER_TOKEN_FILE=/run/apipi/worker.token \
   APIPI_RUN_MODE=microvm apipi worker
 ```
 
@@ -307,9 +307,9 @@ Rootless API, KVM on another host. Example Compose plus a worker:
 ```
 # API host (or docker compose up --build)
 export OPENAI_BASE_URL=http://your-model-host/v1
-export APIPI_WORKER_TOKEN=secret
 apipi check --role api
 apipi migrate
+apipi workers token create --name worker-1   # prints the secret once
 apipi serve --api-only
 ```
 
@@ -317,7 +317,7 @@ apipi serve --api-only
 # KVM host
 apipi install --role worker
 export OPENAI_BASE_URL=http://your-model-host/v1
-export APIPI_WORKER_TOKEN=secret
+export APIPI_WORKER_TOKEN_FILE=/run/apipi/worker.token
 export APIPI_API_URL=http://api.example:8000
 export APIPI_RUN_MODE=microvm
 apipi check --role worker
@@ -325,16 +325,19 @@ apipi worker
 ```
 
 The API never opens `/dev/kvm`. The worker probes Firecracker before
-it connects. Put `APIPI_WORKER_TOKEN` in the process environment, not
-in the browser. Example `apipi.toml` keys: `worker_token` is allowed
+it connects. Keep each worker secret in its token file, not
+in the browser. Example `apipi.toml` keys: `worker_token_file` is allowed
 but secrets belong in `.env`.
 
 ```
 # .env on the API and on each worker
-APIPI_WORKER_TOKEN=secret
 OPENAI_BASE_URL=http://your-model-host/v1
 DATABASE_URL=postgresql+asyncpg://apipi:apipi@db:5432/apipi
 ```
+
+```
+# .env on each worker (the secret lives in this file, not here)
+APIPI_WORKER_TOKEN_FILE=/run/apipi/worker.token
 
 Set `APIPI_VAULT_MASTER_KEY` on the API to a 32-byte key (base64 or
 hex) so MCP vault tokens are not encrypted with the local default.
@@ -347,8 +350,9 @@ APIPI_RUN_MODE=microvm
 
 ### Several workers
 
-One API tier, many KVM hosts, shared Postgres. Start more
-`apipi worker` processes with the same token and API URL. Each worker
+One API tier, many KVM hosts, shared Postgres. Create one token per
+worker (`apipi workers token create --name ...`) and start more
+`apipi worker` processes with the same API URL. Each worker
 advertises `capacity` (from `APIPI_MAX_SESSIONS`) and `memory_mb` (from
 `APIPI_WORKER_MEMORY_MB`, default `max_sessions × mem_mib`). Placement
 picks the worker with the most free RAM among those that still have a
@@ -411,7 +415,7 @@ APIPI_RUN_MODE=none apipi serve
 process. `apipi serve --api-only` is the control plane only. It does
 not probe KVM or start Firecracker, so it can run in rootless Docker.
 `apipi worker` connects outbound to that API (`APIPI_API_URL`,
-`--url`, or `http://127.0.0.1:8000`) with `APIPI_WORKER_TOKEN`. See
+`--url`, or `http://127.0.0.1:8000`) with its token file (`APIPI_WORKER_TOKEN_FILE`). See
 [sandbox workers](workers.md).
 
 That binds `0.0.0.0:8000` by default. `--host`, `--port`, and

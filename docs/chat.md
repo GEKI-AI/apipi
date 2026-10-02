@@ -15,8 +15,10 @@ computer sessions on the same `APIPI_RUN_MODE`.
 
 ```
 apipi serve --api-only
-APIPI_RUN_MODE=chat APIPI_WORKER_TOKEN=secret APIPI_API_URL=http://api.example:8000 apipi worker
-APIPI_RUN_MODE=microvm APIPI_WORKER_TOKEN=secret APIPI_API_URL=http://api.example:8000 apipi worker
+apipi workers token create --name chat-1   # prints the secret once
+apipi workers token create --name computer-1
+APIPI_RUN_MODE=chat APIPI_WORKER_TOKEN_FILE=/run/apipi/chat.token APIPI_API_URL=http://api.example:8000 apipi worker
+APIPI_RUN_MODE=microvm APIPI_WORKER_TOKEN_FILE=/run/apipi/computer.token APIPI_API_URL=http://api.example:8000 apipi worker
 ```
 
 | Process | `APIPI_RUN_MODE` | What it serves |
@@ -89,7 +91,7 @@ guest.
 | `APIPI_RUN_MODE` | `[sandbox].backend` | `none` | Worker process: `chat` for the chat pool, `microvm` for computers. `none` is local/CI. |
 | `APIPI_ENV_NONE_PLACEMENT` | `[placement].env_none` | `chat` | Agents `environment.type=none` → `chat`, `microvm`, or `reject`. Ignored by `/v1/apipi/chat`. |
 | `APIPI_API_ONLY` | `api_only` | off | API process with no in-process Pi. Turns lease a worker. |
-| `APIPI_WORKER_TOKEN` | `worker_token` | unset | Shared secret for both pools. |
+| `APIPI_WORKER_TOKEN_FILE` | `worker_token_file` | unset | One token file per pool. |
 
 The full tables are in [configuration](config.md).
 

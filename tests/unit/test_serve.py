@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -34,6 +35,16 @@ def _noop_probe(_settings: Settings) -> None:
     return None
 
 
+def _worker_settings(tmp_path: Path, **kwargs: Any) -> Settings:
+    token_file = tmp_path / "worker.token"
+    token_file.write_text("test-token\n")
+    return Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        worker_token_file=str(token_file),
+        **kwargs,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _skip_model_host(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("apipi.cli.probe_model_host", _noop_probe)
@@ -66,7 +77,7 @@ def test_prepare_serve_chat_skips_none_warning(
 
 
 def test_prepare_worker_chat_probes_none_backend(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     probed: list[str] = []
 
@@ -75,13 +86,7 @@ def test_prepare_worker_chat_probes_none_backend(
 
     monkeypatch.setattr("apipi.cli.probe_run_mode", fake_probe)
     caplog.set_level(logging.INFO, logger="apipi")
-    settings = prepare_worker(
-        Settings(
-            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-            run_mode="chat",
-            worker_token="secret",
-        )
-    )
+    settings = prepare_worker(_worker_settings(tmp_path, run_mode="chat"))
     assert settings.run_mode == "chat"
     assert probed == ["chat"]
     assert NONE_MODE_WARNING not in caplog.text
@@ -160,16 +165,20 @@ def test_microvm_run_mode_exits_without_kvm(
         require_run_mode("microvm")
 
 
-def test_worker_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_requires_token_file(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.delenv("APIPI_WORKER_TOKEN", raising=False)
+    monkeypatch.delenv("APIPI_WORKER_TOKEN_FILE", raising=False)
     assert main(["worker"]) == 1
 
 
-def test_worker_microvm_exits_without_kvm(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_microvm_exits_without_kvm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
-    monkeypatch.setenv("APIPI_WORKER_TOKEN", "secret")
+    monkeypatch.setenv("APIPI_WORKER_TOKEN_FILE", str(tmp_path / "worker.token"))
+    (tmp_path / "worker.token").write_text("test-token\n")
     monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: False)
 
     async def boom(_settings: Settings, *, url: str | None = None) -> None:
@@ -179,36 +188,31 @@ def test_worker_microvm_exits_without_kvm(monkeypatch: pytest.MonkeyPatch) -> No
     assert main(["worker"]) == 1
 
 
-def test_prepare_worker_probes_model_host(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prepare_worker_probes_model_host(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     seen: list[Settings] = []
     monkeypatch.setattr("apipi.cli.probe_model_host", lambda item: seen.append(item))
     monkeypatch.setattr("apipi.cli.probe_run_mode", lambda _item: None)
     prepare_worker(
-        Settings(
-            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-            run_mode="none",
-            worker_token="secret",
-            model_base_url="http://model.test/v1",
+        _worker_settings(
+            tmp_path, run_mode="none", model_base_url="http://model.test/v1"
         )
     )
     assert seen
     assert seen[0].model_base_url == "http://model.test/v1"
 
 
-def test_prepare_worker_probes_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prepare_worker_probes_sandbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     probed: list[str] = []
 
     def fake_probe(settings: Settings) -> None:
         probed.append(settings.run_mode)
 
     monkeypatch.setattr("apipi.cli.probe_run_mode", fake_probe)
-    settings = prepare_worker(
-        Settings(
-            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-            run_mode="none",
-            worker_token="secret",
-        )
-    )
+    settings = prepare_worker(_worker_settings(tmp_path, run_mode="none"))
     assert settings.run_mode == "none"
     assert probed == ["none"]
 

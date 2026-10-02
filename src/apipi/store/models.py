@@ -186,6 +186,29 @@ class WorkerRow(Base):
     api_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
+class WorkerToken(Base):
+    __tablename__ = "worker_tokens"
+    __table_args__ = (Index("ix_worker_tokens_worker_id", "worker_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    worker_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class EnvironmentRow(Base):
     __tablename__ = "environments"
     __table_args__ = (

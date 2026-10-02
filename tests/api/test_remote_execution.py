@@ -30,7 +30,6 @@ def _api_settings(settings: Settings) -> Settings:
         database_url=settings.database_url,
         run_mode="none",
         sessions_dir=settings.sessions_dir,
-        worker_token="worker-secret",
         api_only=True,
     )
 
@@ -61,7 +60,9 @@ async def test_api_only_without_worker_is_429(settings: Settings, store: Store) 
         assert created.json()["error"]["code"] == "capacity"
 
 
-async def test_remote_turn_via_worker(settings: Settings, store: Store) -> None:
+async def test_remote_turn_via_worker(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
     api_settings = _api_settings(settings)
     app = create_app(api_settings, store=store, harness=FakeHarness())
     local = local_execution(
@@ -71,7 +72,7 @@ async def test_remote_turn_via_worker(settings: Settings, store: Store) -> None:
         hub=app.state.event_hub,
     )
     token = "t"
-    worker = FakeWorker(app, "worker-secret")
+    worker = FakeWorker(app, worker_secret)
     ready = asyncio.Event()
 
     async def pump() -> None:
@@ -129,7 +130,7 @@ async def test_remote_turn_via_worker(settings: Settings, store: Store) -> None:
 
 
 async def test_get_during_remote_turn_stays_in_progress(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     api_settings = _api_settings(settings)
     app = create_app(api_settings, store=store, harness=FakeHarness())
@@ -148,7 +149,7 @@ async def test_get_during_remote_turn_stays_in_progress(
         harness=held,
         hub=app.state.event_hub,
     )
-    worker = FakeWorker(app, "worker-secret")
+    worker = FakeWorker(app, worker_secret)
     ready = asyncio.Event()
 
     async def pump() -> None:
@@ -228,13 +229,12 @@ async def test_get_during_remote_turn_stays_in_progress(
 
 
 async def test_remote_turn_records_metrics_and_spans_on_worker(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     api_settings = Settings(
         database_url=settings.database_url,
         run_mode="none",
         sessions_dir=settings.sessions_dir,
-        worker_token="worker-secret",
         api_only=True,
         metrics=True,
     )
@@ -252,7 +252,7 @@ async def test_remote_turn_records_metrics_and_spans_on_worker(
     )
     token = "t"
     tenant = str(uuid5(NAMESPACE_URL, hash_token(token)))
-    worker = FakeWorker(app, "worker-secret")
+    worker = FakeWorker(app, worker_secret)
     ready = asyncio.Event()
 
     async def pump() -> None:
@@ -316,7 +316,7 @@ async def test_remote_turn_records_metrics_and_spans_on_worker(
 
 
 async def test_remote_turn_shares_trace_and_assign_span(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     api_exporter = InMemorySpanExporter()
     api_tracing = Tracing(exporter=api_exporter)
@@ -334,7 +334,7 @@ async def test_remote_turn_shares_trace_and_assign_span(
         tracing=worker_tracing,
     )
     token = "t"
-    worker = FakeWorker(app, "worker-secret")
+    worker = FakeWorker(app, worker_secret)
     ready = asyncio.Event()
 
     async def pump() -> None:

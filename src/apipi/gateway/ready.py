@@ -157,12 +157,14 @@ def run_checks(
     else:
         checks.append(Check("skip", "images", "none local"))
     if role == "worker":
-        if settings.worker_token:
-            checks.append(Check("ok", "worker token", "set"))
-        else:
-            checks.append(
-                Check("fail", "worker token", "APIPI_WORKER_TOKEN is required")
-            )
+        from apipi.config import load_worker_token, reject_legacy_worker_token
+
+        try:
+            reject_legacy_worker_token()
+            load_worker_token(settings.worker_token_file)
+            checks.append(Check("ok", "worker token", "file"))
+        except ConfigError as exc:
+            checks.append(Check("fail", "worker token", str(exc)))
     if vault_master_key_unset(settings.vault_master_key):
         checks.append(Check("ok", "vault key", "unset (local default)"))
     else:

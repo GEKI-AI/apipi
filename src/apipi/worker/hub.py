@@ -3,7 +3,6 @@ import contextlib
 import json
 import logging
 import os
-import secrets
 import signal
 import time
 import uuid
@@ -15,7 +14,12 @@ from urllib.parse import urlparse, urlunparse
 import websockets
 from starlette.websockets import WebSocket, WebSocketState
 
-from apipi.config import ConfigError, Settings
+from apipi.config import (
+    ConfigError,
+    Settings,
+    load_worker_token,
+    reject_legacy_worker_token,
+)
 from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.otel import (
@@ -38,12 +42,14 @@ from apipi.services.runtime import (
     persist_event,
 )
 from apipi.store.engine import Store
-from apipi.store.models import utc_now
+from apipi.store.models import WorkerToken, utc_now
 from apipi.store.repo import (
+    bind_worker_token,
     clear_session_lease,
     extend_worker_leases,
     get_session,
     get_session_by_lease,
+    get_worker_token,
     list_expired_leases,
     list_worker_leases,
     set_session_lease,
@@ -52,10 +58,8 @@ from apipi.store.repo import (
 )
 from apipi.worker.pi.sandbox import mem_mib_for_size, sandbox_size_of
 from apipi.worker.placement import placement_for, worker_accepts
+from apipi.worker.protocol import COMMAND_OPS, HelloReply, RegisterMessage
 
-COMMAND_OPS = frozenset(
-    {"turn.start", "turn.cancel", "turn.continue", "session.stop", "sandbox.boot"}
-)
 WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})
 log = logging.getLogger("apipi.worker")
 
@@ -76,6 +80,7 @@ class WorkerConnection:
     capacity: int
     memory_mb: int
     run_mode: str
+    token_id: uuid.UUID | None = None
     arch: str = ""
     leases: set[uuid.UUID] = field(default_factory=set)
     lease_mem: dict[uuid.UUID, int] = field(default_factory=dict)
@@ -99,14 +104,12 @@ class WorkerHub:
         self._metric_modes: set[str] = set()
         self._lock = asyncio.Lock()
 
-    def authorized(self, token: str | None) -> bool:
-        expected = self.settings.worker_token
-        if expected is None or expected == "" or token is None:
-            return False
-        return secrets.compare_digest(token, expected)
-
     def live(self) -> int:
         return len(self._conns)
+
+    def observe_protocol(self, event: str) -> None:
+        if self.metrics is not None:
+            self.metrics.observe_worker_protocol(event)
 
     def get(self, worker_id: uuid.UUID) -> WorkerConnection | None:
         return self._conns.get(worker_id)
@@ -457,9 +460,19 @@ class WorkerHub:
         self._observe()
         return expired
 
-    async def replay(self, conn: WorkerConnection, store: Store) -> None:
+    async def replay(
+        self, conn: WorkerConnection, store: Store
+    ) -> dict[uuid.UUID, int]:
+        sessions = await self.restore_leases(conn, store)
+        await self.resend_pending(conn)
+        return sessions
+
+    async def restore_leases(
+        self, conn: WorkerConnection, store: Store
+    ) -> dict[uuid.UUID, int]:
         async with store.session() as db:
             rows = await list_worker_leases(db, conn.worker_id)
+        sessions: dict[uuid.UUID, int] = {}
         for row in rows:
             if row.lease_id is None:
                 continue
@@ -467,7 +480,12 @@ class WorkerHub:
             conn.lease_mem[row.lease_id] = mem_mib_for_size(
                 self.settings, sandbox_size_of(row.environment)
             )
-            pending = self._unacked.get(row.lease_id)
+            sessions[row.id] = 0
+        return sessions
+
+    async def resend_pending(self, conn: WorkerConnection) -> None:
+        for lease_id in conn.leases:
+            pending = self._unacked.get(lease_id)
             if pending is not None:
                 await _send(conn.websocket, pending)
 
@@ -595,30 +613,32 @@ def _payload_with_run_mode(
 
 
 async def register_worker(
-    hub: WorkerHub, store: Store, websocket: WebSocket, message: dict[str, Any]
+    hub: WorkerHub,
+    store: Store,
+    websocket: WebSocket,
+    register: RegisterMessage,
+    token: WorkerToken,
 ) -> WorkerConnection | None:
-    raw_id = message.get("id")
-    run_mode = _run_mode(message.get("run_mode"))
-    if run_mode is None:
-        return None
-    capacity = _positive_int(message.get("capacity", 1))
-    if capacity is None:
-        return None
-    raw_memory = message.get("memory_mb")
-    if raw_memory is None:
+    run_mode = register.run_mode
+    capacity = register.capacity
+    memory_mb = register.memory_mb
+    if memory_mb is None:
         memory_mb = capacity * hub.settings.microvm_mem_mib
-    else:
-        parsed = _positive_int(raw_memory)
-        if parsed is None:
+    worker_id = register.id if register.id is not None else uuid.uuid4()
+    async with store.session() as db:
+        current = await get_worker_token(db, token.id)
+        if current is None or current.revoked_at is not None:
             return None
-        memory_mb = parsed
-    if isinstance(raw_id, str) and raw_id:
-        try:
-            worker_id = uuid.UUID(raw_id)
-        except ValueError:
-            return None
-    else:
-        worker_id = uuid.uuid4()
+        if current.worker_id is None:
+            await bind_worker_token(db, current, worker_id)
+        elif current.worker_id != worker_id:
+            if hub.get(current.worker_id) is not None:
+                log.warning(
+                    "worker token bound to another worker",
+                    extra={"event": "worker.auth.bound"},
+                )
+                return None
+            await bind_worker_token(db, current, worker_id)
     async with store.session() as db:
         row = await upsert_worker(
             db,
@@ -627,8 +647,6 @@ async def register_worker(
             memory_mb=memory_mb,
             api_instance_id=hub.settings.instance_id,
         )
-    raw_arch = message.get("arch")
-    arch = raw_arch if isinstance(raw_arch, str) else ""
     conn = WorkerConnection(
         worker_id=row.id,
         generation=row.generation,
@@ -636,21 +654,46 @@ async def register_worker(
         capacity=row.capacity,
         memory_mb=row.memory_mb,
         run_mode=run_mode,
-        images=images_from_message(message, run_mode),
-        arch=arch,
+        token_id=token.id,
+        images=images_for_register(register, run_mode),
+        arch=register.arch,
     )
     await hub.attach(conn)
+    sessions = await hub.restore_leases(conn, store)
     await _send(
         websocket,
-        {
-            "type": "hello",
-            "ok": True,
-            "worker_id": str(conn.worker_id),
-            "generation": conn.generation,
-        },
+        HelloReply(
+            worker_id=conn.worker_id,
+            generation=conn.generation,
+            sessions=sessions,
+        ).model_dump(mode="json"),
     )
-    await hub.replay(conn, store)
+    await hub.resend_pending(conn)
     return conn
+
+
+def images_for_register(
+    register: RegisterMessage, run_mode: str
+) -> dict[str, WorkerImage]:
+    if register.images is None:
+        return _legacy_images(register.arch or None) if run_mode == "microvm" else {}
+    found: dict[str, WorkerImage] = {}
+    for item in register.images:
+        if not isinstance(item, dict):
+            continue
+        image_id = item.get("id")
+        if not isinstance(image_id, str) or not image_id:
+            continue
+        version = item.get("version")
+        digest = item.get("digest")
+        min_size = item.get("min_size")
+        found[image_id] = WorkerImage(
+            image_id,
+            version if isinstance(version, str) else "",
+            digest if isinstance(digest, str) else "",
+            min_size if isinstance(min_size, str) else "S",
+        )
+    return found
 
 
 async def heartbeat_worker(
@@ -708,9 +751,12 @@ async def _send(websocket: WebSocket, payload: dict[str, Any]) -> None:
     await websocket.send_json(payload)
 
 
-async def _close(websocket: WebSocket) -> None:
+async def _close(websocket: WebSocket, reason: str | None = None) -> None:
     if websocket.client_state == WebSocketState.CONNECTED:
-        await websocket.close()
+        if reason is not None:
+            await websocket.close(code=1008, reason=reason)
+        else:
+            await websocket.close()
 
 
 async def _reject_missing_image(
@@ -1107,10 +1153,10 @@ async def run_worker(
 ) -> int:
     from apipi.store.engine import Store, create_engine
     from apipi.worker.execution import local_execution, worker_observability
+    from apipi.worker.protocol import PROTOCOL_VERSION
 
-    token = settings.worker_token
-    if token is None or token == "":
-        raise ConfigError("APIPI_WORKER_TOKEN is required")
+    reject_legacy_worker_token()
+    token = load_worker_token(settings.worker_token_file)
     base = url or settings.api_url or "http://127.0.0.1:8000"
     ws_url = worker_ws_url(base)
     heartbeat = min(10.0, max(1.0, settings.worker_lease_ttl.total_seconds() / 2))
@@ -1164,9 +1210,14 @@ async def run_worker(
                 json.dumps(
                     {
                         "type": "register",
+                        "protocol": PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "running": [],
                         "capacity": settings.max_sessions,
                         "memory_mb": settings.node_memory_mb(),
                         "run_mode": settings.run_mode,
+                        "arch": worker_arch(),
+                        "images": _heartbeat_images(settings),
                     }
                 )
             )
@@ -1179,7 +1230,14 @@ async def run_worker(
                     hello.get("error") if isinstance(hello, dict) else "unauthorized"
                 )
                 raise ConfigError(f"worker register failed: {error}")
-            log.info("worker hello", extra={"worker_id": hello.get("worker_id")})
+            sessions = hello.get("sessions")
+            log.info(
+                "worker hello",
+                extra={
+                    "worker_id": hello.get("worker_id"),
+                    "sessions": sessions if isinstance(sessions, dict) else {},
+                },
+            )
             session_leases: dict[uuid.UUID, str] = {}
 
             async def release_lease(session_id: uuid.UUID) -> None:

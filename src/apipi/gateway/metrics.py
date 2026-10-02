@@ -128,6 +128,12 @@ class Metrics:
             registry=self.registry,
             buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
         )
+        self.worker_protocol = Counter(
+            "apipi_worker_protocol_total",
+            "Worker protocol handshake and auth outcomes",
+            ["event"],
+            registry=self.registry,
+        )
         self.worker_capacity = Gauge(
             "apipi_worker_capacity",
             "Advertised session slots on this worker",
@@ -314,6 +320,9 @@ class Metrics:
         for mode in modes:
             self.workers.labels(run_mode=mode).set(counts.get(mode, 0))
             self.worker_leases.labels(run_mode=mode).set(leases.get(mode, 0))
+
+    def observe_worker_protocol(self, event: str) -> None:
+        self.worker_protocol.labels(event=event).inc()
 
     def set_worker_util(
         self,
