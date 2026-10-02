@@ -359,10 +359,14 @@ relearns TTLs as new commands arrive.
 
 The inventory also carries on-disk workspaces the worker holds no
 lease for (entries without `lease_id`), so leftovers from a crash or
-a stop while the worker was down are reconciled too. While such a
-session is still leased the API answers with its reaper TTL; once it
-is free the API revokes it and the worker wipes the directory and
-reports `workspace.reaped`, which deletes the session blobs.
+a stop while the worker was down are reconciled too. A released lease
+only means the Pi stopped: while the session row is still alive the
+API answers with its reaper TTL (plus the idle baseline, so the
+reaper clock does not restart on every reply) and the worker reaper
+wipes the directory when the TTL runs out. Only once the row is gone
+does the API revoke, and the worker wipes the directory and reports
+`workspace.reaped` as a receipt. Only `session.stopped` deletes the
+session blobs.
 
 ## Leases
 
@@ -473,11 +477,11 @@ when the worker knows the session from a command context, the reaper
 uses the context's effective idle TTL measured from the last turn
 activity; when it does not (for example after a worker restart), the
 session waits for the API inventory reply, which carries the
-effective TTL per reported session. `none` use `APIPI_IDLE_TTL`.
+effective TTL and the idle baseline per reported session. `none` use `APIPI_IDLE_TTL`.
 Hosted computers use
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED`. A wiped workspace is reported as
-a durable `workspace.reaped` envelope, and the API deletes the
-session blobs when it ingests it. A host Pi kill increments
+a durable `workspace.reaped` envelope, which the API ingests as a
+receipt only (it never deletes the session blobs). A host Pi kill increments
 `apipi_pi_kill_total` with reason `idle` on the worker metrics
 endpoint. A process that exits by itself is `crash`. Worker drain
 uses `drain`, not `idle`.

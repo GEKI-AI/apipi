@@ -108,8 +108,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sandbox.seen` summary that the API validates against the
   connection's leases. The wipe after `session.stop` and the idle
   workspace wipe travel as `session.stopped` and `workspace.reaped`
-  receipts; the worker wipes only its local directory and the API
-  deletes the session blobs on ingest. The reaper uses the command
+  receipts; the worker wipes only its local directory, and only
+  `session.stopped` deletes the session blobs on ingest
+  (`workspace.reaped` is a receipt only). The reaper uses the command
   context TTL, and sessions it does not know wait for the inventory
   reply, which carries the effective idle TTL per session, instead
   of reading the database. Lifecycle export moved to the API: the
@@ -129,7 +130,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/workers.md` (inventory, lease takeover), `docs/usage.md`
   (lifecycle export), and `docs/config.md` (lifecycle settings are
   API-only). No new migration.
-- Review fixes on top: command dedupe is worker-lifetime (a replay
+- Review round 2 on top: an unleased on-disk workspace whose
+  session row is still alive gets a TTL answer (a released lease
+  only means the Pi stopped; the workspace stays until its idle
+  TTL) and is revoked only once the row is gone. The TTL answer
+  also carries the idle baseline (`idle_since_epoch`, the row's
+  last touch) so re-answering it every inventory does not restart
+  the reaper clock. Only `session.stopped` deletes the session
+  blobs; `workspace.reaped` is a receipt only, so a session leased
+  again before its receipt lands keeps its artifacts.
+- Review round 1 on top: command dedupe is worker-lifetime (a replay
   after reconnect is still recognised; ids are forgotten on
   teardown, stop, or revoke). Lease takeover renews exactly the
   reported leases with a conditional `UPDATE` matching `worker_id`
@@ -144,8 +154,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replayed batch cannot export twice. Sandbox phase updates live in
   one shared function used by the local transition path and the
   ingest. The inventory also reports on-disk workspaces the worker
-  holds no lease for: leased ones get a TTL answer, free ones a
-  revoke that wipes the directory.
+  holds no lease for: rows that are still alive get a TTL answer so
+  the reaper wipes them when the TTL runs out, and only a missing
+  row gets a revoke that wipes the directory at once.
 
 ### Breaking
 
