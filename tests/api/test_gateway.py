@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings, extend_settings
 from apipi.gateway import Gateway, create_app
@@ -114,7 +115,7 @@ async def test_owned_store_disposed(tmp_path: Path) -> None:
 async def test_prefix_skips_health_context(
     instance_settings: Settings, store: Store
 ) -> None:
-    inner = create_app(instance_settings, store=store, harness=FakeHarness())
+    inner = create_app(api_settings_for(instance_settings), store=store)
     app = FastAPI()
     app.mount("/apipi", inner)
     async with AsyncClient(

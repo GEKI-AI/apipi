@@ -1,13 +1,13 @@
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from typing import cast
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
@@ -18,6 +18,12 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _app_of(client: AsyncClient) -> FastAPI:
+    transport = client._transport
+    assert isinstance(transport, ASGITransport)
+    return cast(FastAPI, transport.app)
+
+
 @pytest.fixture
 def cancel_harness() -> FakeHarness:
     harness = FakeHarness()
@@ -26,17 +32,17 @@ def cancel_harness() -> FakeHarness:
 
 
 @pytest.fixture
-def cancel_app(
-    settings: Settings, store: Store, cancel_harness: FakeHarness
-) -> FastAPI:
-    return create_app(settings, store=store, harness=cancel_harness)
+async def cancel_client(
+    settings: Settings,
+    store: Store,
+    cancel_harness: FakeHarness,
+    worker_secret: str,
+) -> AsyncIterator[AsyncClient]:
+    from tests.support.split_worker import split_client_for
 
-
-@pytest.fixture
-async def cancel_client(cancel_app: FastAPI) -> AsyncIterator[AsyncClient]:
-    async with AsyncClient(
-        transport=ASGITransport(app=cancel_app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, harness=cancel_harness, token=worker_secret
+    ) as (_app, client, _worker):
         yield client
 
 
@@ -54,12 +60,12 @@ async def _create_idle_session(client: AsyncClient, token: str) -> str:
 
 
 async def test_cancel_in_progress_turn(
-    cancel_client: AsyncClient, cancel_app: FastAPI, store: Store
+    cancel_client: AsyncClient, store: Store
 ) -> None:
     token = "c"
     session_id = await _create_idle_session(cancel_client, token)
     sid = uuid.UUID(session_id)
-    hub = cancel_app.state.event_hub
+    hub = _app_of(cancel_client).state.event_hub
     queue = hub.subscribe(sid)
     try:
         task = asyncio.create_task(
@@ -155,13 +161,12 @@ async def test_cancel_unknown_field(cancel_client: AsyncClient) -> None:
 
 async def test_message_cancels_live_in_progress(
     cancel_client: AsyncClient,
-    cancel_app: FastAPI,
     cancel_harness: FakeHarness,
 ) -> None:
     token = "c"
     session_id = await _create_idle_session(cancel_client, token)
     sid = uuid.UUID(session_id)
-    hub = cancel_app.state.event_hub
+    hub = _app_of(cancel_client).state.event_hub
     queue = hub.subscribe(sid)
     try:
         task = asyncio.create_task(

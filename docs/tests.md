@@ -16,8 +16,8 @@ From a checkout after `uv sync`:
 
 | What | Command |
 | --- | --- |
-| Same as GitHub Tests | `uv run pytest -m "not slow"` |
-| Everything, including slow | `uv run pytest` |
+| Same as GitHub Tests | `uv run pytest -n auto -m "not slow"` |
+| Everything, including slow | `uv run pytest -n auto` |
 | Unit only | `uv run pytest tests/unit` |
 | Public HTTP only | `uv run pytest tests/api` |
 | Fast e2e (none, microvm) | `uv run pytest -m e2e` |
@@ -37,15 +37,15 @@ requires the mode it asked for.
 | Path | Marker | What | GitHub |
 | --- | --- | --- | --- |
 | `tests/unit/` | none | Internals with mocks: config, store, isolation contract, microvm image packing, artifacts | yes |
-| `tests/api/` | none | Public HTTP vs [api.md](api.md). FakeHarness. Tenant isolation. `test_compat.py` has one named test per yes row on the API page. `test_worker_accepts.py` is the worker accepts placement and `type=none` tool-policy matrix | yes |
-| `tests/e2e/test_none_pi.py` | `e2e` | Live session against a fake Pi process in `none` mode | yes |
-| `tests/e2e/test_microvm_pi.py` | `e2e`, `microvm` | Same shape inside a real Firecracker guest | no (skips without KVM) |
-| `tests/e2e/test_metrics_scrape.py` | `e2e` | `/metrics` scrape | yes |
+| `tests/api/` | none | Public HTTP vs [api.md](api.md). Every test runs the split path: API app plus an in-process worker (`split_client_for`) with FakeHarness. Tenant isolation. `test_compat.py` has one named test per yes row on the API page. `test_worker_accepts.py` is the worker accepts placement and `type=none` tool-policy matrix | yes |
+| `tests/e2e/test_none_pi.py` | `e2e` | Real `apipi serve --api-only` and `apipi worker` subprocesses (`tests/support/procs.py`, ephemeral loopback port, tmp dirs) with a fake Pi in `none` mode | yes |
+| `tests/e2e/test_microvm_pi.py` | `e2e`, `microvm` | Same two-process shape with a microvm worker, inside a real Firecracker guest | no (skips without KVM) |
+| `tests/e2e/test_metrics_scrape.py` | `e2e` | `/metrics` scrape from the same two-process setup | yes |
 | `tests/e2e/test_pi_live.py` | `slow` | `pi` is on `PATH` | no |
-| `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against FakeHarness | no |
+| `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against the split fixture | no |
 | `tests/support/` | — | FakeHarness helpers, fake Pi, fake worker. Not a suite | — |
 
-GitHub runs `pytest -m "not slow"`. That is unit, API, and `e2e`.
+GitHub runs `pytest -n auto -m "not slow"` (pytest-xdist; drop `-n` to debug one test or when `APIPI_TEST_DATABASE_URL` is set). That is unit, API, and `e2e`.
 Microvm tests skip if KVM, Firecracker, images, or net tools cannot
 start. GitHub CI stays without Firecracker.
 

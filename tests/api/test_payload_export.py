@@ -2,13 +2,12 @@ import json
 import uuid
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
+from tests.support.split_worker import split_client_for
 
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.services.payload_export import payload_event, redact_payload
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import Item
 from apipi.store.turn_logs import get_turn_log
@@ -66,6 +65,7 @@ async def test_payload_export_sends_items_not_turn_log(
     settings: Settings,
     store: Store,
     monkeypatch: pytest.MonkeyPatch,
+    worker_secret: str,
 ) -> None:
     captured: list[dict[str, object]] = []
 
@@ -100,11 +100,12 @@ async def test_payload_export_sends_items_not_turn_log(
     payload_settings = settings.model_copy(
         update={"payload_export_url": "http://export.test/payloads"}
     )
-    app = create_app(payload_settings, store=store, harness=FakeHarness())
     token = "on-payload"
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(payload_settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
         session_id = await _session_with_turn(client, token)
         turns = await client.get(
             f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
@@ -125,7 +126,10 @@ async def test_payload_export_sends_items_not_turn_log(
 
 
 async def test_payload_export_failure_does_not_break_turn(
-    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+    settings: Settings,
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_secret: str,
 ) -> None:
     def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("payload export down")
@@ -134,11 +138,12 @@ async def test_payload_export_failure_does_not_break_turn(
     payload_settings = settings.model_copy(
         update={"payload_export_url": "http://export.test/payloads"}
     )
-    app = create_app(payload_settings, store=store, harness=FakeHarness())
     token = "payload-fail"
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(payload_settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
         session_id = await _session_with_turn(client, token)
         session = await client.get(
             f"/v1/agents/sessions/{session_id}", headers=_auth(token)

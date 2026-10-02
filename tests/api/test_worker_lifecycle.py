@@ -6,10 +6,10 @@ from typing import Any
 
 from fastapi import FastAPI
 from tests.support.fake_worker import FakeWorker
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
@@ -65,7 +65,7 @@ async def _reply(worker: FakeWorker) -> dict[str, Any]:
 async def test_inventory_reply_revokes_unknown_and_shares_ttl(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect()
     assert hello.get("ok") is True
@@ -105,7 +105,7 @@ async def test_inventory_reply_revokes_unknown_and_shares_ttl(
 async def test_inventory_clears_orphaned_lease(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect()
     worker_id = uuid.UUID(str(hello["worker_id"]))
@@ -124,9 +124,7 @@ async def test_inventory_clears_orphaned_lease(
 async def test_hello_carries_revoke_and_ttl(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app: FastAPI = create_app(
-        _worker_settings(settings), store=store, harness=FakeHarness()
-    )
+    app: FastAPI = create_app(api_settings_for(_worker_settings(settings)), store=store)
     first = FakeWorker(app, worker_secret)
     hello = await first.connect()
     worker_id = str(hello["worker_id"])
@@ -168,7 +166,7 @@ async def test_hello_carries_revoke_and_ttl(
 async def test_sandbox_seen_touches_only_owned(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     first = FakeWorker(app, worker_secret)
     hello = await first.connect()
     worker_id = uuid.UUID(str(hello["worker_id"]))
@@ -217,7 +215,7 @@ async def test_sandbox_seen_touches_only_owned(
 async def test_inventory_unleased_gets_ttl_or_revoke(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect()
     assert hello.get("ok") is True

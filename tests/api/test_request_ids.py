@@ -2,12 +2,12 @@ import uuid
 from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import authenticate
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.turn_logs import get_turn_log
 
@@ -123,7 +123,7 @@ async def test_instance_header_when_set(store: Store, tmp_path: Path) -> None:
         sessions_dir=str(tmp_path / "sessions"),
         instance_id="node-a",
     )
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

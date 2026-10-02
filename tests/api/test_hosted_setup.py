@@ -46,15 +46,18 @@ async def test_public_session_omits_directory(client: AsyncClient) -> None:
 
 
 async def test_host_setup_does_not_block_other_requests(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     import asyncio
     import time
 
-    app = create_app(settings, store=store, harness=FakeHarness())
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    from tests.support.split_worker import split_client_for
+
+    async with split_client_for(settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
         token = "setup-thread"
         agent_id = await _agent(client, token)
         started = time.monotonic()
@@ -184,7 +187,7 @@ async def test_system_packages_rejected_on_microvm(
     settings: Settings, store: Store
 ) -> None:
     microvm = settings.model_copy(update={"run_mode": "microvm", "api_only": True})
-    app = create_app(microvm, store=store, harness=FakeHarness())
+    app = create_app(microvm, store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -338,12 +341,13 @@ class _SpawnFailHarness(FakeHarness):
 
 
 async def test_spawn_oserror_fails_turn_not_500(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=_SpawnFailHarness())
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    from tests.support.split_worker import split_client_for
+
+    async with split_client_for(
+        settings, store, harness=_SpawnFailHarness(), token=worker_secret
+    ) as (_app, client, _worker):
         token = "spawn-fail"
         agent_id = await _agent(client, token)
         created = await client.post(

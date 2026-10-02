@@ -2,10 +2,9 @@ import uuid
 from collections.abc import AsyncIterator
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
@@ -27,12 +26,16 @@ def tool_harness() -> FakeHarness:
 
 @pytest.fixture
 async def tool_client(
-    settings: Settings, store: Store, tool_harness: FakeHarness
+    settings: Settings,
+    store: Store,
+    tool_harness: FakeHarness,
+    worker_secret: str,
 ) -> AsyncIterator[AsyncClient]:
-    app = create_app(settings, store=store, harness=tool_harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    from tests.support.split_worker import split_client_for
+
+    async with split_client_for(
+        settings, store, harness=tool_harness, token=worker_secret
+    ) as (_app, client, _worker):
         yield client
 
 

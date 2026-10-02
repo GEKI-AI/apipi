@@ -17,10 +17,16 @@ done
 uv run ruff format src tests
 uv run ruff check src tests
 uv run ty check src tests
+# xdist workers share nothing but the Postgres test database, so run
+# serially when APIPI_TEST_DATABASE_URL points at one.
+workers=(-n auto)
+if [[ -n "${APIPI_TEST_DATABASE_URL:-}" ]]; then
+  workers=()
+fi
 if [[ "$fast" -eq 1 ]]; then
-  uv run pytest -m "not slow"
+  uv run pytest "${workers[@]}" -m "not slow"
 else
-  uv run pytest
+  uv run pytest "${workers[@]}"
 fi
 if [[ "$docs" -eq 1 ]]; then
   uv run --no-project --with-requirements requirements-docs.txt mkdocs build --strict

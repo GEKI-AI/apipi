@@ -4,11 +4,11 @@ from datetime import timedelta
 
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.services.worker_tokens import create_token
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -56,7 +56,7 @@ def _worker_settings(
 
 
 async def test_worker_requires_token(settings: Settings, store: Store) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     worker = FakeWorker(app, "no-such-token")
     await worker.connect()
     hello = worker.hello
@@ -69,7 +69,7 @@ async def test_worker_requires_token(settings: Settings, store: Store) -> None:
 
 
 async def test_worker_wrong_token(settings: Settings, store: Store) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     worker = FakeWorker(app, "nope")
     await worker.connect()
     hello = worker.hello
@@ -82,7 +82,7 @@ async def test_worker_register_lease_command_event_and_expiry(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     worker_settings = _worker_settings(settings)
-    app = create_app(worker_settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(worker_settings), store=store)
     token = "t"
     tenant_id = _tenant(token)
     async with AsyncClient(
@@ -159,7 +159,7 @@ async def test_worker_register_lease_command_event_and_expiry(
 async def test_worker_reconnect_replays_unacked(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     token = "t"
     tenant_id = _tenant(token)
     async with AsyncClient(
@@ -195,7 +195,7 @@ async def test_worker_reconnect_replays_unacked(
 async def test_draining_worker_is_not_scheduled(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     token = "t"
     tenant_id = _tenant(token)
     async with AsyncClient(
@@ -237,9 +237,8 @@ async def test_worker_register_records_api_instance_id(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     app = create_app(
-        _worker_settings(settings, instance_id="node-a"),
+        api_settings_for(_worker_settings(settings, instance_id="node-a")),
         store=store,
-        harness=FakeHarness(),
     )
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect(capacity=1)
@@ -259,7 +258,7 @@ async def test_worker_register_records_api_instance_id(
 async def test_worker_register_defaults_memory_mb(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect(capacity=4)
     assert hello["ok"] is True
@@ -274,7 +273,7 @@ async def test_worker_register_defaults_memory_mb(
 async def test_worker_register_rejects_invalid_memory_mb(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect(capacity=4, memory_mb=0)
     assert hello.get("ok") is False
@@ -285,7 +284,7 @@ async def test_worker_register_rejects_invalid_memory_mb(
 async def test_worker_register_records_memory_mb(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect(capacity=4, memory_mb=2048)
     assert hello["ok"] is True
@@ -314,7 +313,7 @@ async def test_worker_register_records_memory_mb(
 async def test_pick_skips_worker_at_ram_cap(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     token = "t"
     tenant_id = _tenant(token)
     async with AsyncClient(
@@ -359,7 +358,7 @@ async def test_pick_skips_worker_at_ram_cap(
 async def test_pick_prefers_worker_with_more_free_ram(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     token = "t"
     tenant_id = _tenant(token)
     async with AsyncClient(
@@ -396,7 +395,7 @@ async def test_pick_prefers_worker_with_more_free_ram(
 async def test_worker_register_requires_run_mode(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect(run_mode=None)
     assert hello.get("ok") is False
@@ -407,7 +406,7 @@ async def test_worker_register_requires_run_mode(
 async def test_pick_keeps_none_and_microvm_apart(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     token = "t"
     tenant_id = _tenant(token)
     async with AsyncClient(
@@ -464,7 +463,7 @@ async def test_pick_keeps_none_and_microvm_apart(
 async def test_no_matching_worker_is_capacity(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     token = "t"
     tenant_id = _tenant(token)
     async with AsyncClient(
@@ -496,7 +495,7 @@ async def test_session_kind_is_ignored_for_placement(
         run_mode="none",
         sessions_dir=settings.sessions_dir,
     )
-    app = create_app(worker_settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(worker_settings), store=store)
     token = "t"
     tenant_id = _tenant(token)
     async with AsyncClient(

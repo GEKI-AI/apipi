@@ -1,26 +1,21 @@
-import sys
 import uuid
 from collections.abc import AsyncIterator
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
+from tests.support.procs import split_http_client
 
-from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
-from apipi.store.models import utc_now
-from apipi.store.repo import get_session_by_id, get_session_turn
-from apipi.worker.pi.artifacts import reap_workspaces
-from apipi.worker.pi.dirs import pi_session_file
-from apipi.worker.pi.pool import PiPool
+from apipi.store.repo import get_session_turn
 
+# Real `apipi serve --api-only` + `apipi worker` processes (run mode
+# `none`, fake Pi). Hosted/microvm placement, pool reaping and workspace
+# wipes are covered in tests/api/test_hosted_setup.py and
+# tests/e2e/test_split_worker.py.
 pytestmark = pytest.mark.e2e
 
-_FAKE_PI = Path(__file__).resolve().parents[1] / "support" / "fake_pi.py"
 _MAPPED_PI_USAGE = {
     "prompt_tokens": 5,
     "completion_tokens": 8,
@@ -35,65 +30,9 @@ def _auth(token: str) -> dict[str, str]:
 
 
 @pytest.fixture
-def none_settings(tmp_path: Path) -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-        idle_ttl=timedelta(milliseconds=250),
-        pi_command=f"{sys.executable} {_FAKE_PI}",
-        sessions_dir=str(tmp_path / "sessions"),
-    )
-
-
-@pytest.fixture
-def none_app(none_settings: Settings, store: Store) -> FastAPI:
-    return create_app(none_settings, store=store)
-
-
-@pytest.fixture
-async def none_client(none_app: FastAPI) -> AsyncIterator[AsyncClient]:
-    async with AsyncClient(
-        transport=ASGITransport(app=none_app),
-        base_url="http://test",
-    ) as client:
+async def none_client(store: Store, tmp_path: Path) -> AsyncIterator[AsyncClient]:
+    async with split_http_client(store, tmp_path) as client:
         yield client
-
-
-async def test_none_openai_hosted_streams_fake_pi_text(
-    none_client: AsyncClient, none_settings: Settings
-) -> None:
-    token = "e2e"
-    created_agent = await none_client.post(
-        "/v1/agents",
-        headers=_auth(token),
-        json={"name": "bot", "model": "test"},
-    )
-    agent_id = created_agent.json()["id"]
-    created = await none_client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={"agent_id": agent_id, "input": "hello-none"},
-    )
-    assert created.status_code == 200
-    body = created.json()
-    assert body["environment"]["type"] == "openai_hosted"
-    from tests.support.workspace import hosted_dir
-
-    directory = hosted_dir(none_settings, token, body["id"])
-    assert directory.is_dir()
-    root = Path(none_settings.sessions_dir or ".")
-    assert directory.is_relative_to(root)
-    session_id = body["id"]
-    events = await none_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
-    )
-    done = [
-        event
-        for event in events.json()["data"]
-        if event["type"] == "agent.session.turn.output_text.done"
-    ]
-    assert done[0]["data"]["text"] == "hello-none"
-    assert "assistantMessageEvent" not in done[0]["data"]
 
 
 async def test_none_fake_pi_persists_usage(
@@ -124,6 +63,13 @@ async def test_none_fake_pi_persists_usage(
         for event in events.json()["data"]
         if event["type"] == "agent.session.turn.completed"
     ]
+    done = [
+        event
+        for event in events.json()["data"]
+        if event["type"] == "agent.session.turn.output_text.done"
+    ]
+    assert done[0]["data"]["text"] == "hello-none"
+    assert "assistantMessageEvent" not in done[0]["data"]
     assert len(completed) == 1
     usage = completed[0]["data"]["usage"]
     assert usage == _MAPPED_PI_USAGE
@@ -143,109 +89,3 @@ async def test_none_fake_pi_persists_usage(
         )
     assert row is not None
     assert row.usage == _MAPPED_PI_USAGE
-
-
-async def test_idle_ttl_kills_pi_session_stays(
-    none_client: AsyncClient, none_app: FastAPI
-) -> None:
-    token = "ttl"
-    created_agent = await none_client.post(
-        "/v1/agents",
-        headers=_auth(token),
-        json={"name": "bot", "model": "test"},
-    )
-    pool = none_app.state.pi_pool
-    pool.settings.sandbox_ttl_openai_hosted = timedelta(seconds=0)
-    created = await none_client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": created_agent.json()["id"],
-            "environment": {"type": "openai_hosted"},
-            "input": "stay",
-        },
-    )
-    session_id = uuid.UUID(created.json()["id"])
-    assert pool.alive(session_id)
-    await pool.reap()
-    assert not pool.alive(session_id)
-    got = await none_client.get(
-        f"/v1/agents/sessions/{session_id}", headers=_auth(token)
-    )
-    assert got.status_code == 200
-    events = await none_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
-    )
-    assert events.json()["data"]
-    again = await none_client.post(
-        f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
-        json={"type": "agent.session.input.message", "content": "resume"},
-    )
-    assert again.status_code == 200
-    events = await none_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
-    )
-    texts = [
-        event["data"]["text"]
-        for event in events.json()["data"]
-        if event["type"] == "agent.session.turn.output_text.done"
-    ]
-    assert texts[0] == "stay"
-    assert "stay" in texts[1]
-    assert "resume" in texts[1]
-
-
-async def test_pi_session_restored_after_workspace_wipe(
-    none_client: AsyncClient, none_app: FastAPI, none_settings: Settings, store: Store
-) -> None:
-    token = "restore"
-    created_agent = await none_client.post(
-        "/v1/agents",
-        headers=_auth(token),
-        json={"name": "bot", "model": "test"},
-    )
-    created = await none_client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": created_agent.json()["id"],
-            "environment": {"type": "openai_hosted"},
-            "input": "stay",
-        },
-    )
-    assert created.status_code == 200
-    session_id = uuid.UUID(created.json()["id"])
-    from tests.support.workspace import hosted_dir
-
-    directory = hosted_dir(none_settings, token, created.json()["id"])
-    (directory / "scratch.txt").write_text("gone", encoding="utf-8")
-    pool = none_app.state.pi_pool
-    await pool.kill(session_id)
-    async with store.session() as db:
-        row = await get_session_by_id(db, session_id)
-        assert row is not None
-        assert row.pi_session_id is not None
-        row.updated_at = utc_now() - timedelta(hours=2)
-    await reap_workspaces(none_settings, store, PiPool(none_settings))
-    assert not directory.exists()
-    again = await none_client.post(
-        f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
-        json={"type": "agent.session.input.message", "content": "resume"},
-    )
-    assert again.status_code == 200
-    assert directory.is_dir()
-    assert not (directory / "scratch.txt").exists()
-    assert pi_session_file(directory).is_file()
-    events = await none_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
-    )
-    texts = [
-        event["data"]["text"]
-        for event in events.json()["data"]
-        if event["type"] == "agent.session.turn.output_text.done"
-    ]
-    assert texts[0] == "stay"
-    assert "stay" in texts[1]
-    assert "resume" in texts[1]

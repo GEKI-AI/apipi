@@ -10,11 +10,11 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
 from tests.support.prom import metric_line
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
@@ -181,7 +181,10 @@ async def _drain_acks(worker: FakeWorker, count: int) -> list[dict[str, Any]]:
 async def test_socket_ingest_acks_and_persists(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(
+        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        store=store,
+    )
     token = "t"
     tenant_id, session_id = await _session(app, token, store)
     worker = FakeWorker(app, worker_secret)
@@ -222,14 +225,16 @@ async def test_socket_reject_counts_and_acks_past(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     app = create_app(
-        Settings(
-            database_url=settings.database_url,
-            run_mode="none",
-            sessions_dir=settings.sessions_dir,
-            metrics=True,
+        api_settings_for(
+            Settings(
+                database_url=settings.database_url,
+                run_mode="none",
+                sessions_dir=settings.sessions_dir,
+                metrics=True,
+            ),
+            batch_window_zero=False,
         ),
         store=store,
-        harness=FakeHarness(),
     )
     token = "t"
     tenant_id, session_id = await _session(app, token, store)
@@ -271,7 +276,10 @@ async def test_socket_reject_counts_and_acks_past(
 async def test_reconnect_replays_without_duplicates(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(
+        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        store=store,
+    )
     token = "t"
     tenant_id, session_id = await _session(app, token, store)
     worker = FakeWorker(app, worker_secret)
@@ -321,7 +329,8 @@ async def test_reconnect_to_another_replica_keeps_exactly_once(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     first_app = create_app(
-        _worker_settings(settings), store=store, harness=FakeHarness()
+        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        store=store,
     )
     token = "t"
     tenant_id, session_id = await _session(first_app, token, store)
@@ -337,7 +346,8 @@ async def test_reconnect_to_another_replica_keeps_exactly_once(
     assert acks[-1]["last_seq"] == 4
     await worker.close()
     second_app = create_app(
-        _worker_settings(settings), store=store, harness=FakeHarness()
+        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        store=store,
     )
     second = FakeWorker(second_app, worker_secret, worker_id=str(worker_id))
     await second.ws.connect()
@@ -386,7 +396,10 @@ async def test_ingest_latency_within_batch_window(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     assert settings.worker_ingest_batch_window.total_seconds() <= 0.05
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(
+        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        store=store,
+    )
     token = "t"
     tenant_id, session_id = await _session(app, token, store)
     worker = FakeWorker(app, worker_secret)
@@ -420,10 +433,12 @@ async def test_cross_replica_wake_where_possible(
         assert settings_obj.event_bus == "auto"
         return
     first_app = create_app(
-        _worker_settings(settings), store=store, harness=FakeHarness()
+        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        store=store,
     )
     second_app = create_app(
-        _worker_settings(settings), store=store, harness=FakeHarness()
+        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        store=store,
     )
     token = "t"
     tenant_id, session_id = await _session(first_app, token, store)

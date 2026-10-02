@@ -4,13 +4,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import Base
@@ -98,21 +97,9 @@ def worker_harness() -> FakeHarness:
 async def client(
     settings: Settings, store: Store, worker_secret: str, worker_harness: FakeHarness
 ) -> AsyncIterator[AsyncClient]:
-    from tests.support.split_worker import (
-        api_settings_for,
-        spawn_split_worker,
-        worker_settings_for,
-    )
+    from tests.support.split_worker import split_client_for
 
-    api_settings = api_settings_for(settings)
-    app = create_app(api_settings, store=store)
-    worker = await spawn_split_worker(
-        app, worker_settings_for(settings), worker_harness, worker_secret
-    )
-    try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            yield client
-    finally:
-        await worker.aclose()
+    async with split_client_for(
+        settings, store, harness=worker_harness, token=worker_secret
+    ) as (_app, client, _worker):
+        yield client

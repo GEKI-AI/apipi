@@ -6,11 +6,11 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from tests.support import auth_plugin
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import ConfigError, Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -35,7 +35,7 @@ async def plugin_client(
     auth_plugin.reset()
     plugin, ttl = request.param
     settings = _settings(tmp_path, plugin, ttl)
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -172,4 +172,4 @@ async def test_expired_cache_calls_plugin_again(
 def test_bad_auth_path_is_config_error(store: Store, tmp_path: Path) -> None:
     settings = _settings(tmp_path, "nope.missing:func", timedelta(seconds=30))
     with pytest.raises(ConfigError, match="APIPI_AUTH"):
-        create_app(settings, store=store, harness=FakeHarness())
+        create_app(api_settings_for(settings), store=store)

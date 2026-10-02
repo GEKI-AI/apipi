@@ -4,6 +4,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import Any, NoReturn
 
 from apipi.config import Settings
@@ -30,7 +31,12 @@ from apipi.store.blobs import (
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
-from apipi.store.repo import get_session, get_session_by_id, get_worker
+from apipi.store.repo import (
+    clear_session_lease,
+    get_session,
+    get_session_by_id,
+    get_worker,
+)
 from apipi.worker.pi.artifacts import harvest_session, reap_workspace_loop
 from apipi.worker.pi.harness import PiHarness
 from apipi.worker.pi.isolation import load_isolation
@@ -39,6 +45,10 @@ from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
 log = logging.getLogger("apipi.worker")
+
+# How long a follow-up waits for a worker to acknowledge a cancel with
+# events before treating the stale turn as abandoned.
+CANCEL_GRACE = timedelta(seconds=5)
 
 
 def _require_turn_context(
@@ -803,15 +813,28 @@ class RemoteExecution:
         return {"context": turn_context}
 
     async def _wait(
-        self, tenant_id: uuid.UUID, session_id: uuid.UUID, baseline: int | None = None
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        baseline: int | None = None,
+        *,
+        timeout: timedelta | None = None,
     ) -> None:
         store = self.store
         assert store is not None
         terminal = {
-            "agent.session.turn.failed",
-            "agent.session.turn.cancelled",
             "agent.session.requires_action",
             "agent.session.failed",
+        }
+        # End-of-turn events whose status change travels in later
+        # outbox envelopes (`session.status`, then the `idle` event).
+        # Returning on the turn event alone races ingest: the POST would
+        # report `in_progress` while the status envelope is still in
+        # flight. In combined mode these complete in one transaction.
+        idle_terminated = {
+            "agent.session.turn.completed",
+            "agent.session.turn.cancelled",
+            "agent.session.turn.failed",
         }
         interval = max(self.settings.event_bus_fallback_poll.total_seconds(), 0.01)
         if baseline is None:
@@ -823,7 +846,7 @@ class RemoteExecution:
         queue = self.hub.subscribe(session_id)
         seen: set[str] = set()
         try:
-            deadline = utc_now() + self.settings.turn_timeout
+            deadline = utc_now() + (timeout or self.settings.turn_timeout)
             while utc_now() < deadline:
                 async with store.session() as db:
                     after = await list_events(db, tenant_id, session_id, after_seq=last)
@@ -832,13 +855,14 @@ class RemoteExecution:
                     seen.update(event.type for event in after)
                     if any(item in terminal for item in seen):
                         return
-                    # A completed turn is only done when the idle event that
-                    # follows it is durable too; the two arrive as separate
-                    # outbox envelopes, so wait for both after the baseline.
-                    # This matches combined mode, where run_turn returns with
-                    # the session idle.
+                    # A finished turn is only done when the idle event
+                    # that follows it is durable too; the turn event, the
+                    # status change, and idle arrive as separate outbox
+                    # envelopes, so wait for both after the baseline.
+                    # This matches combined mode, where run_turn returns
+                    # with the session idle.
                     if (
-                        "agent.session.turn.completed" in seen
+                        idle_terminated.intersection(seen)
                         and "agent.session.idle" in seen
                     ):
                         return
@@ -1026,20 +1050,34 @@ class RemoteExecution:
             status_code=429,
         )
 
-    async def cancel(self, session_id: uuid.UUID, *, status: str) -> None:
+    async def cancel(self, session_id: uuid.UUID, *, status: str) -> bool:
+        """Cancel a running turn; True when a live worker accepted it.
+
+        False means no connected worker holds the session lease (e.g.
+        the worker restarted), so the caller must not wait for worker
+        events that will never arrive.
+        """
         abort = request_cancel(self.hub, session_id, status=status)
         if abort is not None:
             abort.set()
         store = self.store
         if store is None:
-            return
+            return False
         async with store.session() as db:
             row = await get_session_by_id(db, session_id)
         if row is None or row.lease_id is None:
-            return
-        await self.workers.command(
-            store, row.tenant_id, session_id, op="turn.cancel", payload={}
+            return False
+        command = await self.workers.command(
+            store,
+            row.tenant_id,
+            session_id,
+            op="turn.cancel",
+            # dispatch_command keys the worker side on payload tenant_id;
+            # without it the worker silently drops the cancel and a held
+            # turn never aborts.
+            payload={"tenant_id": str(row.tenant_id)},
         )
+        return command is not None
 
     async def prepare_for_new_turn(
         self, tenant_id: uuid.UUID, session_id: uuid.UUID
@@ -1052,8 +1090,34 @@ class RemoteExecution:
                 async with store.session() as db:
                     await fail_stale_in_progress(db, self.hub, tenant_id, session_id)
                 return
-        await self.cancel(session_id, status="in_progress")
-        await self._wait(tenant_id, session_id)
+        assert store is not None
+        delivered = await self.cancel(session_id, status="in_progress")
+        if not delivered:
+            # No live worker holds the lease (e.g. the worker restarted
+            # and the lease row is orphaned): drop it and fail the stale
+            # turn now instead of blocking until turn_timeout for worker
+            # events that will never arrive.
+            async with store.session() as db:
+                await clear_session_lease(db, tenant_id, session_id)
+            async with store.session() as db:
+                await fail_stale_in_progress(db, self.hub, tenant_id, session_id)
+            return
+        # The worker accepted the cancel, but if it has no running turn
+        # for this session (stale `in_progress` row, lease still set) it
+        # emits nothing. Bound the wait, then drop the lease and fail the
+        # stale turn instead of blocking until turn_timeout.
+        await self._wait(
+            tenant_id,
+            session_id,
+            timeout=min(CANCEL_GRACE, self.settings.turn_timeout),
+        )
+        async with store.session() as db:
+            row = await get_session_by_id(db, session_id)
+        if row is not None and row.status == "in_progress":
+            async with store.session() as db:
+                await clear_session_lease(db, tenant_id, session_id)
+            async with store.session() as db:
+                await fail_stale_in_progress(db, self.hub, tenant_id, session_id)
 
     async def teardown(self, session_id: uuid.UUID) -> None:
         store = self.store

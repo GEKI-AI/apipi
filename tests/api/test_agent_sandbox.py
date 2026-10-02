@@ -1,8 +1,8 @@
 from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -46,7 +46,7 @@ async def test_agent_rejects_unknown_sandbox_image(
         sessions_dir=settings.sessions_dir,
         sandbox_images=["default", "browser"],
     )
-    app = create_app(limited, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(limited), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

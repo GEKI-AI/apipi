@@ -3,11 +3,11 @@ import time
 from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import AuthFilter, AuthIdentity, AuthReject
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -25,7 +25,7 @@ def _settings(tmp_path: Path, auth: str | None = None) -> Settings:
 
 
 async def _client(settings: Settings, store: Store) -> AsyncClient:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
@@ -46,7 +46,7 @@ async def test_off_loop_sync_plugin_does_not_serialise(
 
     plugin_mod.slow_block = slow_block  # ty: ignore[invalid-assignment]
     settings = _settings(tmp_path, auth="tests.support.auth_plugin:slow_block")
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -105,7 +105,7 @@ async def test_cache_hit_makes_no_db_call(store: Store, tmp_path: Path) -> None:
 
     plugin_mod.reset()
     settings = _settings(tmp_path, auth="tests.support.auth_plugin:accept")
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     gateway = app.state.gateway
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -128,7 +128,7 @@ async def test_gateway_invalidation_reauthenticates(
 
     plugin_mod.reset()
     settings = _settings(tmp_path, auth="tests.support.auth_plugin:accept")
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     gateway = app.state.gateway
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -155,7 +155,7 @@ async def test_http_invalidate_is_tenant_scoped(store: Store, tmp_path: Path) ->
 
     plugin_mod.scoped = scoped  # ty: ignore[invalid-assignment]
     settings = _settings(tmp_path, auth="tests.support.auth_plugin:scoped")
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -209,7 +209,7 @@ async def test_authorize_restricts_to_one_agent(store: Store, tmp_path: Path) ->
 
     plugin_mod.scoped = scoped  # ty: ignore[invalid-assignment]
     settings = _settings(tmp_path, auth="tests.support.auth_plugin:scoped")
-    app = create_app(settings, store=store, harness=FakeHarness(), authorize=authorize)
+    app = create_app(api_settings_for(settings), store=store, authorize=authorize)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

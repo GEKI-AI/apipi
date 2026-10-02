@@ -20,12 +20,16 @@ from apipi.config import Settings
 from tests.support.fake_runner import AsgiWebsocket
 
 
-def api_settings_for(settings: Settings) -> Settings:
-    """Return API-only settings derived from a test settings object."""
-    update: dict[str, Any] = {
-        "api_only": True,
-        "worker_ingest_batch_window": timedelta(0),
-    }
+def api_settings_for(settings: Settings, *, batch_window_zero: bool = True) -> Settings:
+    """Return API-only settings derived from a test settings object.
+
+    The ingest batch window is forced to zero (deterministic per-envelope
+    ingest) unless `batch_window_zero` is False, which ingest-batching
+    tests need to observe real batching behavior.
+    """
+    update: dict[str, Any] = {"api_only": True}
+    if batch_window_zero:
+        update["worker_ingest_batch_window"] = timedelta(0)
     if not settings.local_store_dir and settings.sessions_dir:
         update["local_store_dir"] = settings.sessions_dir
     return settings.model_copy(update=update)
@@ -48,11 +52,14 @@ def worker_settings_for(settings: Settings) -> Settings:
 class _AsgiWorkerSocket:
     """Adapt `AsgiWebsocket` to the `send`/`recv` surface `_serve_connection` uses."""
 
-    def __init__(self, ws: AsgiWebsocket) -> None:
+    def __init__(self, ws: AsgiWebsocket, sent: list[str] | None = None) -> None:
         self._ws = ws
+        self._sent = sent
 
     async def send(self, data: str | bytes) -> None:
         text = data if isinstance(data, str) else data.decode()
+        if self._sent is not None:
+            self._sent.append(text)
         await self._ws._incoming.put({"type": "websocket.receive", "text": text})
 
     async def recv(self) -> str:
@@ -84,6 +91,7 @@ class SplitWorker:
         serve_task: asyncio.Task[Any],
         background: set[asyncio.Task[Any]],
         bus: Any,
+        relay: Any | None = None,
         images_patch: Any | None = None,
     ) -> None:
         self.app = app
@@ -95,6 +103,7 @@ class SplitWorker:
         self._serve_task = serve_task
         self._background = background
         self._bus = bus
+        self._relay = relay
         self._images_patch = images_patch
 
     async def wait_ready(self, timeout: float = 10.0) -> None:
@@ -132,6 +141,9 @@ class SplitWorker:
                 await self._ws.close()
             with _contextlib.suppress(Exception):
                 await self._bus.close()
+            if self._relay is not None:
+                with _contextlib.suppress(Exception):
+                    self._relay.detach()
             if self._images_patch is not None:
                 with _contextlib.suppress(Exception):
                     self._images_patch.stop()
@@ -143,8 +155,19 @@ async def spawn_split_worker(
     worker_settings: Settings,
     harness: Any,
     token: str,
+    *,
+    tracing: Any | None = None,
+    metrics: Any | None = None,
+    pool: Any | None = None,
+    sent: list[str] | None = None,
 ) -> SplitWorker:
-    """Start an in-process worker against `app` and return its handle."""
+    """Start an in-process worker against `app` and return its handle.
+
+    `tracing`/`metrics` are forwarded to the worker-side execution.
+    `pool` swaps in a caller-built worker pool (e.g. pre-seeded for
+    capacity tests); its lifecycle reporter is wired like the default
+    pool. `sent` records raw worker-to-API socket payloads when given.
+    """
     from unittest.mock import patch as _patch
 
     import apipi.worker.hub as _hub
@@ -174,7 +197,12 @@ async def spawn_split_worker(
     from apipi.worker.outbox import Outbox
 
     bus = InMemoryEventBus()
-    relay = DeltaRelay()
+    # Flush deltas immediately: the production batch window lets a fast
+    # single-delta turn commit `done` before the relay flushes, and the
+    # API then drops the late delta as post-done. Tests need the live
+    # delta deterministically; batching behavior itself is covered by
+    # the streaming production path, not this fixture.
+    relay = DeltaRelay(window=0)
     outbox = Outbox()
     execution = local_execution(
         worker_settings,
@@ -182,7 +210,13 @@ async def spawn_split_worker(
         harness=harness,
         hub=LiveRedirectBus(bus, relay),
         outbox=outbox,
+        tracing=tracing,
+        metrics=metrics,
     )
+    if pool is not None:
+        # A caller-built pool (never started: PiPool.__init__ only
+        # allocates maps). The auto-created pool is empty and inert.
+        execution.pool = pool
     execution.pool.lifecycle = OutboxLifecycleReporter(outbox)
     execution.db_fallback = False
     await bus.start()
@@ -207,7 +241,7 @@ async def spawn_split_worker(
         headers=[(b"authorization", f"Bearer {token}".encode())],
     )
     await ws.connect()
-    sock = _AsgiWorkerSocket(ws)
+    sock = _AsgiWorkerSocket(ws, sent)
     session_leases: dict[Any, Any] = {}
     command_tasks: set[asyncio.Task[None]] = set()
     tasks: set[asyncio.Task[Any]] = set()
@@ -232,7 +266,16 @@ async def spawn_split_worker(
         )
     )
     worker = SplitWorker(
-        app, execution, harness, outbox, ws, serve_task, background, bus, _images_patch
+        app,
+        execution,
+        harness,
+        outbox,
+        ws,
+        serve_task,
+        background,
+        bus,
+        relay,
+        _images_patch,
     )
     await worker.wait_ready()
     # Expose the worker-side harness and pool to tests that inspect
@@ -249,13 +292,93 @@ async def serve_split(
     settings: Settings,
     harness: Any,
     token: str,
+    *,
+    worker_settings: Settings | None = None,
+    tracing: Any | None = None,
+    metrics: Any | None = None,
+    pool: Any | None = None,
+    sent: list[str] | None = None,
 ) -> AsyncIterator[SplitWorker]:
     """Start a worker for `app` and shut it down deterministically."""
     worker = await spawn_split_worker(
-        app, worker_settings_for(settings), harness, token
+        app,
+        worker_settings
+        if worker_settings is not None
+        else worker_settings_for(settings),
+        harness,
+        token,
+        tracing=tracing,
+        metrics=metrics,
+        pool=pool,
+        sent=sent,
     )
     try:
         yield worker
+    finally:
+        await worker.aclose()
+
+
+@asynccontextmanager
+async def split_client_for(
+    settings: Settings,
+    store: Any,
+    *,
+    harness: Any | None = None,
+    token: str,
+    worker_settings: Settings | None = None,
+    tracing: Any | None = None,
+    api_tracing: Any | None = None,
+    metrics: Any | None = None,
+    pool: Any | None = None,
+    sent: list[str] | None = None,
+    **app_kwargs: Any,
+) -> AsyncIterator[tuple[FastAPI, Any, SplitWorker]]:
+    """Build an API-only app plus an in-process worker and an HTTP client.
+
+    This is the one-line migration vehicle for API tests: it replaces
+    `app = create_app(settings, store=store, harness=h)` followed by an
+    inline `AsyncClient`, so the test body (which keeps using `app` and
+    `client`) runs against the split production path. `harness` lands on
+    the worker side; `app.state.harness` / `app.state.pi_pool` are
+    patched to the worker objects. Extra `create_app` keyword arguments
+    (`authorize=`, `blobs=`, ...) go to the API side. `tracing=` is the
+    worker side and `api_tracing=` the API side; when only one is given
+    it is shared by both (single-exporter tests). `metrics=`/`pool=`
+    /`sent=` are worker-side only.
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    from apipi.gateway import create_app
+    from apipi.services.runtime import FakeHarness
+
+    api_settings = api_settings_for(settings)
+    # `tracing` names the worker side, `api_tracing` the API side. When
+    # only one side is given, share it, so single-exporter tests (e.g.
+    # otel) keep seeing both sides.
+    api_side_tracing = api_tracing
+    worker_side_tracing = tracing
+    if api_side_tracing is None:
+        api_side_tracing = worker_side_tracing
+    if worker_side_tracing is None:
+        worker_side_tracing = api_side_tracing
+    app = create_app(api_settings, store=store, tracing=api_side_tracing, **app_kwargs)
+    worker = await spawn_split_worker(
+        app,
+        worker_settings
+        if worker_settings is not None
+        else worker_settings_for(settings),
+        harness if harness is not None else FakeHarness(),
+        token,
+        tracing=worker_side_tracing,
+        metrics=metrics,
+        pool=pool,
+        sent=sent,
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            yield app, client, worker
     finally:
         await worker.aclose()
 
