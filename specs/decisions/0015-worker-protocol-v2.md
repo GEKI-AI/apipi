@@ -60,7 +60,9 @@ accepted: old workers cannot connect, and there is no fallback.
 
 The API replies with its persisted `last_seq` per running session
 (`0` until sequence persistence lands). The worker replays everything
-after that seq.
+after that seq. Sequence persistence is not part of this step: until
+the ingest and replay step lands, the API always sends `last_seq: 0`
+as an explicit placeholder. Nothing may rely on the value yet.
 
 ## Semantics
 
@@ -77,7 +79,10 @@ after that seq.
 
 ## Auth
 
-Workers authenticate with per-worker bearer tokens. Only the SHA-256
+Workers authenticate with per-worker bearer tokens. Every secret
+carries the fixed prefix `apipi_wk_` (plus `token_urlsafe(32)`), so the
+public API recognises a worker bearer by its prefix and rejects it
+without a database lookup. Only the SHA-256
 hash is stored (`worker_tokens` table: id, name, hash, creation time,
 last use, revocation). The secret is shown once at creation and never
 again. The shared `APIPI_WORKER_TOKEN` is removed with no fallback.
@@ -91,10 +96,12 @@ again. The shared `APIPI_WORKER_TOKEN` is removed with no fallback.
 * A token is valid only on `/internal/worker`. It is rejected with
   `401` on every other route.
 * A token is bound to one `worker_id` on first register, or declared
-  at creation. A register from another worker id is rejected while the
-  bound worker is connected; after it disconnects the next register
-  rebinds the token. Several active tokens per worker allow rotation
-  without downtime.
+  at creation. A register without `id` is assigned the bound
+  `worker_id` by the API, which is how a restarted worker (which keeps
+  no stable id of its own) keeps working. A register with a different
+  explicit `id` is rejected with `token_bound`, whether or not the
+  bound worker is connected. Several active tokens per worker allow
+  rotation without downtime.
 * Revocation is checked at register and on every heartbeat. A revoked
   token closes live sockets and new registers are rejected.
 

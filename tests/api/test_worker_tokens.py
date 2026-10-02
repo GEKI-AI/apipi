@@ -13,6 +13,7 @@ from apipi.config import ConfigError, Settings, load_settings, load_worker_token
 from apipi.gateway import create_app
 from apipi.services.runtime import FakeHarness
 from apipi.services.worker_tokens import (
+    WORKER_TOKEN_PREFIX,
     authenticate_token,
     create_token,
     hash_worker_secret,
@@ -24,7 +25,7 @@ from apipi.store.engine import Store
 
 async def test_create_stores_only_the_hash(store: Store) -> None:
     created = await create_token(store, name="w1")
-    assert created.secret
+    assert created.secret.startswith(WORKER_TOKEN_PREFIX)
     rows = await list_tokens(store)
     assert len(rows) == 1
     assert rows[0].name == "w1"
@@ -100,33 +101,62 @@ async def test_rotate_without_downtime(
     await first.close()
 
 
-async def test_token_bound_to_live_worker_rejects_other_id(
+async def test_token_bound_to_first_worker_id(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     app = create_app(settings, store=store, harness=FakeHarness())
     first = FakeWorker(app, worker_secret)
     hello = await first.connect()
     assert hello["ok"] is True
+    bound_id = str(hello["worker_id"])
     other = FakeWorker(app, worker_secret, worker_id=str(uuid.uuid4()))
     await other.connect()
     assert other.hello is not None
     assert other.hello.get("ok") is False
+    assert other.hello.get("error") == "token_bound"
+    closed = await other.wait_close()
+    assert closed["code"] == 1008
+    assert closed["reason"] == "token_bound"
     await other.close()
     await first.close()
-    first_id = uuid.UUID(str(hello["worker_id"]))
+    first_uuid = uuid.UUID(bound_id)
     for _ in range(50):
-        if app.state.workers.get(first_id) is None:
+        if app.state.workers.get(first_uuid) is None:
             break
         await asyncio.sleep(0.02)
-    rebound = FakeWorker(app, worker_secret, worker_id=str(uuid.uuid4()))
-    hello2 = await rebound.connect()
-    assert hello2["ok"] is True
+    stranger = FakeWorker(app, worker_secret, worker_id=str(uuid.uuid4()))
+    await stranger.connect()
+    assert stranger.hello is not None
+    assert stranger.hello.get("ok") is False
+    assert stranger.hello.get("error") == "token_bound"
+    await stranger.close()
     rows = await list_tokens(store)
-    assert rows[0].worker_id == uuid.UUID(str(hello2["worker_id"]))
-    await rebound.close()
+    assert rows[0].worker_id == first_uuid
 
 
-async def test_token_declared_at_creation(settings: Settings, store: Store) -> None:
+async def test_register_without_id_gets_bound_worker_id(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    app = create_app(settings, store=store, harness=FakeHarness())
+    first = FakeWorker(app, worker_secret)
+    hello = await first.connect()
+    assert hello["ok"] is True
+    bound_id = str(hello["worker_id"])
+    await first.close()
+    for _ in range(50):
+        if app.state.workers.get(uuid.UUID(bound_id)) is None:
+            break
+        await asyncio.sleep(0.02)
+    restarted = FakeWorker(app, worker_secret)
+    hello2 = await restarted.connect()
+    assert hello2["ok"] is True
+    assert hello2["worker_id"] == bound_id
+    await restarted.close()
+
+
+async def test_token_declared_at_creation_pinned(
+    settings: Settings, store: Store
+) -> None:
     worker_id = uuid.uuid4()
     created = await create_token(store, name="pinned", worker_id=worker_id)
     app = create_app(settings, store=store, harness=FakeHarness())
@@ -137,6 +167,7 @@ async def test_token_declared_at_creation(settings: Settings, store: Store) -> N
     await stranger.connect()
     assert stranger.hello is not None
     assert stranger.hello.get("ok") is False
+    assert stranger.hello.get("error") == "token_bound"
     await stranger.close()
     await worker.close()
     for _ in range(50):
@@ -145,8 +176,14 @@ async def test_token_declared_at_creation(settings: Settings, store: Store) -> N
         await asyncio.sleep(0.02)
     late = FakeWorker(app, created.secret, worker_id=str(uuid.uuid4()))
     late_hello = await late.connect()
-    assert late_hello["ok"] is True
+    assert late_hello.get("ok") is False
+    assert late_hello.get("error") == "token_bound"
     await late.close()
+    noid = FakeWorker(app, created.secret)
+    noid_hello = await noid.connect()
+    assert noid_hello["ok"] is True
+    assert noid_hello["worker_id"] == str(worker_id)
+    await noid.close()
 
 
 async def test_unknown_token_is_unauthorized(settings: Settings, store: Store) -> None:
@@ -257,7 +294,7 @@ def test_cli_token_lifecycle(
     assert main(["workers", "token", "create", "--name", "w1"]) == 0
     out = capsys.readouterr()
     secret = out.out.strip()
-    assert secret
+    assert secret.startswith("apipi_wk_")
     assert len(secret.splitlines()) == 1
     assert main(["workers", "token", "list"]) == 0
     listed = capsys.readouterr().out

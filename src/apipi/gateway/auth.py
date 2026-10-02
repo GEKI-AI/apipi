@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import hashlib
 import importlib
 import inspect
 from collections import OrderedDict
@@ -18,9 +17,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from apipi.config import ConfigError
 from apipi.gateway.errors import ApiError
 from apipi.gateway.tokens import hash_token
+from apipi.services.worker_tokens import WORKER_TOKEN_PREFIX
 from apipi.store.engine import Store
 from apipi.store.models import Tenant
-from apipi.store.repo import ensure_tenant, find_worker_token
+from apipi.store.repo import ensure_tenant
 
 _bearer = HTTPBearer(auto_error=False)
 _MISS = object()
@@ -511,16 +511,6 @@ def forbidden() -> NoReturn:
     raise ApiError("invalid_request", "Forbidden", code="forbidden", status_code=403)
 
 
-async def _is_worker_token(request: Request, token: str) -> bool:
-    store = getattr(request.app.state, "store", None)
-    if store is None:
-        return False
-    digest = hashlib.sha256(token.encode()).hexdigest()
-    async with store.session() as db:
-        row = await find_worker_token(db, digest)
-    return row is not None
-
-
 async def require_tenant(
     creds: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     request: Request,
@@ -528,7 +518,7 @@ async def require_tenant(
     if creds is None or creds.scheme.lower() != "bearer" or not creds.credentials:
         unauthorized()
     token = creds.credentials
-    if await _is_worker_token(request, token):
+    if token.startswith(WORKER_TOKEN_PREFIX):
         raise ApiError(
             "invalid_request",
             "Worker tokens are valid only on /internal/worker",

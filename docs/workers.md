@@ -61,7 +61,9 @@ apipi workers token revoke <id-or-name>
 
 Only the SHA-256 hash of a token is stored in the API database
 (`worker_tokens`: id, name, hash, creation time, last use,
-revocation). The secret is shown once at creation and never again.
+revocation). Every secret starts with `apipi_wk_`, so the public API
+recognises a worker bearer by its prefix and rejects it without a
+database lookup. The secret is shown once at creation and never again.
 Write it to a file on the worker host and point the worker at it:
 
 ```
@@ -77,9 +79,11 @@ startup with a message that points at
 `apipi workers token create`.
 
 A token is bound to one `worker_id` on first register, or declared at
-creation with `--worker-id`. A register from another worker id is
-rejected while the bound worker is connected; after it disconnects,
-the next register rebinds the token. Keep several active tokens per
+creation with `--worker-id`. A register without `id` is assigned the
+bound `worker_id` by the API, which is how a restarted `apipi worker`
+(which sends no `id` and keeps no stable id of its own) keeps working.
+A register with a different explicit `id` is rejected with
+`token_bound`, whether or not the bound worker is connected. Keep several active tokens per
 worker so rotation needs no downtime: create the new token, roll it
 out to the worker, then revoke the old one. A revoked token closes
 live sockets on the next heartbeat, and new registers with it are
@@ -99,7 +103,7 @@ The first worker message must be `register` with `protocol: 2`:
 | Field | What |
 | --- | --- |
 | `protocol` | Must be `2`. Anything else closes the socket with code `1008` and reason `unsupported_protocol`. There is no fallback for old workers. |
-| `id` | Optional worker UUID. The API assigns one when omitted. |
+| `id` | Optional worker UUID. When omitted, the API assigns the token's bound `worker_id` (or mints and binds one on first register). |
 | `capabilities` | Free-form object, reserved for later steps. |
 | `accepts` | Optional list of session kinds. Reserved for placement work; it carries no behavior yet. |
 | `running` | Sessions this worker still holds: `[{session_id, lease_id, last_seq}]`. `last_seq` continues from the API's value on reconnect. |
@@ -111,13 +115,13 @@ The API answers with `hello.reply`:
 | --- | --- |
 | `protocol` | Always `2`. |
 | `worker_id`, `generation` | The worker id and its generation. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
-| `sessions` | `{session_id: last_seq}`: the persisted sequence per running session. The worker replays everything after that seq. |
+| `sessions` | `{session_id: last_seq}`: the persisted sequence per running session. The worker replays everything after that seq. Sequence persistence is not part of this step: the API always sends `last_seq: 0` as an explicit placeholder until the ingest and replay step lands. |
 
 A first message that is not `register` is rejected with
 `register required`. A bad register is rejected with
 `invalid register`. Rejections are logged on the API and counted in
 `apipi_worker_protocol_total{event}` (`unsupported_protocol`,
-`invalid_register`, `unauthorized`, `revoked`).
+`invalid_register`, `unauthorized`, `revoked`, `token_bound`).
 
 ## Messages
 
@@ -166,7 +170,8 @@ after the lease TTL, and the turn is not moved to another worker.
 
 A reconnect may go to any replica. The worker sends its running
 sessions with their `last_seq` in `register`; the API answers with
-the persisted `last_seq` per session in `hello.reply`; the worker
+the persisted `last_seq` per session in `hello.reply` (always `0`
+until sequence persistence lands); the worker
 replays everything after that seq. Unacked commands are retransmitted
 with the same `command.id`, so the worker must treat that id as
 idempotent and never run a turn twice.

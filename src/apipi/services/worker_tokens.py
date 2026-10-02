@@ -1,9 +1,12 @@
 """Per-worker bearer tokens for `/internal/worker`.
 
-Only the SHA-256 hash of a token is stored. The secret is shown once
-at creation and never again. A token is bound to one `worker_id`,
-either declared at creation or on first register. Several active
-tokens per worker allow rotation. Revocation closes live sockets.
+Only the SHA-256 hash of a token is stored. Every secret carries the
+fixed `apipi_wk_` prefix so the public API can reject worker bearers
+without a database lookup. The secret is shown once at creation and
+never again. A token is bound to one `worker_id`, either declared at
+creation or on first register; the binding never moves. Several
+active tokens per worker allow rotation. Revocation closes live
+sockets.
 """
 
 import hashlib
@@ -22,6 +25,8 @@ from apipi.store.repo import (
     touch_worker_token,
 )
 
+WORKER_TOKEN_PREFIX = "apipi_wk_"
+
 
 @dataclass(frozen=True)
 class CreatedWorkerToken:
@@ -30,7 +35,7 @@ class CreatedWorkerToken:
 
 
 def generate_worker_secret() -> str:
-    return secrets.token_urlsafe(32)
+    return WORKER_TOKEN_PREFIX + secrets.token_urlsafe(32)
 
 
 def hash_worker_secret(secret: str) -> str:

@@ -9,6 +9,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from apipi.services.runtime import EventHub
 from apipi.services.worker_tokens import (
+    WORKER_TOKEN_PREFIX,
     authenticate_token,
     is_revoked_secret,
     token_revoked,
@@ -17,6 +18,7 @@ from apipi.store.engine import Store
 from apipi.store.repo import clear_worker_api_instance, get_session_by_lease
 from apipi.worker.hub import (
     WORKER_IN,
+    TokenBindingError,
     WorkerHub,
     heartbeat_worker,
     register_worker,
@@ -56,11 +58,13 @@ async def worker_socket(websocket: WebSocket) -> None:
     store: Store = websocket.app.state.store
     event_hub: EventHub = websocket.app.state.event_hub
     raw_token = _bearer(websocket)
-    token = (
-        await authenticate_token(store, raw_token) if raw_token is not None else None
-    )
+    if raw_token is None or not raw_token.startswith(WORKER_TOKEN_PREFIX):
+        hub.observe_protocol("unauthorized")
+        await _reject(websocket, "unauthorized", reason="unauthorized")
+        return
+    token = await authenticate_token(store, raw_token)
     if token is None:
-        if raw_token is not None and await is_revoked_secret(store, raw_token):
+        if await is_revoked_secret(store, raw_token):
             hub.observe_protocol("revoked")
             log.warning("worker token revoked", extra={"event": "worker.auth.revoked"})
             await _reject(websocket, "revoked", reason="revoked")
@@ -98,7 +102,16 @@ async def worker_socket(websocket: WebSocket) -> None:
         hub.observe_protocol("invalid_register")
         await _reject(websocket, "invalid register", reason="invalid_register")
         return
-    conn = await register_worker(hub, store, websocket, register, token)
+    try:
+        conn = await register_worker(hub, store, websocket, register, token)
+    except TokenBindingError:
+        hub.observe_protocol("token_bound")
+        log.warning(
+            "worker token bound to another worker",
+            extra={"event": "worker.auth.bound"},
+        )
+        await _reject(websocket, "token_bound", reason="token_bound")
+        return
     if conn is None:
         hub.observe_protocol("invalid_register")
         await _reject(websocket, "invalid register", reason="invalid_register")

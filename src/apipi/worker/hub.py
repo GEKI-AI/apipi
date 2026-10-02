@@ -612,6 +612,14 @@ def _payload_with_run_mode(
     return out
 
 
+class TokenBindingError(Exception):
+    """A register presented a worker id the token is not bound to."""
+
+    def __init__(self, worker_id: uuid.UUID) -> None:
+        super().__init__(str(worker_id))
+        self.worker_id = worker_id
+
+
 async def register_worker(
     hub: WorkerHub,
     store: Store,
@@ -624,21 +632,19 @@ async def register_worker(
     memory_mb = register.memory_mb
     if memory_mb is None:
         memory_mb = capacity * hub.settings.microvm_mem_mib
-    worker_id = register.id if register.id is not None else uuid.uuid4()
+    worker_id = register.id
     async with store.session() as db:
         current = await get_worker_token(db, token.id)
         if current is None or current.revoked_at is not None:
             return None
         if current.worker_id is None:
+            if worker_id is None:
+                worker_id = uuid.uuid4()
             await bind_worker_token(db, current, worker_id)
+        elif worker_id is None:
+            worker_id = current.worker_id
         elif current.worker_id != worker_id:
-            if hub.get(current.worker_id) is not None:
-                log.warning(
-                    "worker token bound to another worker",
-                    extra={"event": "worker.auth.bound"},
-                )
-                return None
-            await bind_worker_token(db, current, worker_id)
+            raise TokenBindingError(current.worker_id)
     async with store.session() as db:
         row = await upsert_worker(
             db,
