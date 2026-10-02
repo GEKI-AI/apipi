@@ -1837,6 +1837,19 @@ def worker_arch() -> str:
     return os.uname().machine
 
 
+def _worker_connect_kwargs(settings: Settings, ws_url: str) -> dict[str, Any]:
+    """Extra kwargs for the worker's `websockets.connect` call.
+
+    `ssl` is only passed when there is a real context: websockets
+    raises for `ssl=None` on a `wss://` URI, and omitting it already
+    verifies against the system trust store. Plain `ws://`
+    (loopback only) needs no context."""
+    from apipi.worker.tls import worker_ssl_context
+
+    context = worker_ssl_context(settings) if ws_url.startswith("wss") else None
+    return {"ssl": context} if context is not None else {}
+
+
 def _heartbeat_images(settings: Settings) -> list[dict[str, str]]:
     from apipi.worker.accepts import resolved_worker_accepts
 
@@ -1907,11 +1920,7 @@ async def run_worker(
     )
     from apipi.worker.accepts import require_worker_accepts
     from apipi.worker.execution import local_execution, worker_observability
-    from apipi.worker.tls import (
-        check_worker_mtls_files,
-        require_worker_tls,
-        worker_ssl_context,
-    )
+    from apipi.worker.tls import check_worker_mtls_files, require_worker_tls
 
     reject_legacy_worker_token()
     require_worker_accepts(settings)
@@ -2005,14 +2014,14 @@ async def run_worker(
     dedupe = CommandDedupe()
     status = 0
     backoff = 0.5
-    tls_context = worker_ssl_context(settings) if ws_url.startswith("wss") else None
+    connect_kwargs = _worker_connect_kwargs(settings, ws_url)
     try:
         while True:
             try:
                 async with websockets.connect(
                     ws_url,
                     additional_headers={"Authorization": f"Bearer {token}"},
-                    ssl=tls_context,
+                    **connect_kwargs,
                 ) as sock:
                     outcome, drain_deadline = await _serve_connection(
                         settings,
