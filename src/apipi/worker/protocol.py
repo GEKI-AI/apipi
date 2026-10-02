@@ -231,17 +231,14 @@ class ArtifactPresignPayload(StrictPayload):
 class ArtifactCompletedPayload(StrictPayload):
     """Worker reports an upload or shared-filesystem write is done.
 
-    S3: `upload_id` from `artifact.presign.reply`, plus the observed
-    size and checksum. Filesystem: `path` relative to the shared store
-    root, inside the session prefix. `artifact_id` stays for older
-    senders and is treated as the object suffix when present.
+    `upload_id` comes from `artifact.presign.reply`, plus the observed
+    size and checksum. Filesystem also sends `path`, the store-root
+    relative path the API returned in the reply. No bytes travel here.
     """
 
-    upload_id: uuid.UUID | None = None
-    artifact_id: uuid.UUID | None = None
+    upload_id: uuid.UUID
     path: str | None = None
     name: str | None = None
-    size_bytes: int | None = Field(default=None, ge=0)
     size: int | None = Field(default=None, ge=0)
     sha256: str | None = None
     turn_id: uuid.UUID | None = None
@@ -323,10 +320,11 @@ class ArtifactPresignReply(WireModel):
 
     S3 carries `url`, `headers`, and `expires_at` for a direct PUT with
     no store credentials on the worker. The shared filesystem carries
-    no URL: the worker writes under the session prefix in the shared
-    root and then sends `artifact.completed`. Quota failures arrive as
-    `ok: False` with today's store codes (`artifact_store`,
-    `artifact_too_large`, `workspace_too_large`).
+    `path`, the store-root relative path the worker must write, and no
+    URL. `input_image` also carries `file_id` for the `input_image`
+    item part. Quota failures arrive as `ok: False` with today's store
+    codes (`artifact_store`, `artifact_too_large`,
+    `workspace_too_large`).
     """
 
     type: Literal["artifact.presign.reply"] = "artifact.presign.reply"
@@ -337,6 +335,9 @@ class ArtifactPresignReply(WireModel):
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     expires_at: str | None = None
+    path: str | None = None
+    object_id: str | None = None
+    file_id: str | None = None
     code: str | None = None
     message: str | None = None
 

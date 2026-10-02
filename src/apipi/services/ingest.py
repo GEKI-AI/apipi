@@ -217,10 +217,12 @@ async def _validate(
         return None
     if envelope.type == "artifact.completed":
         payload = envelope.payload
-        has_upload = isinstance(payload.get("upload_id"), str)
-        has_artifact = isinstance(payload.get("artifact_id"), str)
-        has_path = isinstance(payload.get("path"), str)
-        if not (has_upload or has_artifact or has_path):
+        raw_upload = payload.get("upload_id")
+        if not isinstance(raw_upload, str) or not raw_upload:
+            return INVALID_ENVELOPE
+        try:
+            uuid.UUID(raw_upload)
+        except ValueError:
             return INVALID_ENVELOPE
         return None
     if envelope.type == "event":
@@ -505,6 +507,9 @@ async def _apply(
                 "url": issued.get("url"),
                 "headers": issued.get("headers") or {},
                 "expires_at": issued.get("expires_at"),
+                "path": issued.get("path"),
+                "object_id": issued.get("object_id"),
+                "file_id": issued.get("file_id"),
             }
         )
         return
@@ -514,7 +519,7 @@ async def _apply(
 
         raw_upload = payload.get("upload_id")
         raw_path = payload.get("path")
-        raw_size = payload.get("size_bytes", payload.get("size"))
+        raw_size = payload.get("size")
         sha256 = payload.get("sha256")
         name = payload.get("name")
         raw_turn = payload.get("turn_id")
@@ -524,15 +529,12 @@ async def _apply(
                 turn_id = uuid.UUID(raw_turn)
             except ValueError as exc:
                 raise _Reject(INVALID_ENVELOPE) from exc
-        if isinstance(raw_upload, str) and raw_upload:
-            try:
-                upload_id = uuid.UUID(raw_upload)
-            except ValueError as exc:
-                raise _Reject(INVALID_ENVELOPE) from exc
-        elif isinstance(payload.get("artifact_id"), str):
+        if not isinstance(raw_upload, str) or not raw_upload:
             raise _Reject(INVALID_ENVELOPE)
-        else:
-            raise _Reject(INVALID_ENVELOPE)
+        try:
+            upload_id = uuid.UUID(raw_upload)
+        except ValueError as exc:
+            raise _Reject(INVALID_ENVELOPE) from exc
         try:
             await complete_artifact_upload(
                 db,

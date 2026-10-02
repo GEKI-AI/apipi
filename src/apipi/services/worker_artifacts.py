@@ -26,11 +26,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.config import ConfigError, DiskLimitError, Settings
 from apipi.store.blobs import (
     NS_ARTIFACTS,
+    NS_FILES,
     Namespace,
     ObjectStore,
     ObjectStoreError,
     blob_key,
     blob_prefix,
+    file_object_id,
     local_object_path,
     object_store,
 )
@@ -132,6 +134,17 @@ def check_completed_path(path: str, *, prefix_parts: tuple[str, ...] = ()) -> st
 def _quota_for_kind(settings: Settings, kind: str, declared: int) -> None:
     if declared < 1:
         raise DiskLimitError("Artifact is empty", code="artifact_store")
+    if kind == "input_image":
+        if declared > int(settings.max_file_bytes):
+            from apipi.gateway.errors import ApiError
+
+            raise ApiError(
+                "invalid_request",
+                "File too large",
+                code="payload_too_large",
+                status_code=413,
+            )
+        return
     if declared > int(settings.max_workspace_bytes):
         raise DiskLimitError("Workspace too large", code="workspace_too_large")
     if declared > int(settings.max_artifact_bytes):
@@ -148,6 +161,8 @@ async def check_quota(
     blobs_used_bytes: int | None = None,
 ) -> None:
     _quota_for_kind(settings, kind, declared)
+    if kind == "input_image":
+        return
     used = blobs_used_bytes
     if used is None:
         used = 0
@@ -198,6 +213,17 @@ async def issue_artifact_presign(
         sha256=digest,
         expires_at=expires_at,
     )
+    if kind == "input_image":
+        file_id = f"file-{artifact_id.hex}"
+        namespace: Namespace = NS_FILES
+        object_id = file_object_id(tenant_id, file_id)
+    else:
+        file_id = None
+        namespace = NS_ARTIFACTS
+        object_id = session_object_id(tenant_id, key_id, session_id, artifact_id)
+    relative_path: str | None = None
+    url: str | None = None
+    headers: dict[str, str] = {}
     if settings.artifact_store == "s3":
         backend = objects if objects is not None else object_store(settings)
         presign = getattr(backend, "presign", None)
@@ -205,29 +231,28 @@ async def issue_artifact_presign(
             raise _store_error(
                 "object store cannot presign PUT URLs", operation="presign"
             )
-        object_id = session_object_id(tenant_id, key_id, session_id, artifact_id)
         url, headers = presign(
             "PUT",
-            NS_ARTIFACTS,
+            namespace,
             object_id,
             expires=settings.presign_ttl,
             content_type=ctype,
         )
-        return {
-            "upload_id": upload.id,
-            "artifact_id": artifact_id,
-            "object_id": object_id,
-            "url": url,
-            "headers": dict(headers),
-            "expires_at": expires_at.isoformat(),
-        }
-    object_id = session_object_id(tenant_id, key_id, session_id, artifact_id)
+        headers = dict(headers)
+    else:
+        root = store_root(settings)
+        relative_path = str(
+            local_object_path(root, namespace, object_id).relative_to(root)
+        )
     return {
         "upload_id": upload.id,
         "artifact_id": artifact_id,
         "object_id": object_id,
-        "url": None,
-        "headers": {},
+        "namespace": namespace,
+        "file_id": file_id,
+        "path": relative_path,
+        "url": url,
+        "headers": headers,
         "expires_at": expires_at.isoformat(),
     }
 
@@ -257,6 +282,8 @@ async def complete_artifact_upload(
     objects: ObjectStore | None = None,
 ) -> dict[str, Any]:
     """Verify one upload and record its rows. Rejects foreign ids/paths."""
+    from apipi.store.repo import create_file
+
     upload = await get_artifact_upload(db, tenant_id, upload_id)
     if upload is None or upload.session_id != session_id:
         raise _store_error(
@@ -265,12 +292,25 @@ async def complete_artifact_upload(
             key=str(upload_id),
         )
     if upload.status == "complete":
-        return {"upload_id": str(upload.id), "artifact_id": str(upload.artifact_id)}
+        result: dict[str, Any] = {
+            "upload_id": str(upload.id),
+            "artifact_id": str(upload.artifact_id),
+        }
+        if upload.kind == "input_image":
+            result["file_id"] = f"file-{upload.artifact_id.hex}"
+        return result
     if utc_now() > _aware(upload.expires_at):
         raise _store_error("upload URL expired", operation="complete")
     digest = check_sha256(sha256)
-    object_id = session_object_id(tenant_id, key_id, session_id, upload.artifact_id)
-    check_session_prefix(object_id, session_prefix(tenant_id, key_id, session_id))
+    if upload.kind == "input_image":
+        file_id = f"file-{upload.artifact_id.hex}"
+        object_id: str = file_object_id(tenant_id, file_id)
+        namespace: Namespace = NS_FILES
+    else:
+        file_id = None
+        object_id = session_object_id(tenant_id, key_id, session_id, upload.artifact_id)
+        namespace = NS_ARTIFACTS
+        check_session_prefix(object_id, session_prefix(tenant_id, key_id, session_id))
     if settings.artifact_store == "s3":
         if path is not None:
             raise _store_error(
@@ -282,7 +322,7 @@ async def complete_artifact_upload(
         head = getattr(backend, "head", None)
         if head is None:
             raise _store_error("object store cannot verify uploads", operation="head")
-        meta = await head(NS_ARTIFACTS, object_id)
+        meta = await head(namespace, object_id)
         if meta is None:
             raise _store_error(
                 "Object is missing; PUT the presigned URL first",
@@ -301,7 +341,7 @@ async def complete_artifact_upload(
                 "upload size mismatch", operation="complete", key=object_id
             )
         if digest is not None or upload.sha256 is not None:
-            data = await _read_s3_object(backend, NS_ARTIFACTS, object_id)
+            data = await _read_s3_object(backend, namespace, object_id)
             if data is None:
                 raise _store_error(
                     "Object is missing; PUT the presigned URL first",
@@ -323,14 +363,8 @@ async def complete_artifact_upload(
             )
         relative = check_completed_path(path)
         root = store_root(settings)
-        expected_rel = local_object_path(root, NS_ARTIFACTS, object_id).relative_to(
-            root
-        )
-        # The worker writes under the session prefix; the relative path must
-        # stay inside that prefix. We accept the canonical object path and
-        # any sibling under the same session directory.
-        session_dir = str(expected_rel.parent)
-        if relative != str(expected_rel) and not relative.startswith(session_dir + "/"):
+        expected_rel = local_object_path(root, namespace, object_id).relative_to(root)
+        if relative != str(expected_rel):
             raise _store_error(
                 "artifact path is outside the session prefix",
                 operation="complete",
@@ -365,6 +399,18 @@ async def complete_artifact_upload(
         row.pi_session_id = upload.artifact_id
         row.pi_session_bytes = actual_size
         await db.flush()
+    elif upload.kind == "input_image":
+        assert file_id is not None
+        artifact_name = (name or upload.filename).strip() or upload.filename
+        await create_file(
+            db,
+            tenant_id,
+            file_id=file_id,
+            filename=artifact_name,
+            purpose="user_data",
+            size=actual_size,
+            content_type=upload.content_type,
+        )
     else:
         artifact_name = (name or upload.filename).strip() or upload.filename
         await create_artifact(
@@ -376,10 +422,17 @@ async def complete_artifact_upload(
             turn_id=turn_id,
             key_id=key_id,
             byte_size=actual_size,
+            artifact_id=upload.artifact_id,
         )
     upload.status = "complete"
     await db.flush()
-    return {"upload_id": str(upload.id), "artifact_id": str(upload.artifact_id)}
+    done: dict[str, Any] = {
+        "upload_id": str(upload.id),
+        "artifact_id": str(upload.artifact_id),
+    }
+    if file_id is not None:
+        done["file_id"] = file_id
+    return done
 
 
 def _aware(value: Any) -> Any:

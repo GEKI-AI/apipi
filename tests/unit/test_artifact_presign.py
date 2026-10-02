@@ -527,7 +527,7 @@ async def test_s3_presign_ttl_short(store: Store, tmp_path: Path) -> None:
 def test_completed_envelope_helper_has_no_bytes() -> None:
     payload = completed_envelope(
         uuid.uuid4(),
-        upload_id=uuid.uuid4(),
+        upload_id=uuid.UUID(int=0),
         data=b"abc",
         path="a/b",
     )

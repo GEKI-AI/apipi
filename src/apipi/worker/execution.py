@@ -70,6 +70,7 @@ class LocalExecution:
         self.metrics = metrics
         self.tracing = tracing
         self.outbox = outbox
+        self.presign_waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
         self._sinks: dict[tuple[uuid.UUID, uuid.UUID], ResultSink] = {}
         self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
         self._context_ttl: dict[str, tuple[float | None, float, str | None]] = {}
@@ -122,6 +123,7 @@ class LocalExecution:
                     settings=self.settings,
                     metrics=self.metrics,
                     tracing=self.tracing,
+                    waiters=self.presign_waiters,
                 )
             else:
                 sink = DirectSink()
@@ -525,6 +527,9 @@ class LocalExecution:
 
     async def _harvest_killed(self, session_id: uuid.UUID, proc: PiProc | None) -> None:
         try:
+            if self.outbox is not None:
+                await self._harvest_killed_split(session_id, proc)
+                return
             store = self.store
             if store is None:
                 return
@@ -547,6 +552,97 @@ class LocalExecution:
             if note is not None:
                 await note(session_id)
 
+    async def _harvest_killed_split(
+        self, session_id: uuid.UUID, proc: PiProc | None
+    ) -> None:
+        """Split-mode killed harvest: presign uploads, no DB writes."""
+        from apipi.store.repo import get_session_by_id
+        from apipi.worker.artifact_upload import upload_via_presign
+        from apipi.worker.pi.artifacts import (
+            _hosted_files,
+            read_pi_session_bytes,
+        )
+
+        store = self.store
+        tenant_id: uuid.UUID | None = None
+        dest: Any | None = None
+        if store is not None:
+            try:
+                async with store.session() as db:
+                    row = await get_session_by_id(db, session_id)
+                    if row is not None:
+                        tenant_id = row.tenant_id
+                        env = (
+                            row.environment if isinstance(row.environment, dict) else {}
+                        )
+                        if env.get("type") == "openai_hosted":
+                            directory = env.get("directory")
+                            if isinstance(directory, str) and directory:
+                                from pathlib import Path as _Path
+
+                                dest = _Path(directory)
+            except Exception:
+                tenant_id = None
+        if tenant_id is None:
+            for tenant, sid in list(self._sinks.keys()):
+                if sid == session_id:
+                    tenant_id = tenant
+                    break
+        if tenant_id is None:
+            return
+        files: list[tuple[str, bytes]] = []
+        try:
+            hosted, _workspace_error = await _hosted_files(
+                proc,
+                dest,
+                sync_workspace=False,
+                max_workspace_bytes=None,
+            )
+            files = hosted
+            if not files and dest is not None:
+                from apipi.worker.pi.artifacts import (
+                    read_workspace_artifacts as _read_ws,
+                )
+
+                try:
+                    files = _read_ws(dest)
+                except Exception:
+                    files = []
+        except Exception:
+            files = []
+        for rel, data in files:
+            try:
+                await upload_via_presign(
+                    self.outbox,
+                    self.presign_waiters,
+                    self.settings,
+                    session_id,
+                    kind="artifact",
+                    filename=rel,
+                    content_type=None,
+                    data=data,
+                )
+            except Exception:
+                return
+        try:
+            pi_data = await read_pi_session_bytes(proc, dest)
+        except Exception:
+            pi_data = b""
+        if pi_data:
+            try:
+                await upload_via_presign(
+                    self.outbox,
+                    self.presign_waiters,
+                    self.settings,
+                    session_id,
+                    kind="pi_session",
+                    filename="pi-session.jsonl",
+                    content_type="application/octet-stream",
+                    data=pi_data,
+                )
+            except Exception:
+                return
+
 
 def local_execution(
     settings: Settings,
@@ -564,6 +660,7 @@ def local_execution(
     attach_lifecycle(pool, settings, metrics)
     isolation = load_isolation(settings.run_mode)
     resolved_harness = harness if harness is not None else PiHarness(pool)
+    split = outbox is not None
     return LocalExecution(
         settings,
         pool=pool,
@@ -573,8 +670,8 @@ def local_execution(
         if hub is not None
         else create_event_bus(settings, store=store, metrics=metrics),
         store=store,
-        blobs=blob_store(settings),
-        objects=object_store(settings),
+        blobs=None if split else blob_store(settings),
+        objects=None if split else object_store(settings),
         metrics=metrics,
         tracing=tracing,
         outbox=outbox,

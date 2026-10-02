@@ -876,6 +876,139 @@ async def _write_turn_log(
         )
 
 
+async def _harvest_split(
+    active: Any,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    proc: Any | None,
+    *,
+    settings: Any,
+    turn_context: Any | None = None,
+    db: Any | None = None,
+    hub: Any | None = None,
+    request_id: str | None = None,
+    metrics: Any | None = None,
+    tracing: Any | None = None,
+    user_id: str | None = None,
+) -> int | None:
+    """Split-mode harvest: presign uploads, no worker DB writes.
+
+    Returns artifact bytes for the turn log, or None when the turn
+    already failed (quota `artifact_store`) and the caller must stop.
+    """
+    from apipi.config import DiskLimitError
+    from apipi.store.blobs import ObjectStoreError
+    from apipi.worker.pi.artifacts import (
+        _hosted_files,
+        read_pi_session_bytes,
+    )
+
+    files: list[tuple[str, bytes]] = []
+    workspace_error: DiskLimitError | None = None
+    dest: Any | None = None
+    try:
+        env: dict[str, Any] | None = None
+        if turn_context is not None:
+            session_obj = getattr(turn_context, "session", None)
+            raw_env = getattr(session_obj, "environment", None)
+            if isinstance(raw_env, dict):
+                env = raw_env
+        if env is not None and env.get("type") == "openai_hosted":
+            directory = env.get("directory")
+            if isinstance(directory, str) and directory:
+                from pathlib import Path as _Path
+
+                dest = _Path(directory)
+    except Exception:
+        dest = None
+    # Collect from the live proc; workspace dirs stay on the worker and
+    # never touch the database here.
+    try:
+        hosted, workspace_error = await _hosted_files(
+            proc,
+            dest,
+            sync_workspace=False,
+            max_workspace_bytes=None,
+        )
+        files = hosted
+        if not files and dest is not None:
+            from apipi.worker.pi.artifacts import read_workspace_artifacts as _read_ws
+
+            try:
+                files = _read_ws(dest)
+            except Exception:
+                files = []
+    except DiskLimitError as exc:
+        workspace_error = exc
+    except (OSError, Exception):
+        files = []
+    limit_error: DiskLimitError | None = workspace_error
+    if files:
+        try:
+            await active.store_artifacts(
+                None,
+                None,
+                tenant_id,
+                session_id,
+                files,
+                turn_id=turn_id,
+                settings=settings,
+            )
+        except DiskLimitError as exc:
+            limit_error = exc
+        except (OSError, ObjectStoreError, Exception):
+            limit_error = DiskLimitError(
+                "Cannot write artifacts", code="artifact_store"
+            )
+    try:
+        pi_data = await read_pi_session_bytes(proc, dest)
+    except Exception:
+        pi_data = b""
+    if pi_data:
+        try:
+            await active.store_pi_session(
+                None, None, tenant_id, session_id, pi_data, settings=settings
+            )
+        except (OSError, ObjectStoreError, Exception) as exc:
+            if isinstance(exc, DiskLimitError):
+                limit_error = limit_error or exc
+            else:
+                limit_error = limit_error or DiskLimitError(
+                    "Cannot write artifacts", code="artifact_store"
+                )
+    if limit_error is not None:
+        assert db is not None
+        assert hub is not None
+        if limit_error.code == "artifact_store":
+            await _fail_turn(
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                turn_id,
+                str(limit_error),
+                request_id=request_id,
+                metrics=metrics,
+                tracing=tracing,
+                settings=settings,
+                code="artifact_store",
+                user_id=user_id,
+                turn_context=turn_context,
+                sink=active,
+            )
+            return None
+        await active.append_event(
+            db,
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.error",
+            data={"message": str(limit_error), "code": limit_error.code},
+        )
+    return sum(len(data) for _rel, data in files)
+
+
 async def _complete_turn(
     db: AsyncSession,
     hub: EventBus,
@@ -910,43 +1043,65 @@ async def _complete_turn(
     await active.finish_turn(
         db, tenant_id, session_id, turn_id, status="completed", usage=stored
     )
+    published = 0
     if settings is not None:
-        _row, limit_error = await harvest_session(
-            db,
-            settings,
-            session_id,
-            proc,
-            turn_id=turn_id,
-            blobs=blobs,
-        )
-        if limit_error is not None:
-            if limit_error.code == "artifact_store":
-                await _fail_turn(
+        from apipi.services.sink import OutboxSink
+
+        if isinstance(active, OutboxSink):
+            published = await _harvest_split(
+                active,
+                tenant_id,
+                session_id,
+                turn_id,
+                proc,
+                settings=settings,
+                turn_context=turn_context,
+                db=db,
+                hub=hub,
+                request_id=request_id,
+                metrics=metrics,
+                tracing=tracing,
+                user_id=user_id,
+            )
+            if published is None:
+                return
+        else:
+            _row, limit_error = await harvest_session(
+                db,
+                settings,
+                session_id,
+                proc,
+                turn_id=turn_id,
+                blobs=blobs,
+            )
+            if limit_error is not None:
+                if limit_error.code == "artifact_store":
+                    await _fail_turn(
+                        db,
+                        hub,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        str(limit_error),
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                        settings=settings,
+                        code="artifact_store",
+                        user_id=user_id,
+                        turn_context=turn_context,
+                        sink=active,
+                    )
+                    return
+                await active.append_event(
                     db,
                     hub,
                     tenant_id,
                     session_id,
-                    turn_id,
-                    str(limit_error),
-                    request_id=request_id,
-                    metrics=metrics,
-                    tracing=tracing,
-                    settings=settings,
-                    code="artifact_store",
-                    user_id=user_id,
-                    turn_context=turn_context,
-                    sink=active,
+                    type="agent.session.error",
+                    data={"message": str(limit_error), "code": limit_error.code},
                 )
-                return
-            await active.append_event(
-                db,
-                hub,
-                tenant_id,
-                session_id,
-                type="agent.session.error",
-                data={"message": str(limit_error), "code": limit_error.code},
-            )
-    published = await artifact_bytes_for_turn(db, tenant_id, turn_id)
+            published = await artifact_bytes_for_turn(db, tenant_id, turn_id)
     await active.write_turn_log(
         db,
         hub,
@@ -1558,32 +1713,76 @@ async def run_turn(
         item_content: str | list[dict[str, Any]] = text
         ordered = parts or []
         has_image = any(part.get("type") == "image" for part in ordered)
-        if has_image and settings is not None and objects is not None:
-            files = FileService(store, objects, settings)
-            stored_parts: list[dict[str, Any]] = []
-            for part in ordered:
-                if part.get("type") == "input_text":
-                    stored_parts.append(
-                        {"type": "input_text", "text": str(part.get("text") or "")}
-                    )
-                    continue
-                if part.get("type") != "image":
-                    continue
-                mime = str(part.get("mimeType") or "application/octet-stream")
-                data = base64.b64decode(str(part.get("data") or ""))
-                created = await files.create(
-                    tenant_id,
-                    data=data,
-                    filename="image",
-                    purpose="user_data",
-                    content_type=mime,
-                )
-                stored_parts.append({"type": "input_image", "file_id": created["id"]})
-            if len(stored_parts) == 1 and stored_parts[0].get("type") == "input_text":
-                item_content = str(stored_parts[0].get("text") or text)
-            elif stored_parts:
-                item_content = stored_parts
         ctx = _parse_turn_context(turn_context)
+        if has_image and settings is not None:
+            from apipi.services.sink import OutboxSink as _OutboxSink
+
+            _image_sink = resolve_sink(sink)
+            if not isinstance(_image_sink, _OutboxSink):
+                if objects is not None:
+                    files = FileService(store, objects, settings)
+                    stored_parts: list[dict[str, Any]] = []
+                    for part in ordered:
+                        if part.get("type") == "input_text":
+                            stored_parts.append(
+                                {
+                                    "type": "input_text",
+                                    "text": str(part.get("text") or ""),
+                                }
+                            )
+                            continue
+                        if part.get("type") != "image":
+                            continue
+                        mime = str(part.get("mimeType") or "application/octet-stream")
+                        data = base64.b64decode(str(part.get("data") or ""))
+                        created = await files.create(
+                            tenant_id,
+                            data=data,
+                            filename="image",
+                            purpose="user_data",
+                            content_type=mime,
+                        )
+                        stored_parts.append(
+                            {"type": "input_image", "file_id": created["id"]}
+                        )
+                    if (
+                        len(stored_parts) == 1
+                        and stored_parts[0].get("type") == "input_text"
+                    ):
+                        item_content = str(stored_parts[0].get("text") or text)
+                    elif stored_parts:
+                        item_content = stored_parts
+            else:
+                stored_parts = []
+                for part in ordered:
+                    if part.get("type") == "input_text":
+                        stored_parts.append(
+                            {"type": "input_text", "text": str(part.get("text") or "")}
+                        )
+                        continue
+                    if part.get("type") != "image":
+                        continue
+                    mime = str(part.get("mimeType") or "application/octet-stream")
+                    data = base64.b64decode(str(part.get("data") or ""))
+                    created = await _image_sink.store_input_image(
+                        None,
+                        store,
+                        tenant_id,
+                        session_id,
+                        data=data,
+                        filename="image",
+                        content_type=mime,
+                        settings=settings,
+                    )
+                    file_id = created.get("file_id") or created.get("id")
+                    stored_parts.append({"type": "input_image", "file_id": file_id})
+                if (
+                    len(stored_parts) == 1
+                    and stored_parts[0].get("type") == "input_text"
+                ):
+                    item_content = str(stored_parts[0].get("text") or text)
+                elif stored_parts:
+                    item_content = stored_parts
         context_pi: bytes | None = None
         resolved_key = (
             api_key
@@ -1662,9 +1861,9 @@ async def run_turn(
                         from apipi.worker.pi.microvm import microvm_egress_hosts
 
                         gateway_hosts = tuple(microvm_egress_hosts(settings))
-                    if backend is None:
-                        backend = object_store(settings)
                     if ctx is None:
+                        if backend is None:
+                            backend = object_store(settings)
                         extra_files = await FileService(
                             store, backend, settings
                         ).workspace_files(tenant_id, row.environment)
@@ -1687,10 +1886,11 @@ async def run_turn(
                         else None
                     ),
                 )
-                if settings is not None and backend is not None:
+                if settings is not None and (backend is not None or ctx is not None):
                     directory = row.environment.get("directory")
                     if isinstance(directory, str) and directory:
                         if ctx is None:
+                            assert backend is not None
                             await SkillService(store, backend, settings).install(
                                 tenant_id, row.environment, Path(directory)
                             )

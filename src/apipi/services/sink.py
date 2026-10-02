@@ -238,6 +238,46 @@ class ResultSink(Protocol):
         turn_context: Any | None = None,
     ) -> None: ...
 
+    async def store_input_image(
+        self,
+        db: AsyncSession | None,
+        store: Any | None,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        data: bytes,
+        filename: str,
+        content_type: str | None,
+        settings: Any | None = None,
+        objects: Any | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def store_artifacts(
+        self,
+        db: AsyncSession | None,
+        store: Any | None,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        files: list[tuple[str, bytes]],
+        *,
+        turn_id: uuid.UUID | None = None,
+        key_id: str = "",
+        settings: Any | None = None,
+        blobs: Any | None = None,
+    ) -> None: ...
+
+    async def store_pi_session(
+        self,
+        db: AsyncSession | None,
+        store: Any | None,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        data: bytes,
+        *,
+        settings: Any | None = None,
+        blobs: Any | None = None,
+    ) -> None: ...
+
 
 class DirectSink:
     """Today's direct database writes, in the caller's transaction."""
@@ -412,6 +452,84 @@ class DirectSink:
         finally:
             self._tally.reset()
 
+    async def store_input_image(
+        self,
+        db: AsyncSession | None,
+        store: Any | None,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        data: bytes,
+        filename: str,
+        content_type: str | None,
+        settings: Any | None = None,
+        objects: Any | None = None,
+    ) -> dict[str, Any]:
+        from apipi.services.files import FileService
+
+        del session_id
+        assert db is not None
+        assert store is not None
+        assert settings is not None
+        assert objects is not None
+        files = FileService(store, objects, settings)
+        return await files.create(
+            tenant_id,
+            data=data,
+            filename=filename,
+            purpose="user_data",
+            content_type=content_type,
+        )
+
+    async def store_artifacts(
+        self,
+        db: AsyncSession | None,
+        store: Any | None,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        files: list[tuple[str, bytes]],
+        *,
+        turn_id: uuid.UUID | None = None,
+        key_id: str = "",
+        settings: Any | None = None,
+        blobs: Any | None = None,
+    ) -> None:
+        from apipi.worker.pi.artifacts import persist_artifact_files
+
+        del store
+        assert db is not None
+        assert settings is not None
+        await persist_artifact_files(
+            db,
+            settings,
+            tenant_id,
+            session_id,
+            files,
+            turn_id=turn_id,
+            key_id=key_id,
+            blobs=blobs,
+        )
+
+    async def store_pi_session(
+        self,
+        db: AsyncSession | None,
+        store: Any | None,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        data: bytes,
+        *,
+        settings: Any | None = None,
+        blobs: Any | None = None,
+    ) -> None:
+        from apipi.worker.pi.artifacts import persist_pi_session_bytes
+
+        del store
+        assert db is not None
+        assert settings is not None
+        await persist_pi_session_bytes(
+            db, settings, tenant_id, session_id, data, blobs=blobs
+        )
+
 
 DIRECT: DirectSink = DirectSink()
 
@@ -438,6 +556,7 @@ class OutboxSink:
         settings: Any | None = None,
         metrics: Any | None = None,
         tracing: Any | None = None,
+        waiters: dict[Any, Any] | None = None,
     ) -> None:
         self.outbox = outbox
         self.tenant_id = tenant_id
@@ -445,6 +564,7 @@ class OutboxSink:
         self.settings = settings
         self.metrics = metrics
         self.tracing = tracing
+        self.waiters = waiters if waiters is not None else {}
         self._tally = TurnTally()
         self._turn_started: dict[uuid.UUID, float] = {}
         self._emergency = False
@@ -753,3 +873,97 @@ class OutboxSink:
                 total_tokens=stored["total_tokens"],
                 tool_names=tools,
             )
+
+    async def store_input_image(
+        self,
+        db: AsyncSession | None,
+        store: Any | None,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        data: bytes,
+        filename: str,
+        content_type: str | None,
+        settings: Any | None = None,
+        objects: Any | None = None,
+    ) -> dict[str, Any]:
+        from apipi.worker.artifact_upload import upload_via_presign
+
+        del db, store, objects
+        self._check(tenant_id, session_id)
+        resolved = settings if settings is not None else self.settings
+        assert resolved is not None
+        return await upload_via_presign(
+            self.outbox,
+            self.waiters,
+            resolved,
+            session_id,
+            kind="input_image",
+            filename=filename,
+            content_type=content_type,
+            data=data,
+        )
+
+    async def store_artifacts(
+        self,
+        db: AsyncSession | None,
+        store: Any | None,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        files: list[tuple[str, bytes]],
+        *,
+        turn_id: uuid.UUID | None = None,
+        key_id: str = "",
+        settings: Any | None = None,
+        blobs: Any | None = None,
+    ) -> None:
+        from apipi.worker.artifact_upload import upload_via_presign
+
+        del db, store, blobs, key_id
+        if not files:
+            return
+        self._check(tenant_id, session_id)
+        resolved = settings if settings is not None else self.settings
+        assert resolved is not None
+        for rel, data in files:
+            await upload_via_presign(
+                self.outbox,
+                self.waiters,
+                resolved,
+                session_id,
+                kind="artifact",
+                filename=rel,
+                content_type=None,
+                data=data,
+                turn_id=turn_id,
+            )
+
+    async def store_pi_session(
+        self,
+        db: AsyncSession | None,
+        store: Any | None,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        data: bytes,
+        *,
+        settings: Any | None = None,
+        blobs: Any | None = None,
+    ) -> None:
+        from apipi.worker.artifact_upload import upload_via_presign
+
+        del db, store, blobs
+        if not data:
+            return
+        self._check(tenant_id, session_id)
+        resolved = settings if settings is not None else self.settings
+        assert resolved is not None
+        await upload_via_presign(
+            self.outbox,
+            self.waiters,
+            resolved,
+            session_id,
+            kind="pi_session",
+            filename="pi-session.jsonl",
+            content_type="application/octet-stream",
+            data=data,
+        )

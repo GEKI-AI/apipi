@@ -158,7 +158,7 @@ API to worker:
 | --- | --- | --- |
 | `hello` | `ok`, `protocol`, `worker_id`, `generation`, `sessions`, `store_check` | Register succeeded. `store_check` is present only for the filesystem store. |
 | `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key. |
-| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `upload_id`, `url`, `headers`, `expires_at`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix; the filesystem store carries no URL. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`). |
+| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `upload_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
 | error object | `ok: false`, `error` | Auth or register failed, then the socket closes. |
 
@@ -180,11 +180,16 @@ session status change. `error` carries a worker-reported error.
 but only `artifact.completed` is applied yet: ingest rejects sandbox
 messages (counted, and the worker keeps them buffered) until the step
 that owns them lands. `artifact.presign` reserves the upload slot and
-returns its reply on the same socket; `artifact.completed` verifies the
-object (S3 `HEAD` size and checksum, or the shared-root file size and
-checksum) and then writes the artifact, file, or Pi session rows. A
-`completed` for a foreign `upload_id` or a path outside the session
-prefix is rejected, as is a checksum or size mismatch.
+returns its reply on the same socket; `artifact.completed` carries the
+API-issued `upload_id` with the observed size and checksum (plus `path`
+for the filesystem store) and verifies the object (S3 `HEAD` size and
+checksum, or the shared-root file size and checksum) before writing
+rows. Artifacts are stored with the presigned `artifact_id`, so the
+object and the row stay bound; Pi sessions update the session pointer
+the turn context uses for cold restore; input images create file rows
+with the returned `file_id`. A `completed` with a foreign `upload_id`,
+a path outside the expected key, or a checksum or size mismatch is
+rejected.
 
 The outbox is bounded (`APIPI_WORKER_OUTBOX_MAX_MESSAGES`, default
 10,000 messages, and `APIPI_WORKER_OUTBOX_MAX_BYTES`, default 64
@@ -261,24 +266,37 @@ after the lease TTL, and the turn is not moved to another worker.
 
 Artifact, input-image, workspace-file, skill, and Pi session bytes always
 go through the configured store; the socket carries only control and
-metadata messages. The worker holds no object-store credentials. With
-`APIPI_ARTIFACT_STORE=s3` (the recommended production setup) the flow is:
+metadata messages. The split worker holds no object-store credentials
+and performs no artifact or file database writes: `LocalExecution` runs
+with no blobs or objects, and `OutboxSink` uploads through
+`artifact.presign` (outbox) -> reply -> PUT (S3, plain HTTPS with no
+credentials) or shared-root write (filesystem, to the reply `path`) ->
+`artifact.completed` (outbox) for `artifact`, `pi_session`, and
+`input_image` kinds, including the killed-process harvest. Combined
+serve keeps today's direct path through `DirectSink`. Quota failures
+raise today's codes so the turn fails the way direct writes do
+(`artifact_store` fails the turn, other quota codes emit the session
+error event). Split uploads every file; the API keeps the latest
+version per path (no worker-side dedup in split mode).
+
+With `APIPI_ARTIFACT_STORE=s3` (the recommended production setup)
 the worker sends durable `artifact.presign` with the session id, kind
-(`artifact`, `pi_session`, or `input_image`), filename, content type, size,
-and checksum; the API checks quotas (`max_workspace_bytes` and
-`max_artifact_bytes`) before issuing a short-lived presigned PUT URL bound
-to a key under the session prefix; the worker uploads with a plain PUT;
-then it sends durable `artifact.completed` with the `upload_id`, size, and
-checksum. The API verifies the object (`HEAD` size and checksum where
-available), writes the artifact, file, or Pi session pointer rows, and
-emits the existing public events. Reads use the presigned GET references
-in the command context, and downloads go through the existing routes.
-With the filesystem store the worker writes the bytes under the session
-prefix in the shared root and reports `artifact.completed` with the
-session-relative path; the API validates that the path stays inside the
-session prefix, checks size and checksum, and then writes the rows.
-Quotas are checked with a size-only `artifact.presign` (reply without a
-URL) before writing.
+(`artifact`, `pi_session`, or `input_image`), filename, content type,
+size, and checksum; the API checks quotas (`max_workspace_bytes` and
+`max_artifact_bytes`, or `max_file_bytes` for input images) before
+issuing a short-lived presigned PUT URL bound to a key under the
+session prefix (or the files prefix with a `file_id` for input
+images); the worker uploads with a plain PUT; then it sends durable
+`artifact.completed` with the `upload_id`, size, and checksum. The API
+verifies the object (`HEAD` size and checksum where available),
+writes the artifact, file, or Pi session pointer rows, and emits the
+existing public events. Reads use the presigned GET references in the
+command context, and downloads go through the existing routes. With
+the filesystem store the API returns the exact store-root relative
+`path` in the reply; the worker writes there and reports
+`artifact.completed` with that path; the API validates the path
+matches the reserved key, checks size and checksum, and then writes
+the rows.
 
 A reconnect may go to any replica. The worker sends its running
 sessions with their `last_seq` in `register`; the API answers with

@@ -166,6 +166,54 @@ def ensure_openai_workspace(environment: dict[str, Any]) -> None:
         )
 
 
+async def persist_artifact_files(
+    db: AsyncSession,
+    settings: Settings,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    files: list[tuple[str, bytes]],
+    *,
+    turn_id: uuid.UUID | None = None,
+    key_id: str = "",
+    blobs: ArtifactBlobs | None = None,
+) -> None:
+    """Direct (combined) artifact persist with DB dedup."""
+    await _persist_files(
+        db,
+        settings,
+        tenant_id,
+        session_id,
+        files,
+        turn_id=turn_id,
+        key_id=key_id,
+        blobs=blobs,
+    )
+
+
+async def persist_pi_session_bytes(
+    db: AsyncSession,
+    settings: Settings,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    data: bytes,
+    *,
+    key_id: str = "",
+    blobs: ArtifactBlobs | None = None,
+) -> None:
+    """Direct (combined) Pi session persist from bytes."""
+    if not data:
+        return
+    row = await get_session_by_id(db, session_id)
+    if row is None:
+        return
+    store = blobs if blobs is not None else blob_store(settings)
+    blob_id = row.pi_session_id if row.pi_session_id is not None else uuid.uuid4()
+    await store.put(row.tenant_id, row.key_id, row.id, blob_id, data)
+    row.pi_session_id = blob_id
+    row.pi_session_bytes = len(data)
+    await db.flush()
+
+
 async def _persist_files(
     db: AsyncSession,
     settings: Settings,

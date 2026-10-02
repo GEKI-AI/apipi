@@ -449,8 +449,10 @@ async def create_artifact(
     turn_id: uuid.UUID | None = None,
     key_id: str = "",
     byte_size: int = 0,
+    artifact_id: uuid.UUID | None = None,
 ) -> Artifact:
     artifact = Artifact(
+        id=artifact_id if artifact_id is not None else uuid.uuid4(),
         tenant_id=tenant_id,
         session_id=session_id,
         path=path,
