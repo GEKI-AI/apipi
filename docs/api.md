@@ -392,14 +392,12 @@ with `after_seq`. Stored public events are written before SSE.
 `output_text.delta` is live SSE only and is not stored; reconnect and
 export skip those fragments. Full assistant text is on
 `output_text.done` and the assistant item. Thinking is stored as a
-short preview, not as live deltas. In split mode the worker sends
+short preview, not as live deltas. The worker sends
 text fragments as ephemeral messages over its socket (coalesced over
 about 40ms), and the API fans them out over the event bus, so token
 streaming works on any replica with no sticky routing; a delta that
 arrives after its turn already committed `output_text.done` is
-dropped. In combined serve, behind more than one
-gateway process, the stream and the next turn must hit the node that
-owns Pi. See [multiple nodes](scale.md).
+dropped. See [multiple nodes](scale.md).
 
 Only these event types are public. Anything else from Pi is an internal
 log line.
@@ -544,10 +542,11 @@ lists of package names (pin versions when you need to, such as
 `pandas==2.2.3`). Python packages install into `.venv` in the session
 workspace. npm packages install under `.npm` there. Both directories
 are put first on `PATH` for that session. On `microvm` those installs
-use guest RAM because `/workspace` is a tmpfs. `packages.system` uses
-`apk` or `apt-get` on isolation `none`. On `microvm` the guest root is
-read-only, so `packages.system` returns `400` and tells you to bake
-those packages into a guest image. `setup_commands` is an ordered list of
+use guest RAM because `/workspace` is a tmpfs. `openai_hosted`
+sessions are always placed on a `microvm` worker, and the guest root is
+read-only, so `packages.system` returns `400` from the API whenever
+`type=openai_hosted`, and the message tells you to bake those packages
+into a guest image. `setup_commands` is an ordered list of
 `{ "command": "…", "cwd": "…" }` objects. `cwd` is optional and
 defaults to the session workspace. `env` is an object of string
 environment variables for that session. `files` entries are

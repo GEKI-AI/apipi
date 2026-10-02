@@ -9,16 +9,16 @@ import pytest
 from botocore.exceptions import ClientError
 from httpx import ASGITransport, AsyncClient
 from tests.support.split_worker import api_settings_for, split_client_for
+from tests.support.workspace import hosted_dir
 from tests.unit.test_blobs import FakeS3
 
-from apipi.config import DiskLimitError, Settings
+from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import FakeHarness
 from apipi.store.blobs import ObjectStoreError, S3Blobs, S3Store
 from apipi.store.engine import Store
 from apipi.store.repo import get_session
-from apipi.worker.pi.artifacts import harvest_session
 from apipi.worker.pi.dirs import pi_session_file
 
 
@@ -146,58 +146,50 @@ async def test_s3_put_failure_fails_turn(
         assert again.status_code == 200
 
 
-async def test_persist_pi_session_s3_failure_is_artifact_store(
-    client: AsyncClient, store: Store, settings: Settings
+async def test_pi_session_upload_failure_is_artifact_store(
+    settings: Settings,
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_secret: str,
 ) -> None:
-    token = "s3-cache-write"
-    agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={"agent_id": agent.json()["id"]},
-    )
-    session_id = uuid.UUID(created.json()["id"])
-    from tests.support.workspace import hosted_dir
+    s3_settings = _s3_settings(settings)
+    client_s3 = FakeS3()
 
-    directory = hosted_dir(settings, token, str(session_id))
-    path = pi_session_file(directory)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b'{"ok":true}\n')
+    async def _boom_put(
+        url: str, data: bytes, headers: dict[str, str] | None = None
+    ) -> None:
+        raise _client_error("AccessDenied", "PutObject")
 
-    class _Boom:
-        async def put(self, *args: object, **kwargs: object) -> None:
-            del args, kwargs
-            raise ObjectStoreError(
-                "Artifact store unavailable",
-                operation="put",
-                bucket="bucket",
-                key="cache",
-                code="AccessDenied",
-            )
-
-        async def get(self, *args: object, **kwargs: object) -> None:
-            del args, kwargs
-            return None
-
-        async def used_bytes(self, *args: object, **kwargs: object) -> int:
-            del args, kwargs
-            return 0
-
-        async def delete(self, *args: object, **kwargs: object) -> None:
-            del args, kwargs
-
-        async def delete_session(self, *args: object, **kwargs: object) -> None:
-            del args, kwargs
-
-    async with store.session() as db:
-        _row, error = await harvest_session(
-            db, settings, session_id, None, blobs=_Boom()
+    monkeypatch.setattr("apipi.worker.artifact_upload.put_via_url", _boom_put)
+    async with split_client_for(
+        s3_settings,
+        store,
+        blobs=S3Blobs(s3_settings, client=client_s3),
+        objects=S3Store(s3_settings, client=client_s3),
+        token=worker_secret,
+    ) as (_app, client, _worker):
+        token = "s3-cache-write"
+        agent = await client.post(
+            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
         )
-    assert error is not None
-    assert isinstance(error, DiskLimitError)
-    assert error.code == "artifact_store"
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={"agent_id": agent.json()["id"]},
+        )
+        session_id = created.json()["id"]
+        path = pi_session_file(hosted_dir(s3_settings, token, session_id))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'{"ok":true}\n')
+        sent = await client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json={"type": "agent.session.input.message", "content": "hello"},
+        )
+        assert sent.status_code == 200
+        events = await _events(client, token, session_id)
+        assert "agent.session.turn.failed" in [event["type"] for event in events]
+        assert _error(events)["data"]["code"] == "artifact_store"
 
 
 async def test_expected_cache_restore_fails_turn(

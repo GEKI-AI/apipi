@@ -63,6 +63,11 @@ async def db(store: Store) -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture(autouse=True)
+def _local_store_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APIPI_LOCAL_STORE_DIR", str(tmp_path / "default-store"))
+
+
+@pytest.fixture(autouse=True)
 def _clear_model_list_cache() -> Iterator[None]:
     from apipi.worker.pi.model_host import clear_model_cache
 
@@ -77,6 +82,7 @@ def settings(tmp_path: Path) -> Settings:
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
+        local_store_dir=str(tmp_path / "store"),
     )
 
 

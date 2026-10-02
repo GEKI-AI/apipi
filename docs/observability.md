@@ -45,9 +45,8 @@ not a runtime dependency.
 
 The full setting list is in [configuration](config.md).
 
-Combined `apipi serve` is one process: scrape its `/metrics` and set
-OTEL on that process. Production is `apipi serve --api-only` plus
-`apipi worker`. Turn series and turn/model spans are recorded on the
+Production is `apipi serve` plus `apipi worker`, so scrape both and
+set OTEL on both. Turn series and turn/model spans are recorded on the
 worker. HTTP series and `worker.assign` spans are on the API. Set
 `APIPI_METRICS` and `APIPI_OTEL_ENDPOINT` on both.
 
@@ -91,8 +90,7 @@ No bearer. Network-restrict `/metrics` like any scrape endpoint.
 
 | Process | Scrape | What you get |
 | --- | --- | --- |
-| Combined `apipi serve` | `http://<api>:8000/metrics` | HTTP, turns, tokens, worker-pool gauges, sandbox series if this process runs sandboxes |
-| API-only | `http://<api>:8000/metrics` | HTTP requests, errors, `apipi_workers` and `apipi_worker_leases` (labeled `run_mode`), `apipi_worker_assign_seconds` |
+| API (`apipi serve`) | `http://<api>:8000/metrics` | HTTP requests, errors, `apipi_workers` and `apipi_worker_leases` (labeled `run_mode`), `apipi_worker_assign_seconds` |
 | Worker | `http://<worker>:9091/metrics` | Turns, tokens, utilization, sandbox boot/destroy, host Pi RSS/PSS, cgroup guest RAM/CPU, optional vsock samples |
 
 Worker metric sets (same scrape, metrics on):
@@ -127,7 +125,7 @@ When `APIPI_OTEL_ENDPOINT` is set, ApiPi exports OTLP/HTTP traces.
 `/v1/traces` is appended if missing. Spans are wait-focused:
 `session`, `worker.assign`, `sandbox.boot`, `sandbox.attach`,
 `turn`, `model`. Inbound `traceparent` is honored. The worker
-command carries it so split API plus worker stays one trace.
+command carries it so the API and the worker stay on one trace.
 
 Point the endpoint at your collector (Tempo, Jaeger, or a vendor).
 Use traces to see where time went on a slow turn. Use Prometheus for
@@ -154,9 +152,8 @@ Prometheus stays aggregate. `apipi_sandboxes_active` and
 `apipi_pi_kill_total` do not carry `session_id`. Join billing rows on
 `event_id` (`{boot_id}:{seq}`), not on a scrape.
 
-The pool owner emits the events. Scrape `apipi_lifecycle_export_total`
-and `apipi_lifecycle_queue_depth` on that same process (the worker, or
-combined `apipi serve`). `result` is `ok`, `retry`, `drop`, or
+The API emits the events. Scrape `apipi_lifecycle_export_total`
+and `apipi_lifecycle_queue_depth` on the API. `result` is `ok`, `retry`, `drop`, or
 `overflow`. Size the queue for the exporter outage you can tolerate.
 A full queue drops the newest event.
 

@@ -37,12 +37,12 @@ requires the mode it asked for.
 | Path | Marker | What | GitHub |
 | --- | --- | --- | --- |
 | `tests/unit/` | none | Internals with mocks: config, store, isolation contract, microvm image packing, artifacts | yes |
-| `tests/api/` | none | Public HTTP vs [api.md](api.md). Tests that run turns use the split path: API app plus an in-process worker (`split_client_for`) with FakeHarness. API-only exceptions (no worker, or a dedicated worker setup) are listed in the PR that introduced them. Tenant isolation. `test_compat.py` has one named test per yes row on the API page. `test_worker_accepts.py` is the worker accepts placement and `type=none` tool-policy matrix | yes |
-| `tests/e2e/test_none_pi.py` | `e2e` | Real `apipi serve --api-only` and `apipi worker` subprocesses (`tests/support/procs.py`, ephemeral loopback port, tmp dirs) with a fake Pi in `none` mode | yes |
+| `tests/api/` | none | Public HTTP vs [api.md](api.md). Every API test runs the API app (`create_app`, which is always the API) through an in-process worker (`split_client_for`, `tests/support/split_worker.py`) that connects over the real worker socket and runs FakeHarness. The API and the worker talk only over that socket, the same as in production. There is no combined test mode. Tenant isolation. `test_compat.py` has one named test per yes row on the API page. `test_worker_accepts.py` is the worker accepts placement and `type=none` tool-policy matrix | yes |
+| `tests/e2e/test_none_pi.py` | `e2e` | Real `apipi serve` and `apipi worker` subprocesses (`tests/support/procs.py`, ephemeral loopback port, tmp dirs) with a fake Pi in `none` mode | yes |
 | `tests/e2e/test_microvm_pi.py` | `e2e`, `microvm` | Same two-process shape with a microvm worker, inside a real Firecracker guest | no (skips without KVM) |
 | `tests/e2e/test_metrics_scrape.py` | `e2e` | `/metrics` scrape from the same two-process setup | yes |
 | `tests/e2e/test_pi_live.py` | `slow` | `pi` is on `PATH` | no |
-| `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against the split fixture | no |
+| `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against the same two-process setup | no |
 | `tests/support/` | — | FakeHarness helpers, fake Pi, fake worker. Not a suite | — |
 
 GitHub runs `pytest -n auto -m "not slow"` (pytest-xdist; drop `-n` to debug one test or when `APIPI_TEST_DATABASE_URL` is set). That is unit, API, and `e2e`.
@@ -128,7 +128,7 @@ The runnable client script against a live gateway is
 This is a live run against a real model host. It is not pytest. GitHub
 CI does not run it. `./scripts/check` does not run it.
 
-The suite starts one `apipi serve --api-only` process and one
+The suite starts one `apipi serve` process and one
 `apipi worker` with `APIPI_RUN_MODE=microvm`, then runs every script in
 `examples/sessions/` (write-and-run `tree.py`, inject-and-sort a file,
 size `L` browser screenshot). The playground and

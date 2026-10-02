@@ -1,11 +1,12 @@
 # Install and run
 
-You can install ApiPi from PyPI or from a git checkout. A laptop try
-uses SQLite in the current directory and isolation `none`. Production
-isolation is `APIPI_RUN_MODE=microvm` on **workers** (or on combined
-`apipi serve` on one box). One process can keep SQLite. Several
-processes share Postgres. How isolation and workers fit is in
-[Concepts](concepts.md).
+You can install ApiPi from PyPI or from a git checkout. `apipi serve`
+is always the API, and Pi runs in a separate `apipi worker` process.
+A laptop try uses `apipi dev`, which starts both with SQLite in the
+current directory and isolation `none`. Production isolation is
+`APIPI_RUN_MODE=microvm` on **workers**. One API process can keep
+SQLite. Several API processes share Postgres. How isolation and
+workers fit is in [Concepts](concepts.md).
 
 Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model
 host URL. The gateway pins Pi 0.99.1. `apipi install` can install that
@@ -26,30 +27,44 @@ Python 3.13:
 pip install geki-apipi
 apipi install
 export OPENAI_BASE_URL=http://your-model-host/v1
-apipi migrate
-apipi serve
+apipi dev
 ```
 
 The import package and CLI are `apipi`. `uv add geki-apipi` works in a
 project. S3-compatible artifact storage is an extra:
 `pip install "geki-apipi[s3]"`.
 
-When `DATABASE_URL` is unset, the process uses SQLite at
-`.apipi/apipi.db` in the current working directory, next to
-`.apipi/sessions`. Run `apipi migrate` before `apipi serve`. Isolation
-defaults to `none` and logs a warning. Unset
+`apipi dev` is for local development. It runs `apipi migrate`, creates
+or reuses a worker token in `.apipi/dev-worker-token` (mode `0600`),
+and starts `apipi serve` and `apipi worker` as two child processes
+with their log output combined. `APIPI_LOCAL_STORE_DIR` defaults to
+`.apipi/store` for both processes. The worker run mode comes from
+`APIPI_RUN_MODE` and defaults to `none`, and the worker logs a warning
+for that. Press Ctrl-C to stop both processes. If either process
+exits, `apipi dev` stops the other one. `--config` sets the TOML file
+for the API, and for the worker too unless the file sets
+`database_url`, which a worker never accepts. `--host` is the API bind
+host (default `127.0.0.1`), and `--port` is the API port (default
+`8000`). The worker never gets `DATABASE_URL`, even when it is set in
+your environment.
+
+When `DATABASE_URL` is unset, the API uses SQLite at `.apipi/apipi.db`
+in the current working directory, next to `.apipi/sessions`. Outside
+`apipi dev`, run `apipi migrate` before `apipi serve`. Unset
 `APIPI_VAULT_MASTER_KEY` uses a local default for MCP vault tokens and
-logs a warning; set a 32-byte key in production. The process binds
+logs a warning; set a 32-byte key in production. `apipi serve` binds
 `0.0.0.0:8000`. `OPENAI_BASE_URL` is the model host that Pi calls.
 
 `apipi check` verifies requirements and then exits. It leaves HTTP
 unbound. `--skip-db` and `--skip-model` skip the store and the model
 host. `--fast` skips the throwaway sandbox probe for `microvm`.
-`--role api|worker|all` matches how the host will run (default `all`
-is combined API plus sandbox). `apipi install` is idempotent; `--force`
-reinstalls Pi and MicroVM files that are already present.
-`apipi install --role api` installs nothing extra. `--role worker`
-installs MicroVM.
+`apipi check` needs `--role api` or `--role worker`, which matches how the
+host will run.
+`apipi install --role api|worker|all` does the same for installs
+(`all` is the default and asks what to install). `apipi install` is
+idempotent; `--force` reinstalls Pi and MicroVM files that are already
+present. `apipi install --role api` installs nothing extra.
+`--role worker` installs MicroVM.
 
 ## Pi and MicroVM
 
@@ -102,7 +117,7 @@ exit 0 and report the pinned version. A missing or crashing jailer
 is replaced on the next `apipi install --microvm` without `--force`.
 `--force` still replaces binaries that already pass those checks.
 
-When the image store is unset, `apipi serve` and
+When the image store is unset, `apipi worker` and
 `apipi microvm shell` fail with `apipi images pull <id>` and the path that was looked at. `APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` remain as dev-only overrides. Firecracker and
 jailer are found on `PATH`, then in that install prefix, then under
 `SUDO_USER` when the process is root.
@@ -110,7 +125,7 @@ jailer are found on `PATH`, then in that install prefix, then under
 `apipi microvm shell` needs a TTY. If you are not root, it re-runs
 itself with `sudo -E`, the absolute Python interpreter, and `PATH` /
 `HOME` kept, so sudo `secure_path` does not need `uv`. It never runs
-`sudo uv`. `apipi serve` does not re-exec. TAP and jailer still need
+`sudo uv`. `apipi worker` does not re-exec. TAP and jailer still need
 root or the capabilities in [run modes](run-modes.md).
 
 ## Mirror, verify, and pull guest images
@@ -213,8 +228,7 @@ cd apipi
 uv sync
 uv run apipi install
 export OPENAI_BASE_URL=http://your-model-host/v1
-uv run apipi migrate
-uv run apipi serve
+uv run apipi dev
 ```
 
 Prefix every `apipi` command with `uv run` while you work from the
@@ -223,7 +237,7 @@ checkout. Contributors use this path for tests and docs:
 
 ## Production store
 
-One `apipi serve` can keep SQLite. File SQLite uses WAL and foreign
+One API process can keep SQLite. File SQLite uses WAL and foreign
 keys. Several processes, or HA, use Postgres. A Compose file at the
 repo root starts Postgres 17 (user `apipi`, password `apipi`, database
 `apipi`) on port 5432:
@@ -234,6 +248,8 @@ export DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
 apipi migrate
 apipi serve
 ```
+
+Start `apipi worker` next to it (see below), or use `apipi dev`.
 
 `postgres://` and `postgresql://` URLs are rewritten to
 `postgresql+asyncpg://`. You can put the URL in `.env` or `apipi.toml`.
@@ -246,7 +262,7 @@ through the old revision chain. Recreate the database, then migrate.
 ## Docker API
 
 The Compose file can run Postgres and a **rootless** API container.
-The image runs `apipi serve --api-only`. It does not get `/dev/kvm`
+The image runs `apipi serve`. It does not get `/dev/kvm`
 or TAP. Workers stay on Linux hosts:
 
 ```
@@ -271,36 +287,35 @@ APIPI_API_URL=http://api.example:8000 APIPI_WORKER_TOKEN_FILE=/run/apipi/worker.
 
 Unit files are in `deploy/systemd/`.
 
-## Three ways to run
+## Two ways to run
 
 Everything starts through the `apipi` CLI. `uvicorn` is not a
-supported operator path.
+supported operator path. `apipi serve` is always the API and never runs
+Pi. `apipi worker` runs Pi.
 
-### Combined (one host)
+### Local development
 
-Laptop or a single server. API and sandbox share one process.
+Laptop or a single server. `apipi dev` starts the API and one worker as
+two child processes:
 
 ```
 apipi install
 export OPENAI_BASE_URL=http://your-model-host/v1
-apipi check
-apipi migrate
-apipi serve
+apipi dev
 ```
 
-Isolation defaults to `none`. For Firecracker on that same box:
+The worker isolation defaults to `none`. For Firecracker on that same
+box, run the worker in `microvm` mode:
 
 ```
 apipi install --microvm
-export APIPI_RUN_MODE=microvm
-apipi check --role all
-apipi serve
+APIPI_RUN_MODE=microvm apipi dev
 ```
 
-`apipi serve` probes the run mode. If `microvm` cannot start, the
-process exits.
+The worker probes the run mode. If `microvm` cannot start, the worker
+exits, and `apipi dev` stops the API as well.
 
-### Split (API + worker)
+### Production (API + workers)
 
 Rootless API, KVM on another host. Example Compose plus a worker:
 
@@ -310,7 +325,7 @@ export OPENAI_BASE_URL=http://your-model-host/v1
 apipi check --role api
 apipi migrate
 apipi workers token create --name worker-1   # prints the secret once
-apipi serve --api-only
+apipi serve
 ```
 
 ```
@@ -360,15 +375,15 @@ session slot and enough remaining RAM. A turn with no lease returns
 `429` with code `capacity`. Drain a worker with a heartbeat
 `"drain": true` before you stop it.
 
-API replicas do not need sticky routing for Pi. See
+API replicas do not need sticky routing. See
 [multiple nodes](scale.md).
 
 ## Model URL
 
 `OPENAI_BASE_URL` is required. It is the model host Pi calls. Clients
-use a different URL for this gateway. On `apipi serve` and
-`apipi worker`, the process checks that `pi --version` is 0.99.1 and
-exits before it binds if that check fails. With the default
+use a different URL for this gateway. On `apipi worker`,
+the process checks that `pi --version` is 0.99.1 and exits before it
+connects if that check fails. On `apipi serve` and `apipi worker`, with the default
 `APIPI_MODEL_LIST=probe` it also lists `{OPENAI_BASE_URL}/models` at
 start and exits if that list fails. `turn` and `off` do not call
 `/models` at start. See [configuration](config.md#model-host).
@@ -395,25 +410,25 @@ Live turns also need Pi on `PATH`. You can override the binary with
 
 ## Serve
 
-Production operators set `APIPI_RUN_MODE=microvm` so each session
-boots in a Firecracker guest. That starts when `/dev/kvm`, Firecracker,
-jailer, guest images, `ip`, `iptables`, and `tc` are present, and after
-a throwaway guest has booted and been torn down:
+`apipi serve` is the API. It does not run Pi, does not probe KVM, and
+does not start Firecracker, so it can run in rootless Docker.
+
+Production operators set `APIPI_RUN_MODE=microvm` on each worker so each
+session boots in a Firecracker guest. The worker starts when `/dev/kvm`,
+Firecracker, jailer, guest images, `ip`, `iptables`, and `tc` are
+present, and after a throwaway guest has booted and been torn down:
 
 ```
-APIPI_RUN_MODE=microvm apipi serve
+APIPI_RUN_MODE=microvm apipi worker
 ```
 
-The process default is `none` (Pi as a child of the gateway). It logs
-a warning that this isolation is meant for laptops and CI:
+The worker default is `none` (Pi as a child of the worker). It logs a
+warning that this isolation is meant for laptops and CI:
 
 ```
-APIPI_RUN_MODE=none apipi serve
+APIPI_RUN_MODE=none apipi worker
 ```
 
-`apipi serve` is the combined path for test and dev only: API plus a local sandbox in one
-process. Production always runs split. `apipi serve --api-only` is the control plane only. It does
-not probe KVM or start Firecracker, so it can run in rootless Docker.
 `apipi worker` connects outbound to that API (`APIPI_API_URL`,
 `--url`, or `http://127.0.0.1:8000`) with its token file (`APIPI_WORKER_TOKEN_FILE`). See
 [sandbox workers](workers.md).
@@ -440,25 +455,24 @@ paths in the environment file.
 
 `GET /health` returns `{"status": "ok"}` without a bearer.
 
-One `apipi serve` is one process. The Pi pool lives in that process, so
-run a single uvicorn worker. Combined serve with several processes
-needs sticky routing. API-only plus workers does not, for live Pi.
-See [production](production.md) and [multiple nodes](scale.md).
+Run a single uvicorn worker per `apipi serve` process. Several API
+processes can run side by side without sticky routing, because Pi
+lives on the workers. See [production](production.md) and
+[multiple nodes](scale.md).
 
 ## systemd
 
-Run the API under systemd as `apipi serve --api-only`. Run guests as
+Run the API under systemd as `apipi serve`. Run guests as
 `apipi worker` with `APIPI_RUN_MODE=microvm`. Keep secrets in an
 environment file that the unit loads. Worker units need `/dev/kvm` and
 permission to create TAP devices. Files are in `deploy/systemd/` and
 [run modes](run-modes.md).
 
-Example units: `deploy/systemd/apipi-api.service` (`serve --api-only`,
-no KVM) and `deploy/systemd/apipi-worker.service` (DeviceAllow for
+Example units: `deploy/systemd/apipi-api.service` (`serve`, no
+KVM) and `deploy/systemd/apipi-worker.service` (DeviceAllow for
 `/dev/kvm` and TAP). Both worker units need `KillMode=control-group`
-so a stop or crash restart does not leave host Pi processes. Combined
-serve on one box can still use `apipi serve` with
-`APIPI_RUN_MODE=microvm` if that host is the hypervisor.
+so a stop or crash restart does not leave host Pi processes. A single
+host that is also the hypervisor runs both units.
 
 Environment variables in `/etc/apipi.env` override keys in the TOML
 file. Bind, run mode, worker token, and the auth callback are the

@@ -25,9 +25,7 @@ def _execution(settings, **kwargs: Any) -> LocalExecution:
         settings,
         pool=pool,  # ty: ignore[invalid-argument-type]
         harness=SimpleNamespace(),
-        isolation=SimpleNamespace(),  # ty: ignore[invalid-argument-type]
         hub=SimpleNamespace(),  # ty: ignore[invalid-argument-type]
-        store=None,
         outbox=Outbox(),
         **kwargs,
     )
@@ -118,10 +116,8 @@ async def test_reaper_skips_unknown_without_db(settings) -> None:
     path = await _workspace(settings, tenant_id, session_id)
     wiped = await reap_workspaces(
         settings,
-        None,
         _Pool(),  # ty: ignore[invalid-argument-type]
         ttl_overrides={},
-        allow_db=False,
     )
     assert wiped == []
     assert path.is_dir()
@@ -133,12 +129,10 @@ async def test_reaper_wipes_with_inventory_ttl(settings) -> None:
     path = await _workspace(settings, tenant_id, session_id)
     wiped = await reap_workspaces(
         settings,
-        None,
         _Pool(),  # ty: ignore[invalid-argument-type]
         ttl_overrides={
             str(session_id): (0.0, time.time() - 30, "openai_hosted"),
         },
-        allow_db=False,
     )
     assert wiped == [str(session_id)]
     assert not path.exists()
@@ -150,13 +144,11 @@ def _block_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("split worker must not construct storage clients")
 
-    import apipi.services.runtime as runtime
     import apipi.store.blobs as blobs
     import apipi.store.engine as engine
 
     monkeypatch.setattr(engine, "create_engine", _boom)
     monkeypatch.setattr(engine, "Store", _boom)
-    monkeypatch.setattr(runtime, "object_store", _boom)
     monkeypatch.setattr(blobs, "object_store", _boom)
     monkeypatch.setattr(blobs, "blob_store", _boom)
     monkeypatch.setattr(blobs, "S3Store", _boom)
@@ -221,7 +213,6 @@ async def test_split_turn_needs_no_store_or_object_credentials(
     from apipi.services.turn_context import build_turn_context
     from apipi.store.repo import create_session, create_tenant
     from apipi.worker.execution import LocalExecution
-    from apipi.worker.pi.isolation import load_isolation
     from apipi.worker.pi.pool import PiPool
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -240,9 +231,7 @@ async def test_split_turn_needs_no_store_or_object_credentials(
         settings,
         pool=PiPool(settings),
         harness=harness,
-        isolation=load_isolation("none"),
         hub=InMemoryEventBus(),
-        store=None,
         outbox=outbox,
     )
     await execution.run_turn(
@@ -271,7 +260,6 @@ async def test_split_boot_hosted_needs_no_store(
     from apipi.store.repo import create_session, create_tenant
     from apipi.worker.execution import LocalExecution
     from apipi.worker.pi.dirs import sessions_root
-    from apipi.worker.pi.isolation import load_isolation
     from apipi.worker.pi.pool import PiPool
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -292,9 +280,7 @@ async def test_split_boot_hosted_needs_no_store(
         settings,
         pool=PiPool(settings),
         harness=FakeHarness(),
-        isolation=load_isolation("none"),
         hub=InMemoryEventBus(),
-        store=None,
         outbox=Outbox(),
     )
     spawned: list[dict[str, Any]] = []

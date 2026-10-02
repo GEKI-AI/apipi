@@ -13,10 +13,8 @@ from apipi.gateway import create_app
 from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
-from apipi.store.repo import get_session_by_id
 from apipi.worker.pi.artifacts import reap_workspaces
 from apipi.worker.pi.isolation.none import NoneIsolation
-from apipi.worker.pi.pool import PiPool
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -186,7 +184,7 @@ async def test_setup_failure_does_not_start_turn(
 async def test_system_packages_rejected_on_microvm(
     settings: Settings, store: Store
 ) -> None:
-    microvm = settings.model_copy(update={"run_mode": "microvm", "api_only": True})
+    microvm = settings.model_copy(update={"run_mode": "microvm"})
     app = create_app(microvm, store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -245,78 +243,102 @@ async def test_unimplemented_env_fields(client: AsyncClient) -> None:
 
 
 async def test_sandbox_ttl_wipes_scratch_and_rehydrates(
-    client: AsyncClient,
     store: Store,
     settings: Settings,
+    worker_secret: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from tests.support.split_worker import split_client_for
+
     def fake_run(workspace: Path, **_kwargs: object) -> None:
         (workspace / "ready.txt").write_text("ok")
 
     monkeypatch.setattr("apipi.env.setup.run_host_setup", fake_run)
-    token = "sandbox-ttl"
-    agent_id = await _agent(client, token)
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent_id,
-            "environment": {
-                "type": "openai_hosted",
-                "setup_commands": [{"command": "mkdir -p reports"}],
+    async with split_client_for(settings, store, token=worker_secret) as (
+        _app,
+        client,
+        worker,
+    ):
+        token = "sandbox-ttl"
+        agent_id = await _agent(client, token)
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent_id,
+                "environment": {
+                    "type": "openai_hosted",
+                    "setup_commands": [{"command": "mkdir -p reports"}],
+                },
+                "input": "hello",
             },
-        },
-    )
-    assert created.status_code == 200
-    session_id = created.json()["id"]
-    directory = hosted_dir(settings, token, session_id)
-    (directory / "scratch.txt").write_text("gone")
-    async with store.session() as db:
-        row = await get_session_by_id(db, UUID(session_id))
-        assert row is not None
-        row.updated_at = utc_now() - timedelta(hours=2)
-    await reap_workspaces(settings, store, PiPool(settings))
-    assert not directory.exists()
-    follow = await client.post(
-        f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
-        json={"type": "agent.session.input.message", "text": "hello"},
-    )
-    assert follow.status_code == 200
-    assert not (directory / "scratch.txt").exists()
-    assert (directory / "ready.txt").read_text() == "ok"
-    assert (directory / ".apipi" / "setup.sh").is_file()
+        )
+        assert created.status_code == 200
+        session_id = created.json()["id"]
+        directory = hosted_dir(settings, token, session_id)
+        assert (directory / "ready.txt").read_text() == "ok"
+        (directory / "scratch.txt").write_text("gone")
+        await reap_workspaces(
+            worker.execution.settings,
+            worker.execution.pool,
+            ttl_overrides=worker.execution._context_ttl,
+            now=utc_now() + timedelta(hours=2),
+        )
+        assert not directory.exists()
+        follow = await client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json={"type": "agent.session.input.message", "text": "hello"},
+        )
+        assert follow.status_code == 200
+        assert not (directory / "scratch.txt").exists()
+        assert (directory / "ready.txt").read_text() == "ok"
+        assert (directory / ".apipi" / "setup.sh").is_file()
 
 
 async def test_reap_skips_held_hosted_workspace(
-    client: AsyncClient, store: Store, settings: Settings
+    store: Store, settings: Settings, worker_secret: str
 ) -> None:
-    token = "reap-held"
-    agent_id = await _agent(client, token)
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent_id,
-            "environment": {"type": "openai_hosted"},
-        },
-    )
-    assert created.status_code == 200
-    session_id = UUID(created.json()["id"])
-    directory = hosted_dir(settings, token, str(session_id))
-    (directory / "scratch.txt").write_text("keep", encoding="utf-8")
-    async with store.session() as db:
-        row = await get_session_by_id(db, session_id)
-        assert row is not None
-        row.updated_at = utc_now() - timedelta(hours=2)
-    pool = PiPool(settings)
-    pool.hold(session_id)
-    await reap_workspaces(settings, store, pool)
-    assert directory.is_dir()
-    assert (directory / "scratch.txt").read_text(encoding="utf-8") == "keep"
-    pool.release(session_id)
-    await reap_workspaces(settings, store, pool)
-    assert not directory.exists()
+    from tests.support.split_worker import split_client_for
+
+    async with split_client_for(settings, store, token=worker_secret) as (
+        _app,
+        client,
+        worker,
+    ):
+        token = "reap-held"
+        agent_id = await _agent(client, token)
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent_id,
+                "environment": {"type": "openai_hosted"},
+                "input": "hello",
+            },
+        )
+        assert created.status_code == 200
+        session_id = UUID(created.json()["id"])
+        directory = hosted_dir(settings, token, str(session_id))
+        (directory / "scratch.txt").write_text("keep", encoding="utf-8")
+        later = utc_now() + timedelta(hours=2)
+        worker.execution.pool.hold(session_id)
+        await reap_workspaces(
+            worker.execution.settings,
+            worker.execution.pool,
+            ttl_overrides=worker.execution._context_ttl,
+            now=later,
+        )
+        assert directory.is_dir()
+        assert (directory / "scratch.txt").read_text(encoding="utf-8") == "keep"
+        worker.execution.pool.release(session_id)
+        await reap_workspaces(
+            worker.execution.settings,
+            worker.execution.pool,
+            ttl_overrides=worker.execution._context_ttl,
+            now=later,
+        )
+        assert not directory.exists()
 
 
 async def test_none_spawn_creates_missing_cwd(tmp_path: Path) -> None:

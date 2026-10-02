@@ -369,10 +369,12 @@ async def test_compat_artifacts(
     directory = hosted_dir(settings, token, session_id)
     (directory / "outputs").mkdir()
     (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
-    from apipi.worker.pi.artifacts import harvest_session
-
-    async with store.session() as db:
-        await harvest_session(db, settings, uuid.UUID(session_id), None)
+    posted = await client.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(token),
+        json={"type": "agent.session.input.message", "text": "hello"},
+    )
+    assert posted.status_code == 200
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
     )

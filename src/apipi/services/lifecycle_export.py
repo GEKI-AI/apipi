@@ -56,16 +56,16 @@ def lifecycle_configured(settings: Settings) -> bool:
     return bool(settings.lifecycle_sinks.strip())
 
 
-def run_mode_allowed(settings: Settings) -> bool:
+def run_mode_allowed(settings: Settings, run_mode: str | None) -> bool:
     raw = settings.lifecycle_run_modes.strip()
     if not raw:
         return True
     allowed = {part.strip() for part in raw.split(",") if part.strip()}
-    return settings.run_mode in allowed
+    return run_mode in allowed
 
 
 def lifecycle_active(settings: Settings) -> bool:
-    return lifecycle_configured(settings) and run_mode_allowed(settings)
+    return lifecycle_configured(settings)
 
 
 def backoff_seconds(attempt: int, cap: float) -> float:
@@ -116,10 +116,10 @@ class LifecycleEmitter:
         self._task = asyncio.create_task(self._sender())
 
     def emit_start(self, fields: dict[str, Any], *, cause: str) -> int | None:
-        if not self.active:
+        if not self.active or not self._allowed(fields):
             return None
         seq = self._next_seq()
-        event = self._envelope("session.live.start", seq)
+        event = self._envelope("session.live.start", seq, fields.get("run_mode"))
         event.update(self._identity(fields))
         event["cause"] = cause
         self._put(event)
@@ -128,10 +128,10 @@ class LifecycleEmitter:
     def emit_stop(
         self, fields: dict[str, Any], *, reason: str, live_ms: int
     ) -> int | None:
-        if not self.active:
+        if not self.active or not self._allowed(fields):
             return None
         seq = self._next_seq()
-        event = self._envelope("session.live.stop", seq)
+        event = self._envelope("session.live.stop", seq, fields.get("run_mode"))
         event.update(self._identity(fields))
         event["reason"] = reason
         event["started_at"] = fields.get("started_at")
@@ -144,9 +144,9 @@ class LifecycleEmitter:
         if not self.active or self.heartbeat_s is None:
             return None
         seq = self._next_seq()
-        event = self._envelope("session.live.heartbeat", seq)
+        event = self._envelope("session.live.heartbeat", seq, None)
         event["interval_s"] = _interval_s(self.heartbeat_s)
-        event["live"] = [self._entry(item) for item in entries]
+        event["live"] = [self._entry(item) for item in entries if self._allowed(item)]
         self._put(event)
         return seq
 
@@ -187,7 +187,10 @@ class LifecycleEmitter:
         self._seq += 1
         return self._seq
 
-    def _envelope(self, kind: str, seq: int) -> dict[str, Any]:
+    def _allowed(self, fields: dict[str, Any]) -> bool:
+        return run_mode_allowed(self.settings, _text(fields.get("run_mode")))
+
+    def _envelope(self, kind: str, seq: int, run_mode: str | None) -> dict[str, Any]:
         return {
             "type": kind,
             "schema_version": SCHEMA_VERSION,
@@ -197,7 +200,7 @@ class LifecycleEmitter:
             "ts": utc_ts(),
             "worker_id": self.worker_id,
             "instance_id": self.settings.instance_id,
-            "run_mode": self.settings.run_mode,
+            "run_mode": run_mode,
         }
 
     def _identity(self, fields: dict[str, Any]) -> dict[str, Any]:
@@ -213,7 +216,7 @@ class LifecycleEmitter:
             "sandbox_image": fields.get("sandbox_image"),
             "image_version": fields.get("image_version"),
             "image_digest": fields.get("image_digest"),
-            "run_mode": fields.get("run_mode") or self.settings.run_mode,
+            "run_mode": fields.get("run_mode"),
         }
 
     def _entry(self, fields: dict[str, Any]) -> dict[str, Any]:
@@ -504,44 +507,12 @@ class OutboxLifecycleReporter(LifecycleEmitter):
         return None
 
 
-def attach_lifecycle(
-    pool: Any, settings: Settings, metrics: Metrics | None = None
+def create_lifecycle(
+    settings: Settings, metrics: Metrics | None = None
 ) -> LifecycleEmitter | None:
-    current = getattr(pool, "lifecycle", None)
-    if isinstance(current, LifecycleEmitter):
-        if metrics is not None and current.metrics is None:
-            current.metrics = metrics
-        return current if current.active else None
     if not lifecycle_active(settings):
         return None
-    emitter = LifecycleEmitter(settings, metrics)
-    pool.lifecycle = emitter
-    return emitter
-
-
-async def heartbeat_loop(
-    pool: Any,
-    emitter: LifecycleEmitter,
-    *,
-    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-    clock: Callable[[], float] = time.monotonic,
-    max_emits: int | None = None,
-) -> None:
-    interval = emitter.heartbeat_s
-    if interval is None or interval <= 0:
-        return
-    emitted = 0
-    next_at = clock() + interval
-    while max_emits is None or emitted < max_emits:
-        wait = max(0.0, next_at - clock())
-        await sleep(wait)
-        now = clock()
-        if now + 1e-9 < next_at:
-            continue
-        entries = pool.live_entries() if hasattr(pool, "live_entries") else []
-        emitter.emit_heartbeat(entries)
-        emitted += 1
-        next_at = now + interval
+    return LifecycleEmitter(settings, metrics)
 
 
 def heartbeat_fields(row: Any) -> dict[str, Any]:
@@ -601,7 +572,10 @@ async def api_heartbeat_loop(
                     row = await get_session_by_id(db, session_id)
                     if row is None or row.lease_id is None:
                         continue
-                    live.append(heartbeat_fields(row))
+                    entry = heartbeat_fields(row)
+                    conn = hub.get(row.worker_id) if row.worker_id is not None else None
+                    entry["run_mode"] = conn.run_mode if conn is not None else None
+                    live.append(entry)
         except Exception:
             log.exception("lifecycle heartbeat failed")
         emitter.emit_heartbeat(live)

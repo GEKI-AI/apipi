@@ -39,7 +39,7 @@ BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "microvm"})
 SANDBOX_SIZE_HELP = "APIPI_SANDBOX_DEFAULT_SIZE must be S, M, or L"
 WORKER_ACCEPTS_HELP = "APIPI_WORKER_ACCEPTS must be a comma list from none,microvm"
 
-NONE_MODE_WARNING = "APIPI_RUN_MODE=none is not suited for production"
+API_ONLY_REMOVED = "APIPI_API_ONLY was removed in 0.14.0; apipi serve is always the API"
 VAULT_MASTER_KEY_UNSET = (
     "APIPI_VAULT_MASTER_KEY is unset; using a local default. "
     "Set a 32-byte key in production."
@@ -646,10 +646,6 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("APIPI_API_URL", "api_url"),
     )
-    api_only: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("APIPI_API_ONLY", "api_only"),
-    )
     worker_accepts: Annotated[
         list[str] | None, BeforeValidator(parse_worker_accepts)
     ] = Field(
@@ -994,7 +990,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("APIPI_ARTIFACT_STORE", "artifact_store"),
     )
     local_store_dir: str | None = Field(
-        default=None,
+        default=".apipi/store",
         validation_alias=AliasChoices("APIPI_LOCAL_STORE_DIR", "local_store_dir"),
     )
     s3_bucket: OtelEndpoint = Field(
@@ -1168,16 +1164,13 @@ class Settings(BaseSettings):
             self.s3_bucket and self.s3_bucket.strip()
         ):
             raise ValueError("APIPI_S3_BUCKET is required")
-        if (
-            self.artifact_store == "local"
-            and (self.local_store_dir is None or not self.local_store_dir.strip())
-            and self.api_only
+        if self.artifact_store == "local" and (
+            self.local_store_dir is None or not self.local_store_dir.strip()
         ):
             raise ValueError(
-                "APIPI_ARTIFACT_STORE is local in split mode without "
-                "APIPI_LOCAL_STORE_DIR: set APIPI_ARTIFACT_STORE=s3, or set "
-                "APIPI_LOCAL_STORE_DIR to a store root the API and every "
-                "worker mounts at the same path"
+                "APIPI_ARTIFACT_STORE is local without APIPI_LOCAL_STORE_DIR: "
+                "set APIPI_ARTIFACT_STORE=s3, or set APIPI_LOCAL_STORE_DIR to "
+                "a store root the API and every worker mounts at the same path"
             )
         try:
             self.database_url = store_url(self.database_url)
@@ -1343,6 +1336,7 @@ def _toml_values(path: Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ConfigError(f"{path} must be a table")
     nested: dict[str, Any] = {}
+    raw.pop("api_only", None)
     if "worker_token" in raw:
         raise ConfigError(LEGACY_WORKER_TOKEN_MESSAGE)
     if "models" in raw and isinstance(raw["models"], dict):
@@ -1415,12 +1409,24 @@ def _warn_removed_env_none_env() -> None:
         )
 
 
+def _warn_removed_api_only(path: Path | None) -> None:
+    in_toml = False
+    if path is not None:
+        try:
+            in_toml = "api_only" in tomllib.loads(path.read_text())
+        except (OSError, tomllib.TOMLDecodeError):
+            in_toml = False
+    if os.environ.get("APIPI_API_ONLY") or in_toml:
+        _log.warning(API_ONLY_REMOVED, extra={"event": "config.api_only_removed"})
+
+
 def load_settings(*, config_path: str | None = None) -> Settings:
     _warn_removed_agent_versions_env()
     _warn_removed_env_none_env()
     reject_legacy_worker_token()
     path = resolve_config_path(config_path)
     values = _toml_values(path) if path is not None else {}
+    _warn_removed_api_only(path)
     env_file = Path(".env") if Path(".env").is_file() else None
 
     class Loaded(Settings):

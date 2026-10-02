@@ -38,9 +38,9 @@ from apipi.gateway.request_id import RequestIdMiddleware
 from apipi.services.agents import AgentService
 from apipi.services.event_bus import EventBus, create_event_bus
 from apipi.services.files import FileService
+from apipi.services.lifecycle_export import LifecycleEmitter, create_lifecycle
 from apipi.services.models import ModelsService
 from apipi.services.payload_export import load_payload_sinks
-from apipi.services.runtime import FakeHarness
 from apipi.services.sessions import SessionService
 from apipi.services.skill_store import SkillService
 from apipi.services.templates import TemplateService
@@ -54,12 +54,8 @@ from apipi.store.engine import Store, create_engine
 from apipi.store.models import Tenant, utc_now
 from apipi.store.repo import ensure_tenant as store_ensure_tenant
 from apipi.store.repo import purge_turn_logs
-from apipi.worker.execution import LocalExecution, RemoteExecution
+from apipi.worker.execution import RemoteExecution
 from apipi.worker.hub import WorkerHub
-from apipi.worker.pi.harness import PiHarness
-from apipi.worker.pi.isolation import load_isolation
-from apipi.worker.pi.isolation.base import Isolation
-from apipi.worker.pi.pool import PiPool
 
 log = logging.getLogger("apipi")
 
@@ -98,13 +94,11 @@ class Gateway:
         store: Store,
         store_owned: bool,
         event_hub: EventBus,
-        execution: LocalExecution | RemoteExecution,
+        execution: RemoteExecution,
         workers: WorkerHub,
         authenticate: Authenticate,
         authorize: Authorize | None = None,
-        isolation: Isolation,
-        pool: PiPool,
-        harness: FakeHarness | PiHarness,
+        lifecycle: LifecycleEmitter | None,
         blobs: ArtifactBlobs,
         objects: ObjectStore,
         metrics: Metrics | None,
@@ -117,9 +111,7 @@ class Gateway:
         self.workers = workers
         self.authenticate = authenticate
         self.authorize = authorize
-        self.isolation = isolation
-        self.pool = pool
-        self.harness = harness
+        self.lifecycle = lifecycle
         self.blobs = blobs
         self.objects = objects
         self.metrics = metrics
@@ -191,8 +183,6 @@ class Gateway:
         cls,
         settings: Settings | None = None,
         store: Store | None = None,
-        harness: FakeHarness | PiHarness | None = None,
-        pool: PiPool | None = None,
         tracing: Tracing | None = None,
         blobs: ArtifactBlobs | None = None,
         objects: ObjectStore | None = None,
@@ -200,7 +190,7 @@ class Gateway:
         authenticate: Authenticate | None = None,
         authorize: Authorize | None = None,
         event_hub: EventBus | None = None,
-        execution: LocalExecution | RemoteExecution | None = None,
+        execution: RemoteExecution | None = None,
         workers: WorkerHub | None = None,
     ) -> "Gateway":
         resolved = settings if settings is not None else load_settings()
@@ -215,9 +205,6 @@ class Gateway:
                 )
             )
         )
-        resolved_pool = pool if pool is not None else PiPool(resolved)
-        isolation = load_isolation(resolved.run_mode)
-        resolved_harness = harness if harness is not None else PiHarness(resolved_pool)
         resolved_objects = objects if objects is not None else object_store(resolved)
         resolved_blobs = (
             blobs if blobs is not None else ArtifactAdapter(resolved_objects)
@@ -236,37 +223,21 @@ class Gateway:
             resolved_tracing = Tracing(endpoint=resolved.otel_endpoint)
         else:
             resolved_tracing = None
-        resolved_pool.tracing = resolved_tracing
-        resolved_pool.metrics = resolved_metrics
-        # The API always owns the lifecycle export: local processes emit
-        # from the pool, split APIs from worker envelopes and inventories.
-        from apipi.services.lifecycle_export import attach_lifecycle
-
-        attach_lifecycle(resolved_pool, resolved, resolved_metrics)
+        # The API owns the lifecycle export: it emits from worker
+        # envelopes and inventories.
+        resolved_lifecycle = create_lifecycle(resolved, resolved_metrics)
         resolved_workers = (
             workers
             if workers is not None
             else WorkerHub(resolved, metrics=resolved_metrics, tracing=resolved_tracing)
         )
-        if execution is not None:
-            resolved_execution = execution
-        elif resolved.api_only:
-            resolved_execution = RemoteExecution(
+        resolved_execution = (
+            execution
+            if execution is not None
+            else RemoteExecution(
                 resolved, workers=resolved_workers, store=resolved_store, hub=hub
             )
-        else:
-            resolved_execution = LocalExecution(
-                resolved,
-                pool=resolved_pool,
-                harness=resolved_harness,
-                isolation=isolation,
-                hub=hub,
-                store=resolved_store,
-                blobs=resolved_blobs,
-                objects=resolved_objects,
-                metrics=resolved_metrics,
-                tracing=resolved_tracing,
-            )
+        )
         auth = (
             authenticate
             if authenticate is not None
@@ -284,9 +255,7 @@ class Gateway:
             workers=resolved_workers,
             authenticate=auth,
             authorize=resolved_authorize,
-            isolation=isolation,
-            pool=resolved_pool,
-            harness=resolved_harness,
+            lifecycle=resolved_lifecycle,
             blobs=resolved_blobs,
             objects=resolved_objects,
             metrics=resolved_metrics,
@@ -322,7 +291,7 @@ class Gateway:
         app.add_middleware(RequestLogMiddleware)
         app.state.gateway = self
         app.state.settings = self.settings
-        app.state.isolation = self.isolation
+        app.state.lifecycle = self.lifecycle
         app.state.metrics = self.metrics
         app.state.tracing = self.tracing
         app.state.store = self.store
@@ -333,8 +302,6 @@ class Gateway:
         app.state.usage_sinks = self._usage_sinks
         app.state.payload_sinks = self._payload_sinks
         app.state.event_hub = self.event_hub
-        app.state.pi_pool = self.pool
-        app.state.harness = self.harness
         app.state.execution = self.execution
         app.state.workers = self.workers
         app.state.blobs = self.blobs
@@ -346,19 +313,14 @@ class Gateway:
             log.warning(VAULT_MASTER_KEY_UNSET)
         self.execution.attach_store(self.store)
         await self.event_hub.start()
-        emitter = getattr(self.pool, "lifecycle", None)
+        emitter = self.lifecycle
         if emitter is not None:
             emitter.start()
         self._tasks = [
-            asyncio.create_task(self.execution.reap_loop()),
-            asyncio.create_task(self.execution.reap_workspace_loop()),
-            asyncio.create_task(self.execution.observe_loop()),
-            asyncio.create_task(self.execution.lifecycle_loop()),
-            asyncio.create_task(self.execution.sandbox_seen_loop()),
             asyncio.create_task(_purge_usage_loop(self.settings, self.store)),
             asyncio.create_task(self._expire_worker_leases()),
         ]
-        if emitter is not None and isinstance(self.execution, RemoteExecution):
+        if emitter is not None:
             from apipi.services.lifecycle_export import api_heartbeat_loop
 
             self._tasks.append(
@@ -372,6 +334,8 @@ class Gateway:
             task.cancel()
         self._tasks = []
         await self.execution.close()
+        if self.lifecycle is not None:
+            await self.lifecycle.close()
         await self.sessions.cancel_turns()
         await self.event_hub.close()
         if isinstance(self.tracing, Tracing):
@@ -388,8 +352,6 @@ class Gateway:
 def create_app(
     settings: Settings | None = None,
     store: Store | None = None,
-    harness: FakeHarness | PiHarness | None = None,
-    pool: PiPool | None = None,
     tracing: Tracing | None = None,
     blobs: ArtifactBlobs | None = None,
     objects: ObjectStore | None = None,
@@ -397,14 +359,12 @@ def create_app(
     authenticate: Authenticate | None = None,
     authorize: Authorize | None = None,
     event_hub: EventBus | None = None,
-    execution: LocalExecution | RemoteExecution | None = None,
+    execution: RemoteExecution | None = None,
     workers: WorkerHub | None = None,
 ) -> FastAPI:
     gateway = Gateway.create(
         settings,
         store=store,
-        harness=harness,
-        pool=pool,
         tracing=tracing,
         blobs=blobs,
         objects=objects,

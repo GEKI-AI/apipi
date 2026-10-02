@@ -76,7 +76,7 @@ from apipi.store.repo import (
     list_turns,
     update_session,
 )
-from apipi.worker.execution import LocalExecution, RemoteExecution
+from apipi.worker.execution import RemoteExecution
 from apipi.worker.pi.artifacts import wipe_artifact_store, wipe_workspace
 from apipi.worker.pi.dirs import session_workspace
 from apipi.worker.pi.idle import (
@@ -88,7 +88,6 @@ from apipi.worker.pi.model_host import require_model
 from apipi.worker.pi.sandbox import (
     mem_mib_for_size,
     reject_removed_size_key,
-    require_image_rootfs,
     require_image_size,
     require_known_image,
     resolve_sandbox_image,
@@ -319,7 +318,7 @@ class SessionService:
         settings: Settings,
         store: Store,
         event_hub: EventBus,
-        execution: LocalExecution | RemoteExecution,
+        execution: RemoteExecution,
         blobs: ArtifactBlobs,
         files: FileService,
         skill_store: SkillService,
@@ -622,11 +621,10 @@ class SessionService:
             require_known_image(self.settings, image)
             require_image_size(image, size)
             env = {**env, "sandbox_size": size, "sandbox_image": image}
-            require_image_rootfs(self.settings, image)
             turn_content = parse_user_content(input, settings=self.settings)
             require_image_model(self.settings, model, turn_content)
             try:
-                reject_microvm_system_packages(env, run_mode=self.settings.run_mode)
+                reject_microvm_system_packages(env, run_mode="microvm")
             except SetupError as exc:
                 raise ApiError(
                     "invalid_request",

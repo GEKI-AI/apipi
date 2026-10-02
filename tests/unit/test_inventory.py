@@ -350,14 +350,10 @@ async def test_reconcile_unleased_released_session_gets_ttl_then_reaps(
     since = entry["idle_since_epoch"]
     before = datetime.fromtimestamp(since + ttl_seconds - 1, tz=UTC)
     after = datetime.fromtimestamp(since + ttl_seconds + 1, tz=UTC)
-    kept = await reap_workspaces(
-        settings, None, pool, ttl_overrides=seeded, allow_db=False, now=before
-    )
+    kept = await reap_workspaces(settings, pool, ttl_overrides=seeded, now=before)
     assert kept == []
     assert workspace.is_dir()
-    wiped = await reap_workspaces(
-        settings, None, pool, ttl_overrides=seeded, allow_db=False, now=after
-    )
+    wiped = await reap_workspaces(settings, pool, ttl_overrides=seeded, now=after)
     assert wiped == [str(session_id)]
     assert not workspace.exists()
 

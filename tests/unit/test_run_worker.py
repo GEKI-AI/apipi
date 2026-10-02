@@ -49,7 +49,6 @@ class _Connect:
 
 class _Execution:
     tracing = None
-    db_fallback = True
 
     def __init__(self, pool: PiPool, workspace: asyncio.Event) -> None:
         self.pool = pool
@@ -63,6 +62,9 @@ class _Execution:
         await asyncio.Event().wait()
 
     async def observe_loop(self) -> None:
+        await asyncio.Event().wait()
+
+    async def sandbox_seen_loop(self) -> None:
         await asyncio.Event().wait()
 
     async def close(self) -> None:
@@ -137,7 +139,7 @@ async def test_run_worker_reports_lifecycle_over_socket(
     closed = asyncio.Event()
 
     class _LifeExecution(_Execution):
-        async def lifecycle_loop(self) -> None:
+        async def sandbox_seen_loop(self) -> None:
             started.set()
             await asyncio.Event().wait()
 
@@ -172,7 +174,6 @@ async def test_run_worker_reports_lifecycle_over_socket(
                 break
             await asyncio.sleep(0.02)
         assert reporter is not None
-        assert execution.db_fallback is False
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

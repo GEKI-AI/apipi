@@ -13,7 +13,7 @@ runs, and where files run.
       ApiPi HTTP API              never inside a guest
       store (SQLite or Postgres)
            |
-           |  in-process, or a worker lease
+           |  worker lease
            v
       Pi  (+ MCP)           none | microvm
            |
@@ -26,9 +26,8 @@ A hosted computer is not paused. Idle expiry stops Pi and deletes the workspace.
 
 A turn is one model loop. The client posts a message. The API
 authenticates the bearer, loads the session, and asks execution to
-run. Combined `apipi serve` runs Pi in that process.
-`apipi serve --api-only` leases a [worker](worker-concepts.md). Pi
-runs in [isolation](isolation.md) (`none` or a Firecracker guest).
+run. `apipi serve` is always the API: it leases a
+[worker](worker-concepts.md), and Pi runs there. Pi runs in [isolation](isolation.md) (`none` or a Firecracker guest).
 Public events are written to the store, then SSE. Token deltas are
 live only and are not stored. A thinking preview is stored. The full
 thinking text is not.
@@ -103,10 +102,9 @@ starts the first turn. Follow-up messages go to
 `in_progress`, `requires_action`, or `failed`.
 
 When a `none` session is idle for `APIPI_IDLE_TTL`
-(default 15 minutes), the process that holds Pi kills it to free RAM.
-That follows the environment type, not the run mode. Combined
-`apipi serve` does that in-process. In a split deploy, `apipi worker`
-owns the idle reap; `apipi serve --api-only` does not. An
+(default 15 minutes), the worker that holds Pi kills it to free RAM.
+That follows the environment type, not the run mode. `apipi worker`
+owns the idle reap; `apipi serve` does not. An
 `openai_hosted` computer lasts until
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED` (default 1 hour): one timer stops Pi
 and deletes the workspace together. There is no separate guest timeout.
@@ -155,7 +153,7 @@ An artifact is a named output the API can fetch after a turn
 completes. Metadata is in the store, including `turn_id` when the file
 was published at turn complete, plus `key_id` and byte size. Bytes
 live in the configured object store: local files under
-`{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`,
+`{APIPI_LOCAL_STORE_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`,
 or S3-compatible object storage with the same key layout. Hosted file
 and skill uploads share that backend (local or S3) under separate key
 namespaces; see [config](config.md).

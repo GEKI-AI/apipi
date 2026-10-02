@@ -35,11 +35,9 @@ include that prefix so `/internal/worker` connects.
 ## Workers stay vanilla
 
 Workers are unchanged. They run `apipi worker` and speak the existing
-control protocol. Your extended service is the API process. Production
-split is `api_only` on the API (set it on `extend_settings`) plus
-vanilla workers with `APIPI_RUN_MODE=microvm`. Combined in-process
-execution is `api_only` off, the same as `apipi serve` without
-`--api-only`.
+control protocol. Your extended service is the API process, the same as
+`apipi serve`. It never runs Pi. Run vanilla workers next to it with
+`APIPI_RUN_MODE=microvm`, or use `apipi worker` locally.
 
 Do not put channel products (Slack, Teams, bot CRUD) in ApiPi. Those
 are your routes and your tables. Do not put a Job or cron engine in
@@ -97,8 +95,6 @@ background tasks and it does **not** register routes. You list
 `startup()` does this:
 
 - `execution.attach_store`
-- idle Pi reap loop (no-op when `api_only`; `apipi worker` owns it)
-- hosted workspace reap loop (same)
 - usage log purge loop
 - worker-lease expiry loop
 
@@ -140,8 +136,8 @@ Documented methods:
 
 `stream()` matches SSE **event** semantics: replay from the durable
 log after `after_seq`, then live EventHub payloads, and a short store
-poll when the hub is quiet (the same poll SSE uses for `api_only`
-cross-process). SSE comment pings (`: ping`) are HTTP-only; the
+poll when the hub is quiet (the same poll SSE uses across
+processes). SSE comment pings (`: ping`) are HTTP-only; the
 iterator does not yield them.
 
 You still map a key to `tenant_id` yourself when you call the service
@@ -332,9 +328,8 @@ Pitfalls:
 
 EventHub is in-memory in one API process. `SessionService.stream()`
 uses that hub plus a store poll. Several API processes share Postgres;
-they do not share the hub. See [multiple nodes](scale.md) for sticky
-routing on combined serve versus interchangeable replicas with
-`--api-only` and workers.
+they do not share the hub. See [multiple nodes](scale.md) for
+interchangeable API replicas with workers.
 
 `/health` and `/metrics` skip request-id and instance headers. If you
 serve those paths under a prefix, the skip logic uses `root_path`.
@@ -377,9 +372,10 @@ otherwise.
 
 ## Testing
 
-Tests in this repo inject a `Store` and `FakeHarness` into
-`Gateway.create` / `create_app`, then use httpx `ASGITransport`. Do
-the same: do not hit a live network for unit tests, and do not let
+Tests in this repo inject a `Store` into `Gateway.create` /
+`create_app`, run an in-process worker with `FakeHarness` that connects
+over the worker socket, and use httpx `ASGITransport` (see
+[tests](tests.md)). Do the same: do not hit a live network for unit tests, and do not let
 `Settings()` read the host `DATABASE_URL`. Use `extend_settings` in
 your tests when the process environment is not yours.
 

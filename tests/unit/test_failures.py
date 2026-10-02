@@ -4,6 +4,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 import pytest
+from tests.support.worker_turn import ingest_outbox, new_session, run_worker_turn
 
 from apipi.config import Settings
 from apipi.services.failures import (
@@ -18,12 +19,11 @@ from apipi.services.failures import (
 from apipi.services.runtime import (
     EventHub,
     FakeHarness,
-    Harness,
     _cancel_turn,
     _fail_turn,
     fail_stale_in_progress,
-    run_turn,
 )
+from apipi.services.sink import OutboxSink
 from apipi.store.engine import Store
 from apipi.store.repo import (
     create_session,
@@ -32,6 +32,7 @@ from apipi.store.repo import (
     get_turn_log,
     list_events,
 )
+from apipi.worker.outbox import Outbox
 from apipi.worker.pi.harness import PiHarness
 from apipi.worker.pi.version import PINNED_PI
 
@@ -156,33 +157,22 @@ def test_log_level_table(code: str, source: str, level: int) -> None:
     assert log_level_for_code(code, source) == level
 
 
-async def _ready(store: Store) -> tuple[uuid.UUID, uuid.UUID]:
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(
-            db, tenant.id, model="m1", status="idle", environment={"type": "none"}
-        )
-        return tenant.id, row.id
-
-
 async def test_upstream_turn_keeps_legacy_public_code(
     store: Store, settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
-    tenant_id, session_id = await _ready(store)
+    tenant_id, session_id = await new_session(store)
     host = settings.model_copy(
         update={"model_base_url": "http://model.test/v1", "error_codes": "legacy"}
     )
     harness = FakeHarness()
     harness.fail_message = "429 Rate limit reached for requests"
     caplog.set_level(logging.WARNING, logger="apipi")
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, harness),
+        host,
+        harness,
         tenant_id,
         session_id,
-        "hello",
-        settings=host,
     )
     async with store.session() as db:
         events = await list_events(db, tenant_id, session_id)
@@ -215,7 +205,7 @@ async def test_upstream_turn_keeps_legacy_public_code(
 async def test_specific_mode_puts_code_on_session_error(
     store: Store, settings: Settings
 ) -> None:
-    tenant_id, session_id = await _ready(store)
+    tenant_id, session_id = await new_session(store)
     host = settings.model_copy(
         update={
             "model_base_url": "http://model.test/v1",
@@ -224,14 +214,12 @@ async def test_specific_mode_puts_code_on_session_error(
     )
     harness = FakeHarness()
     harness.fail_message = "503: overloaded"
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, harness),
+        host,
+        harness,
         tenant_id,
         session_id,
-        "hello",
-        settings=host,
     )
     async with store.session() as db:
         events = await list_events(db, tenant_id, session_id)
@@ -250,18 +238,16 @@ async def test_default_error_codes_are_specific(
     store: Store, settings: Settings
 ) -> None:
     assert settings.error_codes == "specific"
-    tenant_id, session_id = await _ready(store)
+    tenant_id, session_id = await new_session(store)
     host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
     harness = FakeHarness()
     harness.fail_message = "503: overloaded"
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, harness),
+        host,
+        harness,
         tenant_id,
         session_id,
-        "hello",
-        settings=host,
     )
     async with store.session() as db:
         events = await list_events(db, tenant_id, session_id)
@@ -272,15 +258,23 @@ async def test_default_error_codes_are_specific(
 
 
 async def test_cancel_event_is_user(
-    store: Store, caplog: pytest.LogCaptureFixture
+    store: Store, settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="apipi")
+    tenant_id, session_id = await new_session(store, status="in_progress")
     async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(db, tenant.id, model="m1", status="in_progress")
-        turn = await create_turn(db, tenant.id, row.id, status="in_progress")
-        await _cancel_turn(db, EventHub(), tenant.id, row.id, turn.id)
-        events = await list_events(db, tenant.id, row.id)
+        turn = await create_turn(db, tenant_id, session_id, status="in_progress")
+    outbox = Outbox()
+    await _cancel_turn(
+        EventHub(),
+        tenant_id,
+        session_id,
+        turn.id,
+        sink=OutboxSink(outbox, tenant_id, session_id),
+    )
+    await ingest_outbox(store, settings, outbox, tenant_id, session_id)
+    async with store.session() as db:
+        events = await list_events(db, tenant_id, session_id)
     cancelled = next(
         event for event in events if event.type == "agent.session.turn.cancelled"
     )
@@ -298,18 +292,16 @@ async def test_cancel_event_is_user(
 
 
 async def test_timeout_is_not_a_cancel(store: Store, settings: Settings) -> None:
-    tenant_id, session_id = await _ready(store)
+    tenant_id, session_id = await new_session(store)
     host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
     harness = FakeHarness()
     harness.hold = True
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, harness),
+        host,
+        harness,
         tenant_id,
         session_id,
-        "hello",
-        settings=host,
         turn_timeout=timedelta(milliseconds=20),
     )
     async with store.session() as db:
@@ -369,33 +361,25 @@ async def test_unsettled_pi_is_internal() -> None:
 
 
 async def test_internal_fail_turn_logs_error(
-    store: Store, caplog: pytest.LogCaptureFixture
+    store: Store, settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.ERROR, logger="apipi")
+    tenant_id, session_id = await new_session(store, status="in_progress")
+    outbox = Outbox()
+    sink = OutboxSink(outbox, tenant_id, session_id)
+    for message, code in [
+        ("Cannot start Pi", "spawn_failed"),
+        ("store down", "artifact_store"),
+    ]:
+        async with store.session() as db:
+            turn = await create_turn(db, tenant_id, session_id, status="in_progress")
+        await _fail_turn(
+            EventHub(), tenant_id, session_id, turn.id, message, code=code, sink=sink
+        )
+        outcome = await ingest_outbox(store, settings, outbox, tenant_id, session_id)
+        outbox.acked(session_id, outcome.acks[session_id])
     async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(db, tenant.id, model="m1", status="in_progress")
-        first = await create_turn(db, tenant.id, row.id, status="in_progress")
-        second = await create_turn(db, tenant.id, row.id, status="in_progress")
-        await _fail_turn(
-            db,
-            EventHub(),
-            tenant.id,
-            row.id,
-            first.id,
-            "Cannot start Pi",
-            code="spawn_failed",
-        )
-        await _fail_turn(
-            db,
-            EventHub(),
-            tenant.id,
-            row.id,
-            second.id,
-            "store down",
-            code="artifact_store",
-        )
-        events = await list_events(db, tenant.id, row.id)
+        events = await list_events(db, tenant_id, session_id)
     codes = [
         event.data.get("code")
         for event in events
@@ -426,16 +410,14 @@ class _Os:
 
 
 async def test_spawn_oserror_is_spawn_failed(store: Store, settings: Settings) -> None:
-    tenant_id, session_id = await _ready(store)
+    tenant_id, session_id = await new_session(store)
     host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, _Os()),
+        host,
+        _Os(),
         tenant_id,
         session_id,
-        "hello",
-        settings=host,
     )
     async with store.session() as db:
         events = await list_events(db, tenant_id, session_id)
@@ -461,18 +443,16 @@ class _Exited:
 async def test_pi_exited_keeps_legacy_error_code(
     store: Store, settings: Settings
 ) -> None:
-    tenant_id, session_id = await _ready(store)
+    tenant_id, session_id = await new_session(store)
     host = settings.model_copy(
         update={"model_base_url": "http://model.test/v1", "error_codes": "legacy"}
     )
-    await run_turn(
+    await run_worker_turn(
         store,
-        EventHub(),
-        cast(Harness, _Exited()),
+        host,
+        _Exited(),
         tenant_id,
         session_id,
-        "hello",
-        settings=host,
     )
     async with store.session() as db:
         events = await list_events(db, tenant_id, session_id)

@@ -85,38 +85,32 @@ async def _leased(store: Store, worker_id: uuid.UUID):
         return tenant.id, row.id, lease_id, row.key_id
 
 
-def test_local_store_dir_defaults_to_sessions_dir(tmp_path: Path) -> None:
+def test_local_store_dir_defaults_to_apipi_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("APIPI_LOCAL_STORE_DIR", raising=False)
     settings = _settings(tmp_path)
-    assert settings.sessions_dir is not None
-    assert store_root(settings) == Path(settings.sessions_dir)
+    assert settings.local_store_dir == ".apipi/store"
+    assert store_root(settings) == Path(".apipi/store")
+    assert store_root(settings) != Path(settings.sessions_dir or "")
     custom = _settings(tmp_path, local_store_dir=str(tmp_path / "shared"))
     assert store_root(custom) == tmp_path / "shared"
     assert LocalStore(custom)._root == tmp_path / "shared"
 
 
-def test_split_mode_local_without_shared_root_fails(tmp_path: Path) -> None:
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_local_store_dir_blank_is_rejected(tmp_path: Path, blank: str | None) -> None:
     with pytest.raises(Exception, match="APIPI_LOCAL_STORE_DIR"):
-        _settings(
-            tmp_path,
-            api_only=True,
-            local_store_dir=None,
-        )
-    # A worker (`APIPI_API_URL`) without a shared root starts; the register
-    # shared-root proof rejects it with the documented error instead.
-    worker = _settings(
-        tmp_path,
-        api_url="http://api.example:8000",
+        _settings(tmp_path, local_store_dir=blank)
+    with pytest.raises(Exception, match="APIPI_LOCAL_STORE_DIR"):
+        _settings(tmp_path, api_url="http://api.example:8000", local_store_dir=blank)
+
+
+def test_blank_local_store_dir_is_fine_for_s3(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path, artifact_store="s3", s3_bucket="bucket", local_store_dir=""
     )
-    assert worker.api_url is not None
-    ok = _settings(
-        tmp_path,
-        api_only=True,
-        local_store_dir=str(tmp_path / "shared"),
-    )
-    assert store_root(ok) == tmp_path / "shared"
-    combined = _settings(tmp_path)
-    assert combined.sessions_dir is not None
-    assert store_root(combined) == Path(combined.sessions_dir)
+    assert settings.artifact_store == "s3"
 
 
 def test_no_message_schema_carries_bytes() -> None:

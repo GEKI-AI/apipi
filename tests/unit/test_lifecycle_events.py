@@ -321,37 +321,40 @@ async def test_reporter_start_validates_strictly() -> None:
     assert parsed.sandbox_image == "img"
 
 
-async def test_api_heartbeat_derives_from_inventory(store: Store, settings) -> None:
-    worker_id = uuid.uuid4()
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(
-            db, tenant.id, environment={"type": "openai_hosted"}, metadata={}
-        )
-        await set_session_lease(
-            db,
-            tenant.id,
-            row.id,
-            worker_id=worker_id,
-            lease_id=uuid.uuid4(),
-            lease_until=utc_now() + timedelta(seconds=30),
-        )
-        session_id = row.id
+class _Conn:
+    def __init__(self, run_mode: str) -> None:
+        self.run_mode = run_mode
 
-    class _Hub:
-        def known_live_sessions(self):
-            return [session_id]
 
-    class _Heartbeat:
-        heartbeat_s: float | None = 60.0
+class _Hub:
+    def __init__(
+        self, session_id: uuid.UUID, connections: dict[uuid.UUID, _Conn]
+    ) -> None:
+        self.session_id = session_id
+        self.connections = connections
 
-        def __init__(self) -> None:
-            self.entries: list[list[dict[str, Any]]] = []
+    def known_live_sessions(self) -> list[uuid.UUID]:
+        return [self.session_id]
 
-        def emit_heartbeat(self, entries):
-            self.entries.append(entries)
-            return 1
+    def get(self, worker_id: uuid.UUID) -> _Conn | None:
+        return self.connections.get(worker_id)
 
+
+class _Heartbeat:
+    heartbeat_s: float | None = 60.0
+
+    def __init__(self) -> None:
+        self.entries: list[list[dict[str, Any]]] = []
+
+    def emit_heartbeat(self, entries: list[dict[str, Any]]) -> int:
+        self.entries.append(entries)
+        return 1
+
+
+async def _heartbeat_entries(
+    store: Store, settings, connections: dict[uuid.UUID, _Conn], worker_id: uuid.UUID
+) -> tuple[uuid.UUID, list[dict[str, Any]]]:
+    _tenant, session_id, _lease = await _hosted(store, worker_id)
     emitter = _Heartbeat()
     sleeps: list[float] = []
 
@@ -367,15 +370,32 @@ async def test_api_heartbeat_derives_from_inventory(store: Store, settings) -> N
     await api_heartbeat_loop(
         settings,
         emitter,
-        _Hub(),
+        _Hub(session_id, connections),
         store,
         sleep=sleep,
         clock=now,
         max_emits=1,  # type: ignore[arg-type]
     )
     assert len(emitter.entries) == 1
-    assert emitter.entries[0][0]["session_id"] == str(session_id)
-    assert emitter.entries[0][0]["environment_type"] == "openai_hosted"
+    return session_id, emitter.entries[0]
+
+
+async def test_api_heartbeat_derives_from_inventory(store: Store, settings) -> None:
+    worker_id = uuid.uuid4()
+    session_id, entries = await _heartbeat_entries(
+        store, settings, {worker_id: _Conn("microvm")}, worker_id
+    )
+    assert entries[0]["session_id"] == str(session_id)
+    assert entries[0]["environment_type"] == "openai_hosted"
+    assert entries[0]["run_mode"] == "microvm"
+
+
+async def test_api_heartbeat_entry_without_connection_has_no_run_mode(
+    store: Store, settings
+) -> None:
+    session_id, entries = await _heartbeat_entries(store, settings, {}, uuid.uuid4())
+    assert entries[0]["session_id"] == str(session_id)
+    assert entries[0]["run_mode"] is None
 
 
 async def test_lifecycle_start_payload_fits_export_identity() -> None:

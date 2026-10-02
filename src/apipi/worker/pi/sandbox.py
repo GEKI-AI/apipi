@@ -270,19 +270,3 @@ def require_known_image(settings: Settings, image_id: str) -> None:
             f"unknown sandbox_image {image_id}",
             code="invalid_request",
         )
-
-
-def require_image_rootfs(settings: Settings, image_id: str) -> None:
-    if settings.api_only or settings.run_mode != "microvm":
-        return
-    from apipi.worker.pi.microvm import microvm_images
-
-    try:
-        microvm_images(settings, image=image_id)
-    except ConfigError as exc:
-        raise ApiError(
-            "api_error",
-            str(exc),
-            code="image_unavailable",
-            status_code=503,
-        ) from exc

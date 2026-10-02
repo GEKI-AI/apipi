@@ -237,11 +237,12 @@ agent turn that needs the computer:
    (`npm install -g --prefix`). On isolation `none`, Pi's
    `PATH` puts `.venv/bin` and `.npm/bin` first when those directories
    exist. On `microvm`, guest init does the same after prep, before Pi
-   starts. `packages.system` uses `apt-get` after `apt-get update`. Isolation
-   `microvm` has a read-only root filesystem, so `packages.system` is
-   rejected with `400` at session create. A turn that still reaches
-   prep fails the environment with the same message. Bake those
-   packages into a guest image instead.
+   starts. `openai_hosted` sessions are always placed on a `microvm`
+   worker, and the guest has a read-only root filesystem, so the API
+   rejects `packages.system` with `400` at session create whenever
+   `type=openai_hosted`, whatever run mode the API itself is configured
+   with. A turn that still reaches prep fails the environment with the
+   same message. Bake those packages into a guest image instead.
 4. Run `setup_commands` in order. Each item is an object with
    `command` and optional `cwd`. `cwd` defaults to the session
    directory. Absolute OpenAI paths `/workspace` and `/tmp/workspace`

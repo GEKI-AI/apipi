@@ -9,26 +9,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from apipi.config import ConfigError, DiskLimitError, Settings
 from apipi.services.skills import copy_capability_directories
 from apipi.store.blobs import (
     ArtifactBlobs,
-    ObjectStoreError,
-    blob_store,
 )
-from apipi.store.engine import Store
-from apipi.store.models import SessionRow, utc_now
-from apipi.store.repo import (
-    create_artifact,
-    get_agent,
-    get_session,
-    get_session_by_id,
-    list_artifacts,
-)
+from apipi.store.models import utc_now
 from apipi.worker.pi.dirs import pi_session_file, sessions_root
-from apipi.worker.pi.idle import resolve_idle_ttl
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
@@ -166,108 +153,6 @@ def ensure_openai_workspace(environment: dict[str, Any]) -> None:
         )
 
 
-async def persist_artifact_files(
-    db: AsyncSession,
-    settings: Settings,
-    tenant_id: uuid.UUID,
-    session_id: uuid.UUID,
-    files: list[tuple[str, bytes]],
-    *,
-    turn_id: uuid.UUID | None = None,
-    key_id: str = "",
-    blobs: ArtifactBlobs | None = None,
-) -> None:
-    """Direct (combined) artifact persist with DB dedup."""
-    await _persist_files(
-        db,
-        settings,
-        tenant_id,
-        session_id,
-        files,
-        turn_id=turn_id,
-        key_id=key_id,
-        blobs=blobs,
-    )
-
-
-async def persist_pi_session_bytes(
-    db: AsyncSession,
-    settings: Settings,
-    tenant_id: uuid.UUID,
-    session_id: uuid.UUID,
-    data: bytes,
-    *,
-    key_id: str = "",
-    blobs: ArtifactBlobs | None = None,
-) -> None:
-    """Direct (combined) Pi session persist from bytes."""
-    if not data:
-        return
-    row = await get_session_by_id(db, session_id)
-    if row is None:
-        return
-    store = blobs if blobs is not None else blob_store(settings)
-    blob_id = row.pi_session_id if row.pi_session_id is not None else uuid.uuid4()
-    await store.put(row.tenant_id, row.key_id, row.id, blob_id, data)
-    row.pi_session_id = blob_id
-    row.pi_session_bytes = len(data)
-    await db.flush()
-
-
-async def _persist_files(
-    db: AsyncSession,
-    settings: Settings,
-    tenant_id: uuid.UUID,
-    session_id: uuid.UUID,
-    files: list[tuple[str, bytes]],
-    *,
-    turn_id: uuid.UUID | None = None,
-    key_id: str = "",
-    blobs: ArtifactBlobs | None = None,
-) -> None:
-    store = blobs if blobs is not None else blob_store(settings)
-    existing = await list_artifacts(db, tenant_id, session_id)
-    latest: dict[str, bytes] = {}
-    if existing:
-        for artifact in existing:
-            user = artifact.key_id or key_id
-            data = await store.get(tenant_id, user, session_id, artifact.id)
-            if data is not None:
-                latest[artifact.path] = data
-    to_write: list[tuple[str, bytes]] = []
-    incoming = 0
-    for rel, data in files:
-        if latest.get(rel) == data:
-            continue
-        to_write.append((rel, data))
-        incoming += len(data)
-    used = await store.used_bytes(tenant_id, key_id, session_id)
-    row = await get_session_by_id(db, session_id)
-    cache = row.pi_session_bytes if row is not None else 0
-    if to_write and used - cache + incoming > settings.max_artifact_bytes:
-        raise DiskLimitError("Artifact store too large", code="artifact_too_large")
-    for rel, data in to_write:
-        artifact = await create_artifact(
-            db,
-            tenant_id,
-            session_id,
-            path=rel,
-            content_type=_content_type(rel),
-            turn_id=turn_id,
-            key_id=key_id,
-            byte_size=len(data),
-        )
-        await store.put(
-            tenant_id,
-            key_id,
-            session_id,
-            artifact.id,
-            data,
-            content_type=_content_type(rel),
-        )
-        latest[rel] = data
-
-
 async def _hosted_files(
     proc: PiProc | None,
     dest: Path | None,
@@ -310,75 +195,6 @@ async def _hosted_files(
     return files, workspace_error
 
 
-async def harvest_session(
-    db: AsyncSession,
-    settings: Settings,
-    session_id: uuid.UUID,
-    proc: PiProc | None,
-    *,
-    turn_id: uuid.UUID | None = None,
-    sync_workspace: bool = False,
-    blobs: ArtifactBlobs | None = None,
-) -> tuple[SessionRow | None, DiskLimitError | None]:
-    row = await get_session_by_id(db, session_id)
-    if row is None:
-        return None, None
-    env_type = row.environment.get("type")
-    files: list[tuple[str, bytes]] = []
-    workspace_error: DiskLimitError | None = None
-    if env_type == "openai_hosted":
-        directory = row.environment.get("directory")
-        dest = Path(directory) if isinstance(directory, str) and directory else None
-        files, workspace_error = await _hosted_files(
-            proc,
-            dest,
-            sync_workspace=sync_workspace,
-            max_workspace_bytes=settings.max_workspace_bytes,
-        )
-    persist_error: DiskLimitError | None = None
-    if files:
-        try:
-            await _persist_files(
-                db,
-                settings,
-                row.tenant_id,
-                row.id,
-                files,
-                turn_id=turn_id,
-                key_id=row.key_id,
-                blobs=blobs,
-            )
-        except DiskLimitError as exc:
-            persist_error = exc
-        except (OSError, ObjectStoreError):
-            persist_error = DiskLimitError(
-                "Cannot write artifacts", code="artifact_store"
-            )
-    try:
-        await persist_pi_session(
-            db,
-            settings,
-            row,
-            proc,
-            dest=_hosted_dest(row),
-            blobs=blobs,
-        )
-    except (OSError, ObjectStoreError):
-        persist_error = persist_error or DiskLimitError(
-            "Cannot write artifacts", code="artifact_store"
-        )
-    return row, persist_error or workspace_error
-
-
-def _hosted_dest(row: SessionRow) -> Path | None:
-    if row.environment.get("type") != "openai_hosted":
-        return None
-    directory = row.environment.get("directory")
-    if not isinstance(directory, str) or directory == "":
-        return None
-    return Path(directory)
-
-
 async def read_pi_session_bytes(proc: PiProc | None, dest: Path | None) -> bytes:
     if proc is not None and proc.pull_session is not None:
         try:
@@ -393,57 +209,12 @@ async def read_pi_session_bytes(proc: PiProc | None, dest: Path | None) -> bytes
     return path.read_bytes()
 
 
-async def persist_pi_session(
-    db: AsyncSession,
-    settings: Settings,
-    row: SessionRow,
-    proc: PiProc | None,
-    dest: Path | None,
-    *,
-    blobs: ArtifactBlobs | None = None,
-) -> None:
-    data = await read_pi_session_bytes(proc, dest)
-    if not data:
-        return
-    store = blobs if blobs is not None else blob_store(settings)
-    blob_id = row.pi_session_id if row.pi_session_id is not None else uuid.uuid4()
-    await store.put(row.tenant_id, row.key_id, row.id, blob_id, data)
-    row.pi_session_id = blob_id
-    row.pi_session_bytes = len(data)
-    await db.flush()
-
-
-async def restore_pi_session(
-    settings: Settings,
-    row: SessionRow,
-    dest: Path,
-    *,
-    blobs: ArtifactBlobs | None = None,
-) -> None:
-    data: bytes | None = None
-    if row.pi_session_id is None:
-        return
-    if blobs is not None:
-        data = await blobs.get(row.tenant_id, row.key_id, row.id, row.pi_session_id)
-    else:
-        data = await blob_store(settings).get(
-            row.tenant_id, row.key_id, row.id, row.pi_session_id
-        )
-    if not data:
-        return
-    path = pi_session_file(dest)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-
-
 async def reap_workspaces(
     settings: Settings,
-    store: Store | None,
     pool: PiPool,
     *,
     now: datetime | None = None,
     ttl_overrides: Mapping[str, tuple[float | None, float, str | None]] | None = None,
-    allow_db: bool = True,
 ) -> list[str]:
     current = _utc(now or utc_now())
     now_epoch = current.timestamp()
@@ -453,7 +224,7 @@ async def reap_workspaces(
         if not tenant_dir.is_dir() or tenant_dir.name.startswith("."):
             continue
         try:
-            tenant_id = uuid.UUID(tenant_dir.name)
+            uuid.UUID(tenant_dir.name)
         except ValueError:
             continue
         for session_dir in tenant_dir.iterdir():
@@ -466,46 +237,14 @@ async def reap_workspaces(
             if pool.alive(session_id) or pool.held(session_id):
                 continue
             override = ttl_overrides.get(str(session_id)) if ttl_overrides else None
-            if override is not None:
-                ttl_seconds, last_seen, env_type = override
-                if env_type != "openai_hosted":
-                    continue
-                if ttl_seconds is None:
-                    continue
-                if now_epoch - last_seen >= ttl_seconds:
-                    wipe_workspace(session_dir)
-                    wiped.append(str(session_id))
+            if override is None:
                 continue
-            if not allow_db or store is None:
-                # A split worker never reads the database: sessions it
-                # does not know stay until the API inventory reply
-                # teaches it their idle TTL.
-                continue
-            async with store.session() as db:
-                row = await get_session(db, tenant_id, session_id)
-                agent_idle = None
-                if row is not None and row.agent_id is not None:
-                    agent = await get_agent(db, tenant_id, row.agent_id)
-                    if agent is not None:
-                        agent_idle = agent.idle_ttl
-            if row is None:
-                wipe_workspace(session_dir)
-                wiped.append(str(session_id))
-                continue
-            env_type = row.environment.get("type")
+            ttl_seconds, last_seen, env_type = override
             if env_type != "openai_hosted":
                 continue
-            meta = row.metadata_json if isinstance(row.metadata_json, dict) else {}
-            ttl = resolve_idle_ttl(
-                settings,
-                env_type,
-                session_idle=row.idle_ttl,
-                session_metadata=meta,
-                agent_idle=agent_idle,
-            )
-            if ttl is None:
+            if ttl_seconds is None:
                 continue
-            if current - _utc(row.updated_at) >= ttl:
+            if now_epoch - last_seen >= ttl_seconds:
                 wipe_workspace(session_dir)
                 wiped.append(str(session_id))
     return wiped
@@ -513,21 +252,17 @@ async def reap_workspaces(
 
 async def reap_workspace_loop(
     settings: Settings,
-    store: Store | None,
     pool: PiPool,
     *,
     ttl_overrides: Mapping[str, tuple[float | None, float, str | None]] | None = None,
     on_wiped: Callable[[str], None] | None = None,
-    allow_db: bool = True,
 ) -> None:
     ttl = settings.sandbox_ttl_openai_hosted
     seconds = ttl.total_seconds() if ttl is not None else 15.0
     interval = min(1.0, max(0.02, seconds / 5))
     while True:
         await asyncio.sleep(interval)
-        wiped = await reap_workspaces(
-            settings, store, pool, ttl_overrides=ttl_overrides, allow_db=allow_db
-        )
+        wiped = await reap_workspaces(settings, pool, ttl_overrides=ttl_overrides)
         if on_wiped is not None:
             for session_id in wiped:
                 on_wiped(session_id)

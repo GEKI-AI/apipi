@@ -9,8 +9,7 @@ from apipi.config import Settings
 from apipi.gateway.errors import ApiError
 from apipi.gateway.metrics import Metrics
 from apipi.services.runtime import EventHub
-from apipi.store.engine import Store
-from apipi.store.repo import create_session, create_tenant, list_events
+from apipi.services.sink import OutboxSink
 from apipi.worker.hub import (
     WorkerConnection,
     WorkerHub,
@@ -18,6 +17,7 @@ from apipi.worker.hub import (
     dispatch_command,
     images_from_message,
 )
+from apipi.worker.outbox import Outbox
 
 
 def _settings() -> Settings:
@@ -138,41 +138,43 @@ def test_observe_labels_workers_by_run_mode() -> None:
     assert metric_line(body, "apipi_worker_leases", run_mode="none").endswith(" 0.0")
 
 
-async def test_dispatch_reports_escaped_turn(
-    store: Store, caplog: pytest.LogCaptureFixture
-) -> None:
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        session = await create_session(db, tenant.id, model="m1")
-        tenant_id = tenant.id
-        session_id = session.id
-    hub = EventHub()
+class _SinkExecution:
+    def __init__(self) -> None:
+        self.hub = EventHub()
+        self.outbox = Outbox()
 
-    class Boom:
-        def __init__(self) -> None:
-            self.store = store
-            self.hub = hub
+    def sink_for(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> OutboxSink:
+        return OutboxSink(self.outbox, tenant_id, session_id)
 
+
+async def test_dispatch_reports_escaped_turn(caplog: pytest.LogCaptureFixture) -> None:
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+
+    class Boom(_SinkExecution):
         async def run_turn(self, *_args: object, **_kwargs: object) -> None:
             raise RuntimeError("boom")
 
     caplog.set_level(logging.ERROR, logger="apipi.worker")
+    execution = Boom()
     await dispatch_command(
-        Boom(),
+        execution,
         {
             "op": "turn.start",
             "session_id": str(session_id),
             "payload": {"tenant_id": str(tenant_id), "request_id": "req-1"},
         },
     )
-    async with store.session() as db:
-        events = await list_events(db, tenant_id, session_id)
-    assert any(event.type == "agent.session.failed" for event in events)
+    events = [
+        item["payload"]
+        for item in execution.outbox.pending(session_id)
+        if item["type"] == "event"
+    ]
+    assert any(event["type"] == "agent.session.failed" for event in events)
     assert any(
-        event.type == "agent.session.error"
-        and isinstance(event.data, dict)
-        and event.data.get("code") == "internal"
-        and event.data.get("failure_source") == "internal"
+        event["type"] == "agent.session.error"
+        and event["data"].get("code") == "internal"
+        and event["data"].get("failure_source") == "internal"
         for event in events
     )
     assert any(
@@ -189,19 +191,12 @@ async def test_dispatch_reports_escaped_turn(
 
 
 async def test_dispatch_logs_4xx_and_does_not_raise(
-    store: Store, caplog: pytest.LogCaptureFixture
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        session = await create_session(db, tenant.id, model="m1")
-        tenant_id = tenant.id
-        session_id = session.id
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
 
-    class Denied:
-        def __init__(self) -> None:
-            self.store = store
-            self.hub = EventHub()
-
+    class Denied(_SinkExecution):
         async def run_turn(self, *_args: object, **_kwargs: object) -> None:
             raise ApiError(
                 "invalid_request",

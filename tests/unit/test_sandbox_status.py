@@ -182,9 +182,8 @@ async def test_none_env_emits_no_sandbox_events(
 async def test_pool_kill_notifies_lease_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from apipi.services.runtime import EventHub
     from apipi.worker.execution import LocalExecution
-    from apipi.worker.pi.isolation import load_isolation
+    from apipi.worker.outbox import Outbox
 
     async def fake_spawn(*_args: object, **_kwargs: Any) -> _Proc:
         return _Proc()
@@ -201,8 +200,8 @@ async def test_pool_kill_notifies_lease_release(
         settings,
         pool=pool,
         harness=object(),
-        isolation=load_isolation("none"),
         hub=EventHub(),
+        outbox=Outbox(),
     )
     execution.note_stopped = note
     session_id = uuid.uuid4()
@@ -295,11 +294,11 @@ def test_eager_boot_overrides() -> None:
     )
 
 
-async def test_capacity_failure_marks_environment_failed(
-    store: Store, monkeypatch: pytest.MonkeyPatch
+async def test_capacity_failure_reports_environment_failed(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from apipi.worker.execution import LocalExecution
-    from apipi.worker.pi.isolation import load_isolation
+    from apipi.worker.outbox import Outbox
 
     async def fake_kwargs(*_args: object, **_kwargs: Any) -> dict[str, Any]:
         return {
@@ -315,18 +314,46 @@ async def test_capacity_failure_marks_environment_failed(
     monkeypatch.setattr("apipi.services.runtime.load_boot_kwargs", fake_kwargs)
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
     settings = _settings()
-    pool = PiPool(settings)
-    hub = EventHub()
+    outbox = Outbox()
     execution = LocalExecution(
         settings,
-        pool=pool,
+        pool=PiPool(settings),
         harness=object(),
-        isolation=load_isolation("none"),
-        hub=hub,
-        store=store,
+        hub=EventHub(),
+        outbox=outbox,
     )
-    tenant_id, session_id = await _hosted(store)
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
     await execution.boot_hosted(tenant_id, session_id)
+    pending = outbox.pending(session_id)
+    failed = next(
+        item["payload"]
+        for item in pending
+        if item["type"] == "event"
+        and item["payload"]["type"] == "agent.session.environment.failed"
+    )
+    assert failed["data"] == {"error": "Too many live sessions", "code": "capacity"}
+    status = next(item for item in pending if item["type"] == "session.status")
+    assert status["payload"]["status"] == "failed"
+    assert any(
+        item["type"] == "event" and item["payload"]["type"] == "agent.session.failed"
+        for item in pending
+    )
+
+
+async def test_api_fail_environment_marks_sandbox_failed(store: Store) -> None:
+    from apipi.services.runtime import fail_environment
+
+    tenant_id, session_id = await _hosted(store)
+    async with store.session() as db:
+        await fail_environment(
+            db,
+            EventHub(),
+            tenant_id,
+            session_id,
+            "No worker available",
+            code="capacity",
+        )
     async with store.session() as db:
         events = await list_events(db, tenant_id, session_id)
         row = await get_session(db, tenant_id, session_id)

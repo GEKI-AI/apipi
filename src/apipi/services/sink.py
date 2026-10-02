@@ -1,17 +1,12 @@
 """ResultSink: where turn results are written.
 
 The turn runtime reports turns, items, events, usage, and errors
-through this interface instead of touching the store directly.
-Combined `apipi serve` uses :class:`DirectSink`, which performs
-today's direct database writes in the caller's transaction. A
-split-mode worker uses :class:`OutboxSink`, which buffers durable
-protocol v2 envelopes in :class:`apipi.worker.outbox.Outbox` until
-the API ingests them and sends the cumulative ack.
-
-Reads stay on the store for now; turn context moves into commands in
-a later step. The per-turn tool and MCP tallies are collected in
-memory on the sink while the turn runs, so the worker never reads
-items or events back to summarize the turn.
+through this interface. The worker uses :class:`OutboxSink`, which
+buffers durable protocol v2 envelopes in
+:class:`apipi.worker.outbox.Outbox` until the API ingests them and
+sends the cumulative ack. The per-turn tool and MCP tallies are
+collected in memory on the sink while the turn runs, so the worker
+never reads items or events back to summarize the turn.
 """
 
 import logging
@@ -24,8 +19,8 @@ from typing import Any, Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.gateway.logutil import log_event
-from apipi.store.engine import Store, after_commit
-from apipi.store.models import Event, utc_now
+from apipi.store.engine import after_commit
+from apipi.store.models import Event
 
 log = logging.getLogger("apipi")
 
@@ -145,11 +140,7 @@ class TurnTally:
 
 
 class ResultSink(Protocol):
-    """Write side of the turn runtime. Reads stay on the store."""
-
-    def txn(
-        self, store: Store | None
-    ) -> AbstractAsyncContextManager[AsyncSession | None, bool | None]: ...
+    """Write side of the turn runtime."""
 
     def emergency_mode(self) -> AbstractAsyncContextManager[None, bool | None]:
         """Spend the reserved budget so a full outbox can still fail."""
@@ -163,7 +154,6 @@ class ResultSink(Protocol):
 
     async def update_session(
         self,
-        db: AsyncSession | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         *,
@@ -173,7 +163,6 @@ class ResultSink(Protocol):
 
     async def create_turn(
         self,
-        db: AsyncSession | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         *,
@@ -184,7 +173,6 @@ class ResultSink(Protocol):
 
     async def create_item(
         self,
-        db: AsyncSession | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         *,
@@ -196,7 +184,6 @@ class ResultSink(Protocol):
 
     async def append_event(
         self,
-        db: AsyncSession | None,
         hub: Any,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
@@ -207,7 +194,6 @@ class ResultSink(Protocol):
 
     async def finish_turn(
         self,
-        db: AsyncSession | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         turn_id: uuid.UUID,
@@ -219,7 +205,6 @@ class ResultSink(Protocol):
 
     async def write_turn_log(
         self,
-        db: AsyncSession | None,
         hub: Any,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
@@ -240,8 +225,6 @@ class ResultSink(Protocol):
 
     async def store_input_image(
         self,
-        db: AsyncSession | None,
-        store: Any | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         *,
@@ -249,293 +232,26 @@ class ResultSink(Protocol):
         filename: str,
         content_type: str | None,
         settings: Any | None = None,
-        objects: Any | None = None,
     ) -> dict[str, Any]: ...
 
     async def store_artifacts(
         self,
-        db: AsyncSession | None,
-        store: Any | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         files: list[tuple[str, bytes]],
         *,
         turn_id: uuid.UUID | None = None,
-        key_id: str = "",
         settings: Any | None = None,
-        blobs: Any | None = None,
     ) -> None: ...
 
     async def store_pi_session(
         self,
-        db: AsyncSession | None,
-        store: Any | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         data: bytes,
         *,
         settings: Any | None = None,
-        blobs: Any | None = None,
     ) -> None: ...
-
-
-class DirectSink:
-    """Today's direct database writes, in the caller's transaction."""
-
-    def __init__(self) -> None:
-        self._tally = TurnTally()
-
-    @asynccontextmanager
-    async def txn(self, store: Store | None) -> AsyncIterator[AsyncSession | None]:
-        assert store is not None
-        async with store.session() as db:
-            yield db
-
-    @asynccontextmanager
-    async def emergency_mode(self) -> AsyncIterator[None]:
-        yield
-
-    def tally_tool(self, name: str) -> None:
-        self._tally.add_tool(name)
-
-    def tally_mcp(self, name: str | None) -> None:
-        self._tally.add_mcp(name)
-
-    def tally_snapshot(
-        self,
-    ) -> tuple[list[str], dict[str, int], list[str], dict[str, int]]:
-        return self._tally.snapshot()
-
-    async def update_session(
-        self,
-        db: AsyncSession | None,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        *,
-        changes: dict[str, Any],
-        user_id: str | None = None,
-    ) -> Any:
-        from apipi.store.repo import update_session
-
-        assert db is not None
-        return await update_session(
-            db, tenant_id, session_id, changes=changes, user_id=user_id
-        )
-
-    async def create_turn(
-        self,
-        db: AsyncSession | None,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        *,
-        status: str,
-        usage: dict[str, Any] | None = None,
-        turn_id: uuid.UUID | None = None,
-    ) -> uuid.UUID:
-        from apipi.store.repo import create_turn
-
-        assert db is not None
-        self._tally.reset()
-        turn = await create_turn(
-            db, tenant_id, session_id, status=status, usage=usage, turn_id=turn_id
-        )
-        return turn.id
-
-    async def create_item(
-        self,
-        db: AsyncSession | None,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        *,
-        type: str,
-        data: dict[str, Any] | None = None,
-        turn_id: uuid.UUID | None = None,
-        item_id: uuid.UUID | None = None,
-    ) -> uuid.UUID:
-        from apipi.store.repo import create_item
-
-        assert db is not None
-        item = await create_item(
-            db,
-            tenant_id,
-            session_id,
-            type=type,
-            data=data,
-            turn_id=turn_id,
-            item_id=item_id,
-        )
-        return item.id
-
-    async def append_event(
-        self,
-        db: AsyncSession | None,
-        hub: Any,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        *,
-        type: str,
-        data: dict[str, Any] | None = None,
-    ) -> Event | None:
-        assert db is not None
-        return await persist_event(db, hub, tenant_id, session_id, type=type, data=data)
-
-    async def finish_turn(
-        self,
-        db: AsyncSession | None,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        turn_id: uuid.UUID,
-        *,
-        status: str,
-        usage: dict[str, Any] | None = None,
-        failure: Any | None = None,
-    ) -> None:
-        from apipi.store.repo import get_session_turn
-
-        del failure
-        assert db is not None
-        turn = await get_session_turn(db, tenant_id, session_id, turn_id)
-        if turn is None:
-            return
-        turn.status = status
-        if usage is not None:
-            turn.usage = usage
-        turn.updated_at = utc_now()
-        await db.flush()
-
-    async def write_turn_log(
-        self,
-        db: AsyncSession | None,
-        hub: Any,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        turn_id: uuid.UUID,
-        *,
-        status: str,
-        usage: dict[str, int] | None = None,
-        error_code: str | None = None,
-        request_id: str | None = None,
-        metrics: Any | None = None,
-        tracing: Any | None = None,
-        settings: Any | None = None,
-        artifact_bytes: int = 0,
-        user_id: str | None = None,
-        failure: Any | None = None,
-        turn_context: Any | None = None,
-    ) -> None:
-        from apipi.services.runtime import _write_turn_log
-
-        assert db is not None
-        tools, tool_counts, mcp_names, mcp_counts = self._tally.snapshot()
-        try:
-            await _write_turn_log(
-                db,
-                tenant_id,
-                session_id,
-                turn_id,
-                status=status,
-                usage=usage,
-                error_code=error_code,
-                request_id=request_id,
-                metrics=metrics,
-                tracing=tracing,
-                settings=settings,
-                artifact_bytes=artifact_bytes,
-                user_id=user_id,
-                failure=failure,
-                turn_context=turn_context,
-                tool_names=tools,
-                tool_counts=tool_counts,
-                mcp_names=mcp_names,
-                mcp_counts=mcp_counts,
-            )
-        finally:
-            self._tally.reset()
-
-    async def store_input_image(
-        self,
-        db: AsyncSession | None,
-        store: Any | None,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        *,
-        data: bytes,
-        filename: str,
-        content_type: str | None,
-        settings: Any | None = None,
-        objects: Any | None = None,
-    ) -> dict[str, Any]:
-        from apipi.services.files import FileService
-
-        del session_id
-        assert db is not None
-        assert store is not None
-        assert settings is not None
-        assert objects is not None
-        files = FileService(store, objects, settings)
-        return await files.create(
-            tenant_id,
-            data=data,
-            filename=filename,
-            purpose="user_data",
-            content_type=content_type,
-        )
-
-    async def store_artifacts(
-        self,
-        db: AsyncSession | None,
-        store: Any | None,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        files: list[tuple[str, bytes]],
-        *,
-        turn_id: uuid.UUID | None = None,
-        key_id: str = "",
-        settings: Any | None = None,
-        blobs: Any | None = None,
-    ) -> None:
-        from apipi.worker.pi.artifacts import persist_artifact_files
-
-        del store
-        assert db is not None
-        assert settings is not None
-        await persist_artifact_files(
-            db,
-            settings,
-            tenant_id,
-            session_id,
-            files,
-            turn_id=turn_id,
-            key_id=key_id,
-            blobs=blobs,
-        )
-
-    async def store_pi_session(
-        self,
-        db: AsyncSession | None,
-        store: Any | None,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        data: bytes,
-        *,
-        settings: Any | None = None,
-        blobs: Any | None = None,
-    ) -> None:
-        from apipi.worker.pi.artifacts import persist_pi_session_bytes
-
-        del store
-        assert db is not None
-        assert settings is not None
-        await persist_pi_session_bytes(
-            db, settings, tenant_id, session_id, data, blobs=blobs
-        )
-
-
-DIRECT: DirectSink = DirectSink()
-
-
-def resolve_sink(sink: ResultSink | None) -> ResultSink:
-    return sink if sink is not None else DIRECT
 
 
 class OutboxSink:
@@ -570,11 +286,6 @@ class OutboxSink:
         self._emergency = False
 
     @asynccontextmanager
-    async def txn(self, store: Store | None) -> AsyncIterator[AsyncSession | None]:
-        del store
-        yield None
-
-    @asynccontextmanager
     async def emergency_mode(self) -> AsyncIterator[None]:
         previous = self._emergency
         self._emergency = True
@@ -600,14 +311,13 @@ class OutboxSink:
 
     async def update_session(
         self,
-        db: AsyncSession | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         *,
         changes: dict[str, Any],
         user_id: str | None = None,
     ) -> Any:
-        del db, user_id
+        del user_id
         self._check(tenant_id, session_id)
         self.outbox.append(
             session_id,
@@ -622,7 +332,6 @@ class OutboxSink:
 
     async def create_turn(
         self,
-        db: AsyncSession | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         *,
@@ -632,7 +341,7 @@ class OutboxSink:
     ) -> uuid.UUID:
         from apipi.worker.outbox import OutboxFull
 
-        del db, usage
+        del usage
         self._check(tenant_id, session_id)
         resolved = turn_id if turn_id is not None else uuid.uuid4()
         self._tally.reset()
@@ -655,7 +364,6 @@ class OutboxSink:
 
     async def create_item(
         self,
-        db: AsyncSession | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         *,
@@ -664,7 +372,6 @@ class OutboxSink:
         turn_id: uuid.UUID | None = None,
         item_id: uuid.UUID | None = None,
     ) -> uuid.UUID:
-        del db
         self._check(tenant_id, session_id)
         resolved = item_id if item_id is not None else uuid.uuid4()
         self.outbox.append(
@@ -683,7 +390,6 @@ class OutboxSink:
 
     async def append_event(
         self,
-        db: AsyncSession | None,
         hub: Any,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
@@ -691,7 +397,7 @@ class OutboxSink:
         type: str,
         data: dict[str, Any] | None = None,
     ) -> Event | None:
-        del db, hub
+        del hub
         self._check(tenant_id, session_id)
         if type not in PUBLIC_EVENT_TYPES:
             return None
@@ -714,7 +420,6 @@ class OutboxSink:
 
     async def finish_turn(
         self,
-        db: AsyncSession | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         turn_id: uuid.UUID,
@@ -723,7 +428,7 @@ class OutboxSink:
         usage: dict[str, Any] | None = None,
         failure: Any | None = None,
     ) -> None:
-        del db, usage
+        del usage
         self._check(tenant_id, session_id)
         payload: dict[str, Any] = {"turn_id": str(turn_id), "status": status}
         if failure is not None:
@@ -739,7 +444,6 @@ class OutboxSink:
 
     async def write_turn_log(
         self,
-        db: AsyncSession | None,
         hub: Any,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
@@ -760,7 +464,7 @@ class OutboxSink:
         from apipi.services.failures import failure_dict, log_extra, log_level_for
         from apipi.services.usage import usage_from
 
-        del db, hub, turn_context
+        del hub, turn_context
         self._check(tenant_id, session_id)
         stored = usage_from(usage)
         tools, tool_counts, mcp_names, mcp_counts = self._tally.snapshot()
@@ -876,8 +580,6 @@ class OutboxSink:
 
     async def store_input_image(
         self,
-        db: AsyncSession | None,
-        store: Any | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         *,
@@ -885,11 +587,9 @@ class OutboxSink:
         filename: str,
         content_type: str | None,
         settings: Any | None = None,
-        objects: Any | None = None,
     ) -> dict[str, Any]:
         from apipi.worker.artifact_upload import upload_via_presign
 
-        del db, store, objects
         self._check(tenant_id, session_id)
         resolved = settings if settings is not None else self.settings
         assert resolved is not None
@@ -906,20 +606,16 @@ class OutboxSink:
 
     async def store_artifacts(
         self,
-        db: AsyncSession | None,
-        store: Any | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         files: list[tuple[str, bytes]],
         *,
         turn_id: uuid.UUID | None = None,
-        key_id: str = "",
         settings: Any | None = None,
-        blobs: Any | None = None,
     ) -> None:
         from apipi.worker.artifact_upload import upload_via_presign
+        from apipi.worker.pi.artifacts import _content_type
 
-        del db, store, blobs, key_id
         if not files:
             return
         self._check(tenant_id, session_id)
@@ -933,25 +629,21 @@ class OutboxSink:
                 session_id,
                 kind="artifact",
                 filename=rel,
-                content_type=None,
+                content_type=_content_type(rel),
                 data=data,
                 turn_id=turn_id,
             )
 
     async def store_pi_session(
         self,
-        db: AsyncSession | None,
-        store: Any | None,
         tenant_id: uuid.UUID,
         session_id: uuid.UUID,
         data: bytes,
         *,
         settings: Any | None = None,
-        blobs: Any | None = None,
     ) -> None:
         from apipi.worker.artifact_upload import upload_via_presign
 
-        del db, store, blobs
         if not data:
             return
         self._check(tenant_id, session_id)

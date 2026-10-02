@@ -8,8 +8,8 @@ from apipi.gateway import create_app
 from apipi.gateway.errors import ApiError
 from apipi.services.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store
-from apipi.worker.execution import LocalExecution
-from apipi.worker.pi.isolation import load_isolation
+from apipi.worker.execution import LocalExecution, RemoteExecution
+from apipi.worker.outbox import Outbox
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
@@ -18,14 +18,12 @@ class _Alive:
     alive = True
 
 
-def test_create_app_sets_local_execution(settings: Settings, store: Store) -> None:
-    harness = FakeHarness()
-    app = create_app(settings, store=store, harness=harness)
+def test_create_app_sets_remote_execution(settings: Settings, store: Store) -> None:
+    app = create_app(settings, store=store)
     execution = app.state.execution
-    assert isinstance(execution, LocalExecution)
-    assert execution.harness is harness
-    assert execution.pool is app.state.pi_pool
-    assert execution.isolation is app.state.isolation
+    assert isinstance(execution, RemoteExecution)
+    assert execution.workers is app.state.workers
+    assert not hasattr(app.state, "pi_pool")
 
 
 def test_local_execution_capacity_uses_pool(settings: Settings) -> None:
@@ -40,8 +38,8 @@ def test_local_execution_capacity_uses_pool(settings: Settings) -> None:
         pool.settings,
         pool=pool,
         harness=FakeHarness(),
-        isolation=load_isolation("none"),
         hub=EventHub(),
+        outbox=Outbox(),
     )
     first = uuid.uuid4()
     second = uuid.uuid4()
@@ -57,20 +55,8 @@ async def test_local_execution_cancel_idle_errors(settings: Settings) -> None:
         settings,
         pool=PiPool(settings),
         harness=FakeHarness(),
-        isolation=load_isolation("none"),
         hub=EventHub(),
+        outbox=Outbox(),
     )
     with pytest.raises(ApiError, match="not in_progress"):
         await execution.cancel(uuid.uuid4(), status="idle")
-
-
-async def test_local_execution_probe_none(settings: Settings) -> None:
-    execution = LocalExecution(
-        settings,
-        pool=PiPool(settings),
-        harness=FakeHarness(),
-        isolation=load_isolation("none"),
-        hub=EventHub(),
-    )
-    execution.require()
-    await execution.probe()

@@ -98,8 +98,7 @@ async def _flush_envelopes(
     queued = batcher.take()
     if not queued:
         return
-    pool = getattr(websocket.app.state, "pi_pool", None)
-    lifecycle = getattr(pool, "lifecycle", None)
+    lifecycle = websocket.app.state.lifecycle
     outcome = await flush_batch(
         store,
         queued,
@@ -107,6 +106,7 @@ async def _flush_envelopes(
         settings=settings,
         metrics=metrics,
         objects=objects,
+        run_mode=conn.run_mode,
     )
     for session_id, last_seq in sorted(
         outcome.acks.items(), key=lambda item: str(item[0])
@@ -123,6 +123,9 @@ async def _flush_envelopes(
     if outcome.lifecycle and lifecycle is not None:
         from apipi.services.ingest import emit_lifecycle_intents
 
+        for intent in outcome.lifecycle:
+            if intent.fields.get("run_mode") is None:
+                intent.fields["run_mode"] = conn.run_mode
         emit_lifecycle_intents(lifecycle, outcome.lifecycle)
     if outcome.wipes:
         from apipi.worker.pi.artifacts import wipe_artifact_store

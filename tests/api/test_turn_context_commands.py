@@ -1,4 +1,3 @@
-import asyncio
 import io
 import uuid
 import zipfile
@@ -10,6 +9,7 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
+from tests.support.split_worker import split_client_for, wait_for_event_types
 
 from apipi.config import Settings
 from apipi.gateway import create_app
@@ -20,11 +20,9 @@ from apipi.services.runtime import FakeHarness
 from apipi.services.turn_context import build_turn_context
 from apipi.store.blobs import blob_store
 from apipi.store.engine import Store
-from apipi.store.events import list_events
 from apipi.store.repo import get_session
-from apipi.worker.execution import local_execution
-from apipi.worker.hub import _check_command_context, dispatch_command
-from apipi.worker.pi.dirs import pi_session_file
+from apipi.worker.hub import _check_command_context
+from apipi.worker.pi.dirs import pi_session_file, store_root
 from apipi.worker.turn_context import check_command_size, redact_context
 
 pytest_plugins = ["tests.support.mcp_http_server"]
@@ -44,6 +42,7 @@ def settings(tmp_path: Path) -> Settings:
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
+        local_store_dir=str(tmp_path / "store"),
         mcp_allow_hosts="127.0.0.1",
     )
 
@@ -54,6 +53,7 @@ def worker_settings(settings: Settings) -> Settings:
         database_url=settings.database_url,
         run_mode="none",
         sessions_dir=settings.sessions_dir,
+        local_store_dir=settings.local_store_dir,
         worker_accepts=["none", "microvm"],
         mcp_allow_hosts="127.0.0.1",
     )
@@ -65,14 +65,12 @@ def worker_harness() -> FakeHarness:
 
 
 @pytest.fixture
-async def split_client(
-    settings: Settings, store: Store, worker_harness: FakeHarness
-) -> AsyncIterator[tuple[AsyncClient, FakeHarness]]:
-    app = create_app(settings, store=store, harness=FakeHarness())
+async def client(settings: Settings, store: Store) -> AsyncIterator[AsyncClient]:
+    app = create_app(settings, store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        yield client, worker_harness
+        yield client
 
 
 def _zip_skill(name: str) -> bytes:
@@ -156,25 +154,12 @@ def _walk(value: object) -> None:
             _walk(item)
 
 
-async def _wait_for(
-    store: Store, tenant_id: uuid.UUID, session_id: uuid.UUID, event_type: str
-) -> None:
-    for _ in range(100):
-        async with store.session() as db:
-            events = await list_events(db, tenant_id, session_id)
-        if any(event.type == event_type for event in events):
-            return
-        await asyncio.sleep(0.02)
-    raise AssertionError(f"missing event {event_type}")
-
-
 async def test_turn_start_command_carries_turn_context(
     settings: Settings,
     store: Store,
-    split_client: tuple[AsyncClient, FakeHarness],
+    client: AsyncClient,
     worker_secret: str,
 ) -> None:
-    client, _ = split_client
     token = "ctx-command"
     tenant_id = _tenant(token)
     agent_id = await _agent(
@@ -239,94 +224,73 @@ async def test_turn_start_command_carries_turn_context(
     file_ref = payload["context"]["files"][0]
     assert file_ref["url"] is None
     assert isinstance(file_ref["local_path"], str)
-    assert isinstance(settings.sessions_dir, str)
-    assert (Path(settings.sessions_dir) / file_ref["local_path"]).is_file()
+    assert (store_root(settings) / file_ref["local_path"]).is_file()
     assert payload["context"]["pi_session"]["present"] is False
     _walk(payload)
     check_command_size(payload)
 
 
 async def test_worker_runs_turn_from_context_without_db_reads(
+    settings: Settings,
     worker_settings: Settings,
     store: Store,
-    split_client: tuple[AsyncClient, FakeHarness],
     worker_secret: str,
+    worker_harness: FakeHarness,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, worker_harness = split_client
     token = "ctx-worker"
     tenant_id = _tenant(token)
-    agent_id = await _agent(
-        client,
-        token,
-        tools=[
-            {
-                "type": "function",
-                "name": "lookup",
-                "description": "Look up a record.",
-                "parameters": {"type": "object", "properties": {}},
-            }
-        ],
-        reasoning={"effort": "high"},
-    )
-    session_id = await _idle_session(
-        client, token, agent_id, await _file(client, token), await _skill(client, token)
-    )
-    session_uuid = uuid.UUID(session_id)
-    async with store.session() as db:
-        row = await get_session(db, tenant_id, session_uuid)
-        assert row is not None
-        blob_id = uuid.uuid4()
-        await blob_store(worker_settings).put(
-            tenant_id, row.key_id, session_uuid, blob_id, b"pi-history"
+    async with split_client_for(
+        settings,
+        store,
+        harness=worker_harness,
+        token=worker_secret,
+        worker_settings=worker_settings,
+    ) as (_app, client, _worker):
+        agent_id = await _agent(
+            client,
+            token,
+            tools=[
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Look up a record.",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+            reasoning={"effort": "high"},
         )
-        row.pi_session_id = blob_id
-    transport = client._transport
-    assert isinstance(transport, ASGITransport)
-    app = cast(Any, transport.app)
-    context = await app.state.sessions._turn_context(
-        tenant_id,
-        session_uuid,
-        [],
-        api_key="model-key",
-        key_id=None,
-        user_id=None,
-        org_id=None,
-    )
-    assert context["pi_session"]["present"] is True
-    worker = FakeWorker(app, worker_secret)
-    await worker.connect(capacity=2, accepts=["none", "microvm"])
-    try:
-        command = await app.state.workers.acquire(
-            store,
-            tenant_id,
-            session_uuid,
-            op="turn.start",
-            payload={
-                "tenant_id": str(tenant_id),
-                "text": "hi",
-                "context": context,
-            },
+        session_id = await _idle_session(
+            client,
+            token,
+            agent_id,
+            await _file(client, token),
+            await _skill(client, token),
         )
-    finally:
-        await worker.close()
-    assert command is not None
+        session_uuid = uuid.UUID(session_id)
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_uuid)
+            assert row is not None
+            blob_id = uuid.uuid4()
+            await blob_store(worker_settings).put(
+                tenant_id, row.key_id, session_uuid, blob_id, b"pi-history"
+            )
+            row.pi_session_id = blob_id
 
-    def _boom(*args: object, **kwargs: object) -> object:
-        raise AssertionError("worker must not read the database for turn context")
+        def _boom(*args: object, **kwargs: object) -> object:
+            raise AssertionError("worker must not read the database for turn context")
 
-    class _BoomService:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            raise AssertionError("worker must not use DB-backed file/skill services")
-
-    monkeypatch.setattr(runtime, "get_session", _boom)
-    monkeypatch.setattr(runtime, "definition_for_session", _boom)
-    monkeypatch.setattr(runtime, "restore_pi_session", _boom)
-    monkeypatch.setattr(runtime, "FileService", _BoomService)
-    monkeypatch.setattr(runtime, "SkillService", _BoomService)
-    execution = local_execution(worker_settings, store=store, harness=worker_harness)
-    await dispatch_command(execution, command)
-    await _wait_for(store, tenant_id, session_uuid, "agent.session.turn.completed")
+        monkeypatch.setattr(runtime, "get_session", _boom)
+        monkeypatch.setattr(runtime, "definition_for_session", _boom)
+        posted = await client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json={"type": "agent.session.input.message", "text": "hi"},
+        )
+        assert posted.status_code == 200
+        await wait_for_event_types(
+            client, token, session_id, "agent.session.turn.completed"
+        )
     assert worker_harness.instructions is not None
     assert "Follow the plan." in worker_harness.instructions
     assert worker_harness.function_tools is not None
@@ -344,10 +308,9 @@ async def test_worker_runs_turn_from_context_without_db_reads(
 async def test_followup_turn_rebuilds_mcp_from_db_and_vault(
     settings: Settings,
     store: Store,
-    split_client: tuple[AsyncClient, FakeHarness],
+    client: AsyncClient,
     mcp_server: tuple[str, dict[str, str]],
 ) -> None:
-    client, _ = split_client
     mcp_url, _seen = mcp_server
     token = "ctx-mcp"
     tenant_id = _tenant(token)
@@ -431,6 +394,7 @@ async def test_filesystem_refs_become_presigned_urls_on_s3(
         database_url=settings.database_url,
         run_mode="none",
         sessions_dir=settings.sessions_dir,
+        local_store_dir=settings.local_store_dir,
         artifact_store="s3",
         s3_bucket="bucket",
         s3_prefix="apipi/artifacts",
@@ -440,7 +404,6 @@ async def test_filesystem_refs_become_presigned_urls_on_s3(
     app = create_app(
         s3_settings,
         store=store,
-        harness=FakeHarness(),
         objects=S3Store(s3_settings, client=FakeS3()),
     )
     token = "ctx-s3"

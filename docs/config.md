@@ -32,7 +32,7 @@ the arguments only. It does not read `DATABASE_URL`, `OPENAI_*`, or
 other host environment values. Use it when another app in the same
 process already owns those names.
 
-`--host` and `--port` on `apipi serve` override the bind from config.
+`--host` and `--port` on `apipi serve` and `apipi dev` override the bind from config. `apipi dev` also takes `--config`, and its worker reads `APIPI_RUN_MODE` (default `none`).
 
 Durations are like `15m`, `30s`, `2h`, `15d`. Sizes are like `512M` or
 `1MiB` (1024-based).
@@ -55,17 +55,17 @@ hosted files and skills).
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | `database_url` | `.apipi/apipi.db` (SQLite) | Store URL. Unset uses SQLite in the current directory. File SQLite uses WAL. One process only. Shared store: `postgresql+asyncpg://…`. API-only: every API process points at the same URL. Workers never use it: `apipi worker` refuses to start when `DATABASE_URL` is set in the environment or `database_url` is set in the worker config file. |
+| `DATABASE_URL` | `database_url` | `.apipi/apipi.db` (SQLite) | Store URL. Unset uses SQLite in the current directory. File SQLite uses WAL. One process only. Shared store: `postgresql+asyncpg://…`. Every API process points at the same URL. Workers never use it: `apipi worker` refuses to start when `DATABASE_URL` is set in the environment or `database_url` is set in the worker config file. |
 | `APIPI_HOST` | `host` | `0.0.0.0` | Bind address. |
 | `APIPI_PORT` | `port` | `8000` | Bind port. |
 | `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
 | `APIPI_LOG_FORMAT` | `log_format` | `json` | `json` (one object per line on stderr) or `text` (laptop). |
-| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Idle timer for `none` sessions. Kills Pi to free RAM. Hosted computers use the sandbox TTL instead. This follows environment type, not `APIPI_RUN_MODE`. The process that holds Pi runs the timer: combined `apipi serve`, or `apipi worker` in a split deploy. An agent or session `idle_ttl` overrides it. |
+| `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Idle timer for `none` sessions. Kills Pi to free RAM. Hosted computers use the sandbox TTL instead. This follows environment type, not `APIPI_RUN_MODE`. `apipi worker` runs the timer. An agent or session `idle_ttl` overrides it. |
 | `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | `[sandbox.ttl].openai_hosted` | `1h` | Idle timer for an `openai_hosted` computer. One timer stops Pi and deletes the workspace together. There is no separate guest timeout. Transcript and published artifacts stay. `0` turns the timer off. An agent or session `idle_ttl` overrides it. |
 | `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. Workers advertise this as `capacity`. |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | `max_sessions_per_tenant` | `32` | Live Pi processes for one tenant. A new turn that would pass the cap returns `429` with code `capacity_tenant`. The node cap still applies. |
-| `APIPI_WORKER_MEMORY_MB` | `worker_memory_mb` | `max_sessions × mem_mib` (16384 at defaults) | RAM budget this worker (or combined node) will run, in MiB. Sum of guest `mem_mib` for live leases must stay under this. Set it to usable host RAM minus OS and worker reserve. Do not read `/proc/meminfo` automatically. |
+| `APIPI_WORKER_MEMORY_MB` | `worker_memory_mb` | `max_sessions × mem_mib` (16384 at defaults) | RAM budget this worker will run, in MiB. Sum of guest `mem_mib` for live leases must stay under this. Set it to usable host RAM minus OS and worker reserve. Do not read `/proc/meminfo` automatically. |
 | `APIPI_TURN_TIMEOUT` | `turn_timeout` | `10m` | Fail a stuck turn with code `turn_timeout`. This is not a user cancel. |
 | `APIPI_ERROR_CODES` | `error_codes` | `specific` | `specific` or `legacy`. `specific` puts the specific code in `code` on `agent.session.error` and the non-stream `502` body for upstream failures. `legacy` keeps `model_host_error` there for one release. The specific code is always `detail_code`, and `legacy_code` is still `model_host_error` on those failures. `turn.failed`, logs, and usage always use the specific code. See [failure codes](errors.md). |
 | `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. The callback may return a typed reject (`401` or `429`). |
@@ -77,7 +77,6 @@ hosted files and skills).
 | `APIPI_WORKER_CLIENT_CERT` | `[worker].client_cert` | unset | Path to the PEM client certificate `apipi worker` presents for mutual TLS. Must be set together with `APIPI_WORKER_CLIENT_KEY`. See [workers](workers.md#transport-security). |
 | `APIPI_WORKER_CLIENT_KEY` | `[worker].client_key` | unset | Path to the PEM key for `APIPI_WORKER_CLIENT_CERT`. Must be set together with the certificate. |
 | `APIPI_WORKER_SERVER_CA` | `[worker].server_ca` | unset | Optional PEM CA bundle the worker uses to verify the API server certificate when the system trust store does not cover it. |
-| `APIPI_API_ONLY` | `api_only` | off | Control plane only. Turns lease a worker. `apipi serve --api-only` sets this. |
 | `APIPI_WORKER_ACCEPTS` | `[worker].accepts` | backend default (`none,microvm` for a microVM backend, else `none`) | Comma list from `none`, `microvm`. What this worker runs. `none,microvm` does both on one worker (`type=none` on the host, the rest in microVMs), `microvm` is computer sessions only, `none` is text-only sessions only with no KVM. If `microvm` is listed but the microVM backend cannot run, the worker fails fast before it registers. See [workers](workers.md#placement). |
 | `APIPI_WORKER_OUTBOX_DIR` | `[worker].outbox_dir` | unset | Directory for the worker outbox disk spool. Buffered durable envelopes are written through to one JSONL file per session so they survive a worker restart and replay after the next `hello.reply`. Unset keeps the outbox in memory only. See [workers](workers.md#messages). |
 | `APIPI_WORKER_OUTBOX_MAX_MESSAGES` | `[worker].outbox_max_messages` | `10000` | How many unacked durable envelopes the worker buffers per outbox. Past the cap the turn fails with code `worker_outbox_full`. |
@@ -96,8 +95,8 @@ hosted files and skills).
 | `APIPI_MAX_ARTIFACT_BYTES` | `max_artifact_bytes` | `512MiB` | Published artifact bytes per session. Publishing more is refused with code `artifact_too_large`. The harness session cache uses the same blob store and does not count toward this cap. |
 | `APIPI_MAX_FILE_BYTES` | `max_file_bytes` | `50MiB` | Max size of one `POST /v1/files` or `POST /v1/skills` upload. Larger bodies return `413` with code `payload_too_large`. JSON routes still use `max_request_bytes`. |
 | `APIPI_AGENT_VERSIONS_KEEP` | `agent_versions_keep` | removed | Warned about and ignored. Agent versions and snapshots are gone; the live agent row is the only state. Use the agent bundle export for snapshots. |
-| `APIPI_ARTIFACT_STORE` | `artifact_store` | `local` | `local` or `s3`. Published artifacts, hosted file uploads, and hosted skill bundles share this backend. `s3` is the recommended production setup for split mode: the API issues presigned PUT and GET URLs and the worker uploads and downloads directly, so store credentials exist only on the API. `local` is combined mode (test and dev) by default. In split mode `local` must be chosen explicitly with `APIPI_LOCAL_STORE_DIR`, and the API and every worker must mount that path at the same location. Without it, split startup fails with a message that points at `s3` or an explicit shared root. Local bytes stay under `<store-root>/.artifacts`, files under `<store-root>/.store/files`, and skills under `<store-root>/.store/skills`. |
-| `APIPI_LOCAL_STORE_DIR` | `local_store_dir` | unset (falls back to `APIPI_SESSIONS_DIR`) | Dedicated root for local artifact, file, and skill bytes. Set it to one path the API and every worker mounts at the same location (same machine or a shared network filesystem). How to share it is up to the operator and out of scope for ApiPi. Combined mode leaves it unset so behaviour is unchanged. |
+| `APIPI_ARTIFACT_STORE` | `artifact_store` | `local` | `local` or `s3`. Published artifacts, hosted file uploads, and hosted skill bundles share this backend. `s3` is the recommended production setup: the API issues presigned PUT and GET URLs and the worker uploads and downloads directly, so store credentials exist only on the API. `local` works on a single host with no extra config, because `APIPI_LOCAL_STORE_DIR` defaults to `.apipi/store`. With several hosts, the API and every worker must mount one shared `APIPI_LOCAL_STORE_DIR` at the same location. Local bytes stay under `<store-root>/.artifacts`, files under `<store-root>/.store/files`, and skills under `<store-root>/.store/skills`. |
+| `APIPI_LOCAL_STORE_DIR` | `local_store_dir` | `.apipi/store` under cwd | Dedicated root for local artifact, file, and skill bytes. `apipi dev` sets this default for both processes. On several hosts, set it to one path the API and every worker mounts at the same location (same machine or a shared network filesystem). How to share it is up to the operator and out of scope for ApiPi. |
 | `APIPI_S3_BUCKET` | `s3_bucket` | required if s3 | Bucket. |
 | `APIPI_S3_ENDPOINT` | `s3_endpoint` | unset | Base URL for S3-compatible APIs (Hetzner, MinIO, R2). Unset talks to AWS. |
 | `APIPI_S3_REGION` | `s3_region` | `us-east-1` | Region (`hel1`, `fsn1`, `nbg1` on Hetzner). |
@@ -126,19 +125,19 @@ hosted files and skills).
 | `APIPI_PAYLOAD_EXPORT_RETRIES` | `payload_export_retries` | `1` | Extra tries after the first, then drop. A failed export does not break the turn. |
 | `APIPI_USAGE_SINKS` | `usage_sinks` | empty | Extra usage sinks, comma-separated `package.mod:Class`. |
 | `APIPI_PAYLOAD_SINKS` | `payload_sinks` | empty | Extra payload sinks, comma-separated `package.mod:Class`. |
-| `APIPI_LIFECYCLE_EXPORT_URL` | `lifecycle_export_url` | unset | HTTPS POST of session live start, stop, and heartbeat batches. Off when unset and `APIPI_LIFECYCLE_SINKS` is empty. API-only: `apipi worker` ignores it with a warning. See [usage](usage.md#session-lifecycle-export). |
-| `APIPI_LIFECYCLE_EXPORT_TOKEN` | `lifecycle_export_token` | unset | Bearer for the lifecycle export URL. Put this in the process environment. API-only. |
-| `APIPI_LIFECYCLE_EXPORT_TIMEOUT` | `lifecycle_export_timeout` | `5s` | HTTP timeout, and the shutdown flush limit. API-only. |
-| `APIPI_LIFECYCLE_SINKS` | `lifecycle_sinks` | empty | Extra lifecycle sinks, comma-separated `package.mod:Class`. Each sink implements `emit(event)`. API-only. |
-| `APIPI_LIFECYCLE_HEARTBEAT` | `lifecycle_heartbeat` | `60s` | How often the API posts its live set, derived from worker inventories. `0` or `off` disables heartbeats. API-only. |
-| `APIPI_LIFECYCLE_QUEUE` | `lifecycle_queue` | `10000` | Max queued lifecycle events. A full queue drops the new event. API-only. |
-| `APIPI_LIFECYCLE_BATCH` | `lifecycle_batch` | `100` | Max events in one HTTP POST. API-only. |
-| `APIPI_LIFECYCLE_BATCH_WAIT` | `lifecycle_batch_wait` | `1s` | Flush a short batch after this wait. API-only. |
-| `APIPI_LIFECYCLE_RETRY_MAX` | `lifecycle_retry_max` | `60s` | Cap for exponential backoff on 5xx, 429, 408, and network errors. API-only. |
-| `APIPI_LIFECYCLE_USER_ID` | `lifecycle_user_id` | `raw` | `raw`, `hash`, or `omit`. `hash` needs `APIPI_LIFECYCLE_USER_ID_KEY`. API-only. |
-| `APIPI_LIFECYCLE_USER_ID_KEY` | — | unset | HMAC key for `hash`. Process environment only. Required when `APIPI_LIFECYCLE_USER_ID=hash`. API-only. |
-| `APIPI_LIFECYCLE_RUN_MODES` | `lifecycle_run_modes` | empty | Comma-separated run modes that emit lifecycle events. Empty means all. API-only. |
-| `APIPI_METRICS` | `metrics` | off | Prometheus text at `/metrics` when on. No bearer. Combined `apipi serve` scrapes the API. `apipi worker` also binds `/metrics` on `APIPI_WORKER_METRICS_HOST`:`APIPI_WORKER_METRICS_PORT`. |
+| `APIPI_LIFECYCLE_EXPORT_URL` | `lifecycle_export_url` | unset | HTTPS POST of session live start, stop, and heartbeat batches. Off when unset and `APIPI_LIFECYCLE_SINKS` is empty. `apipi worker` ignores it with a warning. See [usage](usage.md#session-lifecycle-export). |
+| `APIPI_LIFECYCLE_EXPORT_TOKEN` | `lifecycle_export_token` | unset | Bearer for the lifecycle export URL. Put this in the process environment. Read by the API only. |
+| `APIPI_LIFECYCLE_EXPORT_TIMEOUT` | `lifecycle_export_timeout` | `5s` | HTTP timeout, and the shutdown flush limit. Read by the API only. |
+| `APIPI_LIFECYCLE_SINKS` | `lifecycle_sinks` | empty | Extra lifecycle sinks, comma-separated `package.mod:Class`. Each sink implements `emit(event)`. Read by the API only. |
+| `APIPI_LIFECYCLE_HEARTBEAT` | `lifecycle_heartbeat` | `60s` | How often the API posts its live set, derived from worker inventories. `0` or `off` disables heartbeats. Read by the API only. |
+| `APIPI_LIFECYCLE_QUEUE` | `lifecycle_queue` | `10000` | Max queued lifecycle events. A full queue drops the new event. Read by the API only. |
+| `APIPI_LIFECYCLE_BATCH` | `lifecycle_batch` | `100` | Max events in one HTTP POST. Read by the API only. |
+| `APIPI_LIFECYCLE_BATCH_WAIT` | `lifecycle_batch_wait` | `1s` | Flush a short batch after this wait. Read by the API only. |
+| `APIPI_LIFECYCLE_RETRY_MAX` | `lifecycle_retry_max` | `60s` | Cap for exponential backoff on 5xx, 429, 408, and network errors. Read by the API only. |
+| `APIPI_LIFECYCLE_USER_ID` | `lifecycle_user_id` | `raw` | `raw`, `hash`, or `omit`. `hash` needs `APIPI_LIFECYCLE_USER_ID_KEY`. Read by the API only. |
+| `APIPI_LIFECYCLE_USER_ID_KEY` | — | unset | HMAC key for `hash`. Process environment only. Required when `APIPI_LIFECYCLE_USER_ID=hash`. Read by the API only. |
+| `APIPI_LIFECYCLE_RUN_MODES` | `lifecycle_run_modes` | empty | Comma-separated run modes that emit lifecycle events. Empty means all. Read by the API only. |
+| `APIPI_METRICS` | `metrics` | off | Prometheus text at `/metrics` when on. No bearer. `apipi serve` serves the API metrics. `apipi worker` also binds `/metrics` on `APIPI_WORKER_METRICS_HOST`:`APIPI_WORKER_METRICS_PORT`. |
 | `APIPI_WORKER_METRICS_HOST` | `worker_metrics_host` | `0.0.0.0` | Bind address for the worker scrape endpoint. |
 | `APIPI_WORKER_METRICS_PORT` | `worker_metrics_port` | `9091` | Port for the worker scrape endpoint. |
 | `APIPI_GUEST_SAMPLE_INTERVAL` | `guest_sample_interval` | unset | How often the worker pulls a tiny vsock snapshot (CPU/load, MemAvailable, workspace disk). Unset is off. Host cgroup CPU+RAM is on whenever worker metrics are on. |
@@ -189,16 +188,15 @@ is optional. Prompt and completion bodies are never logged.
 table is in [usage](usage.md#logs).
 
 One `apipi serve` process has one profile. Change a setting and restart.
-The Pi pool is in memory in that process, so extra uvicorn workers do
-not share it. Several processes behind a load balancer need session
-affinity ([multiple nodes](scale.md)).
+Run one uvicorn worker per process. Several API processes can sit behind a
+load balancer without session affinity ([multiple nodes](scale.md)).
 
 Each live session is one Pi process (or guest). `max_sessions` counts
 those live processes on the node. `max_sessions_per_tenant` counts them
 for one tenant. `worker_memory_mb` is the RAM budget for the same live
 guests. A new turn that would pass either node cap returns `429` with
 code `capacity`. The session row in Postgres can outlive the process;
-idle TTL kills the process and frees a slot. In a split deploy the
+idle TTL kills the process and frees a slot. The
 worker runs that reap, not the API. The timer is chosen by environment
 type, not by run mode. `none` uses `APIPI_IDLE_TTL`.
 `openai_hosted` uses the sandbox TTL, and that one timer covers Pi and
@@ -263,7 +261,7 @@ without the cache. Session create that cannot read a hosted file or
 skill returns `503` with code `artifact_store`. The same store error
 on a gateway read or upload returns `503` with that code.
 
-The live `openai_hosted` workspace stays on the node. Published
+The live `openai_hosted` workspace stays on the worker. Published
 artifact content, and hosted file and skill bytes, can be read from any
 gateway process that shares the bucket.
 
@@ -490,7 +488,7 @@ directories, packages, and setup commands are unchanged. Empty main
 (`platform_prompt = ""`) drops only the main block; additional and
 agent instructions still apply. An empty `system_prompt` keeps Pi's
 harness default. Platform prompt and compaction settings live on the
-process that runs Pi (combined `apipi serve` or `apipi worker`).
+`apipi worker`.
 Thinking level and system prompt may also be set per session.
 
 Shipped prompt text lives in `src/apipi/worker/pi/prompts/`. `apipi
@@ -634,7 +632,7 @@ default_size = "S"
 ```
 
 ```
-APIPI_RUN_MODE=microvm uv run apipi serve
+APIPI_RUN_MODE=microvm uv run apipi worker
 ```
 
 ### Resources
@@ -796,3 +794,8 @@ keys such as `run_mode` and `microvm_mem_mib` still load for this
 release and log a deprecation warning that names the nested path. Do
 not set a flat key and its nested path in the same file. The next
 release will reject the flat keys as unknown.
+
+`APIPI_API_ONLY` and the `api_only` TOML key were removed in 0.14.0,
+because `apipi serve` is always the API. A leftover value makes
+`apipi serve` and `apipi worker` log the warning `config.api_only_removed`
+and continue.

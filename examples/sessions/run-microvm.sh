@@ -68,7 +68,7 @@ chmod 600 "$WORKER_TOKEN_FILE"
 export APIPI_WORKER_TOKEN_FILE="$WORKER_TOKEN_FILE"
 uv run apipi check --role api
 
-nohup uv run apipi serve --api-only --host 0.0.0.0 --port 8000 >>"$API_LOG" 2>&1 &
+nohup uv run apipi serve --host 0.0.0.0 --port 8000 >>"$API_LOG" 2>&1 &
 API_PID=$!
 echo "API pid $API_PID log $API_LOG"
 

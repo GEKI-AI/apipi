@@ -6,7 +6,7 @@ them at your own LLM endpoints. Clients use an HTTP API compatible with
 the [OpenAI Agents API](https://developers.openai.com/api/docs/guides/agents-api).
 
 Production sessions run in [Firecracker](https://firecracker-microvm.github.io/)
-microVMs on **workers** (or on combined `apipi serve` on one box). Each
+microVMs on **workers**. Each
 guest has its own kernel. The HTTP API stays outside the guest. Pi,
 MCP, and a local session directory share the guest. How that
 fits together is in [Concepts](concepts.md).
@@ -33,12 +33,13 @@ CLI (`pi --mode rpc`) on `PATH`. The gateway pins Pi 0.99.1; `apipi
 install` can install that binary and, if you pick MicroVM, Firecracker
 plus a guest image.
 
-A single process stores data in SQLite at `.apipi/apipi.db` and binds
-`0.0.0.0:8000`. `OPENAI_BASE_URL` on the gateway is the model host that
-Pi calls. Clients send `Authorization: Bearer`; any non-empty bearer
+`apipi serve` is the API. It stores data in SQLite at `.apipi/apipi.db`
+and binds `0.0.0.0:8000`. Pi runs in `apipi worker`, a separate
+process. For local development, `apipi dev` starts both.
+`OPENAI_BASE_URL` on the gateway is the model host that Pi calls. Clients send `Authorization: Bearer`; any non-empty bearer
 becomes a tenant, and that value is the model key unless you set
-`OPENAI_API_KEY_OVERWRITE`. Isolation defaults to `none`. For
-production, run `apipi serve --api-only` and set
+`OPENAI_API_KEY_OVERWRITE`. Worker isolation defaults to `none`. For
+production, run `apipi serve` and set
 `APIPI_RUN_MODE=microvm` on `apipi worker`. Several API processes share
 Postgres. Details are on [Install](install.md).
 
@@ -48,11 +49,12 @@ Postgres. Details are on [Install](install.md).
 pip install geki-apipi
 apipi install
 export OPENAI_BASE_URL=http://your-model-host/v1
-apipi migrate
-apipi serve
+apipi dev
 ```
 
-`uv add geki-apipi` works in a project. The import package and CLI are
+`apipi dev` runs `apipi migrate`, then starts `apipi serve` and
+`apipi worker` as two child processes. `uv add geki-apipi` works in a
+project. The import package and CLI are
 `apipi`. S3-compatible artifact storage is `pip install "geki-apipi[s3]"`.
 
 ### From a git checkout
@@ -63,8 +65,7 @@ cd apipi
 uv sync
 uv run apipi install
 export OPENAI_BASE_URL=http://your-model-host/v1
-uv run apipi migrate
-uv run apipi serve
+uv run apipi dev
 ```
 
 Prefix every `apipi` command with `uv run` in a checkout.

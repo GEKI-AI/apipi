@@ -8,7 +8,7 @@ The HTTP API never runs inside a guest.
 
 This page explains why the modes exist and what a session looks like
 inside a microVM. Packages, image paths, and TAP flags are in
-[run modes](run-modes.md). How API processes and workers split is in
+[run modes](run-modes.md). How API processes and workers fit together is in
 [workers](worker-concepts.md).
 
 ## Why it matters
@@ -21,17 +21,16 @@ kernel.
 
 | Mode | What it is | When |
 | --- | --- | --- |
-| `none` | Pi is a child of the process that holds it, in its own process group. Teardown kills the Pi process group. Crash restart reaps leftovers. | Laptops and CI, plus production workers that accept only `type=none` (no warning there). Combined `apipi serve` with `none` still warns. |
+| `none` | Pi is a child of the worker that holds it, in its own process group. Teardown kills the Pi process group. Crash restart reaps leftovers. | Laptops and CI, plus production workers that accept only `type=none`. A `none` worker logs a warning that this isolation is not suited for production. |
 | `microvm` | One [Firecracker](https://firecracker-microvm.github.io/) KVM guest per session. | Production when a computer is in use. |
 | `package.mod:Class` | An operator class behind the same isolation interface. | You already have a sandbox. |
 
-The process default is `none` so `apipi serve` can start without KVM.
-Production sets `APIPI_RUN_MODE=microvm` on the process that owns
-guests: `apipi worker`, or combined `apipi serve` on a single host.
-`apipi serve --api-only` does not probe KVM and does not create TAP
-devices.
+The worker default is `none` so `apipi worker` and `apipi dev` can start
+without KVM. Production sets `APIPI_RUN_MODE=microvm` on `apipi worker`,
+which owns the guests. `apipi serve` is always the API: it does not probe
+KVM and does not create TAP devices.
 
-If the selected mode cannot start, that process exits. It does not
+If the selected mode cannot start, the worker exits. It does not
 fall back to `none`. `host` and `jail` are not valid.
 
 ## What lives in the guest
@@ -106,34 +105,33 @@ needs `/dev/kvm`, `firecracker`, `jailer` on `PATH` when you use it,
 kernel and rootfs images, and host net tools (`ip`, `iptables`, `tc`).
 `apipi install --microvm` can fetch Firecracker and build images.
 
-`apipi worker` always probes. Combined `apipi serve` probes. `apipi
-serve --api-only` skips the probe so a rootless API container can
-start.
+`apipi worker` always probes. `apipi serve` never probes, so a rootless
+API container can start.
 
 ## Examples
 
 Laptop, no KVM:
 
 ```
-APIPI_RUN_MODE=none apipi serve
+APIPI_RUN_MODE=none apipi dev
 ```
 
-Pi is a child of that process and starts in its own process group so
+Pi is a child of the worker process and starts in its own process group so
 teardown can kill Pi and the MCP children it started. Use a local
 `openai_hosted` directory the same way. This is the process default.
 
-One box with KVM (embedded worker):
+One box with KVM:
 
 ```
-APIPI_RUN_MODE=microvm apipi serve
+APIPI_RUN_MODE=microvm apipi dev
 ```
 
-That process probes Firecracker, then serves HTTP and boots guests.
+The worker probes Firecracker, connects to the API, and boots guests.
 
 API in Docker, guests on a KVM host:
 
 ```
-apipi serve --api-only
+apipi serve
 APIPI_RUN_MODE=microvm apipi worker
 ```
 

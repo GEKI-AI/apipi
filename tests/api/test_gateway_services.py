@@ -7,13 +7,12 @@ from apipi.config import VAULT_MASTER_KEY_UNSET, Settings
 from apipi.gateway import Gateway
 from apipi.gateway.errors import ApiError
 from apipi.services.agents import AgentWrite
-from apipi.services.runtime import FakeHarness
 from apipi.services.vaults import CredentialWrite, VaultWrite
 from apipi.store.engine import Store
 
 
 async def test_ensure_tenant(settings: Settings, store: Store) -> None:
-    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    gateway = Gateway.create(settings, store=store)
     tenant_id = uuid.uuid4()
     first = await gateway.ensure_tenant(tenant_id)
     again = await gateway.ensure_tenant(tenant_id)
@@ -22,7 +21,7 @@ async def test_ensure_tenant(settings: Settings, store: Store) -> None:
 
 
 async def test_in_process_agents_crud(settings: Settings, store: Store) -> None:
-    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    gateway = Gateway.create(settings, store=store)
     tenant_id = uuid.uuid4()
     await gateway.ensure_tenant(tenant_id)
     created = await gateway.agents.create(
@@ -47,7 +46,7 @@ async def test_gateway_startup_warns_without_vault_key(
     settings: Settings, store: Store, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.WARNING, logger="apipi")
-    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    gateway = Gateway.create(settings, store=store)
     await gateway.startup()
     try:
         assert VAULT_MASTER_KEY_UNSET in caplog.text
@@ -65,7 +64,6 @@ async def test_gateway_startup_quiet_with_vault_key(
     gateway = Gateway.create(
         settings.model_copy(update={"vault_master_key": key}),
         store=store,
-        harness=FakeHarness(),
     )
     await gateway.startup()
     try:
@@ -75,7 +73,7 @@ async def test_gateway_startup_quiet_with_vault_key(
 
 
 async def test_in_process_vaults_omit_token(settings: Settings, store: Store) -> None:
-    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    gateway = Gateway.create(settings, store=store)
     tenant_id = uuid.uuid4()
     await gateway.ensure_tenant(tenant_id)
     vault = await gateway.vaults.create(tenant_id, VaultWrite(name="GitHub"))
@@ -105,7 +103,7 @@ async def test_in_process_vaults_omit_token(settings: Settings, store: Store) ->
 async def test_in_process_usage_needs_one_filter(
     settings: Settings, store: Store
 ) -> None:
-    gateway = Gateway.create(settings, store=store, harness=FakeHarness())
+    gateway = Gateway.create(settings, store=store)
     tenant_id = uuid.uuid4()
     await gateway.ensure_tenant(tenant_id)
     with pytest.raises(ApiError) as exc:
@@ -130,6 +128,5 @@ async def test_in_process_models_list(
     gateway = Gateway.create(
         settings.model_copy(update={"model_base_url": "http://model.test/v1"}),
         store=store,
-        harness=FakeHarness(),
     )
     assert await gateway.models.list("t") == payload

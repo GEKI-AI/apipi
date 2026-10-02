@@ -15,12 +15,13 @@ from apipi.config import Settings
 from apipi.gateway.metrics import Metrics
 from apipi.services.lifecycle_export import (
     LifecycleEmitter,
-    attach_lifecycle,
+    api_heartbeat_loop,
     backoff_seconds,
-    heartbeat_loop,
+    create_lifecycle,
     reconcile,
     shape_user_id,
 )
+from apipi.store.engine import Store
 from apipi.worker.pi.microvm import resolve_spawn_image
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
@@ -72,7 +73,7 @@ def _settings(**updates: Any) -> Settings:
 
 def _pool(settings: Settings, metrics: Metrics | None = None) -> PiPool:
     pool = PiPool(settings, metrics=metrics)
-    attach_lifecycle(pool, settings, metrics)
+    pool.lifecycle = create_lifecycle(settings, metrics)
     return pool
 
 
@@ -123,6 +124,7 @@ async def test_off_by_default_builds_nothing(
 ) -> None:
     settings = Settings(database_url=_DB, run_mode="none")
     pool = _pool(settings)
+    assert create_lifecycle(settings) is None
     assert pool.lifecycle is None
 
     async def fake_spawn(*_args: object, **_kw: object) -> _Proc:
@@ -135,10 +137,53 @@ async def test_off_by_default_builds_nothing(
     assert pool._live == {}
 
 
-def test_run_modes_filter_skips_events() -> None:
+def test_run_modes_filter_uses_each_events_run_mode() -> None:
     settings = _settings(run_mode="none", lifecycle_run_modes="microvm")
-    pool = PiPool(settings)
-    assert attach_lifecycle(pool, settings) is None
+    emitter = create_lifecycle(settings)
+    assert emitter is not None
+    assert (
+        emitter.emit_start({"session_id": "a", "run_mode": "none"}, cause="spawn")
+        is None
+    )
+    assert emitter.emit_start({"session_id": "b"}, cause="spawn") is None
+    assert (
+        emitter.emit_stop(
+            {"session_id": "a", "run_mode": "none"}, reason="stop", live_ms=1
+        )
+        is None
+    )
+    assert emitter.pending() == []
+    seq = emitter.emit_start({"session_id": "c", "run_mode": "microvm"}, cause="spawn")
+    assert seq == 1
+    stop = emitter.emit_stop(
+        {"session_id": "c", "run_mode": "microvm", "start_seq": 1},
+        reason="stop",
+        live_ms=1,
+    )
+    assert stop == 2
+    emitter.emit_heartbeat(
+        [
+            {"session_id": "a", "run_mode": "none"},
+            {"session_id": "c", "run_mode": "microvm"},
+        ]
+    )
+    events = emitter.pending()
+    assert [item["type"] for item in events] == [
+        "session.live.start",
+        "session.live.stop",
+        "session.live.heartbeat",
+    ]
+    assert [item["run_mode"] for item in events[:2]] == ["microvm", "microvm"]
+    assert [item["session_id"] for item in events[2]["live"]] == ["c"]
+
+
+def test_event_run_mode_comes_from_the_event_not_the_api() -> None:
+    emitter = LifecycleEmitter(_settings(run_mode="none"))
+    emitter.emit_start({"session_id": "a", "run_mode": "microvm"}, cause="spawn")
+    emitter.emit_start({"session_id": "b"}, cause="spawn")
+    events = emitter.pending()
+    assert events[0]["run_mode"] == "microvm"
+    assert events[1]["run_mode"] is None
 
 
 def test_user_id_hash_and_omit() -> None:
@@ -444,10 +489,9 @@ async def test_unbound_proc_never_starts_or_heartbeats() -> None:
     assert all(item["type"] != "session.live.start" for item in events)
 
 
-async def test_heartbeat_fake_clock() -> None:
+async def test_heartbeat_fake_clock(store: Store) -> None:
     settings = _settings(lifecycle_heartbeat=timedelta(seconds=60))
-    pool = _pool(settings)
-    emitter = pool.lifecycle
+    emitter = create_lifecycle(settings)
     assert emitter is not None
     clock = {"t": 0.0}
 
@@ -457,7 +501,13 @@ async def test_heartbeat_fake_clock() -> None:
     async def sleep(seconds: float) -> None:
         clock["t"] += seconds
 
-    await heartbeat_loop(pool, emitter, sleep=sleep, clock=now, max_emits=2)
+    class _Hub:
+        def known_live_sessions(self) -> list[uuid.UUID]:
+            return []
+
+    await api_heartbeat_loop(
+        settings, emitter, _Hub(), store, sleep=sleep, clock=now, max_emits=2
+    )
     events = emitter.pending()
     assert [item["type"] for item in events] == [
         "session.live.heartbeat",

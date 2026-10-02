@@ -1,8 +1,8 @@
 """Split-mode end to end: streaming deltas and HTTP MCP over a remote worker.
 
-Acceptance test for #441. One API-only app serves HTTP while a
+Acceptance test for #441. One API app serves HTTP while a
 credential-less worker (no ``DATABASE_URL``, no object-store
-credentials, ``store=None``) connects over ``/internal/worker`` through
+credentials) connects over ``/internal/worker`` through
 the real worker protocol and runs turns from the command context. The
 worker side is driven by the real worker connection loop
 (``_serve_connection``) over a small socket adapter around
@@ -69,7 +69,6 @@ def _api_settings(settings: Settings) -> Settings:
         run_mode="none",
         sessions_dir=settings.sessions_dir,
         local_store_dir=settings.sessions_dir,
-        api_only=True,
         mcp_allow_hosts="127.0.0.1",
     )
 
@@ -190,13 +189,11 @@ def _block_worker_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("split worker must not construct storage clients")
 
-    import apipi.services.runtime as runtime
     import apipi.store.blobs as blobs
     import apipi.store.engine as engine
 
     monkeypatch.setattr(engine, "create_engine", _boom)
     monkeypatch.setattr(engine, "Store", _boom)
-    monkeypatch.setattr(runtime, "object_store", _boom)
     monkeypatch.setattr(blobs, "object_store", _boom)
     monkeypatch.setattr(blobs, "blob_store", _boom)
     monkeypatch.setattr(blobs, "S3Store", _boom)
@@ -285,7 +282,7 @@ async def test_split_mode_deltas_and_http_mcp(
     monkeypatch.delenv("DATABASE_URL", raising=False)
     assert os.environ.get("DATABASE_URL") is None
     api_settings = _api_settings(settings)
-    app = create_app(api_settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings, store=store)
     assert isinstance(app.state.execution, RemoteExecution)
 
     worker_settings = Settings(
@@ -307,14 +304,10 @@ async def test_split_mode_deltas_and_http_mcp(
     ]
     execution = local_execution(
         worker_settings,
-        store=None,
         harness=harness,
         hub=LiveRedirectBus(bus, relay),
         outbox=outbox,
     )
-    assert execution.store is None
-    assert execution.blobs is None
-    assert execution.objects is None
     _block_worker_storage(monkeypatch)
 
     worker = FakeWorker(app, worker_secret)
@@ -407,9 +400,7 @@ async def test_split_mode_deltas_and_http_mcp(
                 assert isinstance(app.state.event_hub, PostgresEventBus), (
                     "second-replica block needs the shared Postgres bus"
                 )
-                second_app = create_app(
-                    api_settings, store=store, harness=FakeHarness()
-                )
+                second_app = create_app(api_settings, store=store)
                 assert isinstance(second_app.state.event_hub, PostgresEventBus)
                 await second_app.state.event_hub.start()
                 try:

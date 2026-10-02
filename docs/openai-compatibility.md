@@ -189,7 +189,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | `GET /v1/agents/environments/{id}` | OpenAI route. Exact fields beyond `status` were not verified against the API reference. | Returns `id`, `type`, `status`, and ApiPi `sandbox`. |
 | Idle Pi | Their sandbox runtime | `none`: `APIPI_IDLE_TTL` (default 15 minutes) stops Pi. Hosted computers use sandbox TTL. The session row stays. The next turn starts a new Pi and reloads the cached session file. |
 | Artifacts | `/workspace/outputs` published on turn complete | `/workspace/outputs` copied to the host store on turn complete. Immutable. Downloadable after the workspace expires. |
-| Follow-up affinity | OpenAI's fleet | API-only plus workers: any API replica. Combined `apipi serve`: sticky to the node that holds Pi. See [multiple nodes](scale.md). |
+| Follow-up affinity | OpenAI's fleet | Any API replica, because the session is owned by a worker lease. See [multiple nodes](scale.md). |
 
 ## Errors
 

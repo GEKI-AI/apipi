@@ -231,10 +231,10 @@ async def issue_artifact_presign(
             db, blobs, tenant_id, row.key_id, session_id, name, digest
         )
     ):
-        # Combined `_persist_files` skips files whose latest stored bytes
-        # already match; answer `unchanged` so the worker skips the PUT
-        # and no upload slot is reserved. This check runs before quota so
-        # unchanged files never trip the store limits, as in combined mode.
+        # Skip files whose latest stored bytes already match; answer
+        # `unchanged` so the worker skips the PUT and no upload slot is
+        # reserved. This check runs before quota so unchanged files never
+        # trip the store limits.
         return {
             "unchanged": True,
             "upload_id": None,
@@ -251,9 +251,8 @@ async def issue_artifact_presign(
         db, settings, row, kind=kind, declared=size, blobs_used_bytes=used_bytes
     )
     if kind == "pi_session" and row.pi_session_id is not None:
-        # Reuse the blob id like combined `persist_pi_session_bytes` so
-        # every save overwrites the same object instead of leaking one
-        # new object per save.
+        # Reuse the blob id so every save overwrites the same object
+        # instead of leaking one new object per save.
         artifact_id = row.pi_session_id
     else:
         artifact_id = uuid.uuid4()

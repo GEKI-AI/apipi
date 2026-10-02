@@ -389,6 +389,7 @@ async def _apply(
     presign_replies: list[dict[str, Any]] | None = None,
     objects: Any | None = None,
     intents: list[LifecycleIntent],
+    run_mode: str | None = None,
 ) -> None:
     from apipi.services.failures import failure_from_dict
     from apipi.services.usage import usage_from
@@ -569,6 +570,7 @@ async def _apply(
             tool_counts=dict(payload.get("tool_counts") or {}),
             mcp_names=list(payload.get("mcp_names") or []),
             mcp_counts=dict(payload.get("mcp_counts") or {}),
+            run_mode=run_mode or "",
         )
         return
     if envelope.type == "event":
@@ -799,6 +801,7 @@ async def flush_batch(
     settings: Any,
     metrics: Any,
     objects: Any | None = None,
+    run_mode: str | None = None,
 ) -> IngestOutcome:
     """Apply one batch in a single transaction; returns acks and wakes."""
     outcome = IngestOutcome()
@@ -861,6 +864,7 @@ async def flush_batch(
                             presign_replies=outcome.presign_replies,
                             objects=objects,
                             intents=outcome.lifecycle,
+                            run_mode=run_mode,
                         )
                         if envelope.type == "session.stopped":
                             outcome.wipes.append((row.tenant_id, row.key_id, row.id))

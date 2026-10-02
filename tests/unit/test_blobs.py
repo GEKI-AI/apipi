@@ -52,6 +52,7 @@ def _settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
+        local_store_dir=str(tmp_path / "store"),
         artifact_store=artifact_store,
         s3_bucket=s3_bucket,
         s3_endpoint=s3_endpoint,
@@ -158,7 +159,7 @@ async def test_local_blobs_uses_tenant_and_user(tmp_path: Path) -> None:
     await blobs.put(tenant, "abc123", session, artifact, b"xyz")
     path = (
         tmp_path
-        / "sessions"
+        / "store"
         / ".artifacts"
         / str(tenant)
         / "abc123"
@@ -246,7 +247,7 @@ async def test_local_store_namespaces(tmp_path: Path) -> None:
     skill_id = "skill-xyz"
     await store.put(NS_FILES, file_object_id(tenant, file_id), b"file-bytes")
     await store.put(NS_SKILLS, skill_object_id(tenant, skill_id), b"skill-bytes")
-    root = tmp_path / "sessions"
+    root = tmp_path / "store"
     assert (
         root / ".store" / "files" / str(tenant) / file_id
     ).read_bytes() == b"file-bytes"

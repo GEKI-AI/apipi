@@ -2,8 +2,8 @@
 
 The API and the worker live in the same test process but only talk over
 the `/internal/worker` websocket, the same as in production. The API side
-is `create_app(api_only=True)`; the worker side is a real
-`local_execution(store=None, harness=..., outbox=...)` driven by the real
+is `create_app(...)`; the worker side is a real
+`local_execution(harness=..., outbox=...)` driven by the real
 `_serve_connection`, connected through `AsgiWebsocket`.
 """
 
@@ -21,17 +21,15 @@ from tests.support.fake_runner import AsgiWebsocket
 
 
 def api_settings_for(settings: Settings, *, batch_window_zero: bool = True) -> Settings:
-    """Return API-only settings derived from a test settings object.
+    """Return API settings derived from a test settings object.
 
     The ingest batch window is forced to zero (deterministic per-envelope
     ingest) unless `batch_window_zero` is False, which ingest-batching
     tests need to observe real batching behavior.
     """
-    update: dict[str, Any] = {"api_only": True}
+    update: dict[str, Any] = {}
     if batch_window_zero:
         update["worker_ingest_batch_window"] = timedelta(0)
-    if not settings.local_store_dir and settings.sessions_dir:
-        update["local_store_dir"] = settings.sessions_dir
     return settings.model_copy(update=update)
 
 
@@ -206,7 +204,6 @@ async def spawn_split_worker(
     outbox = Outbox()
     execution = local_execution(
         worker_settings,
-        store=None,
         harness=harness,
         hub=LiveRedirectBus(bus, relay),
         outbox=outbox,
@@ -218,19 +215,13 @@ async def spawn_split_worker(
         # allocates maps). The auto-created pool is empty and inert.
         execution.pool = pool
     execution.pool.lifecycle = OutboxLifecycleReporter(outbox)
-    execution.db_fallback = False
     await bus.start()
 
     background: set[asyncio.Task[Any]] = set()
     background.add(asyncio.create_task(execution.observe_loop()))
     background.add(asyncio.create_task(execution.reap_loop()))
     background.add(asyncio.create_task(execution.reap_workspace_loop()))
-    lifecycle = getattr(execution, "lifecycle_loop", None)
-    if lifecycle is not None:
-        background.add(asyncio.create_task(lifecycle()))
-    seen = getattr(execution, "sandbox_seen_loop", None)
-    if seen is not None:
-        background.add(asyncio.create_task(seen()))
+    background.add(asyncio.create_task(execution.sandbox_seen_loop()))
     emitter = getattr(getattr(execution, "pool", None), "lifecycle", None)
     if emitter is not None:
         emitter.start()
@@ -333,10 +324,10 @@ async def split_client_for(
     sent: list[str] | None = None,
     **app_kwargs: Any,
 ) -> AsyncIterator[tuple[FastAPI, Any, SplitWorker]]:
-    """Build an API-only app plus an in-process worker and an HTTP client.
+    """Build an API app plus an in-process worker and an HTTP client.
 
     This is the one-line migration vehicle for API tests: it replaces
-    `app = create_app(settings, store=store, harness=h)` followed by an
+    `app = create_app(settings, store=store)` followed by an
     inline `AsyncClient`, so the test body (which keeps using `app` and
     `client`) runs against the split production path. `harness` lands on
     the worker side; `app.state.harness` / `app.state.pi_pool` are

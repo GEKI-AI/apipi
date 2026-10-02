@@ -6,10 +6,10 @@ import pytest
 
 from apipi.cli import main, prepare_serve, prepare_worker
 from apipi.config import (
+    API_ONLY_REMOVED,
     LIFECYCLE_EXPORT_OFF,
     METRICS_OFF,
     METRICS_ON,
-    NONE_MODE_WARNING,
     OTEL_SET,
     OTEL_UNSET,
     PAYLOAD_EXPORT_OFF,
@@ -55,12 +55,6 @@ def test_probe_run_mode_skips_none() -> None:
     probe_run_mode(_none_settings())
 
 
-def test_prepare_serve_warns_on_none(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.WARNING, logger="apipi")
-    prepare_serve(_none_settings())
-    assert NONE_MODE_WARNING in caplog.text
-
-
 def test_prepare_worker_none_skips_production_warning(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -74,7 +68,7 @@ def test_prepare_worker_none_skips_production_warning(
     settings = prepare_worker(_worker_settings(tmp_path, run_mode="none"))
     assert settings.run_mode == "none"
     assert probed == ["none"]
-    assert NONE_MODE_WARNING not in caplog.text
+    assert "not suited for production" not in caplog.text
     # Workers never decrypt vaults, so the vault key warning is API-only.
     assert VAULT_MASTER_KEY_UNSET not in caplog.text
 
@@ -202,62 +196,85 @@ def test_prepare_worker_probes_sandbox(
     assert probed == ["none"]
 
 
-def test_serve_api_only_skips_kvm(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
-    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: False)
-    called: dict[str, object] = {}
-
-    def fake_run(app: object, *, host: str, port: int, **_kwargs: object) -> None:
-        called["host"] = host
-        called["app"] = app
-
-    monkeypatch.setattr("apipi.cli.uvicorn.run", fake_run)
-    assert main(["serve", "--api-only"]) == 0
-    assert called["host"] == "0.0.0.0"
-
-
-def test_serve_microvm_does_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serve_never_probes_the_run_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
     monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: False)
 
     def boom(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("must not start")
+        raise AssertionError("serve must not probe the sandbox")
 
-    monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
-    assert main(["serve"]) == 1
-
-
-def test_serve_microvm_starts_when_tools_present(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    kernel = tmp_path / "vmlinux"
-    rootfs = tmp_path / "rootfs.ext4"
-    kernel.write_bytes(b"k")
-    rootfs.write_bytes(b"r")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
-    monkeypatch.setenv("APIPI_MICROVM_KERNEL", str(kernel))
-    monkeypatch.setenv("APIPI_MICROVM_ROOTFS", str(rootfs))
-    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr(
-        "apipi.worker.pi.microvm.shutil.which", lambda name: f"/usr/bin/{name}"
-    )
-    monkeypatch.setattr("apipi.cli.probe_run_mode", _noop_probe)
-    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr("apipi.worker.pi.probe.probe_run_mode", boom)
     called: dict[str, object] = {}
 
     def fake_run(app: object, *, host: str, port: int, **_kwargs: object) -> None:
         called["host"] = host
-        called["port"] = port
         called["app"] = app
 
     monkeypatch.setattr("apipi.cli.uvicorn.run", fake_run)
     assert main(["serve"]) == 0
     assert called["host"] == "0.0.0.0"
-    assert called["port"] == 8000
-    assert NONE_MODE_WARNING not in caplog.text
+
+
+def test_serve_rejects_the_removed_api_only_flag(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        main(["serve", "--api-only"])
+    assert raised.value.code == 2
+    assert "--api-only" in capsys.readouterr().err
+
+
+def test_serve_warns_on_removed_api_only_env(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_API_ONLY", "1")
+    caplog.set_level(logging.WARNING, logger="apipi")
+    called: list[object] = []
+    monkeypatch.setattr("apipi.cli.uvicorn.run", lambda app, **_k: called.append(app))
+    assert main(["serve"]) == 0
+    assert called
+    records = [r for r in caplog.records if r.getMessage() == API_ONLY_REMOVED]
+    assert len(records) == 1
+    assert getattr(records[0], "event", None) == "config.api_only_removed"
+
+
+def test_serve_warns_on_removed_api_only_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("APIPI_API_ONLY", raising=False)
+    config = tmp_path / "apipi.toml"
+    config.write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "api_only = true\n"
+    )
+    caplog.set_level(logging.WARNING, logger="apipi")
+    called: list[object] = []
+    monkeypatch.setattr("apipi.cli.uvicorn.run", lambda app, **_k: called.append(app))
+    assert main(["serve", "--config", str(config)]) == 0
+    assert called
+    assert API_ONLY_REMOVED in caplog.text
+
+
+def test_worker_warns_on_removed_api_only_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("APIPI_API_ONLY", "1")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    token = tmp_path / "worker.token"
+    token.write_text("test-token\n")
+    monkeypatch.setenv("APIPI_WORKER_TOKEN_FILE", str(token))
+    monkeypatch.setattr("apipi.cli.probe_run_mode", _noop_probe)
+    caplog.set_level(logging.WARNING, logger="apipi")
+
+    async def fake_run(_settings: Settings, **_kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("apipi.worker.hub.run_worker", fake_run)
+    assert main(["worker"]) == 0
+    assert API_ONLY_REMOVED in caplog.text
 
 
 def test_serve_host_does_not_start(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -280,53 +297,6 @@ def test_serve_jail_does_not_start(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
     assert main(["serve"]) == 1
-
-
-def test_serve_microvm_probe_fail_does_not_listen(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    kernel = tmp_path / "vmlinux"
-    rootfs = tmp_path / "rootfs.ext4"
-    kernel.write_bytes(b"k")
-    rootfs.write_bytes(b"r")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
-    monkeypatch.setenv("APIPI_MICROVM_KERNEL", str(kernel))
-    monkeypatch.setenv("APIPI_MICROVM_ROOTFS", str(rootfs))
-    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
-    monkeypatch.setattr(
-        "apipi.worker.pi.microvm.shutil.which", lambda name: f"/usr/bin/{name}"
-    )
-
-    def fail(_settings: Settings) -> None:
-        raise ConfigError("APIPI_RUN_MODE=microvm cannot start")
-
-    def boom(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("must not start")
-
-    monkeypatch.setattr("apipi.cli.probe_run_mode", fail)
-    monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
-    assert main(["serve"]) == 1
-
-
-def test_serve_none_starts(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "none")
-    caplog.set_level(logging.WARNING)
-    called: dict[str, object] = {}
-
-    def fake_run(app: object, *, host: str, port: int, **_kwargs: object) -> None:
-        called["host"] = host
-        called["port"] = port
-        called["app"] = app
-
-    monkeypatch.setattr("apipi.cli.uvicorn.run", fake_run)
-    assert main(["serve"]) == 0
-    assert called["host"] == "0.0.0.0"
-    assert called["port"] == 8000
-    assert NONE_MODE_WARNING in caplog.text
 
 
 def test_serve_defaults_to_sqlite(

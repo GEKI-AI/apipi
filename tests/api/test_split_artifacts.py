@@ -202,19 +202,6 @@ async def _s3_split_flow(store: Store, tmp_path: Path, monkeypatch: Any) -> None
     outbox = Outbox()
     waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
 
-    # The worker is credential-less: no blobs/objects on the execution.
-    from apipi.services.runtime import FakeHarness
-    from apipi.worker.execution import local_execution
-
-    execution = local_execution(
-        worker_settings,
-        store=store,
-        harness=FakeHarness(),
-        outbox=outbox,
-    )
-    assert execution.blobs is None
-    assert execution.objects is None
-
     # No artifact/file rows before the API ingests the worker's uploads.
     async with store.session() as db:
         assert await list_artifacts(db, tenant_id, session_id) == []
@@ -359,15 +346,6 @@ async def _fs_split_flow(store: Store, tmp_path: Path) -> None:
     tenant_id, session_id, worker_id, _key_id = await _make_session(store)
     outbox = Outbox()
     waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
-
-    from apipi.services.runtime import FakeHarness
-    from apipi.worker.execution import local_execution
-
-    execution = local_execution(
-        worker_settings, store=store, harness=FakeHarness(), outbox=outbox
-    )
-    assert execution.blobs is None
-    assert execution.objects is None
 
     data = b"artifact-bytes-fs"
     await _upload_roundtrip(
@@ -721,7 +699,6 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
     app = create_app(
         api_settings,
         store=store,
-        harness=FakeHarness(),
         objects=api_objects,
         blobs=api_blobs,
     )
@@ -922,11 +899,7 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
             return _FakeResponse(data, 200)
 
     outbox = Outbox()
-    execution = local_execution(
-        worker_settings, store=store, harness=FakeHarness(), outbox=outbox
-    )
-    assert execution.blobs is None
-    assert execution.objects is None
+    execution = local_execution(worker_settings, harness=FakeHarness(), outbox=outbox)
     waiters = execution.presign_waiters
 
     def _turn_message(text: str, with_image: bool) -> dict[str, Any]:
@@ -1031,13 +1004,12 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
 async def test_split_killed_harvest_without_db(
     store: Store, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Killed harvest uses remembered identity/env only; worker store is None."""
+    """Killed harvest uses remembered identity/env only; no worker database."""
     from tests.unit.test_blobs import FakeS3
 
     from apipi.services.event_bus import create_event_bus
     from apipi.services.runtime import FakeHarness
     from apipi.worker.execution import LocalExecution
-    from apipi.worker.pi.isolation import load_isolation
     from apipi.worker.pi.pool import PiPool
 
     api_settings = _s3_settings(tmp_path)
@@ -1066,14 +1038,9 @@ async def test_split_killed_harvest_without_db(
         worker_settings,
         pool=PiPool(worker_settings),
         harness=FakeHarness(),
-        isolation=load_isolation(worker_settings.run_mode),
         hub=create_event_bus(worker_settings, store=store),
-        store=None,
         outbox=outbox,
     )
-    assert execution.store is None
-    assert execution.blobs is None
-    assert execution.objects is None
     # Register tenant identity and remember the hosted directory from a
     # command context, exactly as run_turn/boot do; no database involved.
     execution.sink_for(tenant_id, session_id)
