@@ -416,11 +416,21 @@ async def _apply(
         )
         wakes.append((session_id, event_body(event)))
         return
-    if envelope.type in {"session.stopped", "workspace.reaped"}:
+    if envelope.type == "session.stopped":
         # The worker already wiped its local workspace; the API owns
         # the artifact store and deletes the session blobs after
-        # commit (see `IngestOutcome.wipes`). The envelope itself is
-        # only the durable receipt, so there is nothing else to apply.
+        # commit (see `IngestOutcome.wipes`). Only this receipt may do
+        # that: it is the terminal receipt of a commanded stop (and
+        # the crash-recovery cleanup when the API died between the
+        # stop command and its own synchronous blob delete). The
+        # envelope itself is only the durable receipt, so there is
+        # nothing else to apply.
+        return
+    if envelope.type == "workspace.reaped":
+        # Receipt only: the idle reaper wiped a local workspace whose
+        # session may since have been leased again, so this must never
+        # delete the artifact store. Rejected-as-unleased receipts are
+        # still acked past, so the worker drops them.
         return
     if envelope.type == "lifecycle.start":
         intents.append(
@@ -845,7 +855,7 @@ async def flush_batch(
                             objects=objects,
                             intents=outcome.lifecycle,
                         )
-                        if envelope.type in {"session.stopped", "workspace.reaped"}:
+                        if envelope.type == "session.stopped":
                             outcome.wipes.append((row.tenant_id, row.key_id, row.id))
                 except _Duplicate:
                     pass

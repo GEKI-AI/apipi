@@ -10,6 +10,7 @@ from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
 from apipi.store.repo import (
+    clear_session_lease,
     create_session,
     create_tenant,
     get_session_by_id,
@@ -156,7 +157,7 @@ async def test_sandbox_status_unknown_phase_rejected(store: Store, settings) -> 
     assert outcome.acks == {session_id: 1}
 
 
-async def test_stopped_and_reaped_record_wipes(store: Store, settings) -> None:
+async def test_only_stopped_deletes_blobs(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
     tenant_id, session_id, _lease = await _hosted(store, worker_id)
     outcome = await _flush(
@@ -170,8 +171,44 @@ async def test_stopped_and_reaped_record_wipes(store: Store, settings) -> None:
     )
     assert outcome.rejected == []
     assert outcome.acks == {session_id: 2}
-    assert [wipe[2] for wipe in outcome.wipes] == [session_id, session_id]
-    assert all(wipe[0] == tenant_id for wipe in outcome.wipes)
+    # Only the commanded stop deletes the artifact store: the idle
+    # reap is a receipt only, so a session leased again before its
+    # receipt lands keeps its artifacts.
+    assert outcome.wipes == [(tenant_id, "", session_id)]
+
+
+async def test_stopped_after_release_is_acked_past(store: Store, settings) -> None:
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease = await _hosted(store, worker_id)
+    async with store.session() as db:
+        await clear_session_lease(db, tenant_id, session_id)
+    outcome = await _flush(
+        store,
+        worker_id,
+        [_envelope(session_id, 1, "session.stopped", {"reason": "stop"})],
+        settings,
+    )
+    # The normal stop already deleted the blobs synchronously; the
+    # late receipt is rejected but acked past so the worker drops it.
+    assert [reason for _, _, reason in outcome.rejected] == ["not_leased"]
+    assert outcome.acks == {session_id: 1}
+    assert outcome.wipes == []
+
+
+async def test_reaped_unknown_session_is_acked_past(store: Store, settings) -> None:
+    worker_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    outcome = await _flush(
+        store,
+        worker_id,
+        [_envelope(session_id, 1, "workspace.reaped", {"reason": "idle"})],
+        settings,
+    )
+    # The worker already wiped its local directory; there is no row
+    # and no blob delete, and the receipt is acked past.
+    assert [reason for _, _, reason in outcome.rejected] == ["not_leased"]
+    assert outcome.acks == {session_id: 1}
+    assert outcome.wipes == []
 
 
 async def test_lifecycle_events_export_once_on_replay(store: Store, settings) -> None:
