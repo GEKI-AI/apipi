@@ -161,6 +161,10 @@ class PostgresEventBus(_LocalFanout):
 
     The publishing process dispatches the full message locally and sends
     a small ``wake`` (or a coalesced ``live`` batch) to other replicas.
+    Every payload carries the instance origin id, and the listener
+    skips its own payloads: Postgres delivers a NOTIFY to every
+    listener, including the sender's, and the local copy was already
+    dispatched.
     ``NOTIFY`` is only sent after the storing commit (callers publish
     from an after-commit hook), the ``LISTEN`` connection is dedicated
     and outside the SQLAlchemy pool, and the fallback poll covers the
@@ -171,6 +175,7 @@ class PostgresEventBus(_LocalFanout):
         super().__init__()
         self._dsn = dsn
         self._metrics = metrics
+        self._origin = uuid.uuid4().hex
         self._listen: asyncpg.Connection | None = None
         self._publish_conn: asyncpg.Connection | None = None
         self._live: dict[uuid.UUID, list[dict[str, Any]]] = {}
@@ -225,9 +230,9 @@ class PostgresEventBus(_LocalFanout):
         self._dispatch(session_id, message)
         try:
             if message_seq(message) is not None:
-                await self._notify(
-                    wake_message(session_id, int(message_seq(message) or 0))
-                )
+                wake = wake_message(session_id, int(message_seq(message) or 0))
+                wake["origin"] = self._origin
+                await self._notify(wake)
             else:
                 self._buffer_live(session_id, message)
         except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
@@ -293,6 +298,8 @@ class PostgresEventBus(_LocalFanout):
             return
         if not isinstance(message, dict):
             return
+        if message.get("origin") == self._origin:
+            return
         raw_session = message.get("session_id")
         try:
             session_id = uuid.UUID(str(raw_session))
@@ -357,6 +364,7 @@ class PostgresEventBus(_LocalFanout):
                             "session_id": str(session_id),
                             "batch": batch,
                             "published_at": time.time(),
+                            "origin": self._origin,
                         }
                     )
             except (TimeoutError, OSError, asyncpg.PostgresError) as exc:

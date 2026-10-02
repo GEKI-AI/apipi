@@ -94,6 +94,11 @@ share SSE. Live `output_text.delta` batches are coalesced over about
 they are never stored. See [config](config.md) for the settings and
 [observability](observability.md) for the bus metrics.
 
+Until durable worker ingest lands (#446), the worker still writes
+its events to the store itself, so the worker builds the same bus
+from its own `DATABASE_URL`. Point every worker at the same database
+as the API, or worker commits only arrive via the fallback poll.
+
 ## nginx
 
 Health checks should call `GET /health`. Probe health rather than a

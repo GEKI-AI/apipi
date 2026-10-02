@@ -10,7 +10,7 @@ from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing, inject_traceparent
-from apipi.services.event_bus import EventBus, InMemoryEventBus, is_wake
+from apipi.services.event_bus import EventBus, create_event_bus, is_wake
 from apipi.services.runtime import (
     continue_turn,
     fail_stale_in_progress,
@@ -450,7 +450,9 @@ def local_execution(
         pool=pool,
         harness=resolved_harness,
         isolation=isolation,
-        hub=hub if hub is not None else InMemoryEventBus(),
+        hub=hub
+        if hub is not None
+        else create_event_bus(settings, store=store, metrics=metrics),
         store=store,
         blobs=blob_store(settings),
         objects=object_store(settings),

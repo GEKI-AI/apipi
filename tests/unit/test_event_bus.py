@@ -20,12 +20,12 @@ from apipi.services.event_bus import (
     split_notify_batches,
     wake_message,
 )
-from apipi.services.runtime import EventHub, persist_event
+from apipi.services.runtime import EventHub, FakeHarness, persist_event
 from apipi.services.sessions import iter_session_events
 from apipi.store import events as store_events
 from apipi.store.engine import Store
 from apipi.store.repo import create_session, create_tenant
-from apipi.worker.execution import RemoteExecution
+from apipi.worker.execution import RemoteExecution, local_execution
 
 
 def test_event_hub_is_the_memory_bus() -> None:
@@ -261,6 +261,22 @@ def test_postgres_on_notify_dispatches_without_server() -> None:
             ),
         )
         assert queue.get_nowait() == {"type": "d", "data": {}}
+        own_wake = wake_message(session_id, 10)
+        own_wake["origin"] = bus._origin
+        bus._on_notify(_conn(), 0, "apipi_events", json.dumps(own_wake))
+        assert queue.empty()
+        own_live = {
+            "kind": "live",
+            "session_id": str(session_id),
+            "batch": [{"type": "d", "data": {}}],
+            "origin": bus._origin,
+        }
+        bus._on_notify(_conn(), 0, "apipi_events", json.dumps(own_live))
+        assert queue.empty()
+        foreign_wake = wake_message(session_id, 11)
+        foreign_wake["origin"] = "other-replica"
+        bus._on_notify(_conn(), 0, "apipi_events", json.dumps(foreign_wake))
+        assert queue.get_nowait()["seq"] == 11
     finally:
         bus.unsubscribe(session_id, queue)
 
@@ -289,6 +305,26 @@ async def test_postgres_publish_delivers_locally_when_down() -> None:
         await bus.close()
         server.close()
         await server.wait_closed()
+
+
+async def test_local_execution_picks_bus_from_store(
+    store: Store, tmp_path: Path
+) -> None:
+    sqlite_settings = Settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        run_mode="none",
+        sessions_dir=str(tmp_path / "sessions"),
+    )
+    execution = local_execution(sqlite_settings, store=store, harness=FakeHarness())
+    assert isinstance(execution.hub, InMemoryEventBus)
+    assert not isinstance(execution.hub, PostgresEventBus)
+    pg_settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+        sessions_dir=str(tmp_path / "sessions"),
+    )
+    execution = local_execution(pg_settings, store=store, harness=FakeHarness())
+    assert isinstance(execution.hub, InMemoryEventBus)
 
 
 def test_event_bus_metrics_exist() -> None:

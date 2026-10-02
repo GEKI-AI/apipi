@@ -11,12 +11,13 @@ slow, so GitHub CI skips them. Run locally with e.g.::
 import asyncio
 import os
 import uuid
+from pathlib import Path
 
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from apipi.gateway.metrics import Metrics
-from apipi.services.event_bus import PostgresEventBus, is_wake
+from apipi.services.event_bus import PostgresEventBus, is_wake, message_seq
 from apipi.services.runtime import persist_event
 from apipi.services.sessions import iter_session_events
 from apipi.store.engine import Store
@@ -146,6 +147,115 @@ async def test_postgres_live_batches_split_and_arrive() -> None:
     finally:
         await replica_a.close()
         await replica_b.close()
+
+
+async def test_postgres_worker_wake_reaches_api(tmp_path: Path) -> None:
+    """Split mode until #446: the worker writes the store itself.
+
+    The worker process builds its execution with the configured bus
+    (like ``run_worker`` does), so its commits still wake API
+    subscribers instead of waiting for the fallback poll.
+    """
+    from apipi.config import Settings
+    from apipi.worker.execution import local_execution
+
+    assert PG_URL is not None
+    engine_w = create_async_engine(PG_URL, pool_pre_ping=True)
+    store_w = Store(engine_w)
+    worker_settings = Settings(
+        database_url=PG_URL,
+        run_mode="none",
+        sessions_dir=str(tmp_path / "sessions"),
+    )
+    worker_execution = local_execution(worker_settings, store=store_w)
+    worker_bus = worker_execution.hub
+    assert isinstance(worker_bus, PostgresEventBus)
+    await worker_bus.start()
+    api_bus = _bus()
+    await api_bus.start()
+    try:
+        async with store_w.session() as db:
+            tenant = await create_tenant(db, name="bus-worker")
+            session_row = await create_session(db, tenant.id)
+            tenant_id = tenant.id
+            session_id = session_row.id
+        queue = api_bus.subscribe(session_id)
+        try:
+            async with store_w.session() as db:
+                event = await persist_event(
+                    db,
+                    worker_bus,
+                    tenant_id,
+                    session_id,
+                    type="agent.session.turn.completed",
+                    data={"status": "completed"},
+                )
+                assert event is not None
+            wake = await asyncio.wait_for(queue.get(), timeout=10)
+            assert is_wake(wake)
+            assert wake["session_id"] == str(session_id)
+            assert wake["seq"] == event.seq
+        finally:
+            api_bus.unsubscribe(session_id, queue)
+    finally:
+        await worker_bus.close()
+        await api_bus.close()
+        await store_w.dispose()
+
+
+async def test_postgres_no_self_delivery_duplicates() -> None:
+    replica_a = _bus()
+    replica_b = _bus()
+    await replica_a.start()
+    await replica_b.start()
+    try:
+        session_id = uuid.uuid4()
+        queue_a = replica_a.subscribe(session_id)
+        queue_b = replica_b.subscribe(session_id)
+        try:
+            await replica_a.publish(
+                session_id,
+                {
+                    "id": "e1",
+                    "type": "agent.session.turn.completed",
+                    "seq": 5,
+                    "session_id": str(session_id),
+                    "data": {},
+                },
+            )
+            first = await asyncio.wait_for(queue_a.get(), timeout=10)
+            assert message_seq(first) == 5
+            for _ in range(5):
+                await replica_a.publish(
+                    session_id,
+                    {
+                        "type": "agent.session.turn.output_text.delta",
+                        "session_id": str(session_id),
+                        "data": {"delta": "hi"},
+                    },
+                )
+            await asyncio.sleep(1.5)
+            rest_a = []
+            while not queue_a.empty():
+                rest_a.append(queue_a.get_nowait())
+            assert len(rest_a) == 5
+            assert all("seq" not in item for item in rest_a)
+            wake_b = await asyncio.wait_for(queue_b.get(), timeout=10)
+            assert is_wake(wake_b) and wake_b["seq"] == 5
+        finally:
+            replica_a.unsubscribe(session_id, queue_a)
+            replica_b.unsubscribe(session_id, queue_b)
+    finally:
+        await replica_a.close()
+        await replica_b.close()
+    replica = _bus(Metrics())
+    await replica.start()
+    try:
+        assert replica._listen is not None
+        value = await replica._listen.fetchval("SELECT pg_notification_queue_usage()")
+        assert isinstance(value, float) and 0.0 <= value <= 1.0
+    finally:
+        await replica.close()
 
 
 async def test_postgres_queue_usage_sample() -> None:

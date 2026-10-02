@@ -1160,6 +1160,7 @@ async def run_worker(
     url: str | None = None,
     drain_timeout: float | None = None,
 ) -> int:
+    from apipi.services.event_bus import create_event_bus
     from apipi.store.engine import Store, create_engine
     from apipi.worker.accepts import require_worker_accepts, resolved_worker_accepts
     from apipi.worker.execution import local_execution, worker_observability
@@ -1173,7 +1174,13 @@ async def run_worker(
     heartbeat = min(10.0, max(1.0, settings.worker_lease_ttl.total_seconds() / 2))
     store = Store(create_engine(settings.database_url, pool_size=settings.db_pool_size))
     metrics, tracing = worker_observability(settings)
-    execution = local_execution(settings, store=store, metrics=metrics, tracing=tracing)
+    # Until durable ingest (#446) the worker still writes events itself,
+    # so it uses the configured bus and its commits NOTIFY like the API's.
+    bus = create_event_bus(settings, store=store, metrics=metrics)
+    execution = local_execution(
+        settings, store=store, hub=bus, metrics=metrics, tracing=tracing
+    )
+    await bus.start()
     tasks: set[asyncio.Task[None]] = set()
     if metrics is not None:
         from apipi.worker.scrape import serve_metrics
@@ -1360,5 +1367,6 @@ async def run_worker(
         await execution.close()
         if execution.tracing is not None:
             execution.tracing.shutdown()
+        await bus.close()
         await store.dispose()
     return status

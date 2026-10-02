@@ -20,7 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `auto` (Postgres on a Postgres store, in-memory on SQLite),
   `memory`, or `postgres`; explicit `postgres` on SQLite fails at
   startup. Each Postgres replica holds one dedicated `LISTEN`
-  connection outside the SQLAlchemy pool. Live `output_text.delta`
+  connection outside the SQLAlchemy pool, and each payload carries
+  its sender so a replica never re-delivers its own broadcast.
+  Until durable worker ingest (#446) the worker still writes events
+  itself, so `apipi worker` builds the same bus from its own
+  `DATABASE_URL` and must point at the same database as the API. Live `output_text.delta`
   batches are coalesced over about 40ms and stay under the
   8000-byte `NOTIFY` limit (larger batches are split); deltas are
   never stored. New metrics: `apipi_event_bus_listener_reconnects_total`,
