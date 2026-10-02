@@ -98,6 +98,8 @@ async def _flush_envelopes(
     queued = batcher.take()
     if not queued:
         return
+    pool = getattr(websocket.app.state, "pi_pool", None)
+    lifecycle = getattr(pool, "lifecycle", None)
     outcome = await flush_batch(
         store,
         queued,
@@ -118,6 +120,68 @@ async def _flush_envelopes(
         await websocket.send_json(reply)
     for session_id, body in outcome.wakes:
         await event_hub.publish(session_id, body)
+    if outcome.lifecycle and lifecycle is not None:
+        from apipi.services.ingest import emit_lifecycle_intents
+
+        emit_lifecycle_intents(lifecycle, outcome.lifecycle)
+    if outcome.wipes:
+        from apipi.worker.pi.artifacts import wipe_artifact_store
+
+        blobs = websocket.app.state.blobs
+        for tenant_id, key_id, session_id in outcome.wipes:
+            try:
+                await wipe_artifact_store(blobs, tenant_id, key_id, session_id)
+            except Exception:
+                log.warning(
+                    "worker wipe blob delete failed",
+                    extra={
+                        "event": "worker.wipe.failed",
+                        "error_code": "artifact_store",
+                        "session_id": str(session_id),
+                    },
+                )
+
+
+def _parse_inventory(
+    message: dict[str, Any],
+) -> tuple[dict[uuid.UUID, uuid.UUID], list[uuid.UUID]] | None:
+    """The worker live set: leased sessions plus unleased on-disk dirs."""
+    raw_sessions = message.get("sessions")
+    if not isinstance(raw_sessions, list):
+        return None
+    reported: dict[uuid.UUID, uuid.UUID] = {}
+    unleased: list[uuid.UUID] = []
+    for entry in raw_sessions:
+        if not isinstance(entry, dict):
+            return None
+        try:
+            session_id = uuid.UUID(str(entry.get("session_id")))
+        except (ValueError, TypeError):
+            return None
+        raw_lease = entry.get("lease_id")
+        if raw_lease is None:
+            if session_id not in unleased:
+                unleased.append(session_id)
+            continue
+        try:
+            lease_id = uuid.UUID(str(raw_lease))
+        except (ValueError, TypeError):
+            return None
+        reported[session_id] = lease_id
+    return reported, unleased
+
+
+def _parse_seen_ids(message: dict[str, Any]) -> list[uuid.UUID] | None:
+    raw_ids = message.get("session_ids")
+    if not isinstance(raw_ids, list):
+        return None
+    seen: list[uuid.UUID] = []
+    for raw_id in raw_ids:
+        try:
+            seen.append(uuid.UUID(str(raw_id)))
+        except (ValueError, TypeError):
+            return None
+    return seen
 
 
 @router.websocket("/internal/worker")
@@ -172,7 +236,7 @@ async def worker_socket(websocket: WebSocket) -> None:
         await _reject(websocket, "invalid register", reason="invalid_register")
         return
     try:
-        conn = await register_worker(hub, store, websocket, register, token)
+        conn = await register_worker(hub, store, websocket, register, token, event_hub)
     except TokenBindingError:
         hub.observe_protocol("token_bound")
         log.warning(
@@ -268,6 +332,36 @@ async def worker_socket(websocket: WebSocket) -> None:
                     )
                     return
                 conn.store_proof = None
+                continue
+            if msg_type == "inventory":
+                parsed = _parse_inventory(message)
+                if parsed is None:
+                    continue
+                reported, unleased = parsed
+                revoke, ttl = await hub.reconcile_inventory(
+                    store, event_hub, conn.worker_id, reported, unleased
+                )
+                hub.observe_protocol("inventory")
+                await websocket.send_json(
+                    {
+                        "type": "inventory.reply",
+                        "revoke": [
+                            {"type": "lease.revoke", **entry} for entry in revoke
+                        ],
+                        "ttl": ttl,
+                    }
+                )
+                continue
+            if msg_type == "sandbox.seen":
+                seen_ids = _parse_seen_ids(message)
+                if seen_ids is None:
+                    continue
+                owned = await hub.owned_sessions(store, conn, seen_ids)
+                if owned:
+                    from apipi.services.sandbox_status import touch_seen
+
+                    await touch_seen(store, owned)
+                hub.observe_protocol("sandbox.seen")
                 continue
             if msg_type == "heartbeat":
                 if conn.token_id is not None and await token_revoked(

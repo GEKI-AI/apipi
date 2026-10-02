@@ -51,6 +51,10 @@ DURABLE_MESSAGE_TYPES = frozenset(
         "event",
         "session.status",
         "artifact.presign",
+        "session.stopped",
+        "workspace.reaped",
+        "lifecycle.start",
+        "lifecycle.stop",
         "artifact.completed",
         "error",
         "sandbox.status",
@@ -146,6 +150,8 @@ class HelloReply(WireModel):
     generation: int
     sessions: dict[uuid.UUID, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
     store_check: StoreCheck | None = None
+    revoke: list[dict[str, Any]] = Field(default_factory=list)
+    ttl: dict[uuid.UUID, dict[str, Any]] = Field(default_factory=dict)
 
 
 class WorkerEnvelope(WireModel):
@@ -264,8 +270,61 @@ class SessionStatusPayload(StrictPayload):
 
 
 class SandboxStatusPayload(StrictPayload):
+    """A sandbox phase transition; the API applies `record_transition`."""
+
     status: str
     reason: str | None = None
+    tenant_id: str | None = None
+    worker_id: str | None = None
+    image: str | None = None
+    image_version: str | None = None
+    size: str | None = None
+    run_mode: str | None = None
+    cause: str | bool | None = None
+    cold: bool | None = None
+    boot_ms: int | None = None
+    lock_wait_ms: int | None = None
+    setup_ms: int | None = None
+    live_ms: int | None = None
+
+
+class SessionStoppedPayload(StrictPayload):
+    """Durable receipt for the wipe after `session.stop`."""
+
+    reason: str = "stop"
+
+
+class WorkspaceReapedPayload(StrictPayload):
+    """Durable receipt for an idle-workspace wipe by the reaper."""
+
+    reason: str = "idle"
+
+
+class LifecycleStartPayload(StrictPayload):
+    """One live session starting; the API exports it, never the worker."""
+
+    cause: str = "spawn"
+    tenant_id: str | None = None
+    org_id: str | None = None
+    agent_id: str | None = None
+    user_id: str | None = None
+    key_id: str | None = None
+    environment_type: str | None = None
+    sandbox_size: str | None = None
+    sandbox_image: str | None = None
+    image_version: str | None = None
+    image_digest: str | None = None
+    run_mode: str | None = None
+    started_at: str | None = None
+
+
+class LifecycleStopPayload(StrictPayload):
+    """One live session ending; the API exports it, never the worker."""
+
+    reason: str = "stop"
+    live_ms: int | None = Field(default=None, ge=0)
+    start_seq: int | None = Field(default=None, ge=1)
+    started_at: str | None = None
 
 
 class DeltaTextPayload(StrictPayload):
@@ -286,6 +345,10 @@ PAYLOAD_MODELS: dict[str, type[StrictPayload]] = {
     "event": WorkerEventPayload,
     "session.status": SessionStatusPayload,
     "artifact.presign": ArtifactPresignPayload,
+    "session.stopped": SessionStoppedPayload,
+    "workspace.reaped": WorkspaceReapedPayload,
+    "lifecycle.start": LifecycleStartPayload,
+    "lifecycle.stop": LifecycleStopPayload,
     "artifact.completed": ArtifactCompletedPayload,
     "error": WorkerErrorPayload,
     "sandbox.status": SandboxStatusPayload,
@@ -376,6 +439,41 @@ class LeaseRevoke(WireModel):
     type: Literal["lease.revoke"] = "lease.revoke"
     session_id: uuid.UUID
     lease_id: uuid.UUID
+
+
+class InventoryEntry(WireModel):
+    """One session the worker reports.
+
+    A missing `lease_id` reports an on-disk workspace the worker holds
+    no lease for: the API answers with a reaper TTL while the session
+    is leased and a revoke (which wipes the dir) once it is free.
+    """
+
+    session_id: uuid.UUID
+    lease_id: uuid.UUID | None = None
+    last_seq: int = Field(default=0, ge=0)
+
+
+class InventoryMessage(WireModel):
+    """Worker to API. Periodic live-set report; also drives reconcile."""
+
+    type: Literal["inventory"] = "inventory"
+    sessions: list[InventoryEntry] = Field(default_factory=list)
+
+
+class InventoryReply(WireModel):
+    """API to worker. Revocations plus TTLs for the reaper."""
+
+    type: Literal["inventory.reply"] = "inventory.reply"
+    revoke: list[LeaseRevoke] = Field(default_factory=list)
+    ttl: dict[uuid.UUID, dict[str, Any]] = Field(default_factory=dict)
+
+
+class SandboxSeenMessage(WireModel):
+    """Worker to API. Periodic live sandbox ids; idempotent like touch_seen."""
+
+    type: Literal["sandbox.seen"] = "sandbox.seen"
+    session_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class HeartbeatMessage(WireModel):

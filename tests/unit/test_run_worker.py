@@ -62,6 +62,7 @@ class _Store:
 
 class _Execution:
     tracing = None
+    db_fallback = True
 
     def __init__(self, pool: PiPool, workspace: asyncio.Event) -> None:
         self.pool = pool
@@ -137,22 +138,20 @@ async def test_run_worker_reaps_idle_sessions(
             await task
 
 
-async def test_run_worker_sets_lifecycle_worker_id(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+async def test_run_worker_reports_lifecycle_over_socket(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from apipi.services.lifecycle_export import LifecycleEmitter
+    from apipi.services.lifecycle_export import OutboxLifecycleReporter
 
     (tmp_path / "worker.token").write_text("secret\n")
+    monkeypatch.setenv("APIPI_LIFECYCLE_EXPORT_URL", "http://export.test/life")
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
         worker_token_file=str(tmp_path / "worker.token"),
-        lifecycle_export_url="http://export.test/life",
         lifecycle_heartbeat="off",
     )
     pool = PiPool(settings)
-    emitter = LifecycleEmitter(settings)
-    pool.lifecycle = emitter
     started = asyncio.Event()
     closed = asyncio.Event()
 
@@ -163,7 +162,6 @@ async def test_run_worker_sets_lifecycle_worker_id(
 
         async def close(self) -> None:
             closed.set()
-            await emitter.close()
 
     execution = _LifeExecution(pool, asyncio.Event())
     monkeypatch.setattr(
@@ -186,11 +184,23 @@ async def test_run_worker_sets_lifecycle_worker_id(
     try:
         await asyncio.wait_for(started.wait(), timeout=2)
         deadline = time.monotonic() + 2
-        while emitter.worker_id is None and time.monotonic() < deadline:
+        reporter = None
+        while time.monotonic() < deadline:
+            current = pool.lifecycle
+            if (
+                type(current) is OutboxLifecycleReporter
+                and current.worker_id is not None
+            ):
+                reporter = current
+                break
             await asyncio.sleep(0.02)
-        assert emitter.worker_id
+        assert reporter is not None
+        assert execution.db_fallback is False
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
     assert closed.is_set()
+    assert any(
+        "API-only lifecycle settings" in record.message for record in caplog.records
+    )

@@ -99,6 +99,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP tallies for the turn log are collected in memory while the
   turn runs. See `docs/workers.md`, `docs/worker-concepts.md`, and
   `docs/config.md`.
+- Lifecycle, sandbox status, reaper, and wipe as events, inventory
+  reconcile, and API-owned lease takeover (#449). The worker makes
+  no database queries. Sandbox transitions travel as durable
+  `sandbox.status` envelopes, which the API applies with the same
+  `record_transition` logic, so the `environment.*` events look the
+  same to clients; the periodic seen update travels as an idempotent
+  `sandbox.seen` summary that the API validates against the
+  connection's leases. The wipe after `session.stop` and the idle
+  workspace wipe travel as `session.stopped` and `workspace.reaped`
+  receipts; the worker wipes only its local directory, and only
+  `session.stopped` deletes the session blobs on ingest
+  (`workspace.reaped` is a receipt only). The reaper uses the command
+  context TTL, and sessions it does not know wait for the inventory
+  reply, which carries the effective idle TTL per session, instead
+  of reading the database. Lifecycle export moved to the API: the
+  worker reports live start and stop as durable `lifecycle.start`
+  and `lifecycle.stop` envelopes (buffered across disconnects and
+  replayed exactly once), the periodic `inventory` live set is what
+  the API derives heartbeats from, and retry and backoff stay on
+  the API. `apipi worker` ignores `APIPI_LIFECYCLE_*` settings with
+  a startup warning. On hello and about every 60s the worker sends
+  `inventory{sessions}`; the API fails leases it no longer reports
+  (`agent.session.error` with code `worker_orphaned`, then clears
+  the lease) and revokes sessions the worker reports without a
+  lease. A reconnect to any replica renews the reattached leases,
+  so running turns stay alive and the lease moves to the new
+  replica. Commands are idempotent by `command_id`: a retransmitted
+  `turn.start` is acked but never dispatched twice. See
+  `docs/workers.md` (inventory, lease takeover), `docs/usage.md`
+  (lifecycle export), and `docs/config.md` (lifecycle settings are
+  API-only). No new migration.
+- Review round 2 on top: an unleased on-disk workspace whose
+  session row is still alive gets a TTL answer (a released lease
+  only means the Pi stopped; the workspace stays until its idle
+  TTL) and is revoked only once the row is gone. The TTL answer
+  also carries the idle baseline (`idle_since_epoch`, the row's
+  last touch) so re-answering it every inventory does not restart
+  the reaper clock. Only `session.stopped` deletes the session
+  blobs; `workspace.reaped` is a receipt only, so a session leased
+  again before its receipt lands keeps its artifacts.
+- Review round 1 on top: command dedupe is worker-lifetime (a replay
+  after reconnect is still recognised; ids are forgotten on
+  teardown, stop, or revoke). Lease takeover renews exactly the
+  reported leases with a conditional `UPDATE` matching `worker_id`
+  and `lease_id` (register already points
+  `workers.api_instance_id` at the new replica); heartbeats still
+  extend all of the worker's leases. The orphan rule spares leases
+  with a command still unacked (marked before the grant commits, so
+  a grant in flight cannot orphan). Lifecycle identity always comes
+  from the session row (the worker only adds sandbox, run mode, and
+  timing fields, which also keeps the strict payload validation
+  happy), and exports are deferred past the ingest commit so a
+  replayed batch cannot export twice. Sandbox phase updates live in
+  one shared function used by the local transition path and the
+  ingest. The inventory also reports on-disk workspaces the worker
+  holds no lease for: rows that are still alive get a TTL answer so
+  the reaper wipes them when the TTL runs out, and only a missing
+  row gets a revoke that wipes the directory at once.
 
 ### Breaking
 

@@ -47,7 +47,11 @@ OVERSIZE = "oversize"
 INVALID_ENVELOPE = "invalid_envelope"
 UNKNOWN_SESSION = "unknown_session"
 
-DEFERRED_TYPES = frozenset({"sandbox.status"})
+# Envelope types no sender may emit yet: rejected like any other
+# violation (and acked past, so the worker drops them). Empty now:
+# #448 owns `artifact.presign` / `artifact.completed` and #449 owns
+# `sandbox.status`, the wipe receipts, and the lifecycle envelopes.
+DEFERRED_TYPES = frozenset()
 
 
 @dataclass
@@ -57,11 +61,81 @@ class QueuedEnvelope:
 
 
 @dataclass
+class LifecycleIntent:
+    """One lifecycle export deferred until the ingest batch commits.
+
+    Export runs after commit (never inside the transaction): a rolled
+    back batch is not acked, so its envelopes replay, and emitting
+    inside would export twice.
+    """
+
+    kind: str  # "start" or "stop"
+    fields: dict[str, Any] = field(default_factory=dict)
+    cause: str = "spawn"
+    reason: str = "stop"
+    live_ms: int = 0
+
+
+@dataclass
 class IngestOutcome:
     acks: dict[uuid.UUID, int] = field(default_factory=dict)
     wakes: list[tuple[uuid.UUID, dict[str, Any]]] = field(default_factory=list)
     rejected: list[tuple[uuid.UUID, int, str]] = field(default_factory=list)
     presign_replies: list[dict[str, Any]] = field(default_factory=list)
+    wipes: list[tuple[uuid.UUID, str, uuid.UUID]] = field(default_factory=list)
+    lifecycle: list[LifecycleIntent] = field(default_factory=list)
+
+
+# Worker payload keys the API accepts into a lifecycle export. Identity
+# always comes from the session row; the worker may only add sandbox,
+# run mode, and timing fields.
+_LIFECYCLE_START_KEYS = frozenset(
+    {
+        "environment_type",
+        "sandbox_size",
+        "sandbox_image",
+        "image_version",
+        "image_digest",
+        "run_mode",
+        "started_at",
+    }
+)
+_LIFECYCLE_STOP_KEYS = frozenset({"started_at", "start_seq"})
+
+
+def lifecycle_fields(
+    row: SessionRow, payload: dict[str, Any], keys: frozenset[str]
+) -> dict[str, Any]:
+    """Build export fields with row identity and worker sandbox/timing."""
+    from apipi.services.lifecycle_export import heartbeat_fields
+
+    fields = heartbeat_fields(row)
+    for key in keys:
+        value = payload.get(key)
+        if value is not None:
+            fields[key] = value
+    return fields
+
+
+def emit_lifecycle_intents(lifecycle: Any, intents: list[LifecycleIntent]) -> None:
+    """Export deferred lifecycle intents after the ingest batch commits."""
+    for intent in intents:
+        try:
+            if intent.kind == "start":
+                lifecycle.emit_start(intent.fields, cause=intent.cause)
+            else:
+                lifecycle.emit_stop(
+                    intent.fields, reason=intent.reason, live_ms=intent.live_ms
+                )
+        except Exception:
+            log.exception(
+                "worker lifecycle export failed",
+                extra={
+                    "event": "worker.lifecycle.failed",
+                    "error_code": "lifecycle_export",
+                    "session_id": str(intent.fields.get("session_id")),
+                },
+            )
 
 
 class IngestBatcher:
@@ -203,6 +277,12 @@ async def _validate(
         return NOT_LEASED
     if envelope.type in DEFERRED_TYPES:
         return NOT_IMPLEMENTED
+    if envelope.type == "sandbox.status" and envelope.payload.get("status") not in {
+        "starting",
+        "ready",
+        "stopped",
+    }:
+        return INVALID_ENVELOPE
     if envelope.type == "artifact.presign":
         raw_request = envelope.payload.get("request_id")
         if not isinstance(raw_request, str) or not raw_request:
@@ -224,6 +304,13 @@ async def _validate(
             uuid.UUID(raw_upload)
         except ValueError:
             return INVALID_ENVELOPE
+        return None
+    if envelope.type in {
+        "session.stopped",
+        "workspace.reaped",
+        "lifecycle.start",
+        "lifecycle.stop",
+    }:
         return None
     if envelope.type == "event":
         from apipi.services.sink import LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES
@@ -301,6 +388,7 @@ async def _apply(
     turn_cache: _TurnCache,
     presign_replies: list[dict[str, Any]] | None = None,
     objects: Any | None = None,
+    intents: list[LifecycleIntent],
 ) -> None:
     from apipi.services.failures import failure_from_dict
     from apipi.services.usage import usage_from
@@ -317,6 +405,60 @@ async def _apply(
     tenant_id = row.tenant_id
     session_id = row.id
     payload = envelope.payload
+    if envelope.type == "sandbox.status":
+        from apipi.services.sandbox_status import apply_transition, is_hosted
+
+        if not is_hosted(row.environment):
+            return
+        phase = str(payload.get("status") or "")
+        applied = await apply_transition(db, row, phase, dict(payload))
+        if applied is None:
+            raise _Reject(INVALID_ENVELOPE)
+        event_type, data = applied
+        from apipi.services.sink import event_body
+        from apipi.store.repo import append_event
+
+        event = await append_event(
+            db, tenant_id, session_id, type=event_type, data=data
+        )
+        wakes.append((session_id, event_body(event)))
+        return
+    if envelope.type == "session.stopped":
+        # The worker already wiped its local workspace; the API owns
+        # the artifact store and deletes the session blobs after
+        # commit (see `IngestOutcome.wipes`). Only this receipt may do
+        # that: it is the terminal receipt of a commanded stop (and
+        # the crash-recovery cleanup when the API died between the
+        # stop command and its own synchronous blob delete). The
+        # envelope itself is only the durable receipt, so there is
+        # nothing else to apply.
+        return
+    if envelope.type == "workspace.reaped":
+        # Receipt only: the idle reaper wiped a local workspace whose
+        # session may since have been leased again, so this must never
+        # delete the artifact store. Rejected-as-unleased receipts are
+        # still acked past, so the worker drops them.
+        return
+    if envelope.type == "lifecycle.start":
+        intents.append(
+            LifecycleIntent(
+                kind="start",
+                fields=lifecycle_fields(row, payload, _LIFECYCLE_START_KEYS),
+                cause=str(payload.get("cause") or "spawn"),
+            )
+        )
+        return
+    if envelope.type == "lifecycle.stop":
+        raw_ms = payload.get("live_ms")
+        intents.append(
+            LifecycleIntent(
+                kind="stop",
+                fields=lifecycle_fields(row, payload, _LIFECYCLE_STOP_KEYS),
+                reason=str(payload.get("reason") or "stop"),
+                live_ms=raw_ms if isinstance(raw_ms, int) else 0,
+            )
+        )
+        return
     if envelope.type == "turn.status":
         status = payload["status"]
         turn_id = uuid.UUID(str(payload["turn_id"]))
@@ -683,9 +825,9 @@ async def flush_batch(
                 if queued_item.raw_size > MAX_MESSAGE_BYTES:
                     raise _Reject(OVERSIZE)
                 if envelope.type in DEFERRED_TYPES:
-                    # No sender emits these until #448/#449 own them; until
-                    # then they are rejected like any other violation (and
-                    # acked past, so the worker drops them).
+                    # Deferred types are rejected like any other
+                    # violation (and acked past, so the worker drops
+                    # them).
                     raise _Reject(NOT_IMPLEMENTED)
                 # Claim, validation, and apply share one savepoint so a
                 # failed envelope rolls back completely: no partial
@@ -718,7 +860,10 @@ async def flush_batch(
                             turn_cache=turn_cache,
                             presign_replies=outcome.presign_replies,
                             objects=objects,
+                            intents=outcome.lifecycle,
                         )
+                        if envelope.type == "session.stopped":
+                            outcome.wipes.append((row.tenant_id, row.key_id, row.id))
                 except _Duplicate:
                     pass
             except _Reject as rejected:

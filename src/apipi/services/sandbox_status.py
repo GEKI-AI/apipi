@@ -1,3 +1,4 @@
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -167,6 +168,101 @@ async def _sync_environment_row(
     await update_environment(db, tenant_id, env.id, status=status)
 
 
+async def apply_transition(
+    db: Any,
+    row: SessionRow,
+    phase: str,
+    fields: dict[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
+    """Apply one sandbox phase to a hosted session row.
+
+    Updates the `sandbox_*` columns and builds the public
+    `environment.*` event body, shared by the local transition path
+    and the split-mode `sandbox.status` ingest so the two cannot drift.
+    Returns the event type and body, or None for an unknown phase.
+    The caller persists the event itself.
+    """
+    environment = row.environment if isinstance(row.environment, dict) else {}
+    now = utc_now()
+    row.sandbox_seen_at = now
+    row.sandbox_since = now
+    worker_id = fields.get("worker_id")
+    if isinstance(worker_id, uuid.UUID):
+        row.sandbox_worker_id = worker_id
+    elif isinstance(worker_id, str) and worker_id:
+        with contextlib.suppress(ValueError):
+            row.sandbox_worker_id = uuid.UUID(worker_id)
+    if phase == "starting":
+        row.sandbox_state = "starting"
+        row.sandbox_reason = None
+        image = fields.get("image")
+        size = fields.get("size")
+        if isinstance(image, str):
+            row.sandbox_image = image
+        if isinstance(size, str):
+            row.sandbox_size = size
+        event_type = "agent.session.environment.pending"
+        data = _sandbox_data(
+            environment,
+            {
+                "state": "starting",
+                "cold": True,
+                "cause": fields.get("cause") or "spawn",
+                "image": row.sandbox_image,
+                "size": row.sandbox_size,
+            },
+        )
+    elif phase == "ready":
+        row.sandbox_state = "ready"
+        row.sandbox_reason = None
+        row.sandbox_cold_boots = (row.sandbox_cold_boots or 0) + 1
+        image = fields.get("image")
+        version = fields.get("image_version")
+        size = fields.get("size")
+        boot_ms = fields.get("boot_ms")
+        if isinstance(image, str):
+            row.sandbox_image = image
+        if isinstance(version, str):
+            row.sandbox_image_version = version
+        if isinstance(size, str):
+            row.sandbox_size = size
+        if isinstance(boot_ms, int):
+            row.sandbox_last_boot_ms = boot_ms
+        event_type = "agent.session.environment.connected"
+        data = _sandbox_data(
+            environment,
+            {
+                "state": "ready",
+                "image": row.sandbox_image,
+                "image_version": row.sandbox_image_version,
+                "size": row.sandbox_size,
+                "run_mode": fields.get("run_mode"),
+                "boot_ms": boot_ms if isinstance(boot_ms, int) else 0,
+                "lock_wait_ms": fields.get("lock_wait_ms") or 0,
+                "setup_ms": fields.get("setup_ms") or 0,
+            },
+        )
+    elif phase == "stopped":
+        row.sandbox_state = "stopped"
+        reason = fields.get("reason")
+        row.sandbox_reason = reason if isinstance(reason, str) else "stop"
+        event_type = "agent.session.environment.disconnected"
+        data = _sandbox_data(
+            environment,
+            {
+                "state": "stopped",
+                "reason": row.sandbox_reason,
+                "live_ms": fields.get("live_ms") or 0,
+            },
+        )
+    else:
+        return None
+    state = row.sandbox_state
+    if state is not None:
+        await _sync_environment_row(db, row.tenant_id, row.id, state)
+    return event_type, data
+
+
 async def record_transition(
     store: Store,
     hub: EventBus,
@@ -181,81 +277,10 @@ async def record_transition(
         row = await get_session(db, tenant_id, session_id)
         if row is None or not is_hosted(row.environment):
             return
-        environment = row.environment if isinstance(row.environment, dict) else {}
-        now = utc_now()
-        row.sandbox_seen_at = now
-        row.sandbox_since = now
-        worker_id = fields.get("worker_id")
-        if isinstance(worker_id, uuid.UUID):
-            row.sandbox_worker_id = worker_id
-        if phase == "starting":
-            row.sandbox_state = "starting"
-            row.sandbox_reason = None
-            image = fields.get("image")
-            size = fields.get("size")
-            if isinstance(image, str):
-                row.sandbox_image = image
-            if isinstance(size, str):
-                row.sandbox_size = size
-            event_type = "agent.session.environment.pending"
-            data = _sandbox_data(
-                environment,
-                {
-                    "state": "starting",
-                    "cold": True,
-                    "cause": fields.get("cause") or "spawn",
-                    "image": row.sandbox_image,
-                    "size": row.sandbox_size,
-                },
-            )
-        elif phase == "ready":
-            row.sandbox_state = "ready"
-            row.sandbox_reason = None
-            row.sandbox_cold_boots = (row.sandbox_cold_boots or 0) + 1
-            image = fields.get("image")
-            version = fields.get("image_version")
-            size = fields.get("size")
-            boot_ms = fields.get("boot_ms")
-            if isinstance(image, str):
-                row.sandbox_image = image
-            if isinstance(version, str):
-                row.sandbox_image_version = version
-            if isinstance(size, str):
-                row.sandbox_size = size
-            if isinstance(boot_ms, int):
-                row.sandbox_last_boot_ms = boot_ms
-            event_type = "agent.session.environment.connected"
-            data = _sandbox_data(
-                environment,
-                {
-                    "state": "ready",
-                    "image": row.sandbox_image,
-                    "image_version": row.sandbox_image_version,
-                    "size": row.sandbox_size,
-                    "run_mode": fields.get("run_mode"),
-                    "boot_ms": boot_ms if isinstance(boot_ms, int) else 0,
-                    "lock_wait_ms": fields.get("lock_wait_ms") or 0,
-                    "setup_ms": fields.get("setup_ms") or 0,
-                },
-            )
-        elif phase == "stopped":
-            row.sandbox_state = "stopped"
-            reason = fields.get("reason")
-            row.sandbox_reason = reason if isinstance(reason, str) else "stop"
-            event_type = "agent.session.environment.disconnected"
-            data = _sandbox_data(
-                environment,
-                {
-                    "state": "stopped",
-                    "reason": row.sandbox_reason,
-                    "live_ms": fields.get("live_ms") or 0,
-                },
-            )
-        else:
+        applied = await apply_transition(db, row, phase, fields)
+        if applied is None:
             return
-        state = row.sandbox_state
-        if state is not None:
-            await _sync_environment_row(db, tenant_id, session_id, state)
+        event_type, data = applied
         await persist_event(db, hub, tenant_id, session_id, type=event_type, data=data)
 
 

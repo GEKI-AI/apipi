@@ -6,7 +6,9 @@ import os
 import signal
 import time
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -56,6 +58,7 @@ from apipi.store.repo import (
     list_events,
     list_expired_leases,
     list_worker_leases,
+    renew_session_leases,
     set_session_lease,
     touch_worker,
     upsert_worker,
@@ -80,7 +83,16 @@ from apipi.worker.turn_context import (
 )
 
 WORKER_IN = frozenset(
-    {"register", "heartbeat", "lease.ack", "lease.release", "event", "store.proof"}
+    {
+        "register",
+        "heartbeat",
+        "lease.ack",
+        "lease.release",
+        "event",
+        "store.proof",
+        "inventory",
+        "sandbox.seen",
+    }
 )
 DELTA_RATE_LIMIT = 100
 DELTA_MAX_TEXT = 32_768
@@ -176,6 +188,7 @@ class WorkerHub:
         self._unacked: dict[uuid.UUID, dict[str, Any]] = {}
         self._delta_hits: dict[uuid.UUID, list[float]] = {}
         self._delta_leases: dict[uuid.UUID, _DeltaLease] = {}
+        self._inventory: dict[uuid.UUID, dict[uuid.UUID, uuid.UUID]] = {}
         self._metric_modes: set[str] = set()
         self._lock = asyncio.Lock()
 
@@ -246,6 +259,49 @@ class WorkerHub:
             if known.worker_id == worker_id
         ]:
             self._forget_delta(session_id)
+        self._inventory.pop(worker_id, None)
+
+    def note_inventory(
+        self, worker_id: uuid.UUID, sessions: dict[uuid.UUID, uuid.UUID]
+    ) -> None:
+        """Remember the worker's reported live set (session_id to lease_id)."""
+        self._inventory[worker_id] = dict(sessions)
+
+    async def owned_sessions(
+        self,
+        store: Store,
+        conn: WorkerConnection,
+        session_ids: list[uuid.UUID],
+    ) -> list[uuid.UUID]:
+        """Filter seen ids to sessions leased to this connection."""
+        if not session_ids:
+            return []
+        from sqlalchemy import select
+
+        from apipi.store.models import SessionRow
+
+        async with store.session() as db:
+            rows = (
+                await db.scalars(
+                    select(SessionRow).where(SessionRow.id.in_(session_ids))
+                )
+            ).all()
+        return [
+            row.id
+            for row in rows
+            if row.worker_id == conn.worker_id
+            and row.lease_id is not None
+            and row.lease_id in conn.leases
+        ]
+
+    def known_live_sessions(self) -> list[uuid.UUID]:
+        """Every session some connected worker reports as live."""
+        seen: list[uuid.UUID] = []
+        for sessions in self._inventory.values():
+            for session_id in sessions:
+                if session_id not in seen:
+                    seen.append(session_id)
+        return seen
 
     def _observe(self) -> None:
         metrics = self.metrics
@@ -377,25 +433,6 @@ class WorkerHub:
         lease_id = uuid.uuid4()
         command_id = uuid.uuid4()
         until = utc_now() + self.settings.worker_lease_ttl
-        async with store.session() as db:
-            row = await set_session_lease(
-                db,
-                tenant_id,
-                session_id,
-                worker_id=conn.worker_id,
-                lease_id=lease_id,
-                lease_until=until,
-            )
-            if row is None:
-                return None
-        conn.leases.add(lease_id)
-        conn.lease_mem[lease_id] = session_mem
-        self._note_delta_lease(
-            session_id,
-            worker_id=conn.worker_id,
-            lease_id=lease_id,
-            tenant_id=tenant_id,
-        )
         command = {
             "type": "command",
             "id": str(command_id),
@@ -407,8 +444,35 @@ class WorkerHub:
             ),
         }
         _check_command_context(op, command["payload"])
+        # Mark the command unacked before the grant commits, so an
+        # inventory arriving between the grant and the send does not
+        # orphan a lease whose command is still in flight.
         self._unacked[lease_id] = command
-        await _send(conn.websocket, command)
+        async with store.session() as db:
+            row = await set_session_lease(
+                db,
+                tenant_id,
+                session_id,
+                worker_id=conn.worker_id,
+                lease_id=lease_id,
+                lease_until=until,
+            )
+            if row is None:
+                self._unacked.pop(lease_id, None)
+                return None
+        conn.leases.add(lease_id)
+        conn.lease_mem[lease_id] = session_mem
+        self._note_delta_lease(
+            session_id,
+            worker_id=conn.worker_id,
+            lease_id=lease_id,
+            tenant_id=tenant_id,
+        )
+        try:
+            await _send(conn.websocket, command)
+        except Exception:
+            self._unacked.pop(lease_id, None)
+            raise
         metrics = self.metrics
         if metrics is not None:
             metrics.worker_assign.observe(time.monotonic() - started)
@@ -466,7 +530,11 @@ class WorkerHub:
         }
         _check_command_context(op, command["payload"])
         self._unacked[lease_id] = command
-        await _send(conn.websocket, command)
+        try:
+            await _send(conn.websocket, command)
+        except Exception:
+            self._unacked.pop(lease_id, None)
+            raise
         return command
 
     async def ack(self, lease_id: uuid.UUID, command_id: str) -> bool:
@@ -604,6 +672,7 @@ class WorkerHub:
                     continue
                 claimed[parsed.session_id] = parsed.lease_id
         sessions: dict[uuid.UUID, int] = {}
+        renewed: list[uuid.UUID] = []
         for row in rows:
             if row.lease_id is None:
                 continue
@@ -620,7 +689,161 @@ class WorkerHub:
                 tenant_id=row.tenant_id,
             )
             sessions[row.id] = row.worker_seq
+            renewed.append(row.lease_id)
+        if renewed:
+            # A reconnect to another replica takes the lease over with
+            # a conditional UPDATE matching worker and lease, so only
+            # the leases the worker still reports move to this replica
+            # and running turns stay alive.
+            async with store.session() as db:
+                await renew_session_leases(
+                    db,
+                    worker_id=conn.worker_id,
+                    lease_ids=renewed,
+                    lease_until=utc_now() + self.settings.worker_lease_ttl,
+                )
         return sessions
+
+    async def reconcile_inventory(
+        self,
+        store: Store,
+        bus: EventBus,
+        worker_id: uuid.UUID,
+        reported: dict[uuid.UUID, uuid.UUID],
+        unleased: Collection[uuid.UUID] = (),
+    ) -> tuple[list[dict[str, str]], dict[str, dict[str, Any]]]:
+        """Compare the worker live set against the lease rows.
+
+        Sessions leased to this worker but not reported are orphaned:
+        the turn (if any) is failed and the lease is cleared, unless a
+        command for that lease is still unacked (in flight to the
+        worker, which cannot have reported it yet). Sessions the worker
+        reports without a matching lease come back as `lease.revoke`
+        entries. Every reported session that is still leased also gets
+        its effective reaper TTL, so a restarted worker learns idle
+        TTLs without reading the database itself. On-disk workspaces
+        the worker reports as unleased get a TTL answer while their
+        session row is still alive — a released lease only means the
+        Pi stopped, while the workspace intentionally stays until its
+        idle TTL — and a revoke (which tells the worker to wipe them)
+        only once the row is gone. The TTL answer carries the idle
+        baseline (`idle_since_epoch`, the row's last touch) so the
+        reaper clock does not restart on every reply.
+        """
+        revoke: list[dict[str, str]] = []
+        ttl: dict[str, dict[str, Any]] = {}
+        self.note_inventory(worker_id, reported)
+        async with store.session() as db:
+            rows = await list_worker_leases(db, worker_id)
+            leased = {row.id: row for row in rows if row.lease_id is not None}
+            for session_id, row in leased.items():
+                claimed_lease = reported.get(session_id)
+                if claimed_lease is not None and claimed_lease != row.lease_id:
+                    revoke.append(
+                        {
+                            "session_id": str(session_id),
+                            "lease_id": str(claimed_lease),
+                        }
+                    )
+                    continue
+                if claimed_lease is None:
+                    if row.lease_id in self._unacked:
+                        # The command granting this lease is still in
+                        # flight: the worker cannot have reported it yet,
+                        # so this is not an orphan.
+                        continue
+                    orphan = failure_for("worker_orphaned", "Worker lease orphaned")
+                    log_event(
+                        log,
+                        logging.ERROR,
+                        "worker lease orphaned",
+                        event="worker.lease.orphaned",
+                        tenant_id=row.tenant_id,
+                        session_id=row.id,
+                        worker_id=worker_id,
+                        **log_extra(orphan),
+                    )
+                    await persist_event(
+                        db,
+                        bus,
+                        row.tenant_id,
+                        row.id,
+                        type="agent.session.error",
+                        data=session_error_data(orphan, mode="legacy"),
+                    )
+                    await clear_session_lease(db, row.tenant_id, row.id)
+                    self._forget_delta(session_id)
+                    conn = self._conns.get(worker_id)
+                    if conn is not None and row.lease_id is not None:
+                        conn.leases.discard(row.lease_id)
+                        conn.lease_mem.pop(row.lease_id, None)
+                    continue
+                ttl[str(session_id)] = await self._inventory_ttl(db, row)
+            for session_id, lease_id in reported.items():
+                row = leased.get(session_id)
+                if row is None:
+                    revoke.append(
+                        {
+                            "session_id": str(session_id),
+                            "lease_id": str(lease_id),
+                        }
+                    )
+            for session_id in unleased:
+                if session_id in reported or str(session_id) in ttl:
+                    continue
+                row = leased.get(session_id)
+                if row is None:
+                    from apipi.store.repo import get_session_by_id
+
+                    row = await get_session_by_id(db, session_id)
+                if row is None:
+                    # No session row anymore (a stopped session is
+                    # deleted): the directory is garbage, tell the
+                    # worker to wipe it.
+                    revoke.append({"session_id": str(session_id)})
+                else:
+                    # The row is alive: a released lease only means
+                    # the Pi stopped, while the workspace stays until
+                    # its idle TTL. Answer the TTL so the normal
+                    # reaper wipes it when the TTL runs out.
+                    ttl[str(session_id)] = await self._inventory_ttl(db, row)
+        self._observe()
+        return revoke, ttl
+
+    async def _inventory_ttl(self, db: Any, row: Any) -> dict[str, Any]:
+        """The effective reaper TTL answer for one session row.
+
+        `idle_since_epoch` is the row's last touch, so the worker
+        reaper measures true idleness: re-answering the TTL on every
+        inventory must not restart the clock, or an idle workspace
+        would never be reaped.
+        """
+        from apipi.worker.pi.idle import resolve_idle_ttl
+
+        environment = row.environment if isinstance(row.environment, dict) else {}
+        env_type = environment.get("type")
+        agent_idle = None
+        if row.agent_id is not None:
+            from apipi.store.repo import get_agent
+
+            agent = await get_agent(db, row.tenant_id, row.agent_id)
+            if agent is not None:
+                agent_idle = agent.idle_ttl
+        meta = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+        resolved = resolve_idle_ttl(
+            self.settings,
+            env_type if isinstance(env_type, str) else None,
+            session_idle=row.idle_ttl,
+            session_metadata=meta,
+            agent_idle=agent_idle,
+        )
+        return {
+            "idle_ttl_seconds": resolved.total_seconds()
+            if resolved is not None
+            else None,
+            "env_type": env_type,
+            "idle_since_epoch": _idle_since_epoch(row.updated_at),
+        }
 
     async def resend_pending(self, conn: WorkerConnection) -> None:
         for lease_id in conn.leases:
@@ -966,6 +1189,7 @@ async def register_worker(
     websocket: WebSocket,
     register: RegisterMessage,
     token: WorkerToken,
+    event_hub: EventBus | None = None,
 ) -> WorkerConnection | None:
     run_mode = register.run_mode
     capacity = register.capacity
@@ -1010,6 +1234,14 @@ async def register_worker(
     store_check = _store_check_for(hub.settings)
     if store_check is not None:
         conn.store_proof = (store_check["marker"], store_check["nonce"])
+    reported = _reported_leases(register.running)
+    if event_hub is not None:
+        revoke, ttl = await hub.reconcile_inventory(
+            store, event_hub, conn.worker_id, reported
+        )
+    else:
+        hub.note_inventory(conn.worker_id, reported)
+        revoke, ttl = [], {}
     await _send(
         websocket,
         HelloReply(
@@ -1017,10 +1249,54 @@ async def register_worker(
             generation=conn.generation,
             sessions=sessions,
             store_check=store_check,
+            revoke=[{**entry, "type": "lease.revoke"} for entry in revoke],
+            ttl={uuid.UUID(key): value for key, value in ttl.items()},
         ).model_dump(mode="json"),
     )
     await hub.resend_pending(conn)
     return conn
+
+
+def _reported_leases(running: list[Any] | None) -> dict[uuid.UUID, uuid.UUID]:
+    """The register live set as session_id to lease_id."""
+    from apipi.worker.protocol import RunningSession
+
+    reported: dict[uuid.UUID, uuid.UUID] = {}
+    for entry in running or []:
+        try:
+            parsed = (
+                entry
+                if isinstance(entry, RunningSession)
+                else RunningSession.model_validate(entry)
+            )
+        except Exception:
+            continue
+        reported[parsed.session_id] = parsed.lease_id
+    return reported
+
+
+class CommandDedupe:
+    """Remember recent command ids per session (bounded, worker-side).
+
+    A retransmitted command (same `id`) is acked again but never
+    dispatched twice, so a duplicate `turn.start` cannot start a
+    second turn.
+    """
+
+    def __init__(self, limit: int = 128) -> None:
+        self.limit = max(limit, 1)
+        self._seen: dict[uuid.UUID, list[str]] = {}
+
+    def duplicate(self, session_id: uuid.UUID, command_id: str) -> bool:
+        known = self._seen.setdefault(session_id, [])
+        if command_id in known:
+            return True
+        known.append(command_id)
+        del known[: max(len(known) - self.limit, 0)]
+        return False
+
+    def forget(self, session_id: uuid.UUID) -> None:
+        self._seen.pop(session_id, None)
 
 
 def images_for_register(
@@ -1509,8 +1785,27 @@ async def _run_command(
 async def _wipe_stopped_session(
     execution: Any, tenant_id: uuid.UUID, session_id: uuid.UUID
 ) -> None:
-    store = getattr(execution, "store", None)
+    from apipi.worker.pi.artifacts import wipe_workspace
+
     settings = getattr(execution, "settings", None)
+    outbox = getattr(execution, "outbox", None)
+    if outbox is not None and settings is not None:
+        # Split mode wipes without the database: the local workspace
+        # directory follows the shared sessions-root layout, the blob
+        # delete happens on the API when it ingests `session.stopped`,
+        # and the envelope is the durable receipt.
+        base = getattr(settings, "sessions_dir", "")
+        root = Path(base) if base else Path.cwd() / ".apipi" / "sessions"
+        wipe_workspace(root / str(tenant_id) / str(session_id))
+        try:
+            outbox.append(session_id, "session.stopped", {"reason": "stop"})
+        except Exception:
+            log.exception(
+                "session stopped report failed",
+                extra={"session_id": str(session_id)},
+            )
+        return
+    store = getattr(execution, "store", None)
     if store is None or settings is None:
         return
     from apipi.store.blobs import blob_store
@@ -1606,12 +1901,25 @@ async def run_worker(
     drain_timeout: float | None = None,
 ) -> int:
     from apipi.services.event_bus import create_event_bus
+    from apipi.services.lifecycle_export import (
+        OutboxLifecycleReporter,
+        worker_lifecycle_ignored,
+    )
     from apipi.store.engine import Store, create_engine
     from apipi.worker.accepts import require_worker_accepts
     from apipi.worker.execution import local_execution, worker_observability
 
     reject_legacy_worker_token()
     require_worker_accepts(settings)
+    ignored_lifecycle = worker_lifecycle_ignored()
+    if ignored_lifecycle:
+        log.warning(
+            "worker ignores API-only lifecycle settings",
+            extra={
+                "event": "worker.lifecycle.ignored",
+                "settings": ignored_lifecycle,
+            },
+        )
     token = load_worker_token(settings.worker_token_file)
     base = url or settings.api_url or "http://127.0.0.1:8000"
     ws_url = worker_ws_url(base)
@@ -1625,14 +1933,21 @@ async def run_worker(
     # Durable results go through the outbox with a cumulative ack.
     bus = create_event_bus(settings, store=store, metrics=metrics)
     relay = DeltaRelay()
+    outbox = worker_outbox(settings)
     execution = local_execution(
         settings,
         store=store,
         hub=LiveRedirectBus(bus, relay),
         metrics=metrics,
         tracing=tracing,
-        outbox=worker_outbox(settings),
+        outbox=outbox,
     )
+    # Split workers report lifecycle over the socket; the API owns the
+    # export. The reporter only appends durable envelopes, and the
+    # reaper learns idle TTLs from inventory replies, so no background
+    # loop needs the database.
+    execution.pool.lifecycle = OutboxLifecycleReporter(outbox)
+    execution.db_fallback = False
     await bus.start()
     tasks: set[asyncio.Task[None]] = set()
     if metrics is not None:
@@ -1667,7 +1982,6 @@ async def run_worker(
     if emitter is not None:
         emitter.start()
     log.info("worker connect", extra={"url": ws_url})
-    outbox = worker_outbox(settings)
     spooled = outbox.load_spool()
     if spooled:
         log.info(
@@ -1680,6 +1994,12 @@ async def run_worker(
     wait = drain_timeout_seconds(settings, drain_timeout)
     command_tasks: set[asyncio.Task[None]] = set()
     session_leases: dict[uuid.UUID, str] = {}
+    # Command dedupe is worker-lifetime, not per-connection: the API
+    # replays unacked commands after a reconnect with the same
+    # `command_id`, and only a dedupe that survives the socket tells
+    # the replay from a new turn. Entries are forgotten when the
+    # session is torn down, stopped, or revoked.
+    dedupe = CommandDedupe()
     status = 0
     backoff = 0.5
     try:
@@ -1702,6 +2022,7 @@ async def run_worker(
                         wait,
                         heartbeat,
                         emitter,
+                        dedupe,
                     )
                 backoff = 0.5
                 if outcome == "drained":
@@ -1773,6 +2094,9 @@ async def _reconcile_hello(
     relay: Any,
     session_leases: dict[uuid.UUID, str],
     sessions: dict[str, Any],
+    hello: dict[str, Any] | None = None,
+    dedupe: "CommandDedupe | None" = None,
+    settings: Any | None = None,
 ) -> None:
     """Adopt the API cursors; drop turns the API no longer leases."""
     kept: set[uuid.UUID] = set()
@@ -1787,6 +2111,8 @@ async def _reconcile_hello(
     for session_id in [sid for sid in session_leases if sid not in kept]:
         session_leases.pop(session_id, None)
         relay.forget(session_id)
+        if dedupe is not None:
+            dedupe.forget(session_id)
         await execution.teardown(session_id)
         outbox.drop_session(session_id)
         log.info(
@@ -1795,7 +2121,222 @@ async def _reconcile_hello(
     for session_id in outbox.pending_sessions():
         if session_id not in kept and session_id not in session_leases:
             outbox.drop_session(session_id)
+    if hello is not None:
+        await _apply_inventory_reply(
+            execution,
+            hello,
+            session_leases=session_leases,
+            outbox=outbox,
+            relay=relay,
+            dedupe=dedupe,
+            settings=settings,
+        )
     outbox.mark_dirty()
+
+
+def _idle_since_epoch(updated_at: Any) -> float | None:
+    """Unix baseline for the reaper idle clock (stable across replies)."""
+    if not isinstance(updated_at, datetime):
+        return None
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
+    return updated_at.timestamp()
+
+
+def _seed_reaper_ttl(execution: Any, ttl: Any) -> None:
+    """Teach the reaper idle TTLs from an inventory reply (no DB read)."""
+    remember = getattr(execution, "_context_ttl", None)
+    if not isinstance(remember, dict) or not isinstance(ttl, dict):
+        return
+    now = time.time()
+    for raw_id, entry in ttl.items():
+        try:
+            session_id = str(uuid.UUID(str(raw_id)))
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        raw_seconds = entry.get("idle_ttl_seconds")
+        seconds = (
+            float(raw_seconds)
+            if isinstance(raw_seconds, (int, float)) and raw_seconds >= 0
+            else None
+        )
+        raw_since = entry.get("idle_since_epoch")
+        if isinstance(raw_since, (int, float)) and 0 < raw_since <= now:
+            last_seen = float(raw_since)
+        else:
+            last_seen = now
+        known = remember.get(session_id)
+        if known is not None:
+            # Never move the reaper clock backwards: the worker's own
+            # turn activity (`refresh_context_seen`) is newer than the
+            # row touch whenever the row is not updated per turn.
+            last_seen = max(last_seen, known[1])
+        env_type = entry.get("env_type")
+        remember[session_id] = (
+            seconds,
+            last_seen,
+            env_type if isinstance(env_type, str) else None,
+        )
+
+
+async def _apply_inventory_reply(
+    execution: Any,
+    reply: dict[str, Any],
+    *,
+    session_leases: dict[uuid.UUID, str] | None = None,
+    outbox: Any | None = None,
+    relay: Any | None = None,
+    dedupe: "CommandDedupe | None" = None,
+    settings: Any | None = None,
+) -> None:
+    """Apply revocations and reaper TTLs from an inventory reply."""
+    _seed_reaper_ttl(execution, reply.get("ttl"))
+    revoke = reply.get("revoke")
+    if not isinstance(revoke, list):
+        return
+    for entry in revoke:
+        if not isinstance(entry, dict):
+            continue
+        raw_session = entry.get("session_id")
+        try:
+            session_id = uuid.UUID(str(raw_session))
+        except (ValueError, TypeError):
+            continue
+        if dedupe is not None:
+            dedupe.forget(session_id)
+        known = session_leases is not None and session_id in session_leases
+        if session_leases is not None:
+            session_leases.pop(session_id, None)
+        if relay is not None:
+            forget = getattr(relay, "forget", None)
+            if callable(forget):
+                forget(session_id)
+        await execution.teardown(session_id)
+        if outbox is not None:
+            drop = getattr(outbox, "drop_session", None)
+            if callable(drop):
+                drop(session_id)
+        if settings is not None and not known:
+            # Revoked without a local lease: an on-disk workspace the
+            # worker only reported as unleased. Wipe it so reaped
+            # leftovers do not accumulate after a restart.
+            await _wipe_unknown_workspace(settings, execution, outbox, session_id)
+        log.info("worker revoked session", extra={"session_id": str(session_id)})
+
+
+async def _wipe_unknown_workspace(
+    settings: Any, execution: Any, outbox: Any | None, session_id: uuid.UUID
+) -> None:
+    """Wipe an on-disk workspace the worker holds no lease for.
+
+    Runs after teardown for revokes of sessions absent from the local
+    lease set (typically unleased dirs reported in the inventory). The
+    pool liveness guard keeps a racing fresh turn safe, and the receipt
+    lets the API delete the session blobs.
+    """
+    pool = getattr(execution, "pool", None)
+    try:
+        if pool is not None and (pool.alive(session_id) or pool.held(session_id)):
+            return
+    except Exception:
+        return
+    from apipi.worker.pi.artifacts import wipe_workspace
+    from apipi.worker.pi.dirs import sessions_root
+
+    try:
+        root = sessions_root(settings)
+    except Exception:
+        return
+    try:
+        tenants = [entry for entry in root.iterdir() if entry.is_dir()]
+    except OSError:
+        return
+    wiped = False
+    for tenant_dir in tenants:
+        if tenant_dir.name.startswith("."):
+            continue
+        try:
+            uuid.UUID(tenant_dir.name)
+        except ValueError:
+            continue
+        workspace = tenant_dir / str(session_id)
+        try:
+            if not workspace.is_dir():
+                continue
+        except OSError:
+            continue
+        try:
+            wipe_workspace(workspace)
+        except Exception:
+            log.exception(
+                "unknown workspace wipe failed",
+                extra={"session_id": str(session_id)},
+            )
+            continue
+        wiped = True
+    if wiped and outbox is not None:
+        append = getattr(outbox, "append", None)
+        if callable(append):
+            try:
+                append(session_id, "workspace.reaped", {"reason": "revoked"})
+            except Exception:
+                log.exception(
+                    "revoked workspace report failed",
+                    extra={"session_id": str(session_id)},
+                )
+
+
+def _unleased_session_dirs(
+    settings: Any,
+    session_leases: dict[uuid.UUID, str],
+    pool: Any | None,
+) -> list[uuid.UUID]:
+    """On-disk session workspaces the worker holds no lease for.
+
+    These ride along in the periodic inventory so the API answers
+    with a reaper TTL while the session row is alive and a revoke
+    (which wipes them) only once the row is gone. Live or held
+    guests are never reported.
+    """
+    from apipi.worker.pi.dirs import sessions_root
+
+    try:
+        root = sessions_root(settings)
+    except Exception:
+        return []
+    try:
+        tenants = [entry for entry in root.iterdir() if entry.is_dir()]
+    except OSError:
+        return []
+    found: list[uuid.UUID] = []
+    for tenant_dir in tenants:
+        if tenant_dir.name.startswith("."):
+            continue
+        try:
+            uuid.UUID(tenant_dir.name)
+        except ValueError:
+            continue
+        try:
+            sessions = [entry for entry in tenant_dir.iterdir() if entry.is_dir()]
+        except OSError:
+            continue
+        for session_dir in sessions:
+            try:
+                session_id = uuid.UUID(session_dir.name)
+            except ValueError:
+                continue
+            if session_id in session_leases or session_id in found:
+                continue
+            if pool is not None:
+                try:
+                    if pool.alive(session_id) or pool.held(session_id):
+                        continue
+                except Exception:
+                    continue
+            found.append(session_id)
+    return found
 
 
 async def _serve_connection(
@@ -1812,8 +2353,14 @@ async def _serve_connection(
     wait: float,
     heartbeat: float,
     emitter: Any,
+    dedupe: CommandDedupe,
 ) -> tuple[str, float | None]:
-    """Serve one socket; returns drained or drain_timeout (loss raises)."""
+    """Serve one socket; returns drained or drain_timeout (loss raises).
+
+    `dedupe` is worker-lifetime (owned by `run_worker`): reconnects
+    replay unacked commands with the same `command_id`, so only a
+    dedupe that survives the socket suppresses the second dispatch.
+    """
     from apipi.worker.accepts import resolved_worker_accepts
     from apipi.worker.protocol import PROTOCOL_VERSION
 
@@ -1875,12 +2422,61 @@ async def _serve_connection(
     raw_worker = hello.get("worker_id")
     if emitter is not None:
         emitter.set_worker_id(str(raw_worker) if raw_worker else None)
-    await _reconcile_hello(execution, outbox, relay, session_leases, hello_sessions)
+    await _reconcile_hello(
+        execution,
+        outbox,
+        relay,
+        session_leases,
+        hello_sessions,
+        hello,
+        dedupe=dedupe,
+        settings=settings,
+    )
     relay.attach(send_json)
     pump = asyncio.create_task(_pump_outbox(outbox, send_json))
 
+    async def report_seen(session_ids: list[uuid.UUID]) -> None:
+        if getattr(execution, "seen_hook", None) is not report_seen:
+            return
+        await send_json(
+            {
+                "type": "sandbox.seen",
+                "session_ids": [str(session_id) for session_id in session_ids],
+            }
+        )
+
+    execution.seen_hook = report_seen
+
+    async def send_inventory() -> None:
+        unleased = _unleased_session_dirs(
+            settings, session_leases, getattr(execution, "pool", None)
+        )
+        await send_json(
+            {
+                "type": "inventory",
+                "sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "lease_id": lease_id,
+                        "last_seq": outbox.high_water(session_id),
+                    }
+                    for session_id, lease_id in session_leases.items()
+                ]
+                + [
+                    {"session_id": str(session_id), "last_seq": 0}
+                    for session_id in unleased
+                ],
+            }
+        )
+
+    last_inventory = time.monotonic()
+
     async def send_heartbeat() -> None:
         await send_json(worker_heartbeat(settings, drain=draining.is_set()))
+        nonlocal last_inventory
+        if time.monotonic() - last_inventory >= 60.0:
+            await send_inventory()
+            last_inventory = time.monotonic()
 
     try:
         while True:
@@ -1927,13 +2523,44 @@ async def _serve_connection(
                 if isinstance(waiters, dict):
                     handle_presign_reply(waiters, message)
                 continue
+            if message.get("type") == "inventory.reply":
+                await _apply_inventory_reply(
+                    execution,
+                    message,
+                    session_leases=session_leases,
+                    outbox=outbox,
+                    relay=relay,
+                    dedupe=dedupe,
+                    settings=settings,
+                )
+                continue
             if message.get("type") == "command":
                 raw_lease = message.get("lease_id")
                 raw_session = message.get("session_id")
                 if isinstance(raw_lease, str) and isinstance(raw_session, str):
                     session_leases[uuid.UUID(raw_session)] = raw_lease
             if message.get("type") == "command" and message.get("op") == "session.stop":
+                command_id = message.get("id")
+                try:
+                    stop_session = uuid.UUID(str(message.get("session_id")))
+                except (ValueError, TypeError):
+                    stop_session = None
+                if (
+                    stop_session is not None
+                    and isinstance(command_id, str)
+                    and dedupe.duplicate(stop_session, command_id)
+                ):
+                    await send_json(
+                        {
+                            "type": "lease.ack",
+                            "id": message.get("id"),
+                            "lease_id": message.get("lease_id"),
+                        }
+                    )
+                    continue
                 await dispatch_command(execution, message)
+                if stop_session is not None:
+                    dedupe.forget(stop_session)
                 await send_json(
                     {
                         "type": "lease.ack",
@@ -1945,9 +2572,40 @@ async def _serve_connection(
             if message.get("type") == "lease.revoke":
                 revoked = message.get("session_id")
                 if isinstance(revoked, str):
-                    await execution.teardown(uuid.UUID(revoked))
+                    try:
+                        revoked_id = uuid.UUID(revoked)
+                    except ValueError:
+                        continue
+                    dedupe.forget(revoked_id)
+                    known = revoked_id in session_leases
+                    session_leases.pop(revoked_id, None)
+                    relay.forget(revoked_id)
+                    await execution.teardown(revoked_id)
+                    outbox.drop_session(revoked_id)
+                    if not known:
+                        await _wipe_unknown_workspace(
+                            settings, execution, outbox, revoked_id
+                        )
                 continue
             if message.get("type") == "command":
+                command_id = message.get("id")
+                try:
+                    command_session = uuid.UUID(str(message.get("session_id")))
+                except (ValueError, TypeError):
+                    command_session = None
+                if (
+                    command_session is not None
+                    and isinstance(command_id, str)
+                    and dedupe.duplicate(command_session, command_id)
+                ):
+                    await send_json(
+                        {
+                            "type": "lease.ack",
+                            "id": message.get("id"),
+                            "lease_id": message.get("lease_id"),
+                        }
+                    )
+                    continue
                 await send_json(
                     {
                         "type": "lease.ack",
@@ -1969,6 +2627,8 @@ async def _serve_connection(
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
     finally:
+        if getattr(execution, "seen_hook", None) is report_seen:
+            execution.seen_hook = None
         relay.detach()
         pump.cancel()
         with contextlib.suppress(asyncio.CancelledError):
