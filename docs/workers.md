@@ -260,7 +260,9 @@ stored before the turn's `usage` envelope is ingested.
 Search is not durable. It does not use the outbox or the ingest batch.
 Before it sends a request, the worker waits until the API has
 acknowledged every envelope the session produced so far, for at most
-five seconds, so the API already knows that the turn is running. The
+five seconds, so the API already knows that the turn is running. If the
+acknowledgements do not arrive in that time, the model gets a tool
+error and no request is sent. The
 worker keeps one waiter per `request_id` and waits for the reply
 for at most 30 seconds. These are the failure rules:
 

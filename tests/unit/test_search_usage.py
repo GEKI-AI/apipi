@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -121,7 +121,7 @@ async def _snapshot(
     async with store.session() as db:
         row = await get_turn_log(db, tenant_id, turn_id)
         assert row is not None
-        day = await usage_day(db, tenant_id, date.today())
+        day = await usage_day(db, tenant_id, utc_now().date())
         counts = await search_usage_for_turn(db, tenant_id, turn_id)
         return {
             "calls": row.search_calls,
@@ -217,7 +217,7 @@ async def test_rollup_totals_across_turns(store: Store, settings: Settings) -> N
     await _search(store, tenant_id, session_id, second, calls=2, units=4)
     await _send_usage(store, settings, worker_id, session_id, second)
     async with store.session() as db:
-        day = await usage_day(db, tenant_id, date.today())
+        day = await usage_day(db, tenant_id, utc_now().date())
         by_session = await usage_totals(db, tenant_id, session_id=session_id)
         by_turn = await usage_totals(db, tenant_id, turn_id=second)
     assert day["search_calls"] == 3
@@ -336,10 +336,10 @@ async def test_search_usage_is_tenant_scoped(store: Store, settings: Settings) -
     async with store.session() as db:
         assert await search_usage_for_turn(db, other.id, turn_id) == (0, 0, {})
         assert await get_turn_log(db, other.id, turn_id) is None
-        empty = await usage_day(db, other.id, date.today())
+        empty = await usage_day(db, other.id, utc_now().date())
         assert empty["search_calls"] == 0
         assert empty["search_units"] == 0
-        mine = await usage_day(db, tenant_id, date.today())
+        mine = await usage_day(db, tenant_id, utc_now().date())
         assert mine["search_calls"] == 1
 
 
@@ -393,7 +393,7 @@ async def test_rollups_store_counts_search_before_usage(
     await _send_usage(store, rollups, worker_id, session_id, turn_id)
     async with store.session() as db:
         assert await get_turn_log(db, tenant_id, turn_id) is None
-        day = await usage_day(db, tenant_id, date.today())
+        day = await usage_day(db, tenant_id, utc_now().date())
     assert day["search_calls"] == 2
     assert day["search_units"] == 3
     assert day["turns"] == 1

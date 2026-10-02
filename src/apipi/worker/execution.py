@@ -172,9 +172,13 @@ class LocalExecution:
             raise SearchHookError(
                 "invalid_request", "Web search request is invalid"
             ) from None
-        await self.outbox.wait_acked(
+        acked = await self.outbox.wait_acked(
             session_uuid, self.outbox.high_water(session_uuid), timeout=5.0
         )
+        if not acked:
+            raise SearchHookError(
+                "search_unavailable", "Web search is not available right now"
+            )
         future: asyncio.Future[dict[str, Any]] = (
             asyncio.get_running_loop().create_future()
         )

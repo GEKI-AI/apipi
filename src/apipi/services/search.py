@@ -34,6 +34,9 @@ SEARCH_NOT_CONFIGURED = (
     "web_search is not available: no search provider is configured for this caller"
 )
 
+USAGE_WRITE_ATTEMPTS = 3
+USAGE_WRITE_DELAY = 0.1
+
 _TURN_EVENTS = (
     "agent.session.turn.created",
     "agent.session.turn.completed",
@@ -361,30 +364,37 @@ class SearchService:
         calls: int,
         units: int,
     ) -> None:
-        try:
-            async with self.store.session() as db:
-                await record_search_usage(
-                    db,
-                    tenant_id,
-                    session_id,
-                    turn_id,
+        for attempt in range(USAGE_WRITE_ATTEMPTS):
+            try:
+                async with self.store.session() as db:
+                    await record_search_usage(
+                        db,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        provider=provider,
+                        key_source=key_source,
+                        calls=calls,
+                        units=units,
+                    )
+                return
+            except Exception:
+                if attempt + 1 < USAGE_WRITE_ATTEMPTS:
+                    await asyncio.sleep(USAGE_WRITE_DELAY * (attempt + 1))
+                    continue
+                log_event(
+                    log,
+                    logging.ERROR,
+                    "search usage not recorded",
+                    event="search.usage_failed",
+                    error_code="usage_write",
+                    exc_info=True,
+                    session_id=str(session_id),
                     provider=provider,
                     key_source=key_source,
                     calls=calls,
                     units=units,
                 )
-        except Exception:
-            log_event(
-                log,
-                logging.ERROR,
-                "search usage not recorded",
-                event="search.usage_failed",
-                error_code="usage_write",
-                exc_info=True,
-                session_id=str(session_id),
-                provider=provider,
-                key_source=key_source,
-            )
 
 
 async def _turn_running(

@@ -204,7 +204,6 @@ async def test_full_turn_flow_applies_once(store: Store, settings) -> None:
             "agent.session.turn.completed",
             "agent.session.idle",
         ]
-        from datetime import date
 
         from apipi.store.repo import get_session, get_turn_log, usage_day
 
@@ -215,7 +214,7 @@ async def test_full_turn_flow_applies_once(store: Store, settings) -> None:
         assert turn_log is not None
         assert turn_log.status == "completed"
         assert turn_log.tool_names == ["get_weather"]
-        totals = await usage_day(db, tenant_id, date.today())
+        totals = await usage_day(db, tenant_id, utc_now().date())
         assert totals["prompt_tokens"] == 11
         assert totals["turns"] == 1
     assert await last_seq_for(store, worker_id, session_id) == 13

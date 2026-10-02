@@ -157,6 +157,7 @@ def test_search_toml_unknown_key_fails(
     [
         ("APIPI_SEARCH_TIMEOUT", "soon", "APIPI_SEARCH_TIMEOUT"),
         ("APIPI_SEARCH_TIMEOUT", "0s", "APIPI_SEARCH_TIMEOUT"),
+        ("APIPI_SEARCH_TIMEOUT", "26s", "at most 25s"),
         ("APIPI_SEARCH_MAX_RESULTS", "0", "APIPI_SEARCH_MAX_RESULTS"),
         ("APIPI_SEARCH_MAX_RESULTS", "21", "APIPI_SEARCH_MAX_RESULTS"),
         ("APIPI_SEARCH_TAVILY_DEPTH", "deep", "APIPI_SEARCH_TAVILY_DEPTH"),
@@ -532,6 +533,29 @@ async def test_usage_write_failure_is_logged_not_raised(store: Store) -> None:
     )
     assert reply is None
     assert (await case.usage())[:2] == (0, 0)
+
+
+async def test_usage_write_is_retried(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import apipi.services.search as search_module
+
+    real = search_module.record_search_usage
+    attempts = {"n": 0}
+
+    async def flaky(*args: Any, **kwargs: Any) -> None:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise RuntimeError("db busy")
+        await real(*args, **kwargs)
+
+    monkeypatch.setattr(search_module, "record_search_usage", flaky)
+    monkeypatch.setattr(search_module, "USAGE_WRITE_DELAY", 0.0)
+    case = await _case(store)
+    reply = await case.ask()
+    assert reply is not None and reply["ok"] is True
+    assert attempts["n"] == 3
+    assert (await case.usage())[:2] == (1, 1)
 
 
 async def test_logs_never_hold_query_or_key(

@@ -49,6 +49,10 @@ VAULT_MASTER_KEY_UNSET = (
 SQLITE_WARNING = (
     "SQLite is for one process. Do not share the file across processes or nodes."
 )
+SEARCH_TIMEOUT_MAX = 25.0
+SEARCH_TIMEOUT_MESSAGE = (
+    "APIPI_SEARCH_TIMEOUT must be a duration above 0 and at most 25s, like 15s"
+)
 SEARCH_KEY_REQUIRED = (
     "APIPI_SEARCH_API_KEY is required when APIPI_SEARCH_PROVIDER is set"
 )
@@ -1248,8 +1252,8 @@ class Settings(BaseSettings):
             ("http://", "https://")
         ):
             raise ValueError("APIPI_SEARCH_BASE_URL must be an http URL")
-        if self.search_timeout.total_seconds() <= 0:
-            raise ValueError("APIPI_SEARCH_TIMEOUT must be like 15s")
+        if not 0 < self.search_timeout.total_seconds() <= SEARCH_TIMEOUT_MAX:
+            raise ValueError(SEARCH_TIMEOUT_MESSAGE)
         return self
 
     def sandbox_mem_mib(self, size: str) -> int:
@@ -1712,7 +1716,7 @@ def _settings_message(exc: ValidationError) -> str:
             or "search_timeout" in loc
             or "APIPI_SEARCH_TIMEOUT" in loc
         ):
-            return "APIPI_SEARCH_TIMEOUT must be like 15s"
+            return SEARCH_TIMEOUT_MESSAGE
         if "search_provider" in loc or "APIPI_SEARCH_PROVIDER" in loc:
             return "APIPI_SEARCH_PROVIDER must be tavily or staan"
         if "search_max_results" in loc or "APIPI_SEARCH_MAX_RESULTS" in loc:

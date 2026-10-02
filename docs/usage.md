@@ -121,7 +121,9 @@ from the worker `usage` envelope, so a worker cannot change it.
 The rule is simple: only calls the provider charged are counted. A
 successful call is counted. A failed call is counted only when the
 provider says it charged for it. A timeout, a transport error, and a
-provider `4xx` or `5xx` response are not counted. A search that is
+provider `4xx` or `5xx` response are not counted. A `2xx` response
+with a body ApiPi cannot read is counted, because the provider
+processed the request. A search that is
 denied or invalid before a provider call is not counted. These are
 counters, not USD. Convert units to money outside ApiPi.
 
@@ -178,6 +180,7 @@ are never logged.
 | `worker.command.failed` | warning or error | A worker command raised. Caller errors are warning. Internal faults are error. Fields include `session_id`, `tenant_id`, and `request_id`. Turn commands also emit a session failure event unless the session is already `failed`. |
 | `worker.assign.failed` | warning | No worker capacity (`capacity` or `capacity_tenant`). |
 | `worker.lease.expired` | error | A worker lease TTL elapsed. `error_code` is `worker_lease_expired`. |
+| `search.usage_failed` | error | The API could not store the usage of a search after three tries. The model still gets the results. Carries the provider, the key source, and the counts, so the numbers can be added by hand. |
 | `search.denied` | warning | An agent has the `web_search` tool but search is not allowed for the session, so the tool was not loaded for the turn, or a `search.request` arrived for such a session. Carries no query text. The turn does not fail. |
 | `usage.export.dropped` | warning | Usage HTTPS export or sink dropped the event. |
 | `payload.export.dropped` | warning | Payload HTTPS export or sink dropped the event. |

@@ -362,7 +362,7 @@ fail at startup.
 | `APIPI_SEARCH_PROVIDER` | `[search].provider` | unset | `tavily` or `staan`. Unset turns the `web_search` tool off for every tenant. |
 | `APIPI_SEARCH_API_KEY` | none | unset | The provider key. Environment or `.env` only, never TOML, like other secrets. It stays in the API process. |
 | `APIPI_SEARCH_BASE_URL` | `[search].base_url` | provider default | Base URL of the provider API. Use it for a proxy or a test double. |
-| `APIPI_SEARCH_TIMEOUT` | `[search].timeout` | `15s` | Timeout for one provider call. A timeout is a tool error for the model, and the call is not counted in usage. |
+| `APIPI_SEARCH_TIMEOUT` | `[search].timeout` | `15s` | Timeout for one provider call, above `0` and at most `25s`, so it ends before the worker gives up after 30 seconds. A timeout is a tool error for the model, and the call is not counted in usage. |
 | `APIPI_SEARCH_MAX_RESULTS` | `[search].max_results` | `5` | Cap for the `max_results` the model asks for. |
 | `APIPI_SEARCH_TAVILY_DEPTH` | `[search].tavily_depth` | `basic` | Tavily `search_depth`: `basic` or `advanced`. `advanced` costs 2 credits for each search. |
 | `APIPI_SEARCH_STAAN_MARKET` | `[search].staan_market` | `en-us` | Staan `market`, for example `de-de`. |
