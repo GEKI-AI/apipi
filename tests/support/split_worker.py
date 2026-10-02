@@ -258,11 +258,11 @@ async def spawn_split_worker(
             command_tasks,
             tasks,
             draining,
-            None,
-            1.0,
-            1.0,
-            emitter,
-            dedupe,
+            drain_deadline=None,
+            wait=1.0,
+            heartbeat=1.0,
+            emitter=emitter,
+            dedupe=dedupe,
         )
     )
     worker = SplitWorker(

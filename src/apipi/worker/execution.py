@@ -16,6 +16,7 @@ from apipi.services.event_bus import EventBus, create_event_bus, is_wake
 from apipi.services.runtime import (
     continue_turn,
     fail_stale_in_progress,
+    lease_live,
     prepare_for_new_turn,
     request_cancel,
     run_turn,
@@ -32,7 +33,6 @@ from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
 from apipi.store.repo import (
-    clear_session_lease,
     get_session,
     get_session_by_id,
     get_worker,
@@ -1083,41 +1083,59 @@ class RemoteExecution:
         self, tenant_id: uuid.UUID, session_id: uuid.UUID
     ) -> None:
         store = self.store
-        if store is not None:
-            async with store.session() as db:
-                row = await get_session_by_id(db, session_id)
-            if row is None or row.lease_id is None:
-                async with store.session() as db:
-                    await fail_stale_in_progress(db, self.hub, tenant_id, session_id)
-                return
         assert store is not None
-        delivered = await self.cancel(session_id, status="in_progress")
-        if not delivered:
-            # No live worker holds the lease (e.g. the worker restarted
-            # and the lease row is orphaned): drop it and fail the stale
-            # turn now instead of blocking until turn_timeout for worker
-            # events that will never arrive.
-            async with store.session() as db:
-                await clear_session_lease(db, tenant_id, session_id)
+        async with store.session() as db:
+            row = await get_session_by_id(db, session_id)
+        if row is None or row.lease_id is None:
             async with store.session() as db:
                 await fail_stale_in_progress(db, self.hub, tenant_id, session_id)
             return
+        lease_id = row.lease_id
+        # Baseline before the cancel goes out, so its events are not missed.
+        async with store.session() as db:
+            existing = await list_events(db, tenant_id, session_id)
+        baseline = existing[-1].seq if existing else 0
+        if not await self.cancel(session_id, status="in_progress"):
+            # No command went out. If the lease holder's socket is on
+            # another API replica and the lease is still live, the worker
+            # may be running: answer with the usual 429 instead of
+            # clearing a live lease. Otherwise the lease is orphaned
+            # (expired, or the worker restarted without it): release it
+            # and fail the stale turn instead of waiting for events that
+            # will never arrive.
+            if (
+                row.worker_id is not None
+                and self.workers.get(row.worker_id) is None
+                and lease_live(row.lease_until)
+            ):
+                await self._raise_no_worker(tenant_id, session_id)
+            await self._release_and_fail_stale(tenant_id, session_id, lease_id)
+            return
         # The worker accepted the cancel, but if it has no running turn
         # for this session (stale `in_progress` row, lease still set) it
-        # emits nothing. Bound the wait, then drop the lease and fail the
-        # stale turn instead of blocking until turn_timeout.
+        # emits nothing. Bound the wait, then release the lease and fail
+        # the stale turn instead of blocking until turn_timeout.
         await self._wait(
             tenant_id,
             session_id,
+            baseline,
             timeout=min(CANCEL_GRACE, self.settings.turn_timeout),
         )
         async with store.session() as db:
             row = await get_session_by_id(db, session_id)
         if row is not None and row.status == "in_progress":
-            async with store.session() as db:
-                await clear_session_lease(db, tenant_id, session_id)
-            async with store.session() as db:
-                await fail_stale_in_progress(db, self.hub, tenant_id, session_id)
+            await self._release_and_fail_stale(tenant_id, session_id, lease_id)
+
+    async def _release_and_fail_stale(
+        self, tenant_id: uuid.UUID, session_id: uuid.UUID, lease_id: uuid.UUID
+    ) -> None:
+        store = self.store
+        assert store is not None
+        # `release` clears only if the row still holds `lease_id`, and
+        # drops the hub's per-connection lease bookkeeping.
+        await self.workers.release(store, tenant_id, session_id, lease_id)
+        async with store.session() as db:
+            await fail_stale_in_progress(db, self.hub, tenant_id, session_id)
 
     async def teardown(self, session_id: uuid.UUID) -> None:
         store = self.store

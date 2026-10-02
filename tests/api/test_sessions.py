@@ -3,6 +3,8 @@ import json
 import logging
 import time
 import uuid
+from datetime import timedelta
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
@@ -652,21 +654,16 @@ async def test_follow_up_on_stale_in_progress_starts_turn(
     assert "failed" in statuses
 
 
-async def test_follow_up_on_orphaned_lease_fails_fast(
-    client: AsyncClient, store: Store
-) -> None:
-    """A lease no live worker holds must not block a follow-up turn.
-
-    Regression test for the split path: `prepare_for_new_turn` sees a
-    leased session, but the lease holder is gone (e.g. the worker
-    restarted), so the `turn.cancel` command is undelivered. The API
-    must drop the orphaned lease and fail the stale turn immediately
-    instead of blocking until `turn_timeout` for worker events that
-    will never arrive.
-    """
-    from datetime import timedelta
-
-    token = _token("orphaned-lease")
+async def _stale_leased_session(
+    client: AsyncClient,
+    store: Store,
+    name: str,
+    *,
+    worker_id: uuid.UUID,
+    lease_id: uuid.UUID,
+    lease_in: timedelta,
+) -> tuple[str, uuid.UUID, uuid.UUID]:
+    token = _token(name)
     agent_id = await _create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
@@ -683,24 +680,81 @@ async def test_follow_up_on_orphaned_lease_fails_fast(
             db,
             tenant_id,
             sid,
-            worker_id=uuid.uuid4(),
-            lease_id=uuid.uuid4(),
-            lease_until=utc_now() + timedelta(minutes=5),
+            worker_id=worker_id,
+            lease_id=lease_id,
+            lease_until=utc_now() + lease_in,
         )
-    start = time.monotonic()
-    posted = await client.post(
+    return token, sid, stale.id
+
+
+async def _follow_up(client: AsyncClient, token: str, sid: uuid.UUID) -> Any:
+    return await client.post(
         f"/v1/agents/sessions/{sid}/events",
         headers=_auth(token),
         json={"type": "agent.session.input.message", "content": "hello"},
     )
-    elapsed = time.monotonic() - start
+
+
+async def _turn_statuses(
+    client: AsyncClient, token: str, sid: uuid.UUID
+) -> dict[str, str]:
+    turns = await client.get(f"/v1/agents/sessions/{sid}/turns", headers=_auth(token))
+    return {row["id"]: row["status"] for row in turns.json()["data"]}
+
+
+async def test_follow_up_on_expired_orphaned_lease_fails_fast(
+    client: AsyncClient, store: Store
+) -> None:
+    """An expired lease no worker holds must not block a follow-up turn.
+
+    The lease holder is unknown to the hub and the lease has expired, so
+    the `turn.cancel` command is undelivered. The API must release the
+    lease and fail the stale turn immediately instead of blocking until
+    `turn_timeout` for worker events that will never arrive.
+    """
+    token, sid, stale = await _stale_leased_session(
+        client,
+        store,
+        "orphaned-lease",
+        worker_id=uuid.uuid4(),
+        lease_id=uuid.uuid4(),
+        lease_in=timedelta(minutes=-5),
+    )
+    start = time.monotonic()
+    posted = await _follow_up(client, token, sid)
     assert posted.status_code == 200
     assert posted.json()["status"] == "idle"
-    assert elapsed < 60
-    turns = await client.get(f"/v1/agents/sessions/{sid}/turns", headers=_auth(token))
-    by_id = {row["id"]: row["status"] for row in turns.json()["data"]}
-    assert by_id[str(stale.id)] == "failed"
+    assert time.monotonic() - start < 60
+    by_id = await _turn_statuses(client, token, sid)
+    assert by_id[str(stale)] == "failed"
     assert "completed" in set(by_id.values())
+
+
+async def test_follow_up_keeps_live_lease_on_other_replica(
+    client: AsyncClient, store: Store
+) -> None:
+    """A live lease whose worker socket is not on this replica is kept.
+
+    The worker may still be running the turn, so the follow-up gets the
+    usual 429 and neither the lease nor the turn is touched.
+    """
+    lease_id = uuid.uuid4()
+    token, sid, stale = await _stale_leased_session(
+        client,
+        store,
+        "live-lease-elsewhere",
+        worker_id=uuid.uuid4(),
+        lease_id=lease_id,
+        lease_in=timedelta(minutes=5),
+    )
+    posted = await _follow_up(client, token, sid)
+    assert posted.status_code == 429
+    assert "Worker socket is on" in posted.text
+    async with store.session() as db:
+        row = await get_session_by_id(db, sid)
+    assert row is not None
+    assert row.lease_id == lease_id
+    assert (await _turn_statuses(client, token, sid))[str(stale)] == "in_progress"
 
 
 async def test_follow_up_on_live_lease_without_running_turn_is_bounded(
@@ -712,62 +766,72 @@ async def test_follow_up_on_live_lease_without_running_turn_is_bounded(
     """A live worker that holds the lease but runs no turn must not hang.
 
     The worker accepts `turn.cancel` yet has nothing to cancel, so it
-    emits no events. The follow-up waits a bounded grace, then drops the
-    lease, fails the stale turn and runs the new turn.
+    emits no events. The follow-up waits a bounded grace, then releases
+    the lease (API bookkeeping included), fails the stale turn and runs
+    the new turn.
     """
-    from datetime import timedelta
-
     from tests.support.split_worker import split_client_for
 
     from apipi.worker import execution as execution_module
+
+    monkeypatch.setattr(execution_module, "CANCEL_GRACE", timedelta(seconds=0.3))
+    async with split_client_for(settings, store, token=worker_secret) as (
+        app,
+        client,
+        _worker,
+    ):
+        (conn,) = app.state.workers._conns.values()
+        lease_id = uuid.uuid4()
+        token, sid, stale = await _stale_leased_session(
+            client,
+            store,
+            "live-lease-no-turn",
+            worker_id=conn.worker_id,
+            lease_id=lease_id,
+            lease_in=timedelta(minutes=5),
+        )
+        conn.leases.add(lease_id)
+        start = time.monotonic()
+        posted = await _follow_up(client, token, sid)
+        assert posted.status_code == 200
+        assert posted.json()["status"] == "idle"
+        assert time.monotonic() - start < 30
+        assert lease_id not in conn.leases
+        by_id = await _turn_statuses(client, token, sid)
+        assert by_id[str(stale)] == "failed"
+        assert "completed" in set(by_id.values())
+
+
+async def test_follow_up_after_worker_restart_releases_lease(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    """A reconnected worker that no longer holds the lease fails fast.
+
+    The worker socket is on this replica but `conn.leases` lacks the
+    lease, so the cancel is undelivered: the lease is orphaned and is
+    released without waiting for a grace period.
+    """
+    from tests.support.split_worker import split_client_for
 
     async with split_client_for(settings, store, token=worker_secret) as (
         app,
         client,
         _worker,
     ):
-        hub = app.state.workers
-        monkeypatch.setattr(execution_module, "CANCEL_GRACE", timedelta(seconds=0.3))
-        token = _token("live-lease-no-turn")
-        agent_id = await _create_agent(client, token)
-        created = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={"agent_id": agent_id, "environment": {"type": "none"}},
+        (conn,) = app.state.workers._conns.values()
+        token, sid, stale = await _stale_leased_session(
+            client,
+            store,
+            "restarted-worker",
+            worker_id=conn.worker_id,
+            lease_id=uuid.uuid4(),
+            lease_in=timedelta(minutes=5),
         )
-        assert created.status_code == 200
-        sid = uuid.UUID(created.json()["id"])
-        tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
-        (conn,) = hub._conns.values()
-        lease_id = uuid.uuid4()
-        async with store.session() as db:
-            await update_session(db, tenant_id, sid, changes={"status": "in_progress"})
-            stale = await create_turn(db, tenant_id, sid, status="in_progress")
-            await set_session_lease(
-                db,
-                tenant_id,
-                sid,
-                worker_id=conn.worker_id,
-                lease_id=lease_id,
-                lease_until=utc_now() + timedelta(minutes=5),
-            )
-        conn.leases.add(lease_id)
-        start = time.monotonic()
-        posted = await client.post(
-            f"/v1/agents/sessions/{sid}/events",
-            headers=_auth(token),
-            json={"type": "agent.session.input.message", "content": "hello"},
-        )
-        elapsed = time.monotonic() - start
+        posted = await _follow_up(client, token, sid)
         assert posted.status_code == 200
         assert posted.json()["status"] == "idle"
-        assert elapsed < 30
-        turns = await client.get(
-            f"/v1/agents/sessions/{sid}/turns", headers=_auth(token)
-        )
-        by_id = {row["id"]: row["status"] for row in turns.json()["data"]}
-        assert by_id[str(stale.id)] == "failed"
-        assert "completed" in set(by_id.values())
+        by_id = await _turn_statuses(client, token, sid)
+        assert by_id[str(stale)] == "failed"
 
 
 async def test_stream_create_ends_when_first_turn_fails(

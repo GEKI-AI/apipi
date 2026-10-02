@@ -37,7 +37,7 @@ requires the mode it asked for.
 | Path | Marker | What | GitHub |
 | --- | --- | --- | --- |
 | `tests/unit/` | none | Internals with mocks: config, store, isolation contract, microvm image packing, artifacts | yes |
-| `tests/api/` | none | Public HTTP vs [api.md](api.md). Every test runs the split path: API app plus an in-process worker (`split_client_for`) with FakeHarness. Tenant isolation. `test_compat.py` has one named test per yes row on the API page. `test_worker_accepts.py` is the worker accepts placement and `type=none` tool-policy matrix | yes |
+| `tests/api/` | none | Public HTTP vs [api.md](api.md). Tests that run turns use the split path: API app plus an in-process worker (`split_client_for`) with FakeHarness. API-only exceptions (no worker, or a dedicated worker setup) are listed in the PR that introduced them. Tenant isolation. `test_compat.py` has one named test per yes row on the API page. `test_worker_accepts.py` is the worker accepts placement and `type=none` tool-policy matrix | yes |
 | `tests/e2e/test_none_pi.py` | `e2e` | Real `apipi serve --api-only` and `apipi worker` subprocesses (`tests/support/procs.py`, ephemeral loopback port, tmp dirs) with a fake Pi in `none` mode | yes |
 | `tests/e2e/test_microvm_pi.py` | `e2e`, `microvm` | Same two-process shape with a microvm worker, inside a real Firecracker guest | no (skips without KVM) |
 | `tests/e2e/test_metrics_scrape.py` | `e2e` | `/metrics` scrape from the same two-process setup | yes |
