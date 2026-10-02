@@ -254,6 +254,22 @@ class Metrics:
             ["reason"],
             registry=self.registry,
         )
+        self.event_bus_reconnects = Counter(
+            "apipi_event_bus_listener_reconnects_total",
+            "Postgres LISTEN reconnects",
+            registry=self.registry,
+        )
+        self.pg_notification_queue_usage = Gauge(
+            "apipi_pg_notification_queue_usage",
+            "Postgres notification queue usage (0-1)",
+            registry=self.registry,
+        )
+        self.event_bus_wake_sse = Histogram(
+            "apipi_event_bus_wake_sse_seconds",
+            "Wake to SSE delivery latency in seconds",
+            registry=self.registry,
+            buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5),
+        )
 
     def observe_request(
         self,
@@ -388,6 +404,15 @@ class Metrics:
 
     def observe_pi_kill(self, reason: str) -> None:
         self.pi_kill.labels(reason=reason).inc()
+
+    def observe_event_bus_reconnect(self) -> None:
+        self.event_bus_reconnects.inc()
+
+    def observe_wake_sse(self, seconds: float) -> None:
+        self.event_bus_wake_sse.observe(max(seconds, 0.0))
+
+    def set_pg_notification_queue_usage(self, value: float) -> None:
+        self.pg_notification_queue_usage.set(value)
 
     def scrape(self) -> bytes:
         return generate_latest(self.registry)

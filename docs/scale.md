@@ -4,12 +4,13 @@ How you load-balance depends on whether Pi lives in the API process.
 
 With `apipi serve --api-only` and `apipi worker`, a session is owned by
 a **worker lease**. API replicas are interchangeable for create,
-follow-up REST, and SSE. SSE also polls the store. You do not need
-sticky routing for live Pi.
+follow-up REST, and SSE. Stored events fan out over the event bus,
+so an SSE client on any replica sees commits from any other replica.
+You do not need sticky routing for live Pi.
 
-Combined `apipi serve` (no `--api-only`) still owns live Pi, local
-`openai_hosted` directories, and in-memory SSE in that process.
-Follow-up must return to that node, or the next turn has no Pi.
+Combined `apipi serve` (no `--api-only`) still owns live Pi and local
+`openai_hosted` directories in that process. Follow-up must return
+to that node, or the next turn has no Pi.
 
 Scale by adding processes (systemd units or API containers), not
 uvicorn workers inside one process. The Pi pool lives in one process.
@@ -68,10 +69,30 @@ For **API-only plus workers**, hash is optional. Any replica can
 stream SSE and accept the next message. Reconnect with `after_seq` to
 replay from the store.
 
-For **combined serve**, follow-up REST and SSE must return to the node
-that owns Pi. Hash that path segment.
+For **combined serve on Postgres**, SSE works on any replica through
+the shared event bus, but follow-up REST must still return to the
+node that owns Pi. Hash that path segment. On SQLite the bus is
+process-local, so SSE needs the same stickiness as follow-up.
 
 There is no runner WebSocket. `self_hosted` is currently not supported (see [environments](environments.md)).
+
+## Event fan-out
+
+Session events fan out over the event bus. After the API commits
+stored events, it publishes a wake with the session id and sequence
+number. SSE streams wait for wakes instead of polling the store, and
+then read everything after their last sequence number. A wake that is
+lost (for example while the listener reconnects) is covered by a
+fallback poll (`APIPI_EVENT_BUS_FALLBACK_POLL`, default `3s`), so an
+idle stream queries the store no more often than that interval.
+
+On Postgres the bus uses `LISTEN`/`NOTIFY` on the `apipi_events`
+channel, with one dedicated `LISTEN` connection per API replica. On
+SQLite the bus stays in memory, which is why SQLite replicas cannot
+share SSE. Live `output_text.delta` batches are coalesced over about
+40ms and travel inside `NOTIFY` payloads under the 8000-byte limit;
+they are never stored. See [config](config.md) for the settings and
+[observability](observability.md) for the bus metrics.
 
 ## nginx
 

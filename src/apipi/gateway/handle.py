@@ -36,10 +36,11 @@ from apipi.gateway.middleware import InstanceMiddleware, MaxBodyMiddleware
 from apipi.gateway.otel import Tracing
 from apipi.gateway.request_id import RequestIdMiddleware
 from apipi.services.agents import AgentService
+from apipi.services.event_bus import EventBus, create_event_bus
 from apipi.services.files import FileService
 from apipi.services.models import ModelsService
 from apipi.services.payload_export import load_payload_sinks
-from apipi.services.runtime import EventHub, FakeHarness
+from apipi.services.runtime import FakeHarness
 from apipi.services.sessions import SessionService
 from apipi.services.skill_store import SkillService
 from apipi.services.templates import TemplateService
@@ -96,7 +97,7 @@ class Gateway:
         settings: Settings,
         store: Store,
         store_owned: bool,
-        event_hub: EventHub,
+        event_hub: EventBus,
         execution: LocalExecution | RemoteExecution,
         workers: WorkerHub,
         authenticate: Authenticate,
@@ -135,6 +136,7 @@ class Gateway:
             files=self.files,
             skill_store=self.skill_store,
             tracing=tracing,
+            metrics=metrics,
         )
         self.agents = AgentService(store, settings)
         self.templates = TemplateService(
@@ -197,7 +199,7 @@ class Gateway:
         *,
         authenticate: Authenticate | None = None,
         authorize: Authorize | None = None,
-        event_hub: EventHub | None = None,
+        event_hub: EventBus | None = None,
         execution: LocalExecution | RemoteExecution | None = None,
         workers: WorkerHub | None = None,
     ) -> "Gateway":
@@ -216,12 +218,18 @@ class Gateway:
         resolved_pool = pool if pool is not None else PiPool(resolved)
         isolation = load_isolation(resolved.run_mode)
         resolved_harness = harness if harness is not None else PiHarness(resolved_pool)
-        hub = event_hub if event_hub is not None else EventHub()
         resolved_objects = objects if objects is not None else object_store(resolved)
         resolved_blobs = (
             blobs if blobs is not None else ArtifactAdapter(resolved_objects)
         )
         resolved_metrics = Metrics() if resolved.metrics else None
+        hub = (
+            event_hub
+            if event_hub is not None
+            else create_event_bus(
+                resolved, store=resolved_store, metrics=resolved_metrics
+            )
+        )
         if tracing is not None:
             resolved_tracing = tracing
         elif resolved.otel_endpoint:
@@ -336,6 +344,7 @@ class Gateway:
         if vault_master_key_unset(self.settings.vault_master_key):
             log.warning(VAULT_MASTER_KEY_UNSET)
         self.execution.attach_store(self.store)
+        await self.event_hub.start()
         emitter = getattr(self.pool, "lifecycle", None)
         if emitter is not None:
             emitter.start()
@@ -355,6 +364,7 @@ class Gateway:
         self._tasks = []
         await self.execution.close()
         await self.sessions.cancel_turns()
+        await self.event_hub.close()
         if isinstance(self.tracing, Tracing):
             self.tracing.shutdown()
         if self._store_owned:
@@ -377,7 +387,7 @@ def create_app(
     *,
     authenticate: Authenticate | None = None,
     authorize: Authorize | None = None,
-    event_hub: EventHub | None = None,
+    event_hub: EventBus | None = None,
     execution: LocalExecution | RemoteExecution | None = None,
     workers: WorkerHub | None = None,
 ) -> FastAPI:

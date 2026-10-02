@@ -15,7 +15,7 @@ from apipi.gateway.auth import check_authorize, require_tenant
 from apipi.gateway.request_id import request_id_of
 from apipi.gateway.schemas import StrictModel
 from apipi.services.agents import AgentWrite
-from apipi.services.runtime import EventHub
+from apipi.services.event_bus import EventBus
 from apipi.services.sessions import SessionService, iter_session_events
 from apipi.store.disposition import content_disposition
 from apipi.store.engine import Store
@@ -186,13 +186,23 @@ def _sse(event: dict[str, Any]) -> str:
 
 async def _event_stream(
     store: Store,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     after_seq: int | None,
+    *,
+    fallback_poll: Any | None = None,
+    metrics: Any | None = None,
 ) -> AsyncGenerator[str]:
     async for item in iter_session_events(
-        store, hub, tenant_id, session_id, after_seq, ping=True
+        store,
+        hub,
+        tenant_id,
+        session_id,
+        after_seq,
+        ping=True,
+        fallback_poll=fallback_poll,
+        metrics=metrics,
     ):
         if item is None:
             yield SSE_PING
@@ -202,13 +212,24 @@ async def _event_stream(
 
 def _sse_response(
     store: Store,
-    hub: EventHub,
+    hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     after_seq: int | None,
+    *,
+    fallback_poll: Any | None = None,
+    metrics: Any | None = None,
 ) -> StreamingResponse:
     return StreamingResponse(
-        _event_stream(store, hub, tenant_id, session_id, after_seq),
+        _event_stream(
+            store,
+            hub,
+            tenant_id,
+            session_id,
+            after_seq,
+            fallback_poll=fallback_poll,
+            metrics=metrics,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
@@ -259,6 +280,8 @@ async def create_agent_session(
             tenant.id,
             uuid.UUID(payload["id"]),
             None,
+            fallback_poll=request.app.state.settings.event_bus_fallback_poll,
+            metrics=request.app.state.metrics,
         )
     return payload
 
@@ -376,7 +399,13 @@ async def get_session_events(
         )
     await sessions.get(tenant.id, session_id, user_id=_user_id(request))
     return _sse_response(
-        sessions.store, sessions.event_hub, tenant.id, session_id, after_seq
+        sessions.store,
+        sessions.event_hub,
+        tenant.id,
+        session_id,
+        after_seq,
+        fallback_poll=request.app.state.settings.event_bus_fallback_poll,
+        metrics=request.app.state.metrics,
     )
 
 

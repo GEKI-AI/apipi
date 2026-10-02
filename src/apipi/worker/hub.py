@@ -28,6 +28,7 @@ from apipi.gateway.otel import (
     detach_traceparent,
     start_span,
 )
+from apipi.services.event_bus import EventBus
 from apipi.services.failures import (
     failure_for,
     log_extra,
@@ -37,7 +38,6 @@ from apipi.services.failures import (
 )
 from apipi.services.runtime import (
     PUBLIC_EVENT_TYPES,
-    EventHub,
     fail_session,
     persist_event,
 )
@@ -387,7 +387,7 @@ class WorkerHub:
                 conn.lease_mem.pop(lease_id, None)
         self._observe()
 
-    async def expire(self, store: Store, hub: EventHub) -> list[uuid.UUID]:
+    async def expire(self, store: Store, hub: EventBus) -> list[uuid.UUID]:
         expired: list[uuid.UUID] = []
         async with store.session() as db:
             rows = await list_expired_leases(db, utc_now())
@@ -466,7 +466,7 @@ class WorkerHub:
     async def handle_event(
         self,
         store: Store,
-        hub: EventHub,
+        hub: EventBus,
         *,
         lease_id: uuid.UUID,
         event_type: str,

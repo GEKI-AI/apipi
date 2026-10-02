@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,21 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from apipi.config import is_sqlite_url, store_url
+
+log = logging.getLogger("apipi")
+
+
+def after_commit(
+    session: AsyncSession, callback: Callable[[], Awaitable[None]]
+) -> None:
+    """Run ``callback`` after the surrounding ``Store.session`` commits.
+
+    Event wakes are published here so a ``NOTIFY`` is never sent before
+    the storing commit. A failed commit drops the callbacks.
+    """
+    info = session.sync_session.info
+    callbacks = info.setdefault("apipi_after_commit", [])
+    callbacks.append(callback)
 
 
 def _ensure_sqlite_dir(url: str) -> None:
@@ -63,6 +79,14 @@ class Store:
             except Exception:
                 await session.rollback()
                 raise
+            callbacks: list[Callable[[], Awaitable[None]]] = (
+                session.sync_session.info.pop("apipi_after_commit", [])
+            )
+        for callback in callbacks:
+            try:
+                await callback()
+            except Exception:
+                log.warning("after-commit callback failed", exc_info=True)
 
     async def dispose(self) -> None:
         await self.engine.dispose()
