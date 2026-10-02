@@ -212,3 +212,30 @@ async def test_sandbox_seen_touches_only_owned(
     assert before is not None and after is not None
     assert after > before
     await worker.close()
+
+
+async def test_inventory_unleased_gets_ttl_or_revoke(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    worker = FakeWorker(app, worker_secret)
+    hello = await worker.connect()
+    assert hello.get("ok") is True
+    worker_id = uuid.UUID(str(hello["worker_id"]))
+    _tenant, session_id, _lease = await _hosted_lease(store, worker_id)
+    ghost = uuid.uuid4()
+    await worker.send_json(
+        {
+            "type": "inventory",
+            "sessions": [
+                {"session_id": str(session_id), "last_seq": 0},
+                {"session_id": str(ghost), "last_seq": 0},
+            ],
+        }
+    )
+    reply = await _reply(worker)
+    assert reply["ttl"][str(session_id)]["env_type"] == "openai_hosted"
+    assert reply["revoke"] == [
+        {"type": "lease.revoke", "session_id": str(ghost)},
+    ]
+    await worker.close()

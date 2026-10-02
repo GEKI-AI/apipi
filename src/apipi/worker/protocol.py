@@ -442,10 +442,15 @@ class LeaseRevoke(WireModel):
 
 
 class InventoryEntry(WireModel):
-    """One session the worker believes it holds."""
+    """One session the worker reports.
+
+    A missing `lease_id` reports an on-disk workspace the worker holds
+    no lease for: the API answers with a reaper TTL while the session
+    is leased and a revoke (which wipes the dir) once it is free.
+    """
 
     session_id: uuid.UUID
-    lease_id: uuid.UUID
+    lease_id: uuid.UUID | None = None
     last_seq: int = Field(default=0, ge=0)
 
 

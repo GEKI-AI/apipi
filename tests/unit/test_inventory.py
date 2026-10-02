@@ -198,3 +198,97 @@ async def test_owned_sessions_filters_other_workers(store: Store, settings) -> N
     conn.leases.add(lease_id)
     owned = await hub.owned_sessions(store, conn, [session_id, other_session])
     assert owned == [session_id]
+
+
+async def test_reconcile_spares_orphan_with_command_in_flight(
+    store: Store, settings
+) -> None:
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, lease_id = await _leased(store, worker_id)
+    hub = _hub(settings)
+    bus = create_event_bus(settings, store=store)
+    hub._unacked[lease_id] = {"id": str(uuid.uuid4()), "op": "turn.start"}
+    try:
+        revoke, _ttl = await hub.reconcile_inventory(store, bus, worker_id, {})
+        assert revoke == []
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            assert row is not None
+            assert row.lease_id == lease_id
+            events = await list_events(db, tenant_id, session_id)
+        assert all(event.type != "agent.session.error" for event in events)
+        hub._unacked.pop(lease_id, None)
+        revoke, _ttl = await hub.reconcile_inventory(store, bus, worker_id, {})
+        assert revoke == []
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            assert row is not None
+            assert row.lease_id is None
+            events = await list_events(db, tenant_id, session_id)
+        assert events[-1].type == "agent.session.error"
+    finally:
+        await bus.close()
+
+
+async def test_takeover_renews_only_claimed_leases(store: Store, settings) -> None:
+    from apipi.worker.hub import WorkerConnection
+
+    worker_id = uuid.uuid4()
+    tenant_a, first_id, first_lease = await _leased(store, worker_id)
+    tenant_b, second_id, _second_lease = await _leased(store, worker_id)
+    async with store.session() as db:
+        stale = await get_session(db, tenant_b, second_id)
+        assert stale is not None
+        stale.lease_until = utc_now() - timedelta(seconds=5)
+        await db.flush()
+    hub = _hub(settings)
+    conn = WorkerConnection(
+        worker_id=worker_id,
+        generation=1,
+        websocket=MagicMock(),
+        capacity=4,
+        memory_mb=8192,
+        run_mode="none",
+    )
+    claimed = [
+        {"session_id": first_id, "lease_id": first_lease, "last_seq": 0},
+    ]
+    sessions = await hub.restore_leases(conn, store, claimed)
+    assert set(sessions) == {first_id}
+    assert first_lease in conn.leases
+    async with store.session() as db:
+        first = await get_session(db, tenant_a, first_id)
+        second = await get_session(db, tenant_b, second_id)
+        assert first is not None and second is not None
+        assert first.lease_until is not None and second.lease_until is not None
+        # Only the claimed lease moved: the unclaimed row keeps its stale
+        # cursor instead of being renewed with it.
+        assert first.lease_until > second.lease_until
+
+
+async def test_reconcile_unleased_gets_ttl_while_leased(store: Store, settings) -> None:
+    worker_id = uuid.uuid4()
+    _tenant, session_id, _lease = await _leased(store, worker_id)
+    hub = _hub(settings)
+    bus = create_event_bus(settings, store=store)
+    try:
+        revoke, ttl = await hub.reconcile_inventory(
+            store, bus, worker_id, {}, [session_id]
+        )
+        assert revoke == []
+        assert str(session_id) in ttl
+    finally:
+        await bus.close()
+
+
+async def test_reconcile_unleased_unknown_is_revoked(store: Store, settings) -> None:
+    worker_id = uuid.uuid4()
+    hub = _hub(settings)
+    bus = create_event_bus(settings, store=store)
+    ghost = uuid.uuid4()
+    try:
+        revoke, ttl = await hub.reconcile_inventory(store, bus, worker_id, {}, [ghost])
+        assert revoke == [{"session_id": str(ghost)}]
+        assert ttl == {}
+    finally:
+        await bus.close()
