@@ -135,3 +135,14 @@ async def test_terminate_process_group_kills_grandchild() -> None:
         if grandchild and _pid_running(grandchild):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(grandchild, signal.SIGKILL)
+
+
+def test_provider_flag_always_comes_with_a_model() -> None:
+    from apipi.config import Settings
+    from apipi.worker.pi.proc import pi_command_args
+
+    settings = Settings(database_url="sqlite+aiosqlite:///x.db", run_mode="none")
+    without = pi_command_args(settings, tools=True)
+    assert "--provider" not in without and "--model" not in without
+    with_model = pi_command_args(settings, tools=True, model="m")
+    assert with_model.count("--provider") == 1 and with_model.count("--model") == 1

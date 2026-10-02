@@ -26,7 +26,7 @@ It only says what is different. Alpine is not supported.
 `PINNED_PI` is an environment override of the shared script, not a
 recipe field. The Debian digest, Node pin, uv pin, agent-browser pin,
 and Chrome pin are read from `src/apipi/worker/pi/version.py`. They
-are not recipe fields. The gateway pins Pi 0.99.1. All guest images
+are not recipe fields. The gateway pins Pi 1.0.0. All guest images
 are rebuilt with that Pi as a new store version; operators must mirror
 and pull again.
 

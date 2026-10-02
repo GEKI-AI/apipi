@@ -8,6 +8,7 @@ from pydantic_core import PydanticCustomError
 from apipi.config import Settings
 from apipi.env.spec import EnvironmentSpec
 from apipi.gateway.auth import not_found
+from apipi.gateway.errors import ApiError
 from apipi.gateway.schemas import StrictModel
 from apipi.services.env_none import (
     is_env_none,
@@ -54,6 +55,28 @@ from apipi.worker.pi.settings_json import (
 _UNIMPLEMENTED = ("multi_agent", "tool_search", "programmatic_tool_calling")
 
 _SERVER_LABEL = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def reject_colliding_mcp_labels(tools: object) -> None:
+    if not isinstance(tools, list):
+        return
+    seen: dict[str, str] = {}
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "mcp":
+            continue
+        label = tool.get("server_label")
+        if not isinstance(label, str):
+            continue
+        key = label.replace("-", "_")
+        first = seen.setdefault(key, label)
+        if first != label:
+            raise ApiError(
+                "invalid_request",
+                f"MCP server labels {first!r} and {label!r} differ only in '-' "
+                "and '_'. Pi treats them as the same name. Use distinct labels.",
+                code="mcp_label_collision",
+                status_code=400,
+            )
 
 
 def _defaults_environment(defaults: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -404,6 +427,7 @@ class AgentService:
         if is_env_none(_defaults_environment(payload.get("session_defaults"))):
             reject_tools_for_env_none(payload.get("tools"))
             reject_builtin_tools_for_env_none(payload.get("metadata"), None)
+        reject_colliding_mcp_labels(payload.get("tools"))
         await require_search(
             self.search,
             payload.get("tools"),
@@ -531,6 +555,7 @@ class AgentService:
                 reject_tools_for_env_none(tools if isinstance(tools, list) else None)
                 reject_builtin_tools_for_env_none(stored, None)
             if "tools" in payload:
+                reject_colliding_mcp_labels(payload["tools"])
                 await require_search(
                     self.search,
                     payload["tools"],

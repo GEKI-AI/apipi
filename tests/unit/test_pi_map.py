@@ -13,7 +13,7 @@ from apipi.worker.pi.version import PINNED_PI
 
 
 def test_pinned_pi() -> None:
-    assert PINNED_PI == "0.99.1"
+    assert PINNED_PI == "1.0.0"
 
 
 def test_text_delta_is_public() -> None:

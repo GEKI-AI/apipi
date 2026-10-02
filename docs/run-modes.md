@@ -48,7 +48,7 @@ microVM inside a container is a lab setup. For local development,
 ## What to install
 
 Every mode needs Python 3.13, [uv](https://docs.astral.sh/uv/),
-the store, the Pi CLI (`pi --mode rpc`) on `PATH` at version 0.99.1, and
+the store, the Pi CLI (`pi --mode rpc`) on `PATH` at version 1.0.0, and
 `OPENAI_BASE_URL`. `apipi worker` exits if those are missing. See
 [install](install.md). The extra OS packages differ by mode.
 

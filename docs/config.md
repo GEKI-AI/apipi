@@ -389,7 +389,7 @@ Firecracker.
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
 | `APIPI_PI_COMMAND` | `[pi].command` | `pi` | Pi binary used as `pi --mode rpc`. |
-| `APIPI_PI_AUTO_COMPACT` | `[pi].auto_compact` | on | When off, ApiPi writes `compaction.enabled` false in Pi `settings.json`. Pi 0.99.1 does not accept `--no-auto-compact`, so that flag is not passed. |
+| `APIPI_PI_AUTO_COMPACT` | `[pi].auto_compact` | on | When off, ApiPi writes `compaction.enabled` false in Pi `settings.json`. Pi 1.0.0 does not accept `--no-auto-compact`, so that flag is not passed. |
 | `APIPI_PI_COMPACTION_RESERVE_TOKENS` | `[pi].compaction_reserve_tokens` | unset (Pi default 16384) | `compaction.reserveTokens` in Pi `settings.json`. Tokens reserved for the model reply. Unset leaves Pi's default. |
 | `APIPI_PI_COMPACTION_KEEP_RECENT_TOKENS` | `[pi].compaction_keep_recent_tokens` | unset (Pi default 20000) | `compaction.keepRecentTokens` in Pi `settings.json`. Recent tokens kept out of the summary. Unset leaves Pi's default. |
 | `APIPI_PI_THINKING` | `[pi].thinking` | `off` | Process default thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. A session or agent may override it. |
@@ -479,7 +479,7 @@ count. The full thinking text is not a public event. See
 
 Compaction and the system prompt are written into the session Pi agent
 directory before Pi starts (`settings.json` and, when set, `SYSTEM.md`).
-That directory is `PI_CODING_AGENT_DIR`. Pi 0.99.1 reads global settings
+That directory is `PI_CODING_AGENT_DIR`. Pi 1.0.0 reads global settings
 and `SYSTEM.md` from there. Project `.pi/settings.json` and
 `.pi/SYSTEM.md` are not used, because RPC does not trust the workspace.
 `compaction.enabled` follows `[pi].auto_compact`. Thresholds are written
@@ -492,7 +492,8 @@ defaults. `retry.enabled`, `retry.maxRetries`, `retry.baseDelayMs`,
 `APIPI_MODEL_*` settings. They are process-wide. There is no per-agent
 override in this version.
 
-Pi 0.99.1 has no session-level backoff cap, so
+Pi 1.0.0 caps agent-level backoff at `retry.maxAgentDelayMs` (60000 by
+default), which ApiPi does not set, so
 `APIPI_MODEL_BACKOFF_MAX_MS` limits the effective `retry.maxRetries`
 instead. It also has no status-based selection at that layer: retry
 matching is text. A `400` whose body mentions `timeout` or `502` can
@@ -598,7 +599,7 @@ Use `[pi.prompts]` instead. `APIPI_PLATFORM_PROMPT`,
 
 ### Context files
 
-Pi 0.99.1 also loads context files into the prompt. This is a supported
+Pi 1.0.0 also loads context files into the prompt. This is a supported
 way to add instructions for one session. ApiPi does not write these
 files. A template, the caller, or the agent does.
 

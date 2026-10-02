@@ -38,7 +38,7 @@ from apipi.worker.pi.version import PINNED_PI
 
 
 def test_fixtures_match_pinned_pi() -> None:
-    assert FIXTURE_PI == PINNED_PI == "0.99.1"
+    assert FIXTURE_PI == PINNED_PI == "1.0.0"
 
 
 @pytest.mark.parametrize(
@@ -79,6 +79,8 @@ def test_fixtures_match_pinned_pi() -> None:
             None,
             False,
         ),
+        ("Prompt too long", "context_length_exceeded", None, False),
+        ("Prompt exceeds max length", "context_length_exceeded", None, False),
         (
             '400: {"error":{"code":"context_length_exceeded"}}',
             "context_length_exceeded",
