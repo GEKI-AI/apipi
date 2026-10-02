@@ -3,10 +3,9 @@ import uuid
 from collections.abc import AsyncIterator
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import FAKE_USAGE, FakeHarness
 from apipi.store.engine import Store
@@ -122,12 +121,16 @@ def mcp_log_harness() -> FakeHarness:
 
 @pytest.fixture
 async def mcp_log_client(
-    settings: Settings, store: Store, mcp_log_harness: FakeHarness
+    settings: Settings,
+    store: Store,
+    mcp_log_harness: FakeHarness,
+    worker_secret: str,
 ) -> AsyncIterator[AsyncClient]:
-    app = create_app(settings, store=store, harness=mcp_log_harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    from tests.support.split_worker import split_client_for
+
+    async with split_client_for(
+        settings, store, harness=mcp_log_harness, token=worker_secret
+    ) as (_app, client, _worker):
         yield client
 
 

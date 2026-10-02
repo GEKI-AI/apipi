@@ -449,6 +449,13 @@ async def test_remote_wait_returns_on_bus_wake(
                 type="agent.session.turn.completed",
                 data={"status": "completed"},
             )
+            await persist_event(
+                db,
+                bus,
+                tenant_id,
+                session_id,
+                type="agent.session.idle",
+            )
         await asyncio.wait_for(waiter, timeout=5)
     finally:
         if not waiter.done():
@@ -481,6 +488,9 @@ async def test_remote_wait_ignores_live_and_returns_on_terminal(
         async with store.session() as db:
             await persist_event(
                 db, bus, tenant_id, session_id, type="agent.session.turn.failed"
+            )
+            await persist_event(
+                db, bus, tenant_id, session_id, type="agent.session.idle"
             )
         await asyncio.wait_for(waiter, timeout=5)
     finally:

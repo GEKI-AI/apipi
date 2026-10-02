@@ -1,20 +1,17 @@
-import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
+from tests.support.procs import split_http_client
 from tests.support.prom import metric_line
 
-from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 
 pytestmark = pytest.mark.e2e
 
-_FAKE_PI = Path(__file__).resolve().parents[1] / "support" / "fake_pi.py"
 _MAPPED_PI_USAGE = {
     "prompt_tokens": 5,
     "completion_tokens": 8,
@@ -29,24 +26,11 @@ def _auth(token: str) -> dict[str, str]:
 
 
 @pytest.fixture
-def metrics_host_settings(tmp_path: Path) -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-        pi_command=f"{sys.executable} {_FAKE_PI}",
-        sessions_dir=str(tmp_path / "sessions"),
-        metrics=True,
-    )
-
-
-@pytest.fixture
 async def metrics_host_client(
-    metrics_host_settings: Settings, store: Store
+    store: Store, tmp_path: Path
 ) -> AsyncIterator[AsyncClient]:
-    app = create_app(metrics_host_settings, store=store)
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
+    async with split_http_client(
+        store, tmp_path, api_env={"APIPI_METRICS": "1"}
     ) as client:
         yield client
 
@@ -68,7 +52,7 @@ async def test_scrape_after_host_turn(metrics_host_client: AsyncClient) -> None:
             "input": "hello-host",
         },
     )
-    assert created.status_code == 200
+    assert created.status_code == 200, created.text
     session_id = created.json()["id"]
     denied = await metrics_host_client.get("/v1/agents")
     assert denied.status_code == 401

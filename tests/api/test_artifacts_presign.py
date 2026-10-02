@@ -8,11 +8,11 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.repo import list_artifacts
 from apipi.worker.hub import answer_store_check
@@ -54,7 +54,7 @@ async def _session(client: AsyncClient, token: str) -> tuple[uuid.UUID, uuid.UUI
 async def test_presign_reply_over_socket(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -125,7 +125,7 @@ async def test_presign_reply_over_socket(
 async def test_wrong_store_proof_closes_socket(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

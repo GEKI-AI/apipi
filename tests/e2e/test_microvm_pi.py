@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import subprocess
@@ -7,11 +8,10 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
+from tests.support.procs import split_http_client
 
 from apipi.config import ConfigError, Settings
-from apipi.gateway import create_app
 from apipi.store.engine import Store
 from apipi.worker.pi.microvm import microvm_images, require_microvm
 from apipi.worker.pi.probe import probe_run_mode
@@ -78,16 +78,25 @@ def microvm_settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
-def microvm_app(microvm_settings: Settings, store: Store) -> FastAPI:
-    return create_app(microvm_settings, store=store)
-
-
-@pytest.fixture
-async def microvm_client(microvm_app: FastAPI) -> AsyncIterator[AsyncClient]:
-    async with AsyncClient(
-        transport=ASGITransport(app=microvm_app),
-        base_url="http://test",
-        timeout=60,
+async def microvm_client(
+    microvm_settings: Settings, store: Store, tmp_path: Path
+) -> AsyncIterator[AsyncClient]:
+    """Real `apipi serve --api-only` + microvm `apipi worker` processes."""
+    env = {
+        "APIPI_RUN_MODE": "microvm",
+        "APIPI_MICROVM_KERNEL": microvm_settings.microvm_kernel or "",
+        "APIPI_MICROVM_ROOTFS": microvm_settings.microvm_rootfs or "",
+        # Short hosted TTL: the worker reaps the guest by itself, since
+        # the test cannot reach into the worker's pool.
+        "APIPI_SANDBOX_TTL_OPENAI_HOSTED": "2s",
+    }
+    async with split_http_client(
+        store,
+        tmp_path,
+        env=env,
+        worker_env={"APIPI_SESSIONS_DIR": str(microvm_settings.sessions_dir)},
+        timeout=90,
+        http_timeout=60,
     ) as client:
         yield client
 
@@ -142,7 +151,7 @@ def test_prepare_serve_boots_throwaway_guest(microvm_settings: Settings) -> None
 
 @pytest.mark.slow
 async def test_microvm_workspace_persists_after_guest_stop(
-    microvm_client: AsyncClient, microvm_app: FastAPI, microvm_settings: Settings
+    microvm_client: AsyncClient, microvm_settings: Settings
 ) -> None:
     token = "e2e-microvm-persist"
     created_agent = await microvm_client.post(
@@ -167,7 +176,7 @@ async def test_microvm_workspace_persists_after_guest_stop(
         json={"type": "agent.session.input.message", "content": "persist-me"},
     )
     assert turned.status_code == 200
-    await microvm_app.state.pi_pool.kill(session_id)
+    await asyncio.sleep(6)  # worker reaps the guest after the 2s TTL
     assert not (directory / "keep.txt").exists()
     shutil.copy(_FAKE_PI, directory / "fake_pi.py")
     again = await microvm_client.post(

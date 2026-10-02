@@ -1,27 +1,14 @@
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
-from apipi.config import Settings
-from apipi.gateway import create_app
-from apipi.services.runtime import FakeHarness
-from apipi.store.engine import Store
+from httpx import AsyncClient
 
 pytestmark = pytest.mark.slow
 
 
-@pytest.fixture
-async def sdk_http(settings: Settings, store: Store) -> AsyncIterator[AsyncClient]:
-    app = create_app(settings, store=store, harness=FakeHarness())
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        yield client
-
-
-async def test_openai_sdk_subset(sdk_http: AsyncClient) -> None:
+async def test_openai_sdk_subset(client: AsyncClient) -> None:
+    # `client` is the split-mode fixture: API app plus an in-process worker.
+    sdk_http = client
     openai = pytest.importorskip("openai")
     async_openai = getattr(openai, "AsyncOpenAI", None)
     if async_openai is None:

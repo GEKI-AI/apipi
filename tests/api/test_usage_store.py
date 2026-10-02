@@ -4,13 +4,12 @@ from collections.abc import AsyncIterator
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from tests.support import fake_sink
+from tests.support.split_worker import split_client_for
 
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import get_turn_log, list_turn_logs, usage_day
@@ -58,23 +57,25 @@ def export_settings(settings: Settings) -> Settings:
 
 @pytest.fixture
 async def off_client(
-    off_settings: Settings, store: Store
+    off_settings: Settings, store: Store, worker_secret: str
 ) -> AsyncIterator[AsyncClient]:
-    app = create_app(off_settings, store=store, harness=FakeHarness())
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(off_settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
         yield client
 
 
 @pytest.fixture
 async def rollup_client(
-    rollup_settings: Settings, store: Store
+    rollup_settings: Settings, store: Store, worker_secret: str
 ) -> AsyncIterator[AsyncClient]:
-    app = create_app(rollup_settings, store=store, harness=FakeHarness())
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(rollup_settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
         yield client
 
 
@@ -130,7 +131,10 @@ async def test_usage_store_rollups_skips_turn_rows(
 
 
 async def test_usage_export_receives_event(
-    export_settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+    export_settings: Settings,
+    store: Store,
+    worker_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[dict[str, object]] = []
 
@@ -143,11 +147,12 @@ async def test_usage_export_receives_event(
         captured.append(event)
 
     monkeypatch.setattr("apipi.services.runtime.export_usage", capture)
-    app = create_app(export_settings, store=store, harness=FakeHarness())
     token = "export"
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(export_settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
         session_id = await _session_with_turn(client, token)
     assert len(captured) == 1
     event = captured[0]
@@ -160,17 +165,21 @@ async def test_usage_export_receives_event(
 
 
 async def test_usage_export_failure_does_not_break_turn(
-    export_settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+    export_settings: Settings,
+    store: Store,
+    worker_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("export down")
 
     monkeypatch.setattr("apipi.services.runtime.export_usage", boom)
-    app = create_app(export_settings, store=store, harness=FakeHarness())
     token = "export-fail"
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(export_settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
         created = await client.post(
             "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
         )
@@ -188,7 +197,7 @@ async def test_usage_export_failure_does_not_break_turn(
 
 
 async def test_usage_event_includes_plugin_user_id(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     fake_sink.reset()
 
@@ -200,15 +209,12 @@ async def test_usage_event_includes_plugin_user_id(
             "user_id": "user-9",
         }
 
-    app = create_app(
+    async with split_client_for(
         settings.model_copy(update={"usage_sinks": "tests.support.fake_sink:FakeSink"}),
-        store=store,
-        harness=FakeHarness(),
+        store,
+        token=worker_secret,
         authenticate=auth,
-    )
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    ) as (_app, client, _worker):
         agent = await client.post(
             "/v1/agents", headers=_auth("t"), json={"name": "bot", "model": "test"}
         )

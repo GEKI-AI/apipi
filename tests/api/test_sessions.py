@@ -1,32 +1,34 @@
 import asyncio
 import json
 import logging
+import time
 import uuid
+from datetime import timedelta
+from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import select
 from tests.support.workspace import hosted_dir
 
 from apipi.api.sessions import _event_stream
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.gateway.errors import ApiError
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import (
     PUBLIC_EVENT_TYPES,
     EventHub,
-    FakeHarness,
     persist_event,
 )
 from apipi.store.engine import Store
 from apipi.store.events import list_events
-from apipi.store.models import SessionRow
+from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import (
     create_session,
     create_tenant,
     create_turn,
     get_session_by_id,
+    set_session_lease,
     update_session,
 )
 
@@ -472,12 +474,35 @@ async def test_thinking_events_are_stored_and_replayed(store: Store) -> None:
     assert "full secret thinking" not in json.dumps(streamed)
 
 
-async def test_turn_publishes_live_delta(settings: Settings, store: Store) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
-    hub: EventHub = app.state.event_hub
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+async def test_turn_publishes_live_delta(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    from tests.support.split_worker import split_client_for
+
+    from apipi.services.runtime import FakeHarness as _FakeHarness
+    from apipi.services.runtime import usage_from as _usage_from
+
+    class _StreamingHarness(_FakeHarness):
+        """Yield the reply in spaced chunks so live deltas beat `done`.
+
+        In split mode the API drops a delta that arrives after the
+        turn committed its final text; a single-delta turn always loses
+        that race (relay flush vs outbox pump), so live-delta coverage
+        needs spaced chunks like a real streaming model.
+        """
+
+        async def generate(self, text: str, **kwargs: object):  # type: ignore[override]
+            reply = self.complete(text)
+            yield ("agent.session.turn.output_text.delta", {"delta": reply[:2]})
+            await asyncio.sleep(0.05)
+            yield ("agent.session.turn.output_text.delta", {"delta": reply[2:]})
+            yield ("agent.session.turn.output_text.done", {"text": reply})
+            yield ("usage", _usage_from(self.usage))
+
+    async with split_client_for(
+        settings, store, harness=_StreamingHarness(), token=worker_secret
+    ) as (app, client, _worker):
+        hub: EventHub = app.state.event_hub
         token = _token()
         agent_id = await _create_agent(client, token)
         created = await client.post(
@@ -629,24 +654,207 @@ async def test_follow_up_on_stale_in_progress_starts_turn(
     assert "failed" in statuses
 
 
-async def test_stream_create_ends_when_first_turn_fails(
-    settings: Settings, store: Store
-) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
-
-    async def fail_turn(*_args: object, **_kwargs: object) -> None:
-        raise ApiError(
-            "invalid_request",
-            "Too many live sessions",
-            code="capacity",
-            status_code=429,
+async def _stale_leased_session(
+    client: AsyncClient,
+    store: Store,
+    name: str,
+    *,
+    worker_id: uuid.UUID,
+    lease_id: uuid.UUID,
+    lease_in: timedelta,
+) -> tuple[str, uuid.UUID, uuid.UUID]:
+    token = _token(name)
+    agent_id = await _create_agent(client, token)
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent_id, "environment": {"type": "none"}},
+    )
+    assert created.status_code == 200
+    sid = uuid.UUID(created.json()["id"])
+    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    async with store.session() as db:
+        await update_session(db, tenant_id, sid, changes={"status": "in_progress"})
+        stale = await create_turn(db, tenant_id, sid, status="in_progress")
+        await set_session_lease(
+            db,
+            tenant_id,
+            sid,
+            worker_id=worker_id,
+            lease_id=lease_id,
+            lease_until=utc_now() + lease_in,
         )
+    return token, sid, stale.id
 
-    app.state.execution.run_turn = fail_turn
-    token = _token("stream-fail")
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+
+async def _follow_up(client: AsyncClient, token: str, sid: uuid.UUID) -> Any:
+    return await client.post(
+        f"/v1/agents/sessions/{sid}/events",
+        headers=_auth(token),
+        json={"type": "agent.session.input.message", "content": "hello"},
+    )
+
+
+async def _turn_statuses(
+    client: AsyncClient, token: str, sid: uuid.UUID
+) -> dict[str, str]:
+    turns = await client.get(f"/v1/agents/sessions/{sid}/turns", headers=_auth(token))
+    return {row["id"]: row["status"] for row in turns.json()["data"]}
+
+
+async def test_follow_up_on_expired_orphaned_lease_fails_fast(
+    client: AsyncClient, store: Store
+) -> None:
+    """An expired lease no worker holds must not block a follow-up turn.
+
+    The lease holder is unknown to the hub and the lease has expired, so
+    the `turn.cancel` command is undelivered. The API must release the
+    lease and fail the stale turn immediately instead of blocking until
+    `turn_timeout` for worker events that will never arrive.
+    """
+    token, sid, stale = await _stale_leased_session(
+        client,
+        store,
+        "orphaned-lease",
+        worker_id=uuid.uuid4(),
+        lease_id=uuid.uuid4(),
+        lease_in=timedelta(minutes=-5),
+    )
+    start = time.monotonic()
+    posted = await _follow_up(client, token, sid)
+    assert posted.status_code == 200
+    assert posted.json()["status"] == "idle"
+    assert time.monotonic() - start < 60
+    by_id = await _turn_statuses(client, token, sid)
+    assert by_id[str(stale)] == "failed"
+    assert "completed" in set(by_id.values())
+
+
+async def test_follow_up_keeps_live_lease_on_other_replica(
+    client: AsyncClient, store: Store
+) -> None:
+    """A live lease whose worker socket is not on this replica is kept.
+
+    The worker may still be running the turn, so the follow-up gets the
+    usual 429 and neither the lease nor the turn is touched.
+    """
+    lease_id = uuid.uuid4()
+    token, sid, stale = await _stale_leased_session(
+        client,
+        store,
+        "live-lease-elsewhere",
+        worker_id=uuid.uuid4(),
+        lease_id=lease_id,
+        lease_in=timedelta(minutes=5),
+    )
+    posted = await _follow_up(client, token, sid)
+    assert posted.status_code == 429
+    assert "Worker socket is on" in posted.text
+    async with store.session() as db:
+        row = await get_session_by_id(db, sid)
+    assert row is not None
+    assert row.lease_id == lease_id
+    assert (await _turn_statuses(client, token, sid))[str(stale)] == "in_progress"
+
+
+async def test_follow_up_on_live_lease_without_running_turn_is_bounded(
+    settings: Settings,
+    store: Store,
+    worker_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live worker that holds the lease but runs no turn must not hang.
+
+    The worker accepts `turn.cancel` yet has nothing to cancel, so it
+    emits no events. The follow-up waits a bounded grace, then releases
+    the lease (API bookkeeping included), fails the stale turn and runs
+    the new turn.
+    """
+    from tests.support.split_worker import split_client_for
+
+    from apipi.worker import execution as execution_module
+
+    monkeypatch.setattr(execution_module, "CANCEL_GRACE", timedelta(seconds=0.3))
+    async with split_client_for(settings, store, token=worker_secret) as (
+        app,
+        client,
+        _worker,
+    ):
+        (conn,) = app.state.workers._conns.values()
+        lease_id = uuid.uuid4()
+        token, sid, stale = await _stale_leased_session(
+            client,
+            store,
+            "live-lease-no-turn",
+            worker_id=conn.worker_id,
+            lease_id=lease_id,
+            lease_in=timedelta(minutes=5),
+        )
+        conn.leases.add(lease_id)
+        start = time.monotonic()
+        posted = await _follow_up(client, token, sid)
+        assert posted.status_code == 200
+        assert posted.json()["status"] == "idle"
+        assert time.monotonic() - start < 30
+        assert lease_id not in conn.leases
+        by_id = await _turn_statuses(client, token, sid)
+        assert by_id[str(stale)] == "failed"
+        assert "completed" in set(by_id.values())
+
+
+async def test_follow_up_after_worker_restart_releases_lease(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    """A reconnected worker that no longer holds the lease fails fast.
+
+    The worker socket is on this replica but `conn.leases` lacks the
+    lease, so the cancel is undelivered: the lease is orphaned and is
+    released without waiting for a grace period.
+    """
+    from tests.support.split_worker import split_client_for
+
+    async with split_client_for(settings, store, token=worker_secret) as (
+        app,
+        client,
+        _worker,
+    ):
+        (conn,) = app.state.workers._conns.values()
+        token, sid, stale = await _stale_leased_session(
+            client,
+            store,
+            "restarted-worker",
+            worker_id=conn.worker_id,
+            lease_id=uuid.uuid4(),
+            lease_in=timedelta(minutes=5),
+        )
+        posted = await _follow_up(client, token, sid)
+        assert posted.status_code == 200
+        assert posted.json()["status"] == "idle"
+        by_id = await _turn_statuses(client, token, sid)
+        assert by_id[str(stale)] == "failed"
+
+
+async def test_stream_create_ends_when_first_turn_fails(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    from tests.support.split_worker import split_client_for
+
+    async with split_client_for(settings, store, token=worker_secret) as (
+        app,
+        client,
+        _worker,
+    ):
+
+        async def fail_turn(*_args: object, **_kwargs: object) -> None:
+            raise ApiError(
+                "invalid_request",
+                "Too many live sessions",
+                code="capacity",
+                status_code=429,
+            )
+
+        app.state.execution.run_turn = fail_turn
+        token = _token("stream-fail")
         agent_id = await _create_agent(client, token)
         async with client.stream(
             "POST",
@@ -675,21 +883,24 @@ async def test_stream_create_ends_when_first_turn_fails(
 
 
 async def test_delete_stops_guest_before_dropping_the_row(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
-    seen: dict[str, bool] = {}
+    from tests.support.split_worker import split_client_for
 
-    async def teardown(session_id: uuid.UUID) -> None:
-        async with store.session() as db:
-            row = await get_session_by_id(db, session_id)
-        seen["row"] = row is not None
+    async with split_client_for(settings, store, token=worker_secret) as (
+        app,
+        client,
+        _worker,
+    ):
+        seen: dict[str, bool] = {}
 
-    app.state.execution.teardown = teardown
-    token = _token("delete-order")
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+        async def teardown(session_id: uuid.UUID) -> None:
+            async with store.session() as db:
+                row = await get_session_by_id(db, session_id)
+            seen["row"] = row is not None
+
+        app.state.execution.teardown = teardown
+        token = _token("delete-order")
         agent_id = await _create_agent(client, token)
         created = await client.post(
             "/v1/agents/sessions",

@@ -5,12 +5,12 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for
 from tests.unit.test_blobs import FakeS3
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.store.blobs import S3Store, file_object_id, skill_object_id
 from apipi.store.engine import Store
 from apipi.store.repo import create_artifact
@@ -63,9 +63,8 @@ async def test_file_presign_put_then_complete(settings: Settings, store: Store) 
     client_s3 = FakeS3()
     s3_settings = _s3_settings(settings)
     app = create_app(
-        s3_settings,
+        api_settings_for(s3_settings),
         store=store,
-        harness=FakeHarness(),
         objects=S3Store(s3_settings, client=client_s3),
     )
     async with AsyncClient(
@@ -129,9 +128,8 @@ async def test_skill_presign_complete(settings: Settings, store: Store) -> None:
     client_s3 = FakeS3()
     s3_settings = _s3_settings(settings)
     app = create_app(
-        s3_settings,
+        api_settings_for(s3_settings),
         store=store,
-        harness=FakeHarness(),
         objects=S3Store(s3_settings, client=client_s3),
     )
     data = _zip_skill()
@@ -198,9 +196,8 @@ async def test_artifact_download_forces_attachment(
     client_s3 = FakeS3()
     s3_settings = _s3_settings(settings)
     app = create_app(
-        s3_settings,
+        api_settings_for(s3_settings),
         store=store,
-        harness=FakeHarness(),
         objects=S3Store(s3_settings, client=client_s3),
     )
     async with AsyncClient(

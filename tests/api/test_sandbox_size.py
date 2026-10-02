@@ -2,7 +2,6 @@ from httpx import ASGITransport, AsyncClient
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -151,7 +150,9 @@ async def test_gateway_default_size(settings: Settings, store: Store) -> None:
         sessions_dir=settings.sessions_dir,
         sandbox_default_size="L",
     )
-    app = create_app(sized, store=store, harness=FakeHarness())
+    from tests.support.split_worker import api_settings_for
+
+    app = create_app(api_settings_for(sized), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

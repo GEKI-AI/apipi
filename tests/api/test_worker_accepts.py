@@ -3,11 +3,11 @@ import uuid
 import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.services.worker_tokens import create_token
 from apipi.store.engine import Store
 
@@ -55,7 +55,7 @@ async def test_placement_matrix(
     pools: str,
     want: str | None,
 ) -> None:
-    app = create_app(_worker_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     token = f"matrix-{kind}-{pools}"
     tenant_id = _tenant(token)
     async with AsyncClient(

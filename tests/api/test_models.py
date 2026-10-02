@@ -3,11 +3,11 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.errors import ApiError
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 _PAYLOAD = {
@@ -34,7 +34,7 @@ def model_settings(tmp_path: Path) -> Settings:
 async def model_client(
     model_settings: Settings, store: Store
 ) -> AsyncIterator[AsyncClient]:
-    app = create_app(model_settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(model_settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -78,7 +78,7 @@ async def test_models_uses_overwrite_key(
         return _PAYLOAD
 
     monkeypatch.setattr("apipi.services.models.fetch_models_json", fake_fetch)
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -131,7 +131,7 @@ async def test_models_disabled(tmp_path: Path, store: Store) -> None:
         model_base_url="http://model.test/v1",
         forward_models=False,
     )
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

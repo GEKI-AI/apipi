@@ -43,7 +43,7 @@ jobs:
       - name: Sync
         run: uv sync --locked
       - name: Tests
-        run: uv run pytest -m "not slow"
+        run: uv run pytest -n auto -m "not slow"
 
   docs:
     name: Docs

@@ -1194,7 +1194,7 @@ async def _cancel_turn(
     await active.append_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
 
-def _lease_live(until: datetime | None) -> bool:
+def lease_live(until: datetime | None) -> bool:
     if until is None:
         return False
     current = until if until.tzinfo is not None else until.replace(tzinfo=UTC)
@@ -1214,7 +1214,7 @@ async def fail_stale_in_progress(
     row = await get_session(db, tenant_id, session_id)
     if row is None or row.status != "in_progress":
         return row
-    if _lease_live(row.lease_until):
+    if lease_live(row.lease_until):
         return row
     turns = await list_turns(db, tenant_id, session_id)
     if turns:

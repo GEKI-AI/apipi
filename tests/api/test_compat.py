@@ -4,13 +4,13 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from httpx import ASGITransport, AsyncClient, Response
+from httpx import AsyncClient, Response
 from sqlalchemy import select
+from tests.support.split_worker import split_client_for
 from tests.support.workspace import hosted_dir
 
 from apipi.api.sessions import _event_stream
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.services.runtime import FAKE_USAGE, PUBLIC_EVENT_TYPES, EventHub, FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow
@@ -263,15 +263,16 @@ async def test_compat_environment_self_hosted_not_supported(
     assert "self_hosted" in str(error["message"])
 
 
-async def test_compat_function_tools(settings: Settings, store: Store) -> None:
+async def test_compat_function_tools(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
     harness = FakeHarness()
     harness.function_calls = [
         {"name": "echo", "arguments": {"text": "hi"}, "call_id": "call_1"}
     ]
-    app = create_app(settings, store=store, harness=harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, _worker):
         token = "compat-tools"
         agent_id = await _agent(client, token, tools=[_TOOLS[0]])
         created = await _session(
@@ -323,15 +324,18 @@ async def test_compat_mcp(client: AsyncClient) -> None:
     assert tools[1]["allowed_tools"] == ["search"]
 
 
-async def test_compat_skills(settings: Settings, store: Store, tmp_path: Path) -> None:
+async def test_compat_skills(
+    settings: Settings, store: Store, tmp_path: Path, worker_secret: str
+) -> None:
     caps = tmp_path / "pack"
     tree = caps / "cap-skill"
     tree.mkdir(parents=True)
     (tree / "SKILL.md").write_text("---\nname: cap-skill\n---\n")
-    app = create_app(settings, store=store, harness=FakeHarness())
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
         token = "compat-skills"
         agent_id = await _agent(client, token)
         created = await _session(
@@ -546,16 +550,15 @@ async def test_compat_nested_events_message(client: AsyncClient) -> None:
 
 
 async def test_compat_nested_events_tool_result(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     harness = FakeHarness()
     harness.function_calls = [
         {"name": "echo", "arguments": {"text": "hi"}, "call_id": "call_1"}
     ]
-    app = create_app(settings, store=store, harness=harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, _worker):
         token = "compat-nested-tool"
         agent_id = await _agent(client, token, tools=[_TOOLS[0]])
         created = await _session(
@@ -593,13 +596,14 @@ async def test_compat_nested_events_tool_result(
         assert resumed.json()["status"] == "idle"
 
 
-async def test_compat_nested_events_cancel(settings: Settings, store: Store) -> None:
+async def test_compat_nested_events_cancel(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
     harness = FakeHarness()
     harness.hold = True
-    app = create_app(settings, store=store, harness=harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (app, client, _worker):
         token = "compat-nested-cancel"
         agent_id = await _agent(client, token)
         created = await _session(
@@ -757,16 +761,19 @@ async def test_image_requires_registry_capability(client: AsyncClient) -> None:
     assert _error(created)["code"] == "unsupported_input"
 
 
-async def test_image_is_stored_by_file_id(settings: Settings, store: Store) -> None:
+async def test_image_is_stored_by_file_id(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
     vision = settings.model_copy(
         update={
             "model_registry": {"test": {"input": ["text", "image"], "reasoning": True}}
         }
     )
-    app = create_app(vision, store=store, harness=FakeHarness())
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(vision, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
         token = "compat-image-on"
         agent_id = await _agent(client, token)
         created = await client.post(

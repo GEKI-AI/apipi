@@ -1,10 +1,9 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
@@ -14,12 +13,13 @@ def _auth(token: str) -> dict[str, str]:
 
 
 async def _client(
-    settings: Settings, store: Store, harness: FakeHarness
+    settings: Settings, store: Store, harness: FakeHarness, worker_secret: str
 ) -> AsyncIterator[AsyncClient]:
-    app = create_app(settings, store=store, harness=harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    from tests.support.split_worker import split_client_for
+
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, _worker):
         yield client
 
 
@@ -37,10 +37,10 @@ def _write_skill(tree: Path, name: str) -> None:
 
 
 async def test_planted_skill_is_passed_to_harness(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     harness = FakeHarness()
-    async for client in _client(settings, store, harness):
+    async for client in _client(settings, store, harness, worker_secret):
         token = "skills"
         agent_id = await _create_agent(client, token)
         created = await client.post(
@@ -65,12 +65,12 @@ async def test_planted_skill_is_passed_to_harness(
 
 
 async def test_capability_directories_copied_and_discovered(
-    settings: Settings, store: Store, tmp_path: Path
+    settings: Settings, store: Store, tmp_path: Path, worker_secret: str
 ) -> None:
     harness = FakeHarness()
     caps = tmp_path / "pack"
     _write_skill(caps / "cap-skill", "cap-skill")
-    async for client in _client(settings, store, harness):
+    async for client in _client(settings, store, harness, worker_secret):
         token = "caps"
         agent_id = await _create_agent(client, token)
         created = await client.post(
@@ -97,9 +97,11 @@ async def test_capability_directories_copied_and_discovered(
         assert str(copied.resolve()) in harness.skill_dirs
 
 
-async def test_unknown_environment_field(settings: Settings, store: Store) -> None:
+async def test_unknown_environment_field(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
     harness = FakeHarness()
-    async for client in _client(settings, store, harness):
+    async for client in _client(settings, store, harness, worker_secret):
         token = "skills"
         agent_id = await _create_agent(client, token)
         response = await client.post(

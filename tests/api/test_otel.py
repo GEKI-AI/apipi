@@ -2,8 +2,9 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from tests.support.split_worker import api_settings_for, split_client_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
@@ -43,12 +44,11 @@ def otel_tracing(otel_exporter: InMemorySpanExporter) -> Iterator[Tracing]:
 
 @pytest.fixture
 async def otel_client(
-    settings: Settings, store: Store, otel_tracing: Tracing
+    settings: Settings, store: Store, otel_tracing: Tracing, worker_secret: str
 ) -> AsyncIterator[AsyncClient]:
-    app = create_app(settings, store=store, harness=FakeHarness(), tracing=otel_tracing)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, token=worker_secret, tracing=otel_tracing
+    ) as (_app, client, _worker):
         yield client
 
 
@@ -63,17 +63,24 @@ def tool_harness() -> FakeHarness:
 
 @pytest.fixture
 async def otel_tool_client(
-    settings: Settings, store: Store, otel_tracing: Tracing, tool_harness: FakeHarness
+    settings: Settings,
+    store: Store,
+    otel_tracing: Tracing,
+    tool_harness: FakeHarness,
+    worker_secret: str,
 ) -> AsyncIterator[AsyncClient]:
-    app = create_app(settings, store=store, harness=tool_harness, tracing=otel_tracing)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings,
+        store,
+        harness=tool_harness,
+        token=worker_secret,
+        tracing=otel_tracing,
+    ) as (_app, client, _worker):
         yield client
 
 
 def test_create_app_tracing_off(settings: Settings, store: Store) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     assert app.state.tracing is None
 
 
@@ -84,7 +91,7 @@ def test_create_app_otlp_when_endpoint_set(tmp_path: Path, store: Store) -> None
         sessions_dir=str(tmp_path / "sessions"),
         otel_endpoint="http://otel:4318",
     )
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     try:
         assert isinstance(app.state.tracing, Tracing)
     finally:

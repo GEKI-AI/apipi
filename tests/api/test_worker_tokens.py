@@ -7,11 +7,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from tests.support.fake_worker import FakeWorker
+from tests.support.split_worker import api_settings_for
 
 from apipi.cli import main, prepare_worker
 from apipi.config import ConfigError, Settings, load_settings, load_worker_token
 from apipi.gateway import create_app
-from apipi.services.runtime import FakeHarness
 from apipi.services.worker_tokens import (
     WORKER_TOKEN_PREFIX,
     authenticate_token,
@@ -37,7 +37,7 @@ async def test_create_stores_only_the_hash(store: Store) -> None:
 async def test_use_updates_last_used_and_binds_worker(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect()
     assert hello["ok"] is True
@@ -52,7 +52,7 @@ async def test_use_updates_last_used_and_binds_worker(
 async def test_revoke_closes_socket_and_rejects_register(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect()
     assert hello["ok"] is True
@@ -76,7 +76,7 @@ async def test_revoke_closes_socket_and_rejects_register(
 async def test_rotate_without_downtime(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     first = FakeWorker(app, worker_secret)
     hello = await first.connect()
     assert hello["ok"] is True
@@ -104,7 +104,7 @@ async def test_rotate_without_downtime(
 async def test_token_bound_to_first_worker_id(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     first = FakeWorker(app, worker_secret)
     hello = await first.connect()
     assert hello["ok"] is True
@@ -137,7 +137,7 @@ async def test_token_bound_to_first_worker_id(
 async def test_register_without_id_gets_bound_worker_id(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     first = FakeWorker(app, worker_secret)
     hello = await first.connect()
     assert hello["ok"] is True
@@ -159,7 +159,7 @@ async def test_token_declared_at_creation_pinned(
 ) -> None:
     worker_id = uuid.uuid4()
     created = await create_token(store, name="pinned", worker_id=worker_id)
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     worker = FakeWorker(app, created.secret, worker_id=str(worker_id))
     hello = await worker.connect()
     assert hello["ok"] is True
@@ -194,7 +194,7 @@ async def test_unknown_token_is_unauthorized(settings: Settings, store: Store) -
 async def test_worker_token_rejected_on_public_routes(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

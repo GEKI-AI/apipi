@@ -1,10 +1,10 @@
 from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import AuthRequest, tenant_from_key
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -47,9 +47,7 @@ async def test_same_bearer_different_users_are_separate(
             return f"{token}:{user}"
 
     authenticate = OrgAuth()
-    app = create_app(
-        settings, store=store, harness=FakeHarness(), authenticate=authenticate
-    )
+    app = create_app(api_settings_for(settings), store=store, authenticate=authenticate)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -101,9 +99,7 @@ async def test_missing_user_id_stays_tenant_scoped(
             "tenant_id": tenant_from_key("shared-org"),
         }
 
-    app = create_app(
-        settings, store=store, harness=FakeHarness(), authenticate=authenticate
-    )
+    app = create_app(api_settings_for(settings), store=store, authenticate=authenticate)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

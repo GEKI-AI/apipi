@@ -3,11 +3,9 @@ import uuid
 from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
 from apipi.config import Settings
-from apipi.gateway import create_app
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -100,16 +98,22 @@ async def test_eager_boot_off_by_default(client: AsyncClient) -> None:
 
 
 async def test_eager_boot_override_starts_computer(
-    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+    settings: Settings,
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_secret: str,
 ) -> None:
     async def fake_spawn(*_args: object, **_kwargs: Any) -> _Proc:
         return _Proc()
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
-    app = create_app(settings, store=store, harness=FakeHarness())
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    from tests.support.split_worker import split_client_for
+
+    async with split_client_for(settings, store, token=worker_secret) as (
+        app,
+        client,
+        _worker,
+    ):
         token = "sandbox-eager"
         agent_id = await _agent(client, token)
         created = await client.post(

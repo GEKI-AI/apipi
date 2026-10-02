@@ -1,23 +1,25 @@
+"""Capacity limits through the split production path (#473).
+
+API-side capacity in split mode comes from worker assignment: a worker
+advertises `max_sessions` as its connection capacity, and the API
+rejects a new turn with 429 `capacity` when no live connection has room
+(`worker.assign.failed`). Per-tenant caps live one layer down, in the
+worker pool at sandbox spawn time, and are unit-covered in
+`tests/unit/test_pool.py::test_has_capacity_per_tenant`; there is no
+HTTP-level per-tenant gate once a worker is live, so that case is
+covered here as non-interference instead of a per-tenant 429.
+"""
+
 import logging
-import uuid
-from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import cast
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for, split_client_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.auth import authenticate
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
-from apipi.worker.pi.pool import PiPool
-from apipi.worker.pi.proc import PiProc
-
-
-class _Alive:
-    alive = True
 
 
 @pytest.fixture
@@ -31,37 +33,45 @@ def limited_settings(tmp_path: Path) -> Settings:
     )
 
 
-@pytest.fixture
-async def limited_client(
-    limited_settings: Settings, store: Store
-) -> AsyncIterator[AsyncClient]:
-    pool = PiPool(limited_settings)
-    pool._procs[uuid.uuid4()] = cast(PiProc, _Alive())
-    app = create_app(limited_settings, store=store, harness=FakeHarness(), pool=pool)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        yield client
-
-
 async def test_capacity_rejects_new_turn(
-    limited_client: AsyncClient, caplog: pytest.LogCaptureFixture
+    limited_settings: Settings,
+    store: Store,
+    worker_secret: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """A worker at its advertised capacity rejects the next turn with 429."""
     caplog.set_level(logging.WARNING, logger="apipi")
     token = {"Authorization": "Bearer t"}
-    agent = await limited_client.post(
-        "/v1/agents", headers=token, json={"name": "bot", "model": "test"}
-    )
-    assert agent.status_code == 200
-    created = await limited_client.post(
-        "/v1/agents/sessions",
-        headers=token,
-        json={
-            "agent_id": agent.json()["id"],
-            "environment": {"type": "none"},
-            "input": "Hello",
-        },
-    )
+    async with split_client_for(limited_settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
+        agent = await client.post(
+            "/v1/agents", headers=token, json={"name": "bot", "model": "test"}
+        )
+        assert agent.status_code == 200
+        # The worker advertises capacity 1; the finished turn keeps its
+        # lease, so the worker is full for the next session.
+        first = await client.post(
+            "/v1/agents/sessions",
+            headers=token,
+            json={
+                "agent_id": agent.json()["id"],
+                "environment": {"type": "none"},
+                "input": "Hello",
+            },
+        )
+        assert first.status_code == 200
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=token,
+            json={
+                "agent_id": agent.json()["id"],
+                "environment": {"type": "none"},
+                "input": "Hello",
+            },
+        )
     assert created.status_code == 429
     error = created.json()["error"]
     assert error["code"] == "capacity"
@@ -76,40 +86,37 @@ async def test_capacity_rejects_new_turn(
     assert assigned[-1].__dict__.get("tenant_id")
 
 
-async def test_capacity_rejects_tenant_over_cap(store: Store, tmp_path: Path) -> None:
+async def test_other_tenant_unaffected_by_occupied_lease(
+    store: Store, tmp_path: Path, worker_secret: str
+) -> None:
+    """Below the worker's capacity, one tenant's lease never blocks another."""
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
         max_sessions=8,
-        max_sessions_per_tenant=1,
     )
-    pool = PiPool(settings)
-    tenant_a = authenticate("a").tenant_id
-    live = uuid.uuid4()
-    pool._procs[live] = cast(PiProc, _Alive())
-    pool._tenants[live] = tenant_a
-    app = create_app(settings, store=store, harness=FakeHarness(), pool=pool)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        blocked = await client.post(
+    async with split_client_for(settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
+        first = await client.post(
             "/v1/agents",
             headers={"Authorization": "Bearer a"},
             json={"name": "bot", "model": "test"},
         )
-        assert blocked.status_code == 200
-        created = await client.post(
+        assert first.status_code == 200
+        held = await client.post(
             "/v1/agents/sessions",
             headers={"Authorization": "Bearer a"},
             json={
-                "agent_id": blocked.json()["id"],
+                "agent_id": first.json()["id"],
                 "environment": {"type": "none"},
                 "input": "Hello",
             },
         )
-        assert created.status_code == 429
-        assert created.json()["error"]["code"] == "capacity_tenant"
+        assert held.status_code == 200
         other = await client.post(
             "/v1/agents",
             headers={"Authorization": "Bearer b"},
@@ -126,10 +133,11 @@ async def test_capacity_rejects_tenant_over_cap(store: Store, tmp_path: Path) ->
             },
         )
         assert ok.status_code == 200
+        assert ok.json()["status"] == "idle"
 
 
 async def test_payload_too_large(limited_settings: Settings, store: Store) -> None:
-    app = create_app(limited_settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(limited_settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

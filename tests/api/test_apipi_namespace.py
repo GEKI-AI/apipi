@@ -60,7 +60,9 @@ def _paths(app: object) -> set[str]:
 
 
 def test_agents_namespace_has_no_new_apipi_routes(settings, store) -> None:
-    app = create_app(settings, store=store)
+    from tests.support.split_worker import api_settings_for
+
+    app = create_app(api_settings_for(settings), store=store)
     paths = _paths(app)
     agents = {path for path in paths if path.startswith("/v1/agents")}
     assert agents == _AGENTS_ALLOW

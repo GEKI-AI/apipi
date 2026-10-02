@@ -5,8 +5,10 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+import pytest
 from botocore.exceptions import ClientError
 from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for, split_client_for
 from tests.unit.test_blobs import FakeS3
 
 from apipi.config import DiskLimitError, Settings
@@ -89,19 +91,31 @@ async def _events(client: AsyncClient, token: str, session_id: str) -> list[dict
     return data
 
 
-async def test_s3_put_failure_fails_turn(settings: Settings, store: Store) -> None:
+async def test_s3_put_failure_fails_turn(
+    settings: Settings,
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_secret: str,
+) -> None:
     s3_settings = _s3_settings(settings)
     client_s3 = _FailPut()
-    app = create_app(
+
+    async def _boom_put(
+        url: str, data: bytes, headers: dict[str, str] | None = None
+    ) -> None:
+        # Split workers upload without store credentials (presigned PUT);
+        # the S3 PUT failure surfaces here, not at the API's S3 client.
+        raise _client_error("AccessDenied", "PutObject")
+
+    monkeypatch.setattr("apipi.worker.artifact_upload.put_via_url", _boom_put)
+    async with split_client_for(
         s3_settings,
-        store=store,
+        store,
         harness=_Publish(),
         blobs=S3Blobs(s3_settings, client=client_s3),
         objects=S3Store(s3_settings, client=client_s3),
-    )
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+        token=worker_secret,
+    ) as (_app, client, _worker):
         token = "s3-put"
         agent = await client.post(
             "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
@@ -187,20 +201,36 @@ async def test_persist_pi_session_s3_failure_is_artifact_store(
 
 
 async def test_expected_cache_restore_fails_turn(
-    settings: Settings, store: Store
+    settings: Settings,
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_secret: str,
 ) -> None:
     s3_settings = _s3_settings(settings)
     client_s3 = _FailGet()
-    app = create_app(
+
+    async def _boom_fetch(ref: object, settings: object) -> bytes:
+        # Split workers restore the Pi session over the socket boundary;
+        # the blob GET failure surfaces at the context fetch, which the
+        # worker maps to artifact_store like a direct store read.
+        raise ObjectStoreError(
+            "Artifact store unavailable",
+            operation="get",
+            bucket="bucket",
+            key="cache",
+            code="AccessDenied",
+        )
+
+    monkeypatch.setattr(
+        "apipi.services.turn_context.fetch_pi_session_bytes", _boom_fetch
+    )
+    async with split_client_for(
         s3_settings,
-        store=store,
-        harness=FakeHarness(),
+        store,
         blobs=S3Blobs(s3_settings, client=client_s3),
         objects=S3Store(s3_settings, client=client_s3),
-    )
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+        token=worker_secret,
+    ) as (_app, client, _worker):
         token = "s3-restore"
         agent = await client.post(
             "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
@@ -246,9 +276,8 @@ async def test_workspace_file_s3_get_fails_environment(
     s3_settings = _s3_settings(settings)
     client_s3 = _FailGet()
     app = create_app(
-        s3_settings,
+        api_settings_for(s3_settings),
         store=store,
-        harness=FakeHarness(),
         objects=S3Store(s3_settings, client=client_s3),
     )
     async with AsyncClient(
@@ -292,9 +321,8 @@ async def test_skill_s3_get_fails_environment(settings: Settings, store: Store) 
     s3_settings = _s3_settings(settings)
     client_s3 = _FailGet()
     app = create_app(
-        s3_settings,
+        api_settings_for(s3_settings),
         store=store,
-        harness=FakeHarness(),
         objects=S3Store(s3_settings, client=client_s3),
     )
     data = _zip_skill()
@@ -332,9 +360,8 @@ async def test_file_content_s3_error_is_503(settings: Settings, store: Store) ->
     s3_settings = _s3_settings(settings)
     client_s3 = _FailGet()
     app = create_app(
-        s3_settings,
+        api_settings_for(s3_settings),
         store=store,
-        harness=FakeHarness(),
         objects=S3Store(s3_settings, client=client_s3),
     )
     async with AsyncClient(

@@ -4,10 +4,10 @@ import uuid
 import pytest
 from tests.support.fake_worker import FakeWorker
 from tests.support.prom import metric_line
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -26,7 +26,7 @@ async def test_v1_register_is_rejected(
     worker_secret: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    app = create_app(_metrics_settings(settings), store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(_metrics_settings(settings)), store=store)
     caplog.set_level(logging.WARNING, logger="apipi.worker")
     worker = FakeWorker(app, worker_secret)
     await worker.connect(protocol=None)
@@ -52,7 +52,7 @@ async def test_v1_register_is_rejected(
 async def test_first_message_must_be_register(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     worker = FakeWorker(app, worker_secret)
     await worker.ws.connect()
     await worker.send_json({"type": "heartbeat"})
@@ -65,7 +65,7 @@ async def test_first_message_must_be_register(
 async def test_invalid_register_is_rejected(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     worker = FakeWorker(app, worker_secret)
     await worker.connect(run_mode="")
     assert worker.hello is not None
@@ -77,7 +77,7 @@ async def test_invalid_register_is_rejected(
 async def test_hello_reply_carries_protocol_and_sessions(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(settings), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect(capacity=2)
     assert hello["ok"] is True

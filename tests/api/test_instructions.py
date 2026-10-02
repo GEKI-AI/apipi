@@ -1,9 +1,8 @@
 from pathlib import Path
 
-from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import split_client_for
 
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.worker.pi.platform_prompt import compose_instructions
@@ -14,13 +13,12 @@ def _auth(token: str) -> dict[str, str]:
 
 
 async def test_saved_agent_instructions_reach_harness(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     harness = FakeHarness()
-    app = create_app(settings, store=store, harness=harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, _worker):
         token = "saved-instructions"
         agent = await client.post(
             "/v1/agents",
@@ -44,13 +42,12 @@ async def test_saved_agent_instructions_reach_harness(
 
 
 async def test_inline_instructions_kept_for_follow_up(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     harness = FakeHarness()
-    app = create_app(settings, store=store, harness=harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, _worker):
         token = "inline-instructions"
         created = await client.post(
             "/v1/agents/sessions",
@@ -80,13 +77,12 @@ async def test_inline_instructions_kept_for_follow_up(
 
 
 async def test_empty_agent_instructions_keep_platform_prompt(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     harness = FakeHarness()
-    app = create_app(settings, store=store, harness=harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, _worker):
         token = "empty-instructions"
         created = await client.post(
             "/v1/agents/sessions",
@@ -104,13 +100,12 @@ async def test_empty_agent_instructions_keep_platform_prompt(
 
 
 async def test_omitted_agent_instructions_keep_platform_prompt(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, worker_secret: str
 ) -> None:
     harness = FakeHarness()
-    app = create_app(settings, store=store, harness=harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, _worker):
         token = "omit-instructions"
         created = await client.post(
             "/v1/agents/sessions",
@@ -128,7 +123,7 @@ async def test_omitted_agent_instructions_keep_platform_prompt(
 
 
 async def test_empty_main_platform_prompt_keeps_additional(
-    store: Store, tmp_path: Path
+    store: Store, tmp_path: Path, worker_secret: str
 ) -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
@@ -138,10 +133,9 @@ async def test_empty_main_platform_prompt_keeps_additional(
         platform_prompt_additional="Always answer in German.",
     )
     harness = FakeHarness()
-    app = create_app(settings, store=store, harness=harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, _worker):
         created = await client.post(
             "/v1/agents/sessions",
             headers=_auth("empty-main"),
@@ -161,7 +155,9 @@ async def test_empty_main_platform_prompt_keeps_additional(
         )
 
 
-async def test_override_main_platform_prompt(store: Store, tmp_path: Path) -> None:
+async def test_override_main_platform_prompt(
+    store: Store, tmp_path: Path, worker_secret: str
+) -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
@@ -169,10 +165,9 @@ async def test_override_main_platform_prompt(store: Store, tmp_path: Path) -> No
         platform_prompt="Use outputs/ only.",
     )
     harness = FakeHarness()
-    app = create_app(settings, store=store, harness=harness)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, _worker):
         created = await client.post(
             "/v1/agents/sessions",
             headers=_auth("override-main"),

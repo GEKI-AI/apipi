@@ -1,9 +1,9 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 
 
@@ -34,7 +34,7 @@ async def test_unknown_model_rejected_on_agent_write(
     host_settings = settings.model_copy(
         update={"model_base_url": "http://model.test/v1"}
     )
-    app = create_app(host_settings, store=store, harness=FakeHarness())
+    app = create_app(api_settings_for(host_settings), store=store)
 
     async def fake_ids(*_args: object, **_kwargs: object) -> list[str]:
         return ["other"]

@@ -6,17 +6,11 @@ import uuid
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
-from httpx import ASGITransport, AsyncClient
-from tests.support.fake_worker import FakeWorker
-
 from apipi.api.sessions import _event_stream
 from apipi.config import Settings
-from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.services.runtime import FakeHarness, usage_from
 from apipi.store.engine import Store
-from apipi.worker.deltas import DeltaRelay, LiveRedirectBus
-from apipi.worker.execution import local_execution
 
 CHUNKS = ["hel", "lo ", "wor", "ld"]
 FULL_TEXT = "".join(CHUNKS)
@@ -24,16 +18,6 @@ FULL_TEXT = "".join(CHUNKS)
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
-
-
-def _api_settings(settings: Settings) -> Settings:
-    return Settings(
-        database_url=settings.database_url,
-        run_mode="none",
-        sessions_dir=settings.sessions_dir,
-        local_store_dir=settings.sessions_dir,
-        api_only=True,
-    )
 
 
 def _parse_sse(text: str) -> list[dict[str, Any]]:
@@ -64,142 +48,110 @@ class StreamHarness(FakeHarness):
         yield ("usage", usage_from(self.usage))
 
 
+def _wire_envelope(raw: str) -> dict[str, Any] | None:
+    """Parse one recorded worker-to-API payload as a delta envelope."""
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    if isinstance(parsed, dict) and parsed.get("type") == "delta.text":
+        return parsed
+    return None
+
+
 async def test_split_mode_streams_deltas_before_done(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    api_settings = _api_settings(settings)
-    app = create_app(api_settings, store=store, harness=FakeHarness())
-    relay = DeltaRelay()
-    worker_execution = local_execution(
-        api_settings,
-        store=store,
-        harness=StreamHarness(),
-        hub=LiveRedirectBus(app.state.event_hub, relay),
-    )
+    from tests.support.split_worker import split_client_for
+
     token = "delta-split"
     tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
-    worker = FakeWorker(app, worker_secret)
-    ready = asyncio.Event()
+    sent: list[str] = []
+    async with split_client_for(
+        settings, store, harness=StreamHarness(), token=worker_secret, sent=sent
+    ) as (app, client, _worker):
+        agent = await client.post(
+            "/v1/agents",
+            headers=_auth(token),
+            json={"name": "bot", "model": "test"},
+        )
+        assert agent.status_code == 200
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent.json()["id"],
+                "environment": {"type": "none"},
+            },
+        )
+        assert created.status_code == 200
+        session_id = uuid.UUID(created.json()["id"])
 
-    async def pump() -> None:
-        hello = await worker.connect(capacity=2)
-        assert hello.get("ok") is True
-        ready.set()
-        while True:
-            message = await worker.receive_json()
-            if message.get("type") != "command":
-                continue
-            await worker.send_json(
-                {
-                    "type": "lease.ack",
-                    "id": message.get("id"),
-                    "lease_id": message.get("lease_id"),
-                }
-            )
-            from apipi.worker.hub import dispatch_command
+        agen = _event_stream(
+            store,
+            app.state.event_hub,
+            tenant_id,
+            session_id,
+            None,
+            fallback_poll=0.05,
+        )
 
-            await dispatch_command(worker_execution, message)
+        async def collect() -> str:
+            chunks: list[str] = []
+            try:
+                async with asyncio.timeout(30):
+                    async for chunk in agen:
+                        if chunk.startswith(":"):
+                            continue
+                        chunks.append(chunk)
+                        types = [event["type"] for event in _parse_sse("".join(chunks))]
+                        if "agent.session.turn.completed" in types:
+                            return "".join(chunks)
+            finally:
+                await agen.aclose()
+            raise AssertionError("turn never completed on SSE")
 
-    task = asyncio.create_task(pump())
-    await ready.wait()
-    envelopes: list[dict[str, Any]] = []
+        collector = asyncio.create_task(collect())
+        posted = await client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json={"type": "agent.session.input.message", "content": "hello"},
+        )
+        assert posted.status_code == 200
+        raw = await collector
+        events = _parse_sse(raw)
+        kinds = [event["type"] for event in events]
+        assert "agent.session.turn.output_text.done" in kinds
+        deltas = [
+            event
+            for event in events
+            if event["type"] == "agent.session.turn.output_text.delta"
+        ]
+        assert len(deltas) >= 3
+        first_done = kinds.index("agent.session.turn.output_text.done")
+        delta_positions = [
+            i
+            for i, kind in enumerate(kinds)
+            if kind == "agent.session.turn.output_text.delta"
+        ]
+        assert delta_positions and max(delta_positions) < first_done
+        done = next(
+            event
+            for event in events
+            if event["type"] == "agent.session.turn.output_text.done"
+        )
+        assert done["data"]["text"] == FULL_TEXT
+        assert "".join(str(delta["data"]["delta"]) for delta in deltas) == FULL_TEXT
+        envelopes = [
+            envelope for raw in sent if (envelope := _wire_envelope(raw)) is not None
+        ]
+        assert len(envelopes) >= 3
+        assert all(item["type"] == "delta.text" for item in envelopes)
+        assert "".join(str(item["payload"]["text"]) for item in envelopes) == FULL_TEXT
 
-    async def send_envelope(envelope: dict[str, Any]) -> None:
-        envelopes.append(envelope)
-        await worker.send_json(envelope)
-
-    relay.attach(send_envelope)
-    try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            agent = await client.post(
-                "/v1/agents",
-                headers=_auth(token),
-                json={"name": "bot", "model": "test"},
-            )
-            assert agent.status_code == 200
-            created = await client.post(
-                "/v1/agents/sessions",
-                headers=_auth(token),
-                json={
-                    "agent_id": agent.json()["id"],
-                    "environment": {"type": "none"},
-                },
-            )
-            assert created.status_code == 200
-            session_id = uuid.UUID(created.json()["id"])
-
-            agen = _event_stream(
-                store,
-                app.state.event_hub,
-                tenant_id,
-                session_id,
-                None,
-                fallback_poll=0.05,
-            )
-
-            async def collect() -> str:
-                chunks: list[str] = []
-                try:
-                    async with asyncio.timeout(30):
-                        async for chunk in agen:
-                            if chunk.startswith(":"):
-                                continue
-                            chunks.append(chunk)
-                            types = [
-                                event["type"] for event in _parse_sse("".join(chunks))
-                            ]
-                            if "agent.session.turn.completed" in types:
-                                return "".join(chunks)
-                finally:
-                    await agen.aclose()
-                raise AssertionError("turn never completed on SSE")
-
-            collector = asyncio.create_task(collect())
-            posted = await client.post(
-                f"/v1/agents/sessions/{session_id}/events",
-                headers=_auth(token),
-                json={"type": "agent.session.input.message", "content": "hello"},
-            )
-            assert posted.status_code == 200
-            raw = await collector
-            events = _parse_sse(raw)
-            kinds = [event["type"] for event in events]
-            assert "agent.session.turn.output_text.done" in kinds
-            deltas = [
-                event
-                for event in events
-                if event["type"] == "agent.session.turn.output_text.delta"
-            ]
-            assert len(deltas) >= 3
-            first_done = kinds.index("agent.session.turn.output_text.done")
-            delta_positions = [
-                i
-                for i, kind in enumerate(kinds)
-                if kind == "agent.session.turn.output_text.delta"
-            ]
-            assert delta_positions and max(delta_positions) < first_done
-            done = next(
-                event
-                for event in events
-                if event["type"] == "agent.session.turn.output_text.done"
-            )
-            assert done["data"]["text"] == FULL_TEXT
-            assert "".join(str(delta["data"]["delta"]) for delta in deltas) == FULL_TEXT
-            assert len(envelopes) >= 3
-            assert all(item["type"] == "delta.text" for item in envelopes)
-            assert (
-                "".join(str(item["payload"]["text"]) for item in envelopes) == FULL_TEXT
-            )
-
-            stored = await client.get(
-                f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
-            )
-            stored_types = [event["type"] for event in stored.json()["data"]]
-            assert "agent.session.turn.output_text.delta" not in stored_types
-            assert "agent.session.turn.output_text.done" in stored_types
-    finally:
-        task.cancel()
-        await worker.close()
-        await worker_execution.close()
+        stored = await client.get(
+            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        )
+        stored_types = [event["type"] for event in stored.json()["data"]]
+        assert "agent.session.turn.output_text.delta" not in stored_types
+        assert "agent.session.turn.output_text.done" in stored_types
