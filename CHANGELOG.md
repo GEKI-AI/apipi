@@ -99,6 +99,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP tallies for the turn log are collected in memory while the
   turn runs. See `docs/workers.md`, `docs/worker-concepts.md`, and
   `docs/config.md`.
+- Lifecycle, sandbox status, reaper, and wipe as events, inventory
+  reconcile, and API-owned lease takeover (#449). The worker makes
+  no database queries. Sandbox transitions travel as durable
+  `sandbox.status` envelopes, which the API applies with the same
+  `record_transition` logic, so the `environment.*` events look the
+  same to clients; the periodic seen update travels as an idempotent
+  `sandbox.seen` summary that the API validates against the
+  connection's leases. The wipe after `session.stop` and the idle
+  workspace wipe travel as `session.stopped` and `workspace.reaped`
+  receipts; the worker wipes only its local directory and the API
+  deletes the session blobs on ingest. The reaper uses the command
+  context TTL, and sessions it does not know wait for the inventory
+  reply, which carries the effective idle TTL per session, instead
+  of reading the database. Lifecycle export moved to the API: the
+  worker reports live start and stop as durable `lifecycle.start`
+  and `lifecycle.stop` envelopes (buffered across disconnects and
+  replayed exactly once), the periodic `inventory` live set is what
+  the API derives heartbeats from, and retry and backoff stay on
+  the API. `apipi worker` ignores `APIPI_LIFECYCLE_*` settings with
+  a startup warning. On hello and about every 60s the worker sends
+  `inventory{sessions}`; the API fails leases it no longer reports
+  (`agent.session.error` with code `worker_orphaned`, then clears
+  the lease) and revokes sessions the worker reports without a
+  lease. A reconnect to any replica renews the reattached leases,
+  so running turns stay alive and the lease moves to the new
+  replica. Commands are idempotent by `command_id`: a retransmitted
+  `turn.start` is acked but never dispatched twice. See
+  `docs/workers.md` (inventory, lease takeover), `docs/usage.md`
+  (lifecycle export), and `docs/config.md` (lifecycle settings are
+  API-only). No new migration.
 
 ### Breaking
 

@@ -13,6 +13,7 @@ on `sessions.worker_seq` and is reported in `hello.reply`, so a
 reconnect replays exactly what is missing.
 """
 
+import contextlib
 import logging
 import time
 import uuid
@@ -47,7 +48,7 @@ OVERSIZE = "oversize"
 INVALID_ENVELOPE = "invalid_envelope"
 UNKNOWN_SESSION = "unknown_session"
 
-DEFERRED_TYPES = frozenset({"sandbox.status"})
+DEFERRED_TYPES = frozenset({"sandbox.status", "artifact.completed"})
 
 
 @dataclass
@@ -62,6 +63,7 @@ class IngestOutcome:
     wakes: list[tuple[uuid.UUID, dict[str, Any]]] = field(default_factory=list)
     rejected: list[tuple[uuid.UUID, int, str]] = field(default_factory=list)
     presign_replies: list[dict[str, Any]] = field(default_factory=list)
+    wipes: list[tuple[uuid.UUID, str, uuid.UUID]] = field(default_factory=list)
 
 
 class IngestBatcher:
@@ -203,6 +205,9 @@ async def _validate(
         return NOT_LEASED
     if envelope.type in DEFERRED_TYPES:
         return NOT_IMPLEMENTED
+    if envelope.type == "sandbox.status":
+        if envelope.payload.get("status") not in {"starting", "ready", "stopped"}:
+            return INVALID_ENVELOPE
     if envelope.type == "artifact.presign":
         raw_request = envelope.payload.get("request_id")
         if not isinstance(raw_request, str) or not raw_request:
@@ -224,6 +229,13 @@ async def _validate(
             uuid.UUID(raw_upload)
         except ValueError:
             return INVALID_ENVELOPE
+        return None
+    if envelope.type in {
+        "session.stopped",
+        "workspace.reaped",
+        "lifecycle.start",
+        "lifecycle.stop",
+    }:
         return None
     if envelope.type == "event":
         from apipi.services.sink import LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES
@@ -301,6 +313,7 @@ async def _apply(
     turn_cache: _TurnCache,
     presign_replies: list[dict[str, Any]] | None = None,
     objects: Any | None = None,
+    lifecycle: Any | None = None,
 ) -> None:
     from apipi.services.failures import failure_from_dict
     from apipi.services.usage import usage_from
@@ -317,6 +330,121 @@ async def _apply(
     tenant_id = row.tenant_id
     session_id = row.id
     payload = envelope.payload
+    if envelope.type == "sandbox.status":
+        from apipi.services.sandbox_status import (
+            _sandbox_data,
+            _sync_environment_row,
+            is_hosted,
+        )
+
+        if not is_hosted(row.environment):
+            return
+        environment = row.environment if isinstance(row.environment, dict) else {}
+        phase = str(payload.get("status") or "")
+        reason = payload.get("reason")
+        now = utc_now()
+        row.sandbox_seen_at = now
+        row.sandbox_since = now
+        worker_id = payload.get("worker_id")
+        if isinstance(worker_id, str) and worker_id:
+            with contextlib.suppress(ValueError):
+                row.sandbox_worker_id = uuid.UUID(worker_id)
+        if phase == "starting":
+            row.sandbox_state = "starting"
+            row.sandbox_reason = None
+            if isinstance(payload.get("image"), str):
+                row.sandbox_image = payload["image"]
+            if isinstance(payload.get("size"), str):
+                row.sandbox_size = payload["size"]
+            event_type = "agent.session.environment.pending"
+            data = _sandbox_data(
+                environment,
+                {
+                    "state": "starting",
+                    "cold": True,
+                    "cause": payload.get("cause") or "spawn",
+                    "image": row.sandbox_image,
+                    "size": row.sandbox_size,
+                },
+            )
+        elif phase == "ready":
+            row.sandbox_state = "ready"
+            row.sandbox_reason = None
+            row.sandbox_cold_boots = (row.sandbox_cold_boots or 0) + 1
+            if isinstance(payload.get("image"), str):
+                row.sandbox_image = payload["image"]
+            if isinstance(payload.get("image_version"), str):
+                row.sandbox_image_version = payload["image_version"]
+            if isinstance(payload.get("size"), str):
+                row.sandbox_size = payload["size"]
+            if isinstance(payload.get("boot_ms"), int):
+                row.sandbox_last_boot_ms = payload["boot_ms"]
+            event_type = "agent.session.environment.connected"
+            data = _sandbox_data(
+                environment,
+                {
+                    "state": "ready",
+                    "image": row.sandbox_image,
+                    "image_version": row.sandbox_image_version,
+                    "size": row.sandbox_size,
+                    "run_mode": payload.get("run_mode"),
+                    "boot_ms": payload.get("boot_ms")
+                    if isinstance(payload.get("boot_ms"), int)
+                    else 0,
+                    "lock_wait_ms": payload.get("lock_wait_ms") or 0,
+                    "setup_ms": payload.get("setup_ms") or 0,
+                },
+            )
+        elif phase == "stopped":
+            row.sandbox_state = "stopped"
+            row.sandbox_reason = reason if isinstance(reason, str) else "stop"
+            event_type = "agent.session.environment.disconnected"
+            data = _sandbox_data(
+                environment,
+                {
+                    "state": "stopped",
+                    "reason": row.sandbox_reason,
+                    "live_ms": payload.get("live_ms") or 0,
+                },
+            )
+        else:
+            raise _Reject(INVALID_ENVELOPE)
+        state = row.sandbox_state
+        if state is not None:
+            await _sync_environment_row(db, tenant_id, session_id, state)
+        from apipi.services.sink import event_body
+        from apipi.store.repo import append_event
+
+        event = await append_event(
+            db, tenant_id, session_id, type=event_type, data=data
+        )
+        wakes.append((session_id, event_body(event)))
+        return
+    if envelope.type in {"session.stopped", "workspace.reaped"}:
+        # The worker already wiped its local workspace; the API owns
+        # the artifact store and deletes the session blobs after
+        # commit (see `IngestOutcome.wipes`). The envelope itself is
+        # only the durable receipt, so there is nothing else to apply.
+        return
+    if envelope.type == "lifecycle.start":
+        if lifecycle is not None:
+            fields = dict(payload)
+            fields.setdefault("session_id", str(session_id))
+            fields.setdefault("tenant_id", str(tenant_id))
+            lifecycle.emit_start(fields, cause=str(payload.get("cause") or "spawn"))
+        return
+    if envelope.type == "lifecycle.stop":
+        if lifecycle is not None:
+            fields = dict(payload)
+            fields.setdefault("session_id", str(session_id))
+            fields.setdefault("tenant_id", str(tenant_id))
+            raw_ms = payload.get("live_ms")
+            lifecycle.emit_stop(
+                fields,
+                reason=str(payload.get("reason") or "stop"),
+                live_ms=raw_ms if isinstance(raw_ms, int) else 0,
+            )
+        return
     if envelope.type == "turn.status":
         status = payload["status"]
         turn_id = uuid.UUID(str(payload["turn_id"]))
@@ -657,6 +785,7 @@ async def flush_batch(
     settings: Any,
     metrics: Any,
     objects: Any | None = None,
+    lifecycle: Any | None = None,
 ) -> IngestOutcome:
     """Apply one batch in a single transaction; returns acks and wakes."""
     outcome = IngestOutcome()
@@ -718,7 +847,10 @@ async def flush_batch(
                             turn_cache=turn_cache,
                             presign_replies=outcome.presign_replies,
                             objects=objects,
+                            lifecycle=lifecycle,
                         )
+                        if envelope.type in {"session.stopped", "workspace.reaped"}:
+                            outcome.wipes.append((row.tenant_id, row.key_id, row.id))
                 except _Duplicate:
                     pass
             except _Reject as rejected:

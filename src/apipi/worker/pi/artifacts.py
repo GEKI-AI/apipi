@@ -438,11 +438,12 @@ async def restore_pi_session(
 
 async def reap_workspaces(
     settings: Settings,
-    store: Store,
+    store: Store | None,
     pool: PiPool,
     *,
     now: datetime | None = None,
     ttl_overrides: Mapping[str, tuple[float | None, float, str | None]] | None = None,
+    allow_db: bool = True,
 ) -> list[str]:
     current = _utc(now or utc_now())
     now_epoch = current.timestamp()
@@ -474,6 +475,11 @@ async def reap_workspaces(
                 if now_epoch - last_seen >= ttl_seconds:
                     wipe_workspace(session_dir)
                     wiped.append(str(session_id))
+                continue
+            if not allow_db or store is None:
+                # A split worker never reads the database: sessions it
+                # does not know stay until the API inventory reply
+                # teaches it their idle TTL.
                 continue
             async with store.session() as db:
                 row = await get_session(db, tenant_id, session_id)
@@ -507,11 +513,12 @@ async def reap_workspaces(
 
 async def reap_workspace_loop(
     settings: Settings,
-    store: Store,
+    store: Store | None,
     pool: PiPool,
     *,
     ttl_overrides: Mapping[str, tuple[float | None, float, str | None]] | None = None,
     on_wiped: Callable[[str], None] | None = None,
+    allow_db: bool = True,
 ) -> None:
     ttl = settings.sandbox_ttl_openai_hosted
     seconds = ttl.total_seconds() if ttl is not None else 15.0
@@ -519,7 +526,7 @@ async def reap_workspace_loop(
     while True:
         await asyncio.sleep(interval)
         wiped = await reap_workspaces(
-            settings, store, pool, ttl_overrides=ttl_overrides
+            settings, store, pool, ttl_overrides=ttl_overrides, allow_db=allow_db
         )
         if on_wiped is not None:
             for session_id in wiped:

@@ -73,6 +73,9 @@ class LocalExecution:
         self.presign_waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
         self._sinks: dict[tuple[uuid.UUID, uuid.UUID], ResultSink] = {}
         self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
+        self.seen_hook: Callable[[list[uuid.UUID]], Awaitable[None]] | None = None
+        self.db_fallback = True
+        self._identity: dict[str, dict[str, str]] = {}
         self._context_ttl: dict[str, tuple[float | None, float, str | None]] = {}
         self._session_dirs: dict[str, str] = {}
         if pool.on_kill is None:
@@ -112,9 +115,24 @@ class LocalExecution:
         seconds, _seen, env_type = remembered
         self._context_ttl[str(session_id)] = (seconds, time.time(), env_type)
 
+    def note_identity(
+        self, session_id: uuid.UUID, tenant_id: uuid.UUID, context: Any
+    ) -> None:
+        """Remember tenant/key for DB-free wipe and harvest paths."""
+        key_id = ""
+        if isinstance(context, dict):
+            session = context.get("session")
+            if isinstance(session, dict) and isinstance(session.get("key_id"), str):
+                key_id = session["key_id"]
+        self._identity[str(session_id)] = {
+            "tenant_id": str(tenant_id),
+            "key_id": key_id,
+        }
+
     def _forget_context(self, session_id: str) -> None:
         self._context_ttl.pop(session_id, None)
         self._session_dirs.pop(session_id, None)
+        self._identity.pop(session_id, None)
 
     def sink_for(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> ResultSink:
         """Per-session result sink; outbox-backed on a split worker."""
@@ -181,6 +199,7 @@ class LocalExecution:
         store = self.store
         assert store is not None
         self.note_context_ttl(session_id, turn_context)
+        self.note_identity(session_id, tenant_id, turn_context)
         try:
             await run_turn(
                 store,
@@ -232,6 +251,7 @@ class LocalExecution:
         store = self.store
         assert store is not None
         self.note_context_ttl(session_id, turn_context)
+        self.note_identity(session_id, tenant_id, turn_context)
         try:
             await continue_turn(
                 store,
@@ -291,14 +311,27 @@ class LocalExecution:
         await self.pool.reap_loop()
 
     async def reap_workspace_loop(self) -> None:
-        store = self.store
-        assert store is not None
+        def on_wiped(session_id: str) -> None:
+            self._forget_context(session_id)
+            outbox = self.outbox
+            if outbox is not None:
+                try:
+                    outbox.append(
+                        uuid.UUID(session_id), "workspace.reaped", {"reason": "idle"}
+                    )
+                except Exception:
+                    log.exception(
+                        "workspace reaped report failed",
+                        extra={"session_id": session_id},
+                    )
+
         await reap_workspace_loop(
             self.settings,
-            store,
+            self.store,
             self.pool,
             ttl_overrides=self._context_ttl,
-            on_wiped=self._forget_context,
+            on_wiped=on_wiped,
+            allow_db=self.db_fallback,
         )
 
     async def observe_loop(self) -> None:
@@ -424,14 +457,37 @@ class LocalExecution:
 
         while True:
             await asyncio.sleep(SEEN_INTERVAL.total_seconds())
+            seen = self.pool.sandbox_seen_ids()
+            if self.seen_hook is not None:
+                try:
+                    await self.seen_hook(seen)
+                except Exception:
+                    log.exception("sandbox seen report failed")
+                continue
             store = self.store
             if store is None:
                 continue
-            await touch_seen(store, self.pool.sandbox_seen_ids())
+            await touch_seen(store, seen)
 
     async def _sandbox_transition(
         self, session_id: uuid.UUID, phase: str, fields: dict[str, Any]
     ) -> None:
+        outbox = self.outbox
+        if outbox is not None:
+            payload: dict[str, Any] = {"status": phase}
+            for key, value in fields.items():
+                if isinstance(value, uuid.UUID):
+                    payload[key] = str(value)
+                elif isinstance(value, (str, int, float, bool)) or value is None:
+                    payload[key] = value
+            try:
+                outbox.append(session_id, "sandbox.status", payload)
+            except Exception:
+                log.exception(
+                    "sandbox status report failed",
+                    extra={"session_id": str(session_id)},
+                )
+            return
         store = self.store
         if store is None:
             return
@@ -451,6 +507,7 @@ class LocalExecution:
         if store is None:
             return
         self.note_context_ttl(session_id, turn_context)
+        self.note_identity(session_id, tenant_id, turn_context)
         from apipi.config import CapacityError
         from apipi.env.setup import SetupError
         from apipi.services.runtime import fail_environment, load_boot_kwargs
@@ -651,9 +708,13 @@ def local_execution(
     outbox: Any | None = None,
 ) -> LocalExecution:
     pool = PiPool(settings, tracing=tracing, metrics=metrics)
-    from apipi.services.lifecycle_export import attach_lifecycle
+    if outbox is None:
+        # Local and API processes export lifecycle themselves. A split
+        # worker only reports lifecycle over the socket (see run_worker),
+        # so it never attaches the HTTP exporter.
+        from apipi.services.lifecycle_export import attach_lifecycle
 
-    attach_lifecycle(pool, settings, metrics)
+        attach_lifecycle(pool, settings, metrics)
     isolation = load_isolation(settings.run_mode)
     resolved_harness = harness if harness is not None else PiHarness(pool)
     split = outbox is not None

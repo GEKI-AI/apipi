@@ -67,9 +67,11 @@ reading the database. Combined serve builds the same context in-process.
 The worker then runs the turn through
 the same execution contract combined serve uses in-process, then
 reports back in v2 envelopes: durable results (`item.added`,
-`turn.status`, `usage`, `event`, `session.status`, `error`, plus
-`artifact.completed` and `sandbox.status` for later steps) that the
-API ingests idempotently, and ephemeral
+`turn.status`, `usage`, `event`, `session.status`, `session.stopped`,
+`workspace.reaped`, `lifecycle.start`, `lifecycle.stop`, `error`,
+`sandbox.status`, plus `artifact.completed` for a later step) that the
+API ingests idempotently, sandbox seen summaries and inventory live
+sets on the same socket, and ephemeral
 streaming deltas (`delta.text`, `delta.reasoning`) that are never
 persisted. Only the API writes to Postgres: the worker buffers
 results in a bounded outbox (with an optional disk spool) until the
@@ -87,7 +89,12 @@ with code `image_unavailable`. Images are files the operator pulls
 onto the worker before it starts. They are not built on every host.
 
 A heartbeat may set `"drain": true`. That worker keeps current leases
-and takes no new ones. When `lease_until` passes, the lease is
+and takes no new ones. A worker that reconnects, to any replica,
+renews its reattached leases and replays its outbox, so running turns
+survive the move. About every 60s it also reports its live set as
+`inventory`; the API fails leases the worker no longer reports and
+revokes sessions the worker reports without a lease. When
+`lease_until` passes, the lease is
 cleared and the session gets `agent.session.error` with code
 `worker_lease_expired`. The turn is not moved to another worker: the
 guest was on the expired host. Start a new message after that.

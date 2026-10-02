@@ -238,10 +238,11 @@ class Gateway:
             resolved_tracing = None
         resolved_pool.tracing = resolved_tracing
         resolved_pool.metrics = resolved_metrics
-        if not resolved.api_only:
-            from apipi.services.lifecycle_export import attach_lifecycle
+        # The API always owns the lifecycle export: local processes emit
+        # from the pool, split APIs from worker envelopes and inventories.
+        from apipi.services.lifecycle_export import attach_lifecycle
 
-            attach_lifecycle(resolved_pool, resolved, resolved_metrics)
+        attach_lifecycle(resolved_pool, resolved, resolved_metrics)
         resolved_workers = (
             workers
             if workers is not None
@@ -357,6 +358,14 @@ class Gateway:
             asyncio.create_task(_purge_usage_loop(self.settings, self.store)),
             asyncio.create_task(self._expire_worker_leases()),
         ]
+        if emitter is not None and isinstance(self.execution, RemoteExecution):
+            from apipi.services.lifecycle_export import api_heartbeat_loop
+
+            self._tasks.append(
+                asyncio.create_task(
+                    api_heartbeat_loop(self.settings, emitter, self.workers, self.store)
+                )
+            )
 
     async def shutdown(self) -> None:
         for task in self._tasks:

@@ -200,10 +200,14 @@ turn. The HTTPS URL, when set, is one sink on that list.
 Per-turn usage export answers how many tokens a turn used. It does not
 answer how long a session's sandbox was alive, or how many sandboxes a
 tenant held at a given minute. Session lifecycle export is that
-signal. The process that owns the `PiPool` emits it: `apipi worker` in
-hub mode, or combined `apipi serve` in embedded mode. The API process
-in `--api-only` mode does not emit these events, because it does not
-spawn Pi.
+signal. The API owns it: combined `apipi serve` and `apipi serve
+--api-only` both emit from the API process. The worker only reports
+over the worker socket: session live start and stop travel as durable
+v2 envelopes, so they are buffered in the worker outbox during a
+disconnect and replayed exactly once after reconnect, and the
+periodic inventory live set is what the API derives heartbeats from.
+`apipi worker` ignores `APIPI_LIFECYCLE_*` settings with a startup
+warning, because it holds no export URL or token.
 
 The feature is off unless `APIPI_LIFECYCLE_EXPORT_URL` or
 `APIPI_LIFECYCLE_SINKS` is set. When it is off, the pool does not build
@@ -247,8 +251,9 @@ taken at spawn, so an NTP step does not change the billed duration.
 | `drain` | Worker drain killed sessions that were not in a turn |
 | `shutdown` | The pool owner is exiting |
 
-`session.live.heartbeat` is one event per pool owner per interval,
-including when the live set is empty. Set
+`session.live.heartbeat` is one event per API replica per interval,
+covering the sessions that replica's workers report as live in
+their inventory, including when that set is empty. Set
 `APIPI_LIFECYCLE_HEARTBEAT` to `0` or `off` to disable heartbeats.
 Start and stop events still export. Each heartbeat entry repeats the
 spawn-time fields: `session_id`, `start_seq`, `started_at`,

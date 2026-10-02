@@ -382,6 +382,116 @@ def _interval_s(seconds: float) -> int | float:
     return seconds
 
 
+LIFECYCLE_WORKER_ENV_PREFIX = "APIPI_LIFECYCLE_"
+
+
+def worker_lifecycle_ignored() -> list[str]:
+    """Lifecycle settings set on a worker; the API owns export now."""
+    import os
+
+    return sorted(
+        name for name in os.environ if name.startswith(LIFECYCLE_WORKER_ENV_PREFIX)
+    )
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, datetime):
+        return utc_ts(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+class OutboxLifecycleReporter(LifecycleEmitter):
+    """Report pool lifecycle over the worker socket instead of exporting.
+
+    The split worker holds no export URL or token: session live
+    start/stop go out as durable v2 envelopes through the outbox, so
+    they survive disconnects and replay after reconnect. The API
+    persists and exports them. Heartbeats need no envelope; the
+    periodic inventory live set is what the API derives them from.
+
+    It subclasses `LifecycleEmitter` only for the pool slot; the HTTP
+    sender is never started and every export method is overridden.
+    """
+
+    heartbeat_s: float | None = None
+
+    def __init__(self, outbox: Any, worker_id: str | None = None) -> None:
+        self.outbox = outbox
+        self.worker_id = worker_id
+        self.active = True
+        self.metrics = None
+        self._queue = None
+
+    def set_worker_id(self, worker_id: str | None) -> None:
+        self.worker_id = worker_id or None
+
+    def emit_start(self, fields: dict[str, Any], *, cause: str) -> int | None:
+        raw_session = fields.get("session_id")
+        try:
+            session_id = (
+                raw_session
+                if isinstance(raw_session, uuid.UUID)
+                else uuid.UUID(str(raw_session))
+            )
+        except (ValueError, TypeError):
+            return None
+        payload = {key: _jsonable(value) for key, value in fields.items()}
+        payload["cause"] = cause
+        try:
+            envelope = self.outbox.append(session_id, "lifecycle.start", payload)
+        except Exception:
+            return None
+        return int(envelope.get("seq") or 0) or None
+
+    def emit_stop(
+        self, fields: dict[str, Any], *, reason: str, live_ms: int
+    ) -> int | None:
+        raw_session = fields.get("session_id")
+        try:
+            session_id = (
+                raw_session
+                if isinstance(raw_session, uuid.UUID)
+                else uuid.UUID(str(raw_session))
+            )
+        except (ValueError, TypeError):
+            return None
+        payload: dict[str, Any] = {
+            "reason": reason,
+            "live_ms": max(live_ms, 0),
+            "started_at": _jsonable(fields.get("started_at")),
+        }
+        start_seq = fields.get("start_seq")
+        if isinstance(start_seq, int) and start_seq >= 1:
+            payload["start_seq"] = start_seq
+        try:
+            envelope = self.outbox.append(session_id, "lifecycle.stop", payload)
+        except Exception:
+            return None
+        return int(envelope.get("seq") or 0) or None
+
+    def emit_heartbeat(self, entries: list[dict[str, Any]]) -> int | None:
+        del entries
+        return None
+
+    def start(self) -> None:
+        return None
+
+    async def flush(self, timeout: float | None = None) -> None:
+        del timeout
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
 def attach_lifecycle(
     pool: Any, settings: Settings, metrics: Metrics | None = None
 ) -> LifecycleEmitter | None:
@@ -418,6 +528,71 @@ async def heartbeat_loop(
             continue
         entries = pool.live_entries() if hasattr(pool, "live_entries") else []
         emitter.emit_heartbeat(entries)
+        emitted += 1
+        next_at = now + interval
+
+
+def heartbeat_fields(row: Any) -> dict[str, Any]:
+    """Build a heartbeat identity entry for one leased session row."""
+    environment = row.environment if isinstance(row.environment, dict) else {}
+    return {
+        "tenant_id": _text(row.tenant_id),
+        "org_id": _text(row.org_id),
+        "session_id": _text(row.id),
+        "agent_id": _text(row.agent_id),
+        "user_id": _text(row.user_id),
+        "key_id": _text(row.key_id),
+        "environment_type": environment.get("type"),
+        "sandbox_size": row.sandbox_size or environment.get("sandbox_size"),
+        "sandbox_image": row.sandbox_image or environment.get("sandbox_image"),
+        "image_version": row.sandbox_image_version,
+        "image_digest": None,
+        "run_mode": None,
+        "started_at": None,
+        "start_seq": None,
+    }
+
+
+async def api_heartbeat_loop(
+    settings: Settings,
+    emitter: Any,
+    hub: Any,
+    store: Any,
+    *,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    max_emits: int | None = None,
+) -> None:
+    """Derive lifecycle heartbeats on the API from worker live sets.
+
+    Each replica exports the sessions its own workers report in their
+    periodic inventory; the downstream `reconcile` joins boots, so
+    per-replica heartbeats stay correct."""
+    interval = emitter.heartbeat_s
+    if interval is None or interval <= 0:
+        return
+    emitted = 0
+    next_at = clock() + interval
+    while max_emits is None or emitted < max_emits:
+        wait = max(0.0, next_at - clock())
+        await sleep(wait)
+        now = clock()
+        if now + 1e-9 < next_at:
+            continue
+        live: list[dict[str, Any]] = []
+        try:
+            session_ids = hub.known_live_sessions()
+            async with store.session() as db:
+                from apipi.store.repo import get_session_by_id
+
+                for session_id in session_ids:
+                    row = await get_session_by_id(db, session_id)
+                    if row is None or row.lease_id is None:
+                        continue
+                    live.append(heartbeat_fields(row))
+        except Exception:
+            log.exception("lifecycle heartbeat failed")
+        emitter.emit_heartbeat(live)
         emitted += 1
         next_at = now + interval
 

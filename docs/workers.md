@@ -117,6 +117,8 @@ The API answers with `hello.reply`:
 | `worker_id`, `generation` | The worker id and its generation. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
 | `sessions` | `{session_id: last_seq}`: the persisted sequence per running session. The worker replays everything after that seq. `last_seq` is the `sessions.worker_seq` cursor that ingest advances with every batch, so a reconnect resumes exactly where the API persisted. |
 | `store_check` | Only with `APIPI_ARTIFACT_STORE=local`: `{marker, nonce}`. The API writes `marker` into the shared store root containing `nonce`; the worker must read it back and answer with `store.proof`. Without the same filesystem the register is rejected with `filesystem store requires a shared path`. |
+| `revoke` | Sessions the worker claimed that hold no matching lease here (`[{session_id, lease_id}]`, each sent as `lease.revoke`). The worker tears those guests down. |
+| `ttl` | `{session_id: {idle_ttl_seconds, env_type, idle_since_epoch}}`: the effective reaper TTL plus the idle baseline per reported session, so a restarted worker learns idle TTLs without reading the database. |
 
 A first message that is not `register` is rejected with
 `register required`. A bad register is rejected with
@@ -141,6 +143,8 @@ Worker to API:
 | `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. |
 | `store.proof` | `marker`, `nonce` | Proof the worker sees the shared store root (filesystem store only). The worker reads the `hello` `store_check` marker file and echoes its nonce. A wrong proof closes the socket with `shared_store_required`. |
+| `inventory` | `sessions: [{session_id, lease_id, last_seq}]` | The worker live set, sent on hello (as `running`) and about every 60s after. Drives reconciliation and the lifecycle heartbeat (see [Inventory](#inventory)). |
+| `sandbox.seen` | `session_ids` | Live sandbox ids, about every 5s. The API applies the same `touch_seen` update the worker used to write itself; ids not leased to this connection are ignored. |
 | `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |
 | envelope (`v: 2`) | `session_id`, `turn_id`, `seq`, `type`, `payload` | Ephemeral deltas (`delta.text`, `delta.reasoning`; see [Live deltas](#live-deltas)) and durable envelopes below. Artifact and file bytes never travel here, only ids, paths, sizes, and checksums. |
 
@@ -157,16 +161,17 @@ API to worker:
 | `type` | Fields | What |
 | --- | --- | --- |
 | `hello` | `ok`, `protocol`, `worker_id`, `generation`, `sessions`, `store_check` | Register succeeded. `store_check` is present only for the filesystem store. |
-| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key. |
+| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. |
 | `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
+| `inventory.reply` | `revoke: [lease.revoke]`, `ttl: {session_id: {...}}` | Answer to `inventory` (and part of `hello.reply`): sessions to tear down plus reaper TTLs. |
 | error object | `ok: false`, `error` | Auth or register failed, then the socket closes. |
 
 Message classes:
 
 | Class | Types | Delivery |
 | --- | --- | --- |
-| Durable | `item.added`, `item.done`, `turn.status`, `usage`, `event`, `session.status`, `artifact.presign`, `artifact.completed`, `error`, `sandbox.status` | Kept in the worker outbox until the cumulative `ack{last_seq}`. Ingested idempotently. |
+| Durable | `item.added`, `item.done`, `turn.status`, `usage`, `event`, `session.status`, `artifact.presign`, `artifact.completed`, `session.stopped`, `workspace.reaped`, `lifecycle.start`, `lifecycle.stop`, `error`, `sandbox.status` | Kept in the worker outbox until the cumulative `ack{last_seq}`. Ingested idempotently. |
 | Ephemeral | `delta.text`, `delta.reasoning` | At-most-once, never persisted, never acked. The final item is the source of truth. |
 
 `item.added` carries the full item (the API creates the row; the
@@ -190,6 +195,19 @@ the turn context uses for cold restore; input images create file rows
 with the returned `file_id`. A `completed` with a foreign `upload_id`,
 a path outside the expected key, or a checksum or size mismatch is
 rejected.
+`sandbox.status` carries a sandbox phase (`starting`, `ready`,
+`stopped`) with the same fields the pool used to pass to
+`record_transition`; the API applies that transition, so the
+`environment.*` events look the same to clients as before.
+`session.stopped` is the durable receipt for the wipe after
+`session.stop`, and `workspace.reaped` the receipt for an idle
+workspace wipe. Only `session.stopped` deletes the session blobs
+on ingest (the worker already wiped its local workspace directory);
+`workspace.reaped` is a receipt only, so a session leased again
+before its receipt lands keeps its artifacts.
+`lifecycle.start` and `lifecycle.stop` carry one live session each;
+the API persists and exports them (see [Lifecycle
+state](#lifecycle-export)).
 
 The outbox is bounded (`APIPI_WORKER_OUTBOX_MAX_MESSAGES`, default
 10,000 messages, and `APIPI_WORKER_OUTBOX_MAX_BYTES`, default 64
@@ -309,18 +327,41 @@ the rows.
 A reconnect may go to any replica. The worker sends its running
 sessions with their `last_seq` in `register`; the API answers with
 the persisted `last_seq` per session in `hello.reply`; the worker
-replays everything after that seq. Duplicates are no-ops: the
+replays everything after that seq. The reconnect also renews the
+reattached leases, so running turns stay alive and the lease moves
+to the new replica. Duplicates are no-ops: the
 `worker_ingest` ledger claims each `(session_id, worker_seq)` inside
 the batch transaction, so replays apply exactly once. Unacked
 commands are retransmitted
-with the same `command.id`, so the worker must treat that id as
-idempotent and never run a turn twice.
+with the same `command.id`, and the worker keeps recent ids per
+session: a retransmit is acked again but never dispatched twice, so
+a duplicate `turn.start` cannot start a second turn.
+
+## Inventory
+
+On hello and about every 60s after, the worker reports its live set
+as `inventory{sessions: [{session_id, lease_id, last_seq}]}`. The API
+compares it with the lease rows for that worker. Sessions leased
+here but not reported are orphaned: the API records
+`agent.session.error` with code `worker_orphaned` and clears the
+lease. Sessions the worker reports without a matching lease come
+back as `lease.revoke`, and the worker tears those guests down and
+drops their outbox buffers. Reported sessions that are still leased
+get their effective idle TTL in the reply, which seeds the worker
+reaper without a database read. A restarted worker that reports an
+empty live set therefore fails its old turns once (on the API) and
+relearns TTLs as new commands arrive.
 
 ## Leases
 
 A lease is durable on the session row (`worker_id`, `lease_id`,
-`lease_until`). Grant is a single conditional `UPDATE`: it only
-succeeds when there is no live lease. Heartbeats extend all of that
+`lease_until`) and owned entirely by the API. Grant is a single
+conditional `UPDATE`: it only
+succeeds when there is no live lease. The replica holding the socket
+renews the lease on heartbeat and takes it over on reconnect with a
+conditional `UPDATE` that matches `worker_id` and `lease_id` and
+bumps `api_instance_id`, so reconnecting to another replica keeps
+running turns alive. Heartbeats extend all of that
 worker's leases in one statement. Commands carry `lease_id`. A worker
 that does not hold that lease cannot ack, emit events, or release it.
 
@@ -413,13 +454,16 @@ warning; exports no longer carry it. Use
 
 Idle Pi reap and hosted workspace wipe run on the process that holds
 Pi. Combined `apipi serve` starts those loops in the API process.
-`apipi worker` starts the same loops. `apipi serve --api-only` does
-not kill idle guests; the worker that owns the session does. When the
-worker knows the session from a command context, the reaper uses the
-context's effective idle TTL measured from the last turn activity, with
-no database read; otherwise it resolves the TTL from the session and
-agent rows as before. `none` use `APIPI_IDLE_TTL`. Hosted computers use
-`APIPI_SANDBOX_TTL_OPENAI_HOSTED`. A host Pi kill increments
+`apipi worker` starts the same loops but never reads the database:
+when the worker knows the session from a command context, the reaper
+uses the context's effective idle TTL measured from the last turn
+activity; when it does not (for example after a worker restart), the
+session waits for the API inventory reply, which carries the
+effective TTL per reported session. `none` use `APIPI_IDLE_TTL`.
+Hosted computers use
+`APIPI_SANDBOX_TTL_OPENAI_HOSTED`. A wiped workspace is reported as
+a durable `workspace.reaped` envelope, and the API deletes the
+session blobs when it ingests it. A host Pi kill increments
 `apipi_pi_kill_total` with reason `idle` on the worker metrics
 endpoint. A process that exits by itself is `crash`. Worker drain
 uses `drain`, not `idle`.
@@ -466,12 +510,17 @@ cgroup. See [production](production.md#failure-and-drain).
 
 ## Lifecycle export
 
-Session live start, stop, and heartbeat events are emitted by the
-process that owns the `PiPool`. That is `apipi worker`, or combined
-`apipi serve`. `apipi serve --api-only` does not emit them and does
-not relay them. The worker learns its `worker_id` from `hello` and
-puts that id on each event. Embedded serve leaves `worker_id` null.
-The hub does not forward lifecycle events. See
+The API owns the lifecycle export. Combined `apipi serve` and
+`apipi serve --api-only` both emit from the API process; `apipi
+worker` only reports. The worker sends session live start and stop
+as durable v2 envelopes (`lifecycle.start`, `lifecycle.stop`), so
+they survive disconnects and replay exactly once after reconnect,
+and it sends its live set as the periodic `inventory`, from which
+the API derives the heartbeat export. The worker holds no export URL
+or token: `apipi worker` ignores `APIPI_LIFECYCLE_*` settings with a
+startup warning. The pool reporter tags each envelope with the
+`worker_id` from `hello`. Embedded serve leaves `worker_id` null.
+See
 [session lifecycle export](usage.md#session-lifecycle-export).
 
 ## What runs where
@@ -482,9 +531,11 @@ The hub does not forward lifecycle events. See
 | `apipi worker` | Operator sandbox host | Its token file, outbound to the API, the model host, the image store, and MCP upstreams. KVM and Firecracker only when it accepts `microvm`. |
 | Combined `apipi serve` | Lab / one box | Whatever the run mode needs, including KVM when `microvm` |
 
-The worker still reads the session store today; later protocol steps
-remove that access so the worker keeps only its running sessions in
-memory. The per-worker token is an operator secret. It is not a tenant
+The worker holds its running sessions in memory only and makes no
+database queries: turns run from the command context, results go
+through the outbox, sandbox and lifecycle state go over the socket,
+and the reaper learns TTLs from the context and the inventory reply.
+The per-worker token is an operator secret. It is not a tenant
 bearer. Do not put it in the browser. The API container in Compose is
 unprivileged. The worker unit is the only place that should receive
 `/dev/kvm` and `CAP_NET_ADMIN`.

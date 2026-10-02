@@ -123,18 +123,18 @@ hosted files and skills).
 | `APIPI_PAYLOAD_EXPORT_RETRIES` | `payload_export_retries` | `1` | Extra tries after the first, then drop. A failed export does not break the turn. |
 | `APIPI_USAGE_SINKS` | `usage_sinks` | empty | Extra usage sinks, comma-separated `package.mod:Class`. |
 | `APIPI_PAYLOAD_SINKS` | `payload_sinks` | empty | Extra payload sinks, comma-separated `package.mod:Class`. |
-| `APIPI_LIFECYCLE_EXPORT_URL` | `lifecycle_export_url` | unset | HTTPS POST of session live start, stop, and heartbeat batches. Off when unset and `APIPI_LIFECYCLE_SINKS` is empty. See [usage](usage.md#session-lifecycle-export). |
-| `APIPI_LIFECYCLE_EXPORT_TOKEN` | `lifecycle_export_token` | unset | Bearer for the lifecycle export URL. Put this in the process environment. |
-| `APIPI_LIFECYCLE_EXPORT_TIMEOUT` | `lifecycle_export_timeout` | `5s` | HTTP timeout, and the shutdown flush limit. |
-| `APIPI_LIFECYCLE_SINKS` | `lifecycle_sinks` | empty | Extra lifecycle sinks, comma-separated `package.mod:Class`. Each sink implements `emit(event)`. |
-| `APIPI_LIFECYCLE_HEARTBEAT` | `lifecycle_heartbeat` | `60s` | How often the pool owner posts its live set. `0` or `off` disables heartbeats. |
-| `APIPI_LIFECYCLE_QUEUE` | `lifecycle_queue` | `10000` | Max queued lifecycle events. A full queue drops the new event. |
-| `APIPI_LIFECYCLE_BATCH` | `lifecycle_batch` | `100` | Max events in one HTTP POST. |
-| `APIPI_LIFECYCLE_BATCH_WAIT` | `lifecycle_batch_wait` | `1s` | Flush a short batch after this wait. |
-| `APIPI_LIFECYCLE_RETRY_MAX` | `lifecycle_retry_max` | `60s` | Cap for exponential backoff on 5xx, 429, 408, and network errors. |
-| `APIPI_LIFECYCLE_USER_ID` | `lifecycle_user_id` | `raw` | `raw`, `hash`, or `omit`. `hash` needs `APIPI_LIFECYCLE_USER_ID_KEY`. |
-| `APIPI_LIFECYCLE_USER_ID_KEY` | — | unset | HMAC key for `hash`. Process environment only. Required when `APIPI_LIFECYCLE_USER_ID=hash`. |
-| `APIPI_LIFECYCLE_RUN_MODES` | `lifecycle_run_modes` | empty | Comma-separated run modes that emit lifecycle events. Empty means all. |
+| `APIPI_LIFECYCLE_EXPORT_URL` | `lifecycle_export_url` | unset | HTTPS POST of session live start, stop, and heartbeat batches. Off when unset and `APIPI_LIFECYCLE_SINKS` is empty. API-only: `apipi worker` ignores it with a warning. See [usage](usage.md#session-lifecycle-export). |
+| `APIPI_LIFECYCLE_EXPORT_TOKEN` | `lifecycle_export_token` | unset | Bearer for the lifecycle export URL. Put this in the process environment. API-only. |
+| `APIPI_LIFECYCLE_EXPORT_TIMEOUT` | `lifecycle_export_timeout` | `5s` | HTTP timeout, and the shutdown flush limit. API-only. |
+| `APIPI_LIFECYCLE_SINKS` | `lifecycle_sinks` | empty | Extra lifecycle sinks, comma-separated `package.mod:Class`. Each sink implements `emit(event)`. API-only. |
+| `APIPI_LIFECYCLE_HEARTBEAT` | `lifecycle_heartbeat` | `60s` | How often the API posts its live set, derived from worker inventories. `0` or `off` disables heartbeats. API-only. |
+| `APIPI_LIFECYCLE_QUEUE` | `lifecycle_queue` | `10000` | Max queued lifecycle events. A full queue drops the new event. API-only. |
+| `APIPI_LIFECYCLE_BATCH` | `lifecycle_batch` | `100` | Max events in one HTTP POST. API-only. |
+| `APIPI_LIFECYCLE_BATCH_WAIT` | `lifecycle_batch_wait` | `1s` | Flush a short batch after this wait. API-only. |
+| `APIPI_LIFECYCLE_RETRY_MAX` | `lifecycle_retry_max` | `60s` | Cap for exponential backoff on 5xx, 429, 408, and network errors. API-only. |
+| `APIPI_LIFECYCLE_USER_ID` | `lifecycle_user_id` | `raw` | `raw`, `hash`, or `omit`. `hash` needs `APIPI_LIFECYCLE_USER_ID_KEY`. API-only. |
+| `APIPI_LIFECYCLE_USER_ID_KEY` | — | unset | HMAC key for `hash`. Process environment only. Required when `APIPI_LIFECYCLE_USER_ID=hash`. API-only. |
+| `APIPI_LIFECYCLE_RUN_MODES` | `lifecycle_run_modes` | empty | Comma-separated run modes that emit lifecycle events. Empty means all. API-only. |
 | `APIPI_METRICS` | `metrics` | off | Prometheus text at `/metrics` when on. No bearer. Combined `apipi serve` scrapes the API. `apipi worker` also binds `/metrics` on `APIPI_WORKER_METRICS_HOST`:`APIPI_WORKER_METRICS_PORT`. |
 | `APIPI_WORKER_METRICS_HOST` | `worker_metrics_host` | `0.0.0.0` | Bind address for the worker scrape endpoint. |
 | `APIPI_WORKER_METRICS_PORT` | `worker_metrics_port` | `9091` | Port for the worker scrape endpoint. |

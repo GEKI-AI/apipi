@@ -176,6 +176,10 @@ def test_every_message_type_round_trips() -> None:
             "status": "idle",
             "required_actions": [],
         },
+        "session.stopped": {"reason": "stop"},
+        "workspace.reaped": {"reason": "idle"},
+        "lifecycle.start": {"cause": "spawn"},
+        "lifecycle.stop": {"reason": "stop", "live_ms": 3},
         "artifact.presign": {
             "request_id": str(uuid.uuid4()),
             "kind": "artifact",

@@ -338,23 +338,38 @@ async def test_deferred_types_rejected_without_apply(store: Store, settings) -> 
             _envelope(
                 session_id,
                 1,
-                "sandbox.status",
-                {"status": "ready"},
-            ),
-            _envelope(
-                session_id,
-                2,
                 "artifact.completed",
                 {"artifact_id": str(uuid.uuid4())},
             ),
         ],
         settings,
     )
-    assert [reason for _, _, reason in outcome.rejected] == [
-        "not_implemented",
-        "invalid_envelope",
-    ]
+    assert [reason for _, _, reason in outcome.rejected] == ["not_implemented"]
+    assert outcome.wakes == []
     assert outcome.acks == {session_id: 2}
+
+
+async def test_sandbox_status_applies_without_wake_on_none_env(
+    store: Store, settings
+) -> None:
+    worker_id = uuid.uuid4()
+    _tenant, session_id, _lease = await _leased(store, worker_id)
+    outcome = await _flush(
+        store,
+        worker_id,
+        [
+            _envelope(
+                session_id,
+                1,
+                "sandbox.status",
+                {"status": "ready"},
+            ),
+        ],
+        settings,
+    )
+    assert outcome.rejected == []
+    assert outcome.wakes == []
+    assert outcome.acks == {session_id: 1}
 
 
 async def test_oversize_envelope_rejected(store: Store, settings) -> None:
