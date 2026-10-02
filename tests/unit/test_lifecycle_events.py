@@ -58,7 +58,6 @@ async def _flush(
     worker_id: uuid.UUID,
     envelopes: list[WorkerEnvelope],
     settings: Any = None,
-    lifecycle: Any | None = None,
 ):
     batcher = IngestBatcher()
     for envelope in envelopes:
@@ -69,7 +68,6 @@ async def _flush(
         worker_id=worker_id,
         settings=settings,
         metrics=None,
-        lifecycle=lifecycle,
     )
 
 
@@ -177,6 +175,8 @@ async def test_stopped_and_reaped_record_wipes(store: Store, settings) -> None:
 
 
 async def test_lifecycle_events_export_once_on_replay(store: Store, settings) -> None:
+    from apipi.services.ingest import emit_lifecycle_intents
+
     worker_id = uuid.uuid4()
     _tenant, session_id, _lease = await _hosted(store, worker_id)
     emitter = _Emitter()
@@ -194,19 +194,94 @@ async def test_lifecycle_events_export_once_on_replay(store: Store, settings) ->
             {"reason": "stop", "live_ms": 9},
         ),
     ]
-    first = await _flush(store, worker_id, flow, settings, lifecycle=emitter)
+    first = await _flush(store, worker_id, flow, settings)
     assert first.rejected == []
+    # Nothing is exported inside the transaction: the intents wait for
+    # commit so a rolled back batch cannot export twice on replay.
+    assert len(emitter.starts) == 0
+    assert len(emitter.stops) == 0
+    assert [intent.kind for intent in first.lifecycle] == ["start", "stop"]
+    emit_lifecycle_intents(emitter, first.lifecycle)
     assert len(emitter.starts) == 1
     assert emitter.starts[0][1] == "spawn"
     assert emitter.starts[0][0]["session_id"] == str(session_id)
     assert len(emitter.stops) == 1
     assert emitter.stops[0][1] == "stop"
     assert emitter.stops[0][2] == 9
-    replayed = await _flush(store, worker_id, flow, settings, lifecycle=emitter)
+    replayed = await _flush(store, worker_id, flow, settings)
     assert replayed.rejected == []
     assert replayed.acks == {session_id: 2}
+    assert replayed.lifecycle == []
+    emit_lifecycle_intents(emitter, replayed.lifecycle)
     assert len(emitter.starts) == 1
     assert len(emitter.stops) == 1
+
+
+async def test_lifecycle_identity_comes_from_row(store: Store, settings) -> None:
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease = await _hosted(store, worker_id)
+    spoofed = str(uuid.uuid4())
+    outcome = await _flush(
+        store,
+        worker_id,
+        [
+            _envelope(
+                session_id,
+                1,
+                "lifecycle.start",
+                {
+                    "cause": "spawn",
+                    "tenant_id": spoofed,
+                    "org_id": spoofed,
+                    "agent_id": spoofed,
+                    "user_id": spoofed,
+                    "key_id": spoofed,
+                    "sandbox_image": "worker-img",
+                    "run_mode": "microvm",
+                },
+            ),
+        ],
+        settings,
+    )
+    assert outcome.rejected == []
+    assert len(outcome.lifecycle) == 1
+    fields = outcome.lifecycle[0].fields
+    assert fields["session_id"] == str(session_id)
+    assert fields["tenant_id"] == str(tenant_id)
+    assert fields["org_id"] is None
+    assert fields["agent_id"] is None
+    assert fields["user_id"] is None
+    assert fields["key_id"] is None
+    assert fields["sandbox_image"] == "worker-img"
+    assert fields["run_mode"] == "microvm"
+
+
+async def test_reporter_start_validates_strictly() -> None:
+    from apipi.services.lifecycle_export import OutboxLifecycleReporter
+    from apipi.worker.outbox import Outbox
+    from apipi.worker.protocol import LifecycleStartPayload
+
+    outbox = Outbox()
+    reporter = OutboxLifecycleReporter(outbox)
+    session_id = uuid.uuid4()
+    seq = reporter.emit_start(
+        {
+            "session_id": session_id,
+            "tenant_id": str(uuid.uuid4()),
+            "born": 1.0,
+            "environment_type": "openai_hosted",
+            "sandbox_image": "img",
+            "run_mode": "microvm",
+            "started_at": "2026-01-01T00:00:00Z",
+        },
+        cause="spawn",
+    )
+    assert seq == 1
+    pending = outbox.pending(session_id)
+    assert len(pending) == 1
+    parsed = LifecycleStartPayload.model_validate(pending[0]["payload"])
+    assert parsed.cause == "spawn"
+    assert parsed.sandbox_image == "img"
 
 
 async def test_api_heartbeat_derives_from_inventory(store: Store, settings) -> None:

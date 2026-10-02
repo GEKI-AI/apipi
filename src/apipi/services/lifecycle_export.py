@@ -443,8 +443,20 @@ class OutboxLifecycleReporter(LifecycleEmitter):
             )
         except (ValueError, TypeError):
             return None
-        payload = {key: _jsonable(value) for key, value in fields.items()}
-        payload["cause"] = cause
+        # Only the envelope payload keys travel: identity comes from the
+        # session row on the API, and anything else would fail the
+        # strict payload validation there.
+        payload = {"cause": cause}
+        for key in (
+            "environment_type",
+            "sandbox_size",
+            "sandbox_image",
+            "image_version",
+            "image_digest",
+            "run_mode",
+            "started_at",
+        ):
+            payload[key] = _jsonable(fields.get(key))
         try:
             envelope = self.outbox.append(session_id, "lifecycle.start", payload)
         except Exception:

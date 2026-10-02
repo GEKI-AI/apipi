@@ -120,6 +120,10 @@ async def _flush_envelopes(
         await websocket.send_json(reply)
     for session_id, body in outcome.wakes:
         await event_hub.publish(session_id, body)
+    if outcome.lifecycle and lifecycle is not None:
+        from apipi.services.ingest import emit_lifecycle_intents
+
+        emit_lifecycle_intents(lifecycle, outcome.lifecycle)
     if outcome.wipes:
         from apipi.worker.pi.artifacts import wipe_artifact_store
 
@@ -138,22 +142,33 @@ async def _flush_envelopes(
                 )
 
 
-def _parse_inventory(message: dict[str, Any]) -> dict[uuid.UUID, uuid.UUID] | None:
-    """The worker live set as session_id to lease_id, or None if invalid."""
+def _parse_inventory(
+    message: dict[str, Any],
+) -> tuple[dict[uuid.UUID, uuid.UUID], list[uuid.UUID]] | None:
+    """The worker live set: leased sessions plus unleased on-disk dirs."""
     raw_sessions = message.get("sessions")
     if not isinstance(raw_sessions, list):
         return None
     reported: dict[uuid.UUID, uuid.UUID] = {}
+    unleased: list[uuid.UUID] = []
     for entry in raw_sessions:
         if not isinstance(entry, dict):
             return None
         try:
             session_id = uuid.UUID(str(entry.get("session_id")))
-            lease_id = uuid.UUID(str(entry.get("lease_id")))
+        except (ValueError, TypeError):
+            return None
+        raw_lease = entry.get("lease_id")
+        if raw_lease is None:
+            if session_id not in unleased:
+                unleased.append(session_id)
+            continue
+        try:
+            lease_id = uuid.UUID(str(raw_lease))
         except (ValueError, TypeError):
             return None
         reported[session_id] = lease_id
-    return reported
+    return reported, unleased
 
 
 def _parse_seen_ids(message: dict[str, Any]) -> list[uuid.UUID] | None:
@@ -319,11 +334,12 @@ async def worker_socket(websocket: WebSocket) -> None:
                 conn.store_proof = None
                 continue
             if msg_type == "inventory":
-                reported = _parse_inventory(message)
-                if reported is None:
+                parsed = _parse_inventory(message)
+                if parsed is None:
                     continue
+                reported, unleased = parsed
                 revoke, ttl = await hub.reconcile_inventory(
-                    store, event_hub, conn.worker_id, reported
+                    store, event_hub, conn.worker_id, reported, unleased
                 )
                 hub.observe_protocol("inventory")
                 await websocket.send_json(
