@@ -3,7 +3,7 @@ from pathlib import Path
 
 from apipi.config import Settings
 from apipi.worker.pi.fragments import render_shipped
-from apipi.worker.pi.platform_prompt import compose_instructions, sandbox_size_hint
+from apipi.worker.pi.platform_prompt import compose_instructions
 
 
 def _main(kind: str) -> str:
@@ -70,7 +70,7 @@ def test_additional_without_touching_main() -> None:
     assert compose_instructions(settings, None) == (f"{_main('none')}\n\nBe terse.")
 
 
-def test_none_and_chat_omit_workspace_and_size() -> None:
+def test_none_and_chat_omit_workspace() -> None:
     settings = _settings(run_mode="microvm")
     for env_type, chat in (("none", False), ("openai_hosted", True), (None, True)):
         text = compose_instructions(
@@ -84,11 +84,9 @@ def test_none_and_chat_omit_workspace_and_size() -> None:
         assert text == _main("none")
         assert text is not None
         assert "/workspace" not in text
-        assert "Sandbox size" not in text
-        assert "Chromium" not in text
 
 
-def test_hosted_prompt_names_workspace_not_size_on_none() -> None:
+def test_hosted_prompt_names_workspace() -> None:
     text = compose_instructions(
         _settings(),
         None,
@@ -97,54 +95,12 @@ def test_hosted_prompt_names_workspace_not_size_on_none() -> None:
         mem_mib=2048,
     )
     assert text == _main("hosted")
-    assert "15m" not in text
     assert "idle time" in text
     assert "inputs/" in text
     assert "non-persistent" in text
     assert "outputs/" in text
     assert text is not None
     assert "/workspace" in text
-    assert "Sandbox size" not in text
-    assert "Chromium" not in text
-    assert "Playwright" not in text
-
-
-def test_microvm_size_hint_is_ram_only() -> None:
-    text = sandbox_size_hint("L", 2048)
-    assert text == "Sandbox size is L (2048 MiB)."
-    assert "Chromium" not in text
-    assert "browser" not in text
-    composed = compose_instructions(
-        _settings(run_mode="microvm"),
-        None,
-        env_type="openai_hosted",
-        sandbox_size="L",
-        mem_mib=2048,
-        network="enabled",
-    )
-    assert composed is not None
-    assert "Sandbox size is L (2048 MiB)." not in composed
-    assert "This sandbox has network access." not in composed
-    assert "inputs/" in composed
-    assert "Today is" not in composed
-    assert "Chromium" not in composed
-    assert "Playwright" not in composed
-
-
-def test_restricted_network_hint() -> None:
-    text = compose_instructions(
-        _settings(run_mode="microvm"),
-        None,
-        env_type="hosted",
-        sandbox_size="M",
-        mem_mib=1024,
-        network="restricted",
-    )
-    assert text is not None
-    assert "restricted network access" not in text
-    assert "Sandbox size is M (1024 MiB)." not in text
-    assert "idle time" in text
-    assert "15m" not in text
 
 
 def test_capability_file_has_no_date(tmp_path: Path) -> None:
@@ -165,20 +121,5 @@ def test_capability_file_has_no_date(tmp_path: Path) -> None:
     payload = json.loads((tmp_path / ".pi" / "agent" / "capability.json").read_text())
     assert "Do not assume a browser is available" in payload["block"]
     assert "Today is ${date}." in payload["block"]
-    assert "Chromium is" not in payload["block"]
     assert "work" in payload["block"]
     assert "1024" in payload["block"]
-
-
-def test_disabled_or_unset_network_is_omitted() -> None:
-    for network in (None, "disabled"):
-        text = compose_instructions(
-            _settings(run_mode="microvm"),
-            None,
-            env_type="openai_hosted",
-            sandbox_size="S",
-            mem_mib=512,
-            network=network,
-        )
-        assert text is not None
-        assert "network" not in text

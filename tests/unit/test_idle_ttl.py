@@ -17,7 +17,7 @@ def _settings(**updates: object) -> Settings:
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="none",
         idle_ttl=timedelta(minutes=15),
-        workspace_ttl=timedelta(hours=1),
+        sandbox_ttl_openai_hosted=timedelta(hours=1),
     )
     if not updates:
         return base

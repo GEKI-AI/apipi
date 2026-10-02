@@ -3,7 +3,7 @@ import contextlib
 import importlib
 import inspect
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from time import monotonic
@@ -13,7 +13,6 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.config import ConfigError
 from apipi.gateway.errors import ApiError
@@ -363,23 +362,11 @@ def auth_from_result(result: object) -> AuthIdentity | AuthReject:
     raise TypeError("authenticate must return key_id and tenant_id")
 
 
-def identity_from_result(result: object) -> AuthIdentity | None:
-    parsed = auth_from_result(result)
-    if isinstance(parsed, AuthIdentity):
-        return parsed
-    return None
-
-
 def _store(request: Request) -> Store:
     store: Store | None = getattr(request.app.state, "store", None)
     if store is None:
         unauthorized()
     return store
-
-
-async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
-    async with _store(request).session() as session:
-        yield session
 
 
 def _cache_reject(reject: AuthReject) -> bool:

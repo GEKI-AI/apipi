@@ -165,10 +165,6 @@ def xdg_data_home() -> Path:
     return operator_home() / ".local" / "share"
 
 
-def microvm_image_dir() -> Path:
-    return xdg_cache_home() / "apipi" / "microvm"
-
-
 def firecracker_bin_dirs() -> list[Path]:
     dirs = [xdg_data_home() / "apipi" / "firecracker"]
     sudo_user = os.environ.get("SUDO_USER")
@@ -184,18 +180,6 @@ def firecracker_bin_dirs() -> list[Path]:
     return dirs
 
 
-def default_kernel_path() -> Path:
-    return microvm_image_dir() / "vmlinux"
-
-
-def default_rootfs_path() -> Path:
-    return microvm_image_dir() / "rootfs.ext4"
-
-
-def default_rootfs_browser_path() -> Path:
-    return microvm_image_dir() / "rootfs-browser.ext4"
-
-
 def _find_binary(name: str) -> str | None:
     found = shutil.which(name)
     if found is not None:
@@ -207,10 +191,11 @@ def _find_binary(name: str) -> str | None:
     return None
 
 
-def _image_missing(name: str, path: Path) -> ConfigError:
+def _image_missing(name: str) -> ConfigError:
     return ConfigError(
         f"microvm requires {name}. {INSTALL_HINT}, or set {name} / "
-        f"[sandbox].{name.removeprefix('APIPI_MICROVM_').lower()}. Looked at {path}"
+        f"[sandbox].{name.removeprefix('APIPI_MICROVM_').lower()} as a dev override. "
+        "Otherwise run apipi images pull <id>."
     )
 
 
@@ -241,31 +226,20 @@ def microvm_net_binaries() -> tuple[str, str, str]:
     return ip, iptables, tc
 
 
-def microvm_image_name(settings: Settings | None = None) -> str:
-    if settings is not None:
-        return settings.microvm_image
-    raw = os.environ.get("APIPI_MICROVM_IMAGE", "default")
-    image = raw.strip() or "default"
-    if image not in {"default", "browser", "work"}:
-        raise ConfigError("APIPI_MICROVM_IMAGE must be default, browser, or work")
-    return image
+def _resolve_override_file(configured: str | None, name: str) -> str | None:
+    if not configured:
+        return None
+    path = Path(configured)
+    if path.is_file():
+        return str(path)
+    raise ConfigError(
+        f"microvm requires {name} ({path} is not a file). {INSTALL_HINT}, "
+        f"or set {name} / [sandbox].{name.removeprefix('APIPI_MICROVM_').lower()} "
+        "to a dev override file."
+    )
 
 
-def _resolve_image_file(configured: str | None, default: Path, name: str) -> str:
-    if configured:
-        path = Path(configured)
-        if path.is_file():
-            return str(path)
-        raise ConfigError(
-            f"microvm requires {name} ({path} is not a file). {INSTALL_HINT}, "
-            f"or set {name} / [sandbox].{name.removeprefix('APIPI_MICROVM_').lower()}"
-        )
-    if default.is_file():
-        return str(default)
-    raise _image_missing(name, default)
-
-
-def _images_dir_file(settings: Settings | None, image_id: str) -> Path | None:
+def _images_dir_file(settings: Settings, image_id: str) -> Path | None:
     from apipi.worker.pi.image_pull import configured_images_dir
     from apipi.worker.pi.images import read_current
 
@@ -277,7 +251,7 @@ def _images_dir_file(settings: Settings | None, image_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def kernel_for_image(settings: Settings | None, image_id: str) -> Path | None:
+def kernel_for_image(settings: Settings, image_id: str) -> Path | None:
     from apipi.worker.pi.image_pull import configured_images_dir
     from apipi.worker.pi.images import local_kernel_path, read_current
 
@@ -303,7 +277,7 @@ def kernel_for_image(settings: Settings | None, image_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def _images_dir_kernel(settings: Settings | None) -> Path | None:
+def _images_dir_kernel(settings: Settings) -> Path | None:
     from apipi.worker.pi.image_pull import configured_images_dir
     from apipi.worker.pi.images import local_kernel_path
 
@@ -324,9 +298,9 @@ def _digest_from_manifest(path: Path) -> str:
 
 
 def resolve_spawn_image(
-    settings: Settings | None, image: str | None, rootfs: str
+    settings: Settings, image: str | None, rootfs: str
 ) -> ResolvedImage:
-    selected = image if image is not None else microvm_image_name(settings)
+    selected = image if image is not None else settings.sandbox_default_image
     from apipi.worker.pi.image_pull import configured_images_dir
     from apipi.worker.pi.images import read_current
 
@@ -334,66 +308,39 @@ def resolve_spawn_image(
     version = read_current(root, selected)
     if version is not None:
         pulled = root / selected / version / "rootfs.ext4"
-        if pulled.is_file() and Path(rootfs).resolve() == pulled.resolve():
-            digest = _digest_from_manifest(pulled.parent / "manifest.json")
-            return ResolvedImage(id=selected, version=version, digest=digest)
-    return ResolvedImage(id=selected, version="legacy", digest="legacy")
+        if pulled.is_file():
+            try:
+                if Path(rootfs).resolve() == pulled.resolve():
+                    digest = _digest_from_manifest(pulled.parent / "manifest.json")
+                    return ResolvedImage(id=selected, version=version, digest=digest)
+            except OSError:
+                pass
+    return ResolvedImage(id=selected, version=None, digest=None)
 
 
-def microvm_images(
-    settings: Settings | None = None, *, image: str | None = None
-) -> tuple[str, str]:
-    if settings is not None:
-        kernel = settings.microvm_kernel
-        default_rootfs = settings.microvm_rootfs
-        browser_rootfs = settings.microvm_rootfs_browser
-    else:
-        kernel = os.environ.get("APIPI_MICROVM_KERNEL")
-        default_rootfs = os.environ.get("APIPI_MICROVM_ROOTFS")
-        browser_rootfs = os.environ.get("APIPI_MICROVM_ROOTFS_BROWSER")
-    selected = image if image is not None else microvm_image_name(settings)
-    if kernel:
-        kernel_path = _resolve_image_file(
-            kernel, default_kernel_path(), "APIPI_MICROVM_KERNEL"
-        )
+def microvm_images(settings: Settings, *, image: str | None = None) -> tuple[str, str]:
+    selected = image if image is not None else settings.sandbox_default_image
+    override_kernel = _resolve_override_file(
+        settings.microvm_kernel, "APIPI_MICROVM_KERNEL"
+    )
+    if override_kernel is not None:
+        kernel_path = override_kernel
     else:
         pulled = kernel_for_image(settings, selected) or _images_dir_kernel(settings)
-        kernel_path = (
-            str(pulled)
-            if pulled is not None
-            else _resolve_image_file(
-                None, default_kernel_path(), "APIPI_MICROVM_KERNEL"
-            )
-        )
-    explicit = browser_rootfs if selected == "browser" else None
-    if selected == "default":
-        explicit = default_rootfs
-    if explicit:
-        name = (
-            "APIPI_MICROVM_ROOTFS_BROWSER"
-            if selected == "browser"
-            else "APIPI_MICROVM_ROOTFS"
-        )
-        fallback = (
-            default_rootfs_browser_path()
-            if selected == "browser"
-            else default_rootfs_path()
-        )
-        return kernel_path, _resolve_image_file(explicit, fallback, name)
+        if pulled is None:
+            raise _image_missing("APIPI_MICROVM_KERNEL")
+        kernel_path = str(pulled)
+    override_rootfs = _resolve_override_file(
+        settings.microvm_rootfs, "APIPI_MICROVM_ROOTFS"
+    )
+    if override_rootfs is not None:
+        return kernel_path, override_rootfs
     pulled_root = _images_dir_file(settings, selected)
     if pulled_root is not None:
         return kernel_path, str(pulled_root)
-    if selected == "browser":
-        return kernel_path, _resolve_image_file(
-            None, default_rootfs_browser_path(), "APIPI_MICROVM_ROOTFS_BROWSER"
-        )
-    if selected == "default":
-        return kernel_path, _resolve_image_file(
-            None, default_rootfs_path(), "APIPI_MICROVM_ROOTFS"
-        )
     raise ConfigError(
         f"sandbox_image {selected} is not in the images dir. "
-        f"Run apipi images pull, or apipi install --microvm --image {selected}."
+        f"Run apipi images pull {selected}."
     )
 
 
@@ -446,13 +393,15 @@ def reexec_microvm_shell(extra: list[str]) -> None:
         ) from exc
 
 
-def require_microvm(settings: Settings | None = None) -> None:
+def require_microvm(settings: Settings | None) -> None:
     if not kvm_available():
         raise ConfigError("microvm requires /dev/kvm")
+    if settings is None:
+        raise ConfigError("microvm requires settings")
     microvm_binaries()
     microvm_net_binaries()
-    microvm_images(settings, image="default")
-    if settings is not None and settings.sandbox_default_size == "L":
+    microvm_images(settings, image=settings.sandbox_default_image)
+    if settings.sandbox_default_size == "L":
         microvm_images(settings, image="browser")
 
 
@@ -565,22 +514,6 @@ def resolve_host_ips(host: str) -> list[str]:
         ips.append(ip)
     if not ips:
         raise ConfigError(f"microvm cannot resolve {host}")
-    return ips
-
-
-def allowed_egress_ips(
-    settings: Settings,
-    mcp_http: list[McpHttpServer] | None = None,
-    extra_hosts: list[str] | None = None,
-) -> list[str]:
-    ips: list[str] = []
-    seen: set[str] = set()
-    for host in microvm_egress_hosts(settings, mcp_http, extra_hosts=extra_hosts):
-        for ip in resolve_host_ips(host):
-            if ip in seen:
-                continue
-            seen.add(ip)
-            ips.append(ip)
     return ips
 
 
@@ -1382,7 +1315,7 @@ async def start_microvm(
     require_microvm(settings)
     firecracker, jailer = microvm_binaries()
     ip_bin, iptables_bin, tc_bin = microvm_net_binaries()
-    selected = image if image is not None else microvm_image_name(settings)
+    selected = image if image is not None else settings.sandbox_default_image
     kernel, rootfs = microvm_images(settings, image=selected)
     resolved = resolve_spawn_image(settings, selected, rootfs)
     guest_mem = mem_mib if mem_mib is not None else settings.microvm_mem_mib

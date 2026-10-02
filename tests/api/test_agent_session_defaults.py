@@ -1,5 +1,4 @@
 import io
-import uuid
 import zipfile
 
 from httpx import AsyncClient
@@ -80,7 +79,7 @@ async def test_agent_session_defaults_round_trip(client: AsyncClient) -> None:
     body = created.json()
     assert body["session_defaults"]["environment"]["env"]["LOG_LEVEL"] == "info"
     assert body["session_defaults"]["vault_ids"] == [vault_id]
-    assert body["metadata"]["apipi.sandbox_size"] == "M"
+    assert "apipi.sandbox_size" not in body["metadata"]
     agent_id = body["id"]
     cleared = await client.post(
         f"/v1/agents/{agent_id}",
@@ -141,7 +140,6 @@ async def test_inherit_false_and_chat_type_rule(client: AsyncClient) -> None:
         json={
             "name": "bot",
             "model": "test",
-            "metadata": {"apipi.sandbox_size": "M"},
             "session_defaults": {
                 "environment": {
                     "type": "openai_hosted",
@@ -250,7 +248,7 @@ async def test_alias_conflict_and_hosted_only(client: AsyncClient) -> None:
         },
     )
     assert conflict.status_code == 400
-    assert "sandbox_size" in conflict.json()["error"]["message"]
+    assert "container_size" in conflict.json()["error"]["message"]
     hosted = await client.post(
         "/v1/agents",
         headers=_auth(token),
@@ -307,6 +305,5 @@ async def test_session_field_beats_agent_sandbox(client: AsyncClient) -> None:
             "metadata": {"apipi.sandbox_size": "S"},
         },
     )
-    assert session.status_code == 200, session.text
-    assert session.json()["environment"]["sandbox_size"] == "S"
-    assert uuid.UUID(agent_id)
+    assert session.status_code == 400
+    assert "container_size" in session.json()["error"]["message"]

@@ -79,18 +79,22 @@ from apipi.worker.pi.idle import (
 from apipi.worker.pi.model_host import require_model
 from apipi.worker.pi.sandbox import (
     mem_mib_for_size,
+    reject_removed_size_key,
     require_image_rootfs,
     require_image_size,
     require_known_image,
     resolve_sandbox_image,
     resolve_sandbox_size,
     sandbox_size_of,
+    strip_removed_size_key,
 )
 from apipi.worker.pi.settings_json import (
     THINKING_KEY,
     apply_reasoning_effort,
     copy_inline_pi_metadata,
+    public_metadata,
     reasoning_body,
+    reject_client_thinking_key,
     reject_reasoning_conflict,
     require_thinking_supported,
     resolve_thinking,
@@ -153,7 +157,7 @@ def session_body(row: SessionRow) -> dict[str, Any]:
         "status": row.status,
         "environment": overlay_environment(row),
         "idle_ttl": row.idle_ttl,
-        "metadata": row.metadata_json,
+        "metadata": public_metadata(row.metadata_json),
         "reasoning": reasoning_body(row.metadata_json),
         "required_actions": row.required_actions,
         "user_id": row.user_id,
@@ -450,6 +454,11 @@ class SessionService:
                 "Provide agent or agent_id",
                 code="invalid_request",
             )
+        reject_removed_size_key(metadata)
+        reject_client_thinking_key(metadata)
+        if agent is not None and agent.metadata is not None:
+            reject_removed_size_key(agent.metadata)
+            reject_client_thinking_key(agent.metadata)
         agent_defaults = await self._saved_defaults(tenant_id, agent, agent_id)
         if inherit_agent_defaults and agent_defaults:
             label = f"agent {agent_id}" if agent_id is not None else "inline agent"
@@ -491,7 +500,7 @@ class SessionService:
                     not_found()
                 raw_tools = saved.tools
                 model = saved.model
-                agent_metadata = saved.metadata_json
+                agent_metadata = strip_removed_size_key(saved.metadata_json)
             if agent is not None:
                 if agent.model is not None:
                     model = agent.model
@@ -542,8 +551,6 @@ class SessionService:
                 environment_size=env.get("sandbox_size")
                 if isinstance(env.get("sandbox_size"), str)
                 else None,
-                session_metadata=metadata,
-                agent_metadata=sandbox_agent_metadata,
                 agent_default=agent_size,
                 default=self.settings.sandbox_default_size,
             )
@@ -831,6 +838,11 @@ class SessionService:
         user_id: str | None = None,
     ) -> dict[str, Any]:
         changes: dict[str, Any] = {}
+        reject_removed_size_key(metadata)
+        reject_client_thinking_key(metadata)
+        if agent is not None and agent.metadata is not None:
+            reject_removed_size_key(agent.metadata)
+            reject_client_thinking_key(agent.metadata)
         async with self.store.session() as db:
             current = await get_session(db, tenant_id, session_id, user_id=user_id)
             if current is None:

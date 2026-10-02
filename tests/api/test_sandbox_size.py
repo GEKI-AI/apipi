@@ -45,8 +45,8 @@ async def test_environment_sandbox_size(client: AsyncClient) -> None:
     assert created.json()["environment"]["sandbox_size"] == "M"
 
 
-async def test_session_metadata_sandbox_size(client: AsyncClient) -> None:
-    token = "size-meta"
+async def test_session_metadata_sandbox_size_is_rejected(client: AsyncClient) -> None:
+    token = "size-meta-removed"
     agent_id = await _agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
@@ -57,29 +57,28 @@ async def test_session_metadata_sandbox_size(client: AsyncClient) -> None:
             "metadata": {"apipi.sandbox_size": "L"},
         },
     )
-    assert created.status_code == 200
-    body = created.json()
-    assert body["environment"]["sandbox_size"] == "L"
-    assert body["metadata"]["apipi.sandbox_size"] == "L"
+    assert created.status_code == 400
+    assert "container_size" in created.json()["error"]["message"]
 
 
-async def test_agent_metadata_sandbox_size(client: AsyncClient) -> None:
+async def test_agent_metadata_sandbox_size_is_rejected(client: AsyncClient) -> None:
     token = "size-agent"
-    agent_id = await _agent(
-        client, token, metadata={"apipi.sandbox_size": "M", "keep": "me"}
-    )
     created = await client.post(
-        "/v1/agents/sessions",
+        "/v1/agents",
         headers=_auth(token),
-        json={"agent_id": agent_id, "environment": {"type": "none"}},
+        json={
+            "name": "bot",
+            "model": "test",
+            "metadata": {"apipi.sandbox_size": "M", "keep": "me"},
+        },
     )
-    assert created.status_code == 200
-    assert created.json()["environment"]["sandbox_size"] == "M"
+    assert created.status_code == 400
+    assert "container_size" in created.json()["error"]["message"]
 
 
-async def test_environment_overrides_metadata(client: AsyncClient) -> None:
+async def test_removed_size_key_fails_with_env_size(client: AsyncClient) -> None:
     token = "size-override"
-    agent_id = await _agent(client, token, metadata={"apipi.sandbox_size": "S"})
+    agent_id = await _agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
         headers=_auth(token),
@@ -89,8 +88,8 @@ async def test_environment_overrides_metadata(client: AsyncClient) -> None:
             "metadata": {"apipi.sandbox_size": "M"},
         },
     )
-    assert created.status_code == 200
-    assert created.json()["environment"]["sandbox_size"] == "L"
+    assert created.status_code == 400
+    assert "container_size" in created.json()["error"]["message"]
 
 
 async def test_invalid_sandbox_size(client: AsyncClient) -> None:
@@ -124,7 +123,7 @@ async def test_top_level_sandbox_size_unknown_field(client: AsyncClient) -> None
     assert response.json()["error"]["code"] == "unknown_field"
 
 
-async def test_metadata_update_does_not_change_size(client: AsyncClient) -> None:
+async def test_metadata_update_with_removed_key_fails(client: AsyncClient) -> None:
     token = "size-patch"
     agent_id = await _agent(client, token)
     created = await client.post(
@@ -141,9 +140,8 @@ async def test_metadata_update_does_not_change_size(client: AsyncClient) -> None
         headers=_auth(token),
         json={"metadata": {"apipi.sandbox_size": "L"}},
     )
-    assert updated.status_code == 200
-    assert updated.json()["environment"]["sandbox_size"] == "M"
-    assert updated.json()["metadata"]["apipi.sandbox_size"] == "L"
+    assert updated.status_code == 400
+    assert "container_size" in updated.json()["error"]["message"]
 
 
 async def test_gateway_default_size(settings: Settings, store: Store) -> None:
@@ -167,7 +165,7 @@ async def test_gateway_default_size(settings: Settings, store: Store) -> None:
         assert created.json()["environment"]["sandbox_size"] == "L"
 
 
-async def test_invalid_metadata_size(client: AsyncClient) -> None:
+async def test_removed_metadata_size_is_rejected(client: AsyncClient) -> None:
     token = "size-meta-bad"
     agent_id = await _agent(client, token)
     response = await client.post(
@@ -180,4 +178,4 @@ async def test_invalid_metadata_size(client: AsyncClient) -> None:
         },
     )
     assert response.status_code == 400
-    assert "sandbox_size" in response.json()["error"]["message"]
+    assert "container_size" in response.json()["error"]["message"]

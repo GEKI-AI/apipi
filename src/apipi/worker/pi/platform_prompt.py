@@ -1,6 +1,6 @@
 from apipi.config import Settings
 
-_HOSTED = frozenset({"openai_hosted", "hosted"})
+_HOSTED = frozenset({"openai_hosted"})
 
 
 def _computer(env_type: str | None, chat: bool) -> str | None:
@@ -9,27 +9,6 @@ def _computer(env_type: str | None, chat: bool) -> str | None:
     if env_type in _HOSTED:
         return "hosted"
     return None
-
-
-def _main_prompt(env_type: str | None, chat: bool) -> str:
-    from apipi.worker.pi.fragments import render_shipped
-
-    kind = _computer(env_type, chat) or "none"
-    return render_shipped(
-        f"main.{kind}",
-        {
-            "platform_name": "ApiPi",
-            "workspace": "/workspace" if kind == "hosted" else "",
-        },
-    )
-
-
-def sandbox_size_hint(size: str | None, mem_mib: int | None) -> str:
-    if not size or mem_mib is None:
-        return ""
-    from apipi.worker.pi.fragments import render_shipped
-
-    return render_shipped("size", {"size": size, "mem_mib": str(mem_mib)})
 
 
 def _idle_label(settings: Settings) -> str:
@@ -49,33 +28,14 @@ def _write_capability(
 ) -> None:
     if not cwd:
         return
+    import json
     from pathlib import Path
 
-    from apipi.worker.pi.fragments import fragment_source, fragment_text
-
-    overrides: list[str] = []
-    if fragment_source(settings, "size")[0] is not None:
-        overrides.append(fragment_text(settings, "size", values, strict=False))
-    if fragment_source(settings, "network")[0] is not None:
-        overrides.append(fragment_text(settings, "network", values, strict=False))
     directory = Path(cwd) / ".pi" / "agent"
     directory.mkdir(parents=True, exist_ok=True)
-    import json
-
     (directory / "capability.json").write_text(
-        json.dumps({"block": block, "overrides": [item for item in overrides if item]})
-        + "\n"
+        json.dumps({"block": block, "overrides": []}) + "\n"
     )
-
-
-def network_hint(access: str | None) -> str:
-    from apipi.worker.pi.fragments import render_shipped
-
-    if access == "enabled":
-        return render_shipped("network.enabled", {})
-    if access == "restricted":
-        return render_shipped("network.restricted", {})
-    return ""
 
 
 def compose_instructions(
@@ -92,42 +52,36 @@ def compose_instructions(
     vcpus: int | None = None,
     cwd: str | None = None,
 ) -> str | None:
-    from apipi.worker.pi.fragments import cap_prompt, fragment_text
+    from apipi.worker.pi.fragments import (
+        cap_prompt,
+        capability_block,
+        fragment_text,
+    )
 
-    kind = _computer(env_type, chat) or "none"
     if settings is None:
-        main = _main_prompt(env_type, chat)
-        extra = ""
-        size = ""
-        net = ""
-    else:
-        ttl = idle_ttl or _idle_label(settings)
-        values = {
-            "platform_name": settings.platform_name or "ApiPi",
-            "env_type": kind,
-            "workspace": "/workspace" if kind == "hosted" else "",
-            "size": sandbox_size or "",
-            "mem_mib": "" if mem_mib is None else str(mem_mib),
-            "vcpus": "" if vcpus is None else str(vcpus),
-            "image": image or "",
-            "network": network or "",
-            "idle_ttl": ttl,
-            "date": "",
-            "has_browser": "",
-        }
-        main = fragment_text(settings, f"main.{kind}", values, strict=False)
-        extra = fragment_text(settings, f"additional.{kind}", values, strict=False)
-        size = ""
-        net = ""
-        if kind == "hosted" and settings.run_mode == "microvm":
-            from apipi.worker.pi.fragments import capability_block, fragment_source
+        from apipi.config import ConfigError
 
-            _write_capability(cwd, capability_block(settings, values), settings, values)
-            if fragment_source(settings, "size")[0] is not None:
-                size = fragment_text(settings, "size", values, strict=False)
-            if fragment_source(settings, "network")[0] is not None:
-                net = fragment_text(settings, "network", values, strict=False)
+        raise ConfigError("compose_instructions needs settings")
+    kind = _computer(env_type, chat) or "none"
+    ttl = idle_ttl or _idle_label(settings)
+    values = {
+        "platform_name": settings.platform_name or "ApiPi",
+        "env_type": kind,
+        "workspace": "/workspace" if kind == "hosted" else "",
+        "size": sandbox_size or "",
+        "mem_mib": "" if mem_mib is None else str(mem_mib),
+        "vcpus": "" if vcpus is None else str(vcpus),
+        "image": image or "",
+        "network": network or "",
+        "idle_ttl": ttl,
+        "date": "",
+        "has_browser": "",
+    }
+    main = fragment_text(settings, f"main.{kind}", values, strict=False)
+    extra = fragment_text(settings, f"additional.{kind}", values, strict=False)
+    if kind == "hosted" and settings.run_mode == "microvm":
+        _write_capability(cwd, capability_block(settings, values), settings, values)
     agent = agent_instructions or ""
-    parts = [part for part in (main, extra, size, net, agent) if part]
+    parts = [part for part in (main, extra, agent) if part]
     text = "\n\n".join(parts)
     return cap_prompt(text) if text else None

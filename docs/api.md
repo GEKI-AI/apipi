@@ -69,11 +69,11 @@ size and image. The session row stores the merged environment. `environment.env`
 values are stored on the agent row in plain text. Use `vault_ids` for
 credentials.
 
-`metadata["apipi.sandbox_size"]` and `metadata["apipi.sandbox_image"]`
-are deprecated aliases of `session_defaults.environment.sandbox_size`
-and `sandbox_image`. Create and update copy them into
+`metadata["apipi.sandbox_image"]`
+is the stock-SDK path for `session_defaults.environment.sandbox_image`.
+Create and update copy it into
 `session_defaults` and mirror the stored value back into metadata so
-older clients still see the keys. If both are set and they differ, the
+older clients still see the key. If both are set and they differ, the
 write is `400`. A missing value keeps the gateway default. Worker
 availability is not checked until a session is created. See
 [environments](environments.md).
@@ -374,9 +374,10 @@ wins over the agent field. Stock clients can set
 [config](config.md).
 
 `metadata` is a JSON object. Keys that start with `apipi.` are
-reserved. The gateway interprets `apipi.sandbox_size`,
-`apipi.sandbox_image`, `apipi.session_kind`, `apipi.thinking`,
-`apipi.system_prompt`, `apipi.codemode`, and `apipi.idle_ttl`. It
+reserved. The gateway interprets
+`apipi.sandbox_image`, `apipi.session_kind`,
+`apipi.system_prompt`, `apipi.codemode`, and `apipi.idle_ttl`, and it rejects
+`apipi.sandbox_size` and `apipi.thinking` with `400`. It
 stores `apipi.actor_type`, `apipi.schedule_id`, and `apipi.source`
 and does not branch on them. There is no top-level `actor_type`
 field. See [reserved metadata](extending.md#reserved-metadata).
@@ -477,7 +478,8 @@ in items, and not in logs. There is no admin API that returns it.
 Pi's session cache may still hold the full text. That cache is not
 the public transcript. Thinking deltas are not sent to clients.
 Enable thinking with `APIPI_PI_THINKING`, or override it per session
-with `metadata["apipi.thinking"]` or `reasoning.effort`. `none` means
+with `reasoning.effort`. `metadata["apipi.thinking"]` is removed as client
+input and is `400`. `none` means
 off. See [Pi](config.md#pi).
 
 Compaction events are optional. A Pi build that does not emit
@@ -608,10 +610,10 @@ return `400`. Decoded files must fit
 
 `environment.sandbox_size` is an ApiPi extension: `S`, `M`, or `L`.
 Unknown values return `400`. A top-level `sandbox_size` on the session
-body is still `unknown_field`. Stock OpenAI clients can set
-`metadata["apipi.sandbox_size"]` instead. Agent
+body is still `unknown_field`. Set `environment.container_size`
+(`small`, `medium`, `large`) or `environment.sandbox_size`. Agent
 `session_defaults.environment.sandbox_size` is the default for later
-sessions. The metadata key is a deprecated alias of that field. The gateway default is
+sessions. The gateway default is
 `APIPI_SANDBOX_DEFAULT_SIZE` (`S` unless you change it). The resolved
 size is stored on the session `environment` and does not change if you
 later PATCH metadata. Isolation `none` accepts the field and ignores

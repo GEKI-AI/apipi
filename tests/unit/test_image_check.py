@@ -28,22 +28,18 @@ def test_rootfs_check_mounts_dev_before_mkdir() -> None:
     assert 'mkdir -p "$mnt/dev" "$mnt/dev/shm"' not in script
 
 
-def test_parse_check_tar_reads_browser_and_tools() -> None:
+def test_parse_check_tar_reads_browser() -> None:
     browser = {"snapshot": True, "error": None}
-    tools = {"tools": [], "skill": True, "playwright": False}
     blob = _tar(
         {
             "outputs/browser-check.json": (json.dumps(browser) + "\n").encode(),
-            "outputs/image-check.json": (json.dumps(tools) + "\n").encode(),
         }
     )
-    found, listed = parse_check_tar(blob)
-    assert found == browser
-    assert listed == tools
+    assert parse_check_tar(blob) == browser
 
 
 def test_parse_check_tar_empty() -> None:
-    assert parse_check_tar(b"") == (None, None)
+    assert parse_check_tar(b"") is None
 
 
 def test_guest_vcpus_l_defaults_to_two() -> None:

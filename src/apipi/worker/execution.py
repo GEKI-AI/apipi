@@ -3,7 +3,7 @@ import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any, NoReturn, Protocol
+from typing import Any, NoReturn
 
 from apipi.config import Settings
 from apipi.gateway.errors import ApiError
@@ -37,81 +37,6 @@ from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
 log = logging.getLogger("apipi.worker")
-
-
-class Execution(Protocol):
-    def capacity_code(
-        self,
-        session_id: uuid.UUID,
-        tenant_id: uuid.UUID,
-        session_mem_mib: int | None = None,
-    ) -> str | None: ...
-
-    async def run_turn(
-        self,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        text: str,
-        *,
-        images: list[dict[str, str]] | None = None,
-        parts: list[dict[str, str]] | None = None,
-        mcp_http: list[Any] | None = None,
-        request_id: str | None = None,
-        api_key: str | None = None,
-        key_id: str | None = None,
-        user_id: str | None = None,
-        org_id: str | None = None,
-    ) -> None: ...
-
-    async def lifecycle_loop(self) -> None: ...
-
-    async def sandbox_seen_loop(self) -> None: ...
-
-    async def boot_hosted(
-        self,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        *,
-        mcp_http: list[Any] | None = None,
-    ) -> None: ...
-
-    async def continue_turn(
-        self,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        *,
-        turn_id: uuid.UUID,
-        call_id: str,
-        success: bool,
-        output: str | None,
-        error: str | None,
-        mcp_http: list[Any] | None = None,
-        request_id: str | None = None,
-        api_key: str | None = None,
-        key_id: str | None = None,
-        user_id: str | None = None,
-        org_id: str | None = None,
-    ) -> None: ...
-
-    async def cancel(self, session_id: uuid.UUID, *, status: str) -> None: ...
-
-    async def prepare_for_new_turn(
-        self, tenant_id: uuid.UUID, session_id: uuid.UUID
-    ) -> None: ...
-
-    async def teardown(self, session_id: uuid.UUID) -> None: ...
-
-    def require(self) -> None: ...
-
-    async def probe(self) -> None: ...
-
-    async def reap_loop(self) -> None: ...
-
-    async def reap_workspace_loop(self) -> None: ...
-
-    async def observe_loop(self) -> None: ...
-
-    async def close(self) -> None: ...
 
 
 class LocalExecution:

@@ -171,7 +171,7 @@ def test_install_microvm_dry_run(
     assert "apipi images pull default" in text
 
 
-def test_install_microvm_skips_when_present(
+def test_install_microvm_pulls_image(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
@@ -184,31 +184,35 @@ def test_install_microvm_skips_when_present(
     dest.mkdir(parents=True)
     (dest / "firecracker").write_text("")
     (dest / "jailer").write_text("")
-    cache = tmp_path / "cache" / "apipi" / "microvm"
-    cache.mkdir(parents=True)
-    (cache / "vmlinux").write_bytes(b"k")
-    (cache / "rootfs.ext4").write_bytes(b"r")
-    version, _build = pi_install.pinned_kernel()
-    (cache / "vmlinux.version").write_text(version + "\n")
     monkeypatch.setattr(
         "apipi.worker.pi.install._firecracker_version", lambda _path: PINNED_FIRECRACKER
     )
-    ran: list[object] = []
     monkeypatch.setattr(
-        "apipi.worker.pi.install.subprocess.run", lambda *_a, **_k: ran.append(1)
+        "apipi.worker.pi.install.subprocess.run", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
         pi_install,
         "_download_firecracker",
-        lambda *_a, **_k: ran.append("dl"),
+        lambda *_a, **_k: None,
+    )
+    pulled: list[list[str] | None] = []
+
+    def fake_pull(
+        settings: object, *, ids: list[str] | None = None, **_k: object
+    ) -> list[str]:
+        pulled.append(ids)
+        return [f"{ids[0]} v1" if ids else "default v1"]
+
+    monkeypatch.setattr("apipi.worker.pi.image_pull.pull_images", fake_pull)
+    monkeypatch.setattr(
+        "apipi.worker.pi.image_pull.configured_images_dir",
+        lambda _s: tmp_path / "images",
     )
     out = StringIO()
     assert install_microvm(out=out) == 0
-    assert ran == []
+    assert pulled == [["default"]]
     text = out.getvalue()
-    assert "already installed" in text
-    assert "APIPI_MICROVM_KERNEL" in text
-    assert "APIPI_MICROVM_ROOTFS=" in text
+    assert "Pulled MicroVM image default" in text
 
 
 def _tar_member(tar: tarfile.TarFile, name: str, payload: bytes) -> None:
@@ -258,55 +262,6 @@ def test_firecracker_version_reads_jailer(tmp_path: Path) -> None:
     assert _firecracker_version(binary) == PINNED_FIRECRACKER
 
 
-def test_install_replaces_stale_guest_kernel(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    monkeypatch.setattr("apipi.worker.pi.install.kvm_available", lambda: True)
-    monkeypatch.setattr(
-        "apipi.worker.pi.install.microvm_net_binaries", lambda: ("ip", "iptables", "tc")
-    )
-    dest = tmp_path / "apipi" / "firecracker"
-    dest.mkdir(parents=True)
-    (dest / "firecracker").write_text("")
-    (dest / "jailer").write_text("")
-    cache = tmp_path / "cache" / "apipi" / "microvm"
-    cache.mkdir(parents=True)
-    kernel = cache / "vmlinux"
-    kernel.write_bytes(b"old")
-    (cache / "rootfs.ext4").write_bytes(b"r")
-    (cache / "vmlinux.version").write_text("4.14\n")
-    monkeypatch.setattr(
-        "apipi.worker.pi.install._firecracker_version", lambda _path: PINNED_FIRECRACKER
-    )
-
-    class _Resp:
-        def __init__(self) -> None:
-            self._left = b"new-kernel"
-
-        def __enter__(self) -> object:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def read(self, _n: int = -1) -> bytes:
-            data = self._left
-            self._left = b""
-            return data
-
-    monkeypatch.setattr(
-        "apipi.worker.pi.install.urllib.request.urlopen", lambda *_a, **_k: _Resp()
-    )
-    out = StringIO()
-    assert install_microvm(out=out) == 0
-    assert kernel.read_bytes() == b"new-kernel"
-    version, _build = pi_install.pinned_kernel()
-    assert (cache / "vmlinux.version").read_text().strip() == version
-    assert "Downloading guest kernel" in out.getvalue()
-
-
 def test_install_microvm_repairs_bad_jailer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -320,12 +275,6 @@ def test_install_microvm_repairs_bad_jailer(
     dest.mkdir(parents=True)
     (dest / "firecracker").write_text("")
     (dest / "jailer").write_text("")
-    cache = tmp_path / "cache" / "apipi" / "microvm"
-    cache.mkdir(parents=True)
-    (cache / "vmlinux").write_bytes(b"k")
-    (cache / "rootfs.ext4").write_bytes(b"r")
-    version, _build = pi_install.pinned_kernel()
-    (cache / "vmlinux.version").write_text(version + "\n")
     state: dict[str, str | None] = {"jailer": None}
 
     def version(path: Path) -> str | None:
@@ -342,6 +291,13 @@ def test_install_microvm_repairs_bad_jailer(
 
     monkeypatch.setattr("apipi.worker.pi.install._firecracker_version", version)
     monkeypatch.setattr(pi_install, "_download_firecracker", fake_dl)
+    monkeypatch.setattr(
+        "apipi.worker.pi.image_pull.pull_images", lambda *_a, **_k: ["default v1"]
+    )
+    monkeypatch.setattr(
+        "apipi.worker.pi.image_pull.configured_images_dir",
+        lambda _s: tmp_path / "images",
+    )
     ran: list[object] = []
     monkeypatch.setattr(
         "apipi.worker.pi.install.subprocess.run", lambda *_a, **_k: ran.append(1)
@@ -353,7 +309,7 @@ def test_install_microvm_repairs_bad_jailer(
     text = out.getvalue()
     assert "reinstalling" in text
     assert f"Firecracker {PINNED_FIRECRACKER} is already installed" not in text
-    assert "MicroVM default image is already installed" in text
+    assert "Pulled MicroVM image default" in text
 
 
 def test_install_microvm_errors_when_jailer_still_bad(
@@ -438,14 +394,12 @@ def test_recipe_ids_list_shipped_images() -> None:
     assert rootfs_script_path().name == "build.sh"
 
 
-def test_build_script_custom_image_does_not_export_default_rootfs() -> None:
+def test_build_script_points_to_images_build() -> None:
     script = rootfs_script_path().read_text()
-    assert 'echo "export APIPI_MICROVM_ROOTFS=$ROOTFS"' in script
-    custom = script.split('elif [[ "$IMAGE_ID" == default ]]; then', 1)[1]
-    custom = custom.split("else", 1)[1].split("fi", 1)[0]
-    assert "APIPI_MICROVM_ROOTFS=$ROOTFS" not in custom
-    assert "apipi images build" in custom
-    assert "sandbox_image=$IMAGE_ID" in custom
+    assert "apipi images build" in script
+    assert "APIPI_MICROVM_ROOTFS_BROWSER" not in script
+    assert "APIPI_MICROVM_IMAGE=browser" not in script
+    assert "dev-only overrides" in script
 
 
 def test_build_script_base_packages_include_curl_and_git() -> None:

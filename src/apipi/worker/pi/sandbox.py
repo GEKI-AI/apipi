@@ -6,7 +6,6 @@ from apipi.config import ConfigError, Settings
 from apipi.gateway.errors import ApiError
 
 SANDBOX_SIZES = frozenset({"S", "M", "L"})
-SANDBOX_SIZE_KEY = "apipi.sandbox_size"
 SANDBOX_IMAGE_KEY = "apipi.sandbox_image"
 SANDBOX_SIZE_HELP = "sandbox_size must be S, M, or L"
 SANDBOX_IMAGE_HELP = "sandbox_image must match ^[a-z0-9][a-z0-9-]{0,31}$"
@@ -137,19 +136,9 @@ def size_for_mem(settings: Settings, mem_mib: int) -> str:
     return "S"
 
 
-def size_from_metadata(metadata: dict[str, Any] | None) -> str | None:
-    if not metadata:
-        return None
-    if SANDBOX_SIZE_KEY not in metadata:
-        return None
-    return parse_sandbox_size(metadata.get(SANDBOX_SIZE_KEY))
-
-
 def resolve_sandbox_size(
     *,
     environment_size: str | None,
-    session_metadata: dict[str, Any] | None,
-    agent_metadata: dict[str, Any] | None,
     default: str,
     agent_default: str | None = None,
 ) -> str:
@@ -157,16 +146,10 @@ def resolve_sandbox_size(
         parsed = parse_sandbox_size(environment_size)
         if parsed is not None:
             return parsed
-    session_size = size_from_metadata(session_metadata)
-    if session_size is not None:
-        return session_size
     if agent_default is not None:
         parsed = parse_sandbox_size(agent_default)
         if parsed is not None:
             return parsed
-    agent_size = size_from_metadata(agent_metadata)
-    if agent_size is not None:
-        return agent_size
     parsed = parse_sandbox_size(default)
     return parsed if parsed is not None else "S"
 
@@ -225,28 +208,41 @@ def min_vcpus_for_image(image_id: str | None, settings: Settings | None = None) 
     return floor
 
 
+REMOVED_SIZE_KEY = "apipi.sandbox_size"
+
+
+def reject_removed_size_key(metadata: dict[str, Any] | None) -> None:
+    if isinstance(metadata, dict) and REMOVED_SIZE_KEY in metadata:
+        raise ApiError(
+            "invalid_request",
+            "apipi.sandbox_size was removed; set environment.container_size "
+            "(small, medium, or large) or environment.sandbox_size (S, M, or L)",
+            code="invalid_request",
+        )
+
+
+def strip_removed_size_key(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict) or REMOVED_SIZE_KEY not in metadata:
+        return metadata
+    cleaned = dict(metadata)
+    cleaned.pop(REMOVED_SIZE_KEY, None)
+    return cleaned
+
+
 def validate_sandbox_metadata(
     settings: Settings, metadata: dict[str, Any] | None
 ) -> None:
-    if not metadata:
+    reject_removed_size_key(metadata)
+    if not metadata or SANDBOX_IMAGE_KEY not in metadata:
         return
-    if SANDBOX_SIZE_KEY not in metadata and SANDBOX_IMAGE_KEY not in metadata:
-        return
-    size = resolve_sandbox_size(
-        environment_size=None,
-        session_metadata=None,
-        agent_metadata=metadata,
-        default=settings.sandbox_default_size,
-    )
     image = resolve_sandbox_image(
         environment_image=None,
         session_metadata=None,
         agent_metadata=metadata,
-        size=size,
+        size=settings.sandbox_default_size,
         default=settings.sandbox_default_image,
     )
     require_known_image(settings, image)
-    require_image_size(image, size)
 
 
 def _builtin_images() -> frozenset[str]:
@@ -290,7 +286,3 @@ def require_image_rootfs(settings: Settings, image_id: str) -> None:
             code="image_unavailable",
             status_code=503,
         ) from exc
-
-
-def require_size_rootfs(settings: Settings, size: str) -> None:
-    require_image_rootfs(settings, image_for_size(size))

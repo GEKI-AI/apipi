@@ -380,8 +380,8 @@ def test_resolve_image_captures_current_and_ignores_later_flip(tmp_path) -> None
     assert flipped.version == "0.2.0-bbbb"
     assert flipped.digest == "digest-two"
     legacy = resolve_spawn_image(settings, "browser", str(tmp_path / "rootfs.ext4"))
-    assert legacy.version == "legacy"
-    assert legacy.digest == "legacy"
+    assert legacy.version is None
+    assert legacy.digest is None
 
 
 async def test_spawn_capture_survives_image_flip(

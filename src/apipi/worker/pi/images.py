@@ -321,10 +321,6 @@ def flat_manifest_name(image_id: str, arch: str) -> str:
     return f"{image_id}-{arch}.manifest.json"
 
 
-def part_name(image_id: str, arch: str, index: int) -> str:
-    return f"{image_id}-{arch}.ext4.zst.part-{index:02d}"
-
-
 def kernel_artifact_name(arch: str) -> str:
     return f"vmlinux-{arch}.zst"
 

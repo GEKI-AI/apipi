@@ -43,4 +43,5 @@ def test_alembic_revisions_chain() -> None:
         "0021_agent_revision.py",
         "0022_drop_agent_versions.py",
         "0023_session_tools.py",
+        "0024_drop_pi_session_uri.py",
     ]

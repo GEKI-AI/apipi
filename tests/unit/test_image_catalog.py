@@ -10,8 +10,6 @@ from apipi.worker.pi.image_catalog import (
     parse_checksums,
     republish_store,
     signer_identity,
-    split_bytes,
-    verify_checksums,
     warn_signer_override,
 )
 from apipi.worker.pi.image_ops import package_image, publish_images
@@ -48,11 +46,6 @@ def test_checksums_round_trip() -> None:
     files = {"index.json": b"{}", "default-x86_64.ext4.zst": b"blob"}
     text = checksum_lines(files)
     assert parse_checksums(text)["index.json"]
-    verify_checksums(files, text)
-    bad = dict(files)
-    bad["index.json"] = b"nope"
-    with pytest.raises(ConfigError, match="sha256 mismatch"):
-        verify_checksums(bad, text)
 
 
 def _stamp() -> dict[str, str]:
@@ -196,12 +189,6 @@ def test_signer_override_is_exact(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.warns(UserWarning, match="signer identity"):
         warn_signer_override("0.12.0", "custom", None)
     assert signer_identity("v0.12.1").endswith("@refs/tags/v0.12.1")
-
-
-def test_split_bytes() -> None:
-    parts = split_bytes(b"abcdefghij", 4)
-    assert parts == [b"abcd", b"efgh", b"ij"]
-    assert split_bytes(b"ab", 4) == [b"ab"]
 
 
 def test_versioned_publish_is_flat(tmp_path: Path) -> None:

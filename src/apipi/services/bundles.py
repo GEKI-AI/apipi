@@ -6,7 +6,6 @@ import stat
 import zipfile
 from typing import Any
 
-from apipi.env.spec import EnvironmentSpec
 from apipi.gateway.errors import ApiError
 from apipi.services.skills import inspect_skill_zip
 
@@ -31,7 +30,6 @@ _DROP = frozenset(
         "apipi.source",
         "apipi.template_id",
         "apipi.template_updated_at",
-        "apipi.sandbox_size",
         "apipi.sandbox_image",
     }
 )
@@ -42,6 +40,7 @@ _AGENT_FIELDS = frozenset(
         "instructions",
         "idle_ttl",
         "metadata",
+        "reasoning",
         "tools",
         "session_defaults",
     }
@@ -160,6 +159,9 @@ def redact_agent(
     for key in ("name", "model", "instructions", "idle_ttl"):
         if agent.get(key) is not None:
             out[key] = agent[key]
+    reasoning = agent.get("reasoning")
+    if isinstance(reasoning, dict) and reasoning.get("effort") is not None:
+        out["reasoning"] = {"effort": reasoning["effort"]}
     raw_metadata = agent.get("metadata")
     metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
     kept, dropped = _portable_metadata(metadata)
@@ -203,6 +205,7 @@ def apply_bundle(
     warnings = list(parsed.get("warnings") or [])
     body, extra = _known_agent(agent)
     warnings.extend(extra)
+    _migrate_removed_metadata_keys(body, warnings)
     supplied_secrets = secrets or {}
     supplied_credentials = credentials or {}
     missing: dict[str, list[str]] = {"models": [], "secrets": [], "credentials": []}
@@ -596,6 +599,41 @@ def _known_agent(agent: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     return body, warnings
 
 
+def _migrate_removed_metadata_keys(body: dict[str, Any], warnings: list[str]) -> None:
+    metadata = body.get("metadata")
+    if not isinstance(metadata, dict):
+        return
+    if "apipi.sandbox_size" in metadata:
+        size = metadata.pop("apipi.sandbox_size")
+        defaults = body.get("session_defaults")
+        env = (
+            defaults.get("environment")
+            if isinstance(defaults, dict)
+            and isinstance(defaults.get("environment"), dict)
+            else None
+        )
+        if (
+            env is not None
+            and isinstance(size, str)
+            and "sandbox_size" not in env
+            and "container_size" not in env
+        ):
+            env["sandbox_size"] = size
+        warnings.append(
+            "migrated apipi.sandbox_size to session_defaults.environment.sandbox_size"
+        )
+    if "apipi.thinking" in metadata:
+        from apipi.worker.pi.settings_json import thinking_to_effort
+
+        level = metadata.pop("apipi.thinking")
+        reasoning = body.get("reasoning")
+        if not isinstance(reasoning, dict) or "effort" not in reasoning:
+            effort = thinking_to_effort(level) if isinstance(level, str) else None
+            if effort is not None:
+                body["reasoning"] = {"effort": effort}
+        warnings.append("migrated apipi.thinking to reasoning.effort")
+
+
 def _secret_name(label: str, header: str, value: str) -> str:
     match = _ENV_REF.fullmatch(value.strip())
     if match:
@@ -618,9 +656,3 @@ def _is_symlink(info: zipfile.ZipInfo) -> bool:
 
 def _has_drive(name: str) -> bool:
     return len(name) > 2 and name[1] == ":"
-
-
-def env_spec_or_none(value: object) -> EnvironmentSpec | None:
-    if not isinstance(value, dict):
-        return None
-    return EnvironmentSpec.model_validate(value)

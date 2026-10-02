@@ -16,29 +16,16 @@ from apipi.worker.pi.sandbox import (
 def test_resolve_prefers_environment() -> None:
     size = resolve_sandbox_size(
         environment_size="L",
-        session_metadata={"apipi.sandbox_size": "M"},
-        agent_metadata={"apipi.sandbox_size": "S"},
         default="S",
     )
     assert size == "L"
 
 
-def test_resolve_session_metadata_over_agent() -> None:
+def test_resolve_agent_default_over_default() -> None:
     size = resolve_sandbox_size(
         environment_size=None,
-        session_metadata={"apipi.sandbox_size": "M"},
-        agent_metadata={"apipi.sandbox_size": "L"},
         default="S",
-    )
-    assert size == "M"
-
-
-def test_resolve_agent_metadata_over_default() -> None:
-    size = resolve_sandbox_size(
-        environment_size=None,
-        session_metadata={"other": "x"},
-        agent_metadata={"apipi.sandbox_size": "L"},
-        default="S",
+        agent_default="L",
     )
     assert size == "L"
 
@@ -46,19 +33,15 @@ def test_resolve_agent_metadata_over_default() -> None:
 def test_resolve_default() -> None:
     size = resolve_sandbox_size(
         environment_size=None,
-        session_metadata=None,
-        agent_metadata=None,
         default="M",
     )
     assert size == "M"
 
 
-def test_resolve_rejects_invalid_metadata() -> None:
+def test_resolve_rejects_invalid_environment() -> None:
     try:
         resolve_sandbox_size(
-            environment_size=None,
-            session_metadata={"apipi.sandbox_size": "XL"},
-            agent_metadata=None,
+            environment_size="XL",
             default="S",
         )
     except ApiError as exc:
@@ -167,11 +150,9 @@ def _none_settings(sandbox_images: list[str] | None = None) -> Settings:
     )
 
 
-def test_validate_sandbox_metadata_rejects_bad_size() -> None:
-    with pytest.raises(ApiError) as exc:
+def test_validate_sandbox_metadata_rejects_bad_size_key() -> None:
+    with pytest.raises(ApiError, match=r"apipi\.sandbox_size was removed"):
         validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_size": "xl"})
-    assert exc.value.status_code == 400
-    assert exc.value.code == "invalid_request"
 
 
 def test_validate_sandbox_metadata_rejects_unknown_image() -> None:
@@ -181,28 +162,20 @@ def test_validate_sandbox_metadata_rejects_unknown_image() -> None:
     assert exc.value.status_code == 400
 
 
-def test_validate_sandbox_metadata_rejects_browser_on_s() -> None:
-    with pytest.raises(ApiError, match="needs sandbox_size M"):
-        validate_sandbox_metadata(
-            _none_settings(),
-            {"apipi.sandbox_image": "browser", "apipi.sandbox_size": "S"},
-        )
-
-
-def test_validate_sandbox_metadata_accepts_browser_on_m() -> None:
+def test_validate_sandbox_metadata_accepts_browser() -> None:
     validate_sandbox_metadata(
         _none_settings(),
-        {"apipi.sandbox_image": "browser", "apipi.sandbox_size": "M"},
+        {"apipi.sandbox_image": "browser"},
     )
 
 
-def test_validate_sandbox_metadata_size_only_l_selects_browser() -> None:
-    validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_size": "L"})
+def test_validate_sandbox_metadata_rejects_size_key() -> None:
+    with pytest.raises(ApiError, match=r"apipi\.sandbox_size was removed"):
+        validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_size": "L"})
 
 
 def test_validate_sandbox_metadata_image_only_uses_default_size() -> None:
-    with pytest.raises(ApiError, match="needs sandbox_size M"):
-        validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_image": "browser"})
+    validate_sandbox_metadata(_none_settings(), {"apipi.sandbox_image": "browser"})
 
 
 def test_validate_sandbox_metadata_ignores_other_keys() -> None:
@@ -222,7 +195,7 @@ def test_validate_sandbox_metadata_skips_worker_availability(
     )
     validate_sandbox_metadata(
         _microvm(),
-        {"apipi.sandbox_image": "browser", "apipi.sandbox_size": "M"},
+        {"apipi.sandbox_image": "browser"},
     )
 
 

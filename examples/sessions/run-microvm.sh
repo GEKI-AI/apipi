@@ -40,12 +40,6 @@ if ! command -v firecracker >/dev/null || ! command -v jailer >/dev/null; then
   echo "microvm needs firecracker and jailer on PATH. Run: uv run apipi install --microvm" >&2
   exit 1
 fi
-BROWSER_ROOTFS="${APIPI_MICROVM_ROOTFS_BROWSER:-$HOME/.cache/apipi/microvm/rootfs-browser.ext4}"
-if [ ! -f "$BROWSER_ROOTFS" ]; then
-  echo "browser_screenshot.py needs the browser rootfs at $BROWSER_ROOTFS" >&2
-  echo "Run: uv run apipi install --microvm --image browser" >&2
-  exit 1
-fi
 if ! sudo -n true 2>/dev/null; then
   echo "The worker needs passwordless sudo for TAP and jailer." >&2
   exit 1

@@ -1,13 +1,10 @@
-import asyncio
 import os
-import sys
 from pathlib import Path
 
 from apipi.worker.pi.orphan import (
     WORKER_PID_ENV,
     host_pi_stamp,
     orphan_pids,
-    sweep_host_orphans,
 )
 from apipi.worker.pi.proc import pi_env
 
@@ -90,63 +87,3 @@ def test_orphan_pids_honors_skip(tmp_path: Path) -> None:
         environ=f"{WORKER_PID_ENV}=9999\0".encode(),
     )
     assert orphan_pids(proc_root=str(proc), my_pid=1, skip_pids={4242}) == []
-
-
-def _pid_running(pid: int) -> bool:
-    try:
-        with open(f"/proc/{pid}/stat") as fh:
-            rest = fh.read().split(")")[-1].split()
-        return rest[0] not in {"Z", "X"}
-    except FileNotFoundError:
-        return False
-
-
-_SLEEP = """
-import time
-while True:
-    time.sleep(60)
-"""
-
-
-def _dead_pid() -> int:
-    pid = 100000
-    while Path(f"/proc/{pid}").exists():
-        pid += 1
-    return pid
-
-
-async def test_sweep_kills_orphan_not_unstamped() -> None:
-    base = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in {WORKER_PID_ENV, "APIPI_HOST_PI"}
-    }
-    dead = _dead_pid()
-    orphan = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-c",
-        _SLEEP,
-        env={**base, WORKER_PID_ENV: str(dead), "APIPI_HOST_PI": "1"},
-    )
-    control = await asyncio.create_subprocess_exec(
-        sys.executable, "-c", _SLEEP, env=base
-    )
-    assert orphan.pid is not None
-    assert control.pid is not None
-    try:
-        assert _pid_running(orphan.pid)
-        assert _pid_running(control.pid)
-        reaped = await sweep_host_orphans(grace=0.2)
-        assert reaped >= 1
-        deadline = asyncio.get_running_loop().time() + 2
-        while _pid_running(orphan.pid) and asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.05)
-        assert not _pid_running(orphan.pid)
-        assert _pid_running(control.pid)
-    finally:
-        if control.returncode is None:
-            control.kill()
-            await control.wait()
-        if orphan.pid is not None and _pid_running(orphan.pid):
-            os.kill(orphan.pid, 9)
-            await orphan.wait()

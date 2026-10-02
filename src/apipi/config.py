@@ -28,7 +28,6 @@ ArtifactStore = Literal["local", "s3"]
 S3Addressing = Literal["auto", "path", "virtual"]
 UsageStore = Literal["off", "rollups", "turns"]
 ModelList = Literal["probe", "turn", "off"]
-MicrovmImage = Literal["default", "browser", "work"]
 SandboxSize = Literal["S", "M", "L"]
 EnvNonePlacement = Literal["chat", "microvm", "reject"]
 ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -37,7 +36,6 @@ THINKING_HELP = (
     "APIPI_PI_THINKING must be off, minimal, low, medium, high, xhigh, or max"
 )
 BUILTIN_RUN_MODES: frozenset[str] = frozenset({"none", "chat", "microvm"})
-MICROVM_IMAGE_HELP = "APIPI_MICROVM_IMAGE must be default, browser, or work"
 SANDBOX_SIZE_HELP = "APIPI_SANDBOX_DEFAULT_SIZE must be S, M, or L"
 ENV_NONE_PLACEMENT_HELP = "APIPI_ENV_NONE_PLACEMENT must be chat, microvm, or reject"
 
@@ -67,7 +65,6 @@ OTEL_UNSET = "APIPI_OTEL_ENDPOINT unset"
 OPENAI_API_KEY_IGNORED = (
     "OPENAI_API_KEY is ignored; the request bearer is sent to the model host"
 )
-FLAT_TOML_WARNING = "TOML key {key} is deprecated; use {path}"
 
 _log = logging.getLogger("apipi")
 
@@ -89,12 +86,23 @@ _PI_TOML = {
     "model_provider_retries": "model_provider_retries",
     "model_retry_after_max_ms": "model_retry_after_max_ms",
 }
+_PI_PROMPTS = frozenset(
+    {
+        "identity.none",
+        "identity.computer",
+        "main.none",
+        "main.hosted",
+        "additional.none",
+        "additional.hosted",
+        "capability",
+        "browser",
+        "mcp_tool",
+    }
+)
 _SANDBOX_TOML = {
     "backend": "run_mode",
     "kernel": "microvm_kernel",
     "rootfs": "microvm_rootfs",
-    "rootfs_browser": "microvm_rootfs_browser",
-    "image": "microvm_image",
     "default_size": "sandbox_default_size",
     "default_image": "sandbox_default_image",
     "image_source": "image_source",
@@ -120,27 +128,13 @@ _SANDBOX_NETWORK_TOML = {
     "egress_mbit": "microvm_egress_mbit",
 }
 _SANDBOX_TTL_TOML = {
-    "openai_hosted": "workspace_ttl",
+    "openai_hosted": "sandbox_ttl_openai_hosted",
 }
-_REMOVED_BROWSER_KEYS = frozenset({"auto_playwright", "playwright_mcp"})
 _PLACEMENT_TOML = {
     "env_none": "env_none_placement",
 }
 _MCP_TOML = {
     "allow_hosts": "mcp_allow_hosts",
-}
-_LEGACY_FLAT_TOML = {
-    "run_mode": "[sandbox].backend",
-    "pi_command": "[pi].command",
-    "pi_auto_compact": "[pi].auto_compact",
-    "microvm_kernel": "[sandbox].kernel",
-    "microvm_rootfs": "[sandbox].rootfs",
-    "microvm_mem_mib": "[sandbox.resources].mem_mib",
-    "microvm_vcpus": "[sandbox.resources].vcpus",
-    "microvm_egress_allowlist": "[sandbox.network].egress_allowlist",
-    "microvm_egress_hosts": "[sandbox.network].egress_hosts",
-    "microvm_egress_mbit": "[sandbox.network].egress_mbit",
-    "mcp_allow_hosts": "[mcp].allow_hosts",
 }
 
 
@@ -383,16 +377,6 @@ def parse_model_registry(value: object) -> object:
     return out
 
 
-def parse_microvm_image(value: object) -> object:
-    if value is None:
-        return "default"
-    if isinstance(value, str) and not value.strip():
-        return "default"
-    if isinstance(value, str):
-        return value.strip()
-    return value
-
-
 def parse_sandbox_size_setting(value: object) -> object:
     if value is None:
         return "S"
@@ -410,7 +394,6 @@ OtelEndpoint = Annotated[str | None, BeforeValidator(parse_optional_endpoint)]
 ExportUrl = Annotated[str | None, BeforeValidator(parse_export_url)]
 HostList = Annotated[str, BeforeValidator(parse_hosts)]
 InstanceId = Annotated[str | None, BeforeValidator(parse_instance_id)]
-MicrovmImageName = Annotated[MicrovmImage, BeforeValidator(parse_microvm_image)]
 ImageIdList = Annotated[list[str] | None, BeforeValidator(parse_image_list)]
 ImageMinVcpus = Annotated[dict[str, int], BeforeValidator(parse_image_min_vcpus)]
 ModelNameList = Annotated[list[str], BeforeValidator(parse_model_names)]
@@ -481,13 +464,11 @@ class Settings(BaseSettings):
         default=timedelta(minutes=15),
         validation_alias=AliasChoices("APIPI_IDLE_TTL", "idle_ttl"),
     )
-    workspace_ttl: OptionalTtl = Field(
+    sandbox_ttl_openai_hosted: OptionalTtl = Field(
         default=timedelta(hours=1),
         validation_alias=AliasChoices(
             "APIPI_SANDBOX_TTL_OPENAI_HOSTED",
             "sandbox_ttl_openai_hosted",
-            "APIPI_WORKSPACE_TTL",
-            "workspace_ttl",
         ),
     )
     max_sessions: int = Field(
@@ -610,6 +591,7 @@ class Settings(BaseSettings):
             "APIPI_PLATFORM_PROMPT_ADDITIONAL", "platform_prompt_additional"
         ),
     )
+    pi_prompts: dict[str, str] = Field(default_factory=dict)
     model_retry_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices(
@@ -740,12 +722,6 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("APIPI_MICROVM_ROOTFS", "microvm_rootfs"),
     )
-    microvm_rootfs_browser: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "APIPI_MICROVM_ROOTFS_BROWSER", "microvm_rootfs_browser"
-        ),
-    )
     image_store_version: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -777,10 +753,6 @@ class Settings(BaseSettings):
     sandbox_images: ImageIdList = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_SANDBOX_IMAGES", "sandbox_images"),
-    )
-    microvm_image: MicrovmImageName = Field(
-        default="default",
-        validation_alias=AliasChoices("APIPI_MICROVM_IMAGE", "microvm_image"),
     )
     sandbox_default_image: str = Field(
         default="default",
@@ -1033,8 +1005,6 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def run_mode_known(self) -> Self:
         mode = self.run_mode
-        if mode in {"host", "jail"}:
-            raise ValueError(f"APIPI_RUN_MODE={mode} is not valid")
         if mode not in BUILTIN_RUN_MODES and ":" not in mode:
             raise ValueError(RUN_MODE_HELP)
         if self.artifact_store == "s3" and not (
@@ -1076,19 +1046,17 @@ class Settings(BaseSettings):
         return self.microvm_vcpus
 
     def node_memory_mb(self) -> int:
-        memory = self.worker_memory_mb
-        if memory is None:
-            return self.max_sessions * self.sandbox_mem_mib(self.sandbox_default_size)
-        return memory
+        assert self.worker_memory_mb is not None
+        return self.worker_memory_mb
 
     def sandbox_ttl_for(self, env_type: str | None) -> timedelta | None:
-        if env_type in {"openai_hosted", "hosted"}:
-            return self.workspace_ttl
+        if env_type == "openai_hosted":
+            return self.sandbox_ttl_openai_hosted
         return None
 
     def pi_idle_ttl_for(self, env_type: str | None) -> timedelta | None:
-        if env_type in {"openai_hosted", "hosted"}:
-            return self.workspace_ttl
+        if env_type == "openai_hosted":
+            return self.sandbox_ttl_openai_hosted
         return self.idle_ttl
 
 
@@ -1136,6 +1104,28 @@ def _map_table(
     return out
 
 
+def _flatten_pi(table: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in table.items():
+        if key == "prompts":
+            prompts = _require_table(value, "[pi.prompts]")
+            cleaned: dict[str, str] = {}
+            for name, text in prompts.items():
+                if name not in _PI_PROMPTS:
+                    raise ConfigError(f"unknown setting: pi.prompts.{name}")
+                if not isinstance(text, str):
+                    raise ConfigError(f"pi.prompts.{name} must be a string")
+                cleaned[name] = text
+            out["pi_prompts"] = cleaned
+        elif key in _PI_TOML:
+            if isinstance(value, dict):
+                raise ConfigError(f"unknown setting: pi.{key}")
+            out[_PI_TOML[key]] = value
+        else:
+            raise ConfigError(f"unknown setting: pi.{key}")
+    return out
+
+
 def _flatten_sandbox(table: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in table.items():
@@ -1167,10 +1157,7 @@ def _flatten_sandbox(table: dict[str, Any]) -> dict[str, Any]:
         elif key == "browser":
             browser = dict(_require_table(value, "[sandbox.browser]"))
             for name in sorted(browser):
-                if name in _REMOVED_BROWSER_KEYS:
-                    _log.warning("%s was removed and is ignored", name)
-                else:
-                    _log.warning("unknown [sandbox.browser] key %s is ignored", name)
+                _log.warning("unknown [sandbox.browser] key %s is ignored", name)
         elif key in _SANDBOX_TOML:
             if isinstance(value, dict):
                 raise ConfigError(f"unknown setting: sandbox.{key}")
@@ -1191,7 +1178,7 @@ def _toml_values(path: Path) -> dict[str, Any]:
     if "models" in raw and isinstance(raw["models"], dict):
         nested["model_registry"] = raw.pop("models")
     if "pi" in raw:
-        nested.update(_map_table(_require_table(raw.pop("pi"), "[pi]"), _PI_TOML, "pi"))
+        nested.update(_flatten_pi(_require_table(raw.pop("pi"), "[pi]")))
     if "sandbox" in raw:
         nested.update(_flatten_sandbox(_require_table(raw.pop("sandbox"), "[sandbox]")))
     if "placement" in raw:
@@ -1217,8 +1204,6 @@ def _toml_values(path: Path) -> dict[str, Any]:
             raise ConfigError(f"cannot set {key} and its [pi] or [sandbox] path")
         if key not in known or isinstance(value, dict):
             raise ConfigError(f"unknown setting: {key}")
-        if key in _LEGACY_FLAT_TOML:
-            _log.warning(FLAT_TOML_WARNING.format(key=key, path=_LEGACY_FLAT_TOML[key]))
         values[key] = value
     values.update(nested)
     return values
@@ -1238,12 +1223,6 @@ class _ExtendSettings(Settings):
         return (init_settings,)
 
 
-def _warn_removed_browser_env() -> None:
-    raw = os.environ.get("APIPI_SANDBOX_AUTO_PLAYWRIGHT")
-    if raw:
-        _log.warning("APIPI_SANDBOX_AUTO_PLAYWRIGHT was removed and is ignored")
-
-
 def _warn_removed_agent_versions_env() -> None:
     raw = os.environ.get("APIPI_AGENT_VERSIONS_KEEP")
     if raw:
@@ -1254,7 +1233,6 @@ def _warn_removed_agent_versions_env() -> None:
 
 
 def load_settings(*, config_path: str | None = None) -> Settings:
-    _warn_removed_browser_env()
     _warn_removed_agent_versions_env()
     path = resolve_config_path(config_path)
     values = _toml_values(path) if path is not None else {}
@@ -1311,10 +1289,6 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_S3_BUCKET is required"
         if "APIPI_VAULT_MASTER_KEY must be 32 bytes" in msg:
             return "APIPI_VAULT_MASTER_KEY must be 32 bytes (base64 or hex)"
-        if "APIPI_RUN_MODE=host is not valid" in msg:
-            return "APIPI_RUN_MODE=host is not valid"
-        if "APIPI_RUN_MODE=jail is not valid" in msg:
-            return "APIPI_RUN_MODE=jail is not valid"
         if RUN_MODE_HELP in msg:
             return RUN_MODE_HELP
         if "database_url" in loc:
@@ -1326,9 +1300,7 @@ def _settings_message(exc: ValidationError) -> str:
         if "idle_ttl" in loc or "APIPI_IDLE_TTL" in loc:
             return "APIPI_IDLE_TTL must be like 15m"
         if (
-            "workspace_ttl" in loc
-            or "APIPI_WORKSPACE_TTL" in loc
-            or "sandbox_ttl_openai_hosted" in loc
+            "sandbox_ttl_openai_hosted" in loc
             or "APIPI_SANDBOX_TTL_OPENAI_HOSTED" in loc
         ):
             return "APIPI_SANDBOX_TTL_OPENAI_HOSTED must be like 15m or 0"
@@ -1400,8 +1372,6 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_LOG_FORMAT must be json or text"
         if "db_pool_size" in loc:
             return "APIPI_DB_POOL_SIZE must be at least 1"
-        if "microvm_image" in loc or "APIPI_MICROVM_IMAGE" in loc:
-            return MICROVM_IMAGE_HELP
         if "sandbox_default_size" in loc or "APIPI_SANDBOX_DEFAULT_SIZE" in loc:
             return SANDBOX_SIZE_HELP
         if "microvm_mem_mib" in loc:

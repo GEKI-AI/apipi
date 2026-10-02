@@ -1,1 +1,0 @@
-Sandbox size is ${size} (${mem_mib} MiB).

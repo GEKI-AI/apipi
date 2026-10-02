@@ -313,13 +313,6 @@ def models_json_for_base_url(
     ).encode()
 
 
-def pi_binary(settings: Settings) -> str:
-    command = settings.pi_command.split()
-    if not command:
-        raise ConfigError("pi is not on PATH")
-    return command[0]
-
-
 def installed_pi_version(settings: Settings) -> str | None:
     command = settings.pi_command.split()
     if not command:

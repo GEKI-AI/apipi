@@ -1,6 +1,6 @@
 # 0007. Run modes
 
-Where Pi and stdio MCP run.
+Where Pi runs.
 
 | Mode | Isolation |
 | --- | --- |
@@ -43,7 +43,7 @@ host folder so the next pack still has those files. Files under
 completes.
 
 A custom backend implements the isolation interface (`require`,
-`probe`, `spawn`, plus flags for probe, stdio placement, and the
+`probe`, `spawn`, plus flags for probe and the
 production warning) and is selected with `APIPI_RUN_MODE`. The gateway
 reaches those backends through the in-process execution adapter. A
 later remote worker uses the same contract.

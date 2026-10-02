@@ -73,16 +73,14 @@ tools, and point at operator-provided guest images:
 | Firecracker and jailer | Binaries from the [Firecracker release](https://github.com/firecracker-microvm/firecracker/releases) on `PATH` |
 | `ip` and `tc` | `iproute2` |
 | `iptables` | `iptables` |
-| Guest kernel | `APIPI_MICROVM_KERNEL` (a `vmlinux` file) |
-| Guest rootfs | `APIPI_MICROVM_ROOTFS` (ext4) for `APIPI_MICROVM_IMAGE=default`. Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/worker/pi/guest.sh`. Optional `APIPI_MICROVM_ROOTFS_BROWSER` when `image` is `browser`. |
+| Guest kernel | From the image store (`apipi images pull`). `APIPI_MICROVM_KERNEL` is a dev-only override (a `vmlinux` file). |
+| Guest rootfs | From the image store (`apipi images pull <id>`). `APIPI_MICROVM_ROOTFS` is a dev-only override (ext4). Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/worker/pi/guest.sh`. |
 | TAP / NAT | Permission to create a TAP device, set `ip_forward`, and add iptables rules. Root or `CAP_NET_ADMIN` is the usual setup. |
 
 `apipi install --microvm` downloads Firecracker and jailer and pulls
-a guest image when `APIPI_IMAGE_SOURCE` is set. `--build` builds from
-the recipe instead. The runtime looks for a kernel and rootfs in this
-order: an explicit path, then `<id>/current` in the images dir, then
-the legacy cache. Missing files should be fixed with `apipi images pull`. Build a rootfs on the operator machine yourself if
-you want another output directory. Three flavors:
+a guest image when `APIPI_IMAGE_SOURCE` is set. The runtime uses the
+image store only: `<id>/current` in the images dir. Missing files should be fixed with `apipi images pull`. Build a rootfs with `apipi images build` if
+you want another image. Three flavors:
 
 Recipes live in `images/<id>/`. `images/build.sh` is the build
 script. `./scripts/microvm-rootfs` maps `--flavor` to that script so
@@ -94,12 +92,13 @@ older commands still work.
 | `browser` | `./images/build.sh browser` | `rootfs-browser.ext4` |
 | `work` | `./images/build.sh work` | `rootfs-work.ext4` |
 
-Each build writes a Firecracker `vmlinux` (when the download works) under
-`$XDG_CACHE_HOME/apipi/microvm` (or `~/.cache/apipi/microvm`). The
+Each build writes a Firecracker `vmlinux` (when the download works) into
+the build output. The
 kernel is Linux 6.1.186 from the Firecracker 1.17 CI set
 (`images/kernel.env`). It is the newest 6.1 guest that release
 validates, and it includes virtio-rng. Pass a directory argument to
-choose another location. The files do not overwrite each other. The
+`./images/build.sh` to choose another location, or use
+`apipi images build <id> --out <dir>` for a versioned build directory.
 script needs `curl`, `tar`, `mkfs.ext4`, `mount`, and root (or `sudo`)
 for the loop mount and chroot.
 
@@ -155,18 +154,15 @@ A version names the Pi pin, the Debian base digest, the Node pin,
 `guest.sh`, and the recipe.
 The sha256 names the bytes.
 
-When `APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` (or the browser
-rootfs) are unset, the process uses those cache files if they exist.
-Env, `.env`, and `[sandbox].kernel` / `rootfs` still override. The
-install command also prints `export` lines. Production should set
-explicit paths.
+`APIPI_MICROVM_KERNEL` and `APIPI_MICROVM_ROOTFS` are dev-only overrides.
+Leave them unset to use the image store.
 
 Live session guests pick a rootfs from `sandbox_image`, not from size
 alone. When the image is omitted, size `L` selects `browser` and other
-sizes use the default image. Install the rootfs for each image a worker
-accepts. A missing rootfs for the resolved image fails clearly; the
-process does not fall back to another image. `APIPI_MICROVM_IMAGE`
-still selects the image for `apipi install` and `apipi microvm shell`.
+sizes use the default image. Pull each image a worker
+accepts with `apipi images pull <id>`. A missing image for the resolved id fails clearly; the
+process does not fall back to another image. `apipi microvm shell --image`
+selects the image for that VM, defaulting to `[sandbox].default_image`.
 To make every session browser-class without callers setting an image,
 set `[sandbox].default_size = "L"` (and size `worker_memory_mb` for ~2
 GiB guests) or set `[sandbox].default_image = "browser"` with a size of
@@ -190,7 +186,7 @@ and the wrong machine.
 | Store | What | Where it lives | Lifetime |
 | --- | --- | --- | --- |
 | **Session** | Transcript: events, turns, items, artifact metadata | SQLite for one process; Postgres when the store is shared | Until the session is deleted. A session [export](api.md#export) is the thread. |
-| **Harness session cache** | Pi's conversation file so a new process can continue the thread | Bytes in `APIPI_ARTIFACT_STORE` under the same session prefix as artifacts. The session row holds `pi_session_id`, size, and a full URI (`file://…` locally or `s3://bucket/key` on S3). Not listed on `GET …/artifacts`. | Until the session is deleted. Reloaded into a fresh `/workspace` on the next turn from that URI. |
+| **Harness session cache** | Pi's conversation file so a new process can continue the thread | Bytes in `APIPI_ARTIFACT_STORE` under the same session prefix as artifacts. The session row holds `pi_session_id` and size. Not listed on `GET …/artifacts`. | Until the session is deleted. Reloaded into a fresh `/workspace` on the next turn from the blob store. |
 | **Environment files** | The computer. File and shell tools. | `openai_hosted`: `{APIPI_SESSIONS_DIR}/{tenant_id}/{session_id}` next to Pi. Guest cwd is `/workspace`. `none`: no files. | `openai_hosted` is ephemeral: sandbox TTL (default 1 hour) stops Pi and deletes scratch files, or the session is deleted. |
 | **Artifacts** | Named outputs the API can fetch | Metadata in the store. Bytes in `APIPI_ARTIFACT_STORE`: local files under `{APIPI_SESSIONS_DIR}/.artifacts/{tenant_id}/{key_id}/{session_id}/{id}`, or an S3-compatible bucket with the same key layout. Hosted file and skill bytes use the same backend under `files` and `skills` namespaces. | Until the artifact or session is deleted. `GET` content reads this store in every run mode. `410` if nothing was published. |
 
@@ -232,8 +228,8 @@ cannot run. Use `microvm` in production. The process logs a warning.
 [Firecracker](https://firecracker-microvm.github.io/) is a KVM
 hypervisor built for short-lived microVMs. ApiPi uses it so a session
 that can run shell and file tools cannot take the host: the guest has
-its own kernel, the gateway never enters that guest, and Pi, stdio
-MCP, and local file tools boot inside it.
+its own kernel, the gateway never enters that guest, and Pi and
+local file tools boot inside it.
 
 The session directory is packed into a workspace drive at boot,
 unpacked onto a guest tmpfs at `/workspace`, and is the guest cwd.
@@ -283,15 +279,14 @@ apipi microvm shell --config /etc/apipi.toml
 apipi microvm shell --image browser --workspace /path/to/files
 ```
 
-`--image` selects `default` or `browser` for this VM only. Unset, it
-follows `APIPI_MICROVM_IMAGE`. `--workspace` packs a host directory
+`--image` selects the image for this VM only. Unset, it
+follows `[sandbox].default_image`. `--workspace` packs a host directory
 into guest `/workspace` the same way `openai_hosted` does. Unset, the
 guest gets an empty scratch workspace.
 
 Requirements match `apipi check` without `--fast`: KVM, Firecracker,
-jailer, `ip`, `iptables`, `tc`, and the selected kernel and rootfs.
-The command does not need `APIPI_RUN_MODE=microvm`. Unset image paths
-use the cache files from `apipi install --microvm` when they exist.
+jailer, `ip`, `iptables`, `tc`, and the selected image in the images dir
+(`apipi images pull`). The command does not need `APIPI_RUN_MODE=microvm`.
 If you are not root, the command re-runs itself with `sudo -E`, the
 absolute interpreter, and `PATH` / `HOME` kept. It does not run
 `sudo uv`. Creating a TAP device, NAT rules, and `ip_forward` needs
@@ -377,8 +372,7 @@ install `deploy/systemd/apipi-worker-drain.conf` as
 `TimeoutStopSec=16min` so SIGTERM can empty live Pi before SIGKILL.
 
 Many operators run that unit as root so jailer can chroot Firecracker
-and the process can create TAP devices. Set `APIPI_MICROVM_KERNEL`,
-`APIPI_MICROVM_ROOTFS`, `APIPI_WORKER_TOKEN`, and `APIPI_API_URL` in
+and the process can create TAP devices. Set `APIPI_WORKER_TOKEN` and `APIPI_API_URL` in
 the environment file. The API unit is `apipi serve --api-only` with
 no DeviceAllow for KVM.
 

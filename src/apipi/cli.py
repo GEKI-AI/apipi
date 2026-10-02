@@ -171,7 +171,7 @@ def microvm_shell(
     settings = load_settings(config_path=config_path)
     configure_logging(level=settings.log_level, format=settings.log_format)
     if image is not None:
-        settings = settings.model_copy(update={"microvm_image": image})
+        settings = settings.model_copy(update={"sandbox_default_image": image})
     print(SHELL_WARNING, file=sys.stderr)
     return asyncio.run(run_microvm_shell(settings, cwd=workspace))
 
@@ -197,7 +197,7 @@ def _images_command(args: argparse.Namespace) -> int:
         manifest = build_image(args.id, out_dir=out, arch=args.arch)
         print(f"built {manifest.id} {manifest.version} at {out}")
         return 0
-    if args.images_command in {"push", "publish"}:
+    if args.images_command == "push":
         return _images_push(args)
     if args.images_command == "check":
         return _images_check(args)
@@ -384,12 +384,7 @@ def main(argv: list[str] | None = None) -> int:
     install_parser.add_argument(
         "--image",
         default=None,
-        help="MicroVM image recipe id (default: default)",
-    )
-    install_parser.add_argument(
-        "--build",
-        action="store_true",
-        help="Build the guest image locally instead of pulling",
+        help="MicroVM image recipe id (default: sandbox_default_image)",
     )
     install_parser.add_argument(
         "--force", action="store_true", help="Reinstall even if already present"
@@ -454,9 +449,8 @@ def main(argv: list[str] | None = None) -> int:
     shell_parser.add_argument("--config", default=None, help="TOML config file")
     shell_parser.add_argument(
         "--image",
-        choices=("default", "browser", "work"),
         default=None,
-        help="Rootfs flavor (default: APIPI_MICROVM_IMAGE). browser is x86_64 only.",
+        help="Image id (default: sandbox_default_image). browser is x86_64 only.",
     )
     shell_parser.add_argument(
         "--workspace",
@@ -474,7 +468,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Host arch check only; cross-build is not supported",
     )
     _add_image_push_parser(images_sub, "push", "Push built images to the image store")
-    _add_image_push_parser(images_sub, "publish", "Alias for push")
     pull_parser = images_sub.add_parser("pull", help="Pull guest images")
     pull_parser.add_argument("--config", default=None, help="TOML config file")
     pull_parser.add_argument("ids", nargs="*", help="Image ids to pull")
@@ -551,7 +544,6 @@ def main(argv: list[str] | None = None) -> int:
                 image=args.image,
                 force=args.force,
                 dry_run=args.dry_run,
-                build=args.build,
             )
         if args.command == "check":
             return check_ready(

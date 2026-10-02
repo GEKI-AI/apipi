@@ -6,7 +6,6 @@ from apipi.config import ConfigError, Settings
 from apipi.worker.pi.fragments import (
     render_shipped,
     render_template,
-    validate_fragments,
 )
 from apipi.worker.pi.platform_prompt import compose_instructions
 
@@ -50,19 +49,12 @@ def test_unknown_variable_is_startup_error() -> None:
         render_template("${nope}", {}, fragment="main.none", source="env", strict=True)
 
 
-def test_inline_and_file_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APIPI_PLATFORM_PROMPT_HOSTED", "hi")
-    monkeypatch.setenv("APIPI_PLATFORM_PROMPT_HOSTED_FILE", "/tmp/x")
-    with pytest.raises(ConfigError, match="not both"):
-        validate_fragments(_settings())
-
-
-def test_per_type_prompt_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APIPI_PLATFORM_PROMPT_HOSTED", "hosted only")
+def test_pi_prompts_override_wins() -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="microvm",
         platform_prompt="global",
+        pi_prompts={"main.hosted": "hosted only"},
     )
     hosted = compose_instructions(settings, None, env_type="openai_hosted")
     other = compose_instructions(settings, None, env_type="none")

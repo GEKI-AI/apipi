@@ -1,9 +1,8 @@
-import uuid
 from pathlib import Path
 
 import pytest
 
-from apipi.config import DiskLimitError, Settings
+from apipi.config import DiskLimitError
 from apipi.worker.pi.artifacts import (
     dir_bytes,
     read_workspace_artifacts,
@@ -93,19 +92,3 @@ def test_wipe_workspace(tmp_path: Path) -> None:
     (tmp_path / "file.txt").write_text("x", encoding="utf-8")
     wipe_workspace(tmp_path)
     assert not tmp_path.exists()
-
-
-def test_settings_artifact_blob_path(tmp_path: Path) -> None:
-    from apipi.worker.pi.dirs import artifact_blob_path
-
-    settings = Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        sessions_dir=str(tmp_path),
-    )
-    tenant = uuid.uuid4()
-    session = uuid.uuid4()
-    artifact = uuid.uuid4()
-    path = artifact_blob_path(settings, tenant, session, artifact, key_id="user-a")
-    assert path.parent.is_dir()
-    assert path.parent.name == str(session)
-    assert path.parent.parent.name == "user-a"

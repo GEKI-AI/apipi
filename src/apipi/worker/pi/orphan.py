@@ -1,13 +1,6 @@
-import asyncio
 import contextlib
-import logging
 import os
-import signal
 from pathlib import Path
-
-from apipi.gateway.logutil import log_event
-
-log = logging.getLogger("apipi.worker.pi")
 
 WORKER_PID_ENV = "APIPI_WORKER_PID"
 HOST_PI_ENV = "APIPI_HOST_PI"
@@ -129,37 +122,3 @@ def _kill_matching(
             ppid is not None and got_ppid == ppid
         ):
             _kill(pid, sig)
-
-
-async def sweep_host_orphans(
-    *,
-    proc_root: str = "/proc",
-    my_pid: int | None = None,
-    skip_pids: set[int] | None = None,
-    grace: float = 0.2,
-) -> int:
-    pids = orphan_pids(proc_root=proc_root, my_pid=my_pid, skip_pids=skip_pids)
-    if not pids:
-        return 0
-    log_event(
-        log,
-        logging.INFO,
-        "worker orphan sweep",
-        event="worker.orphan.reaped",
-        count=len(pids),
-        pids=pids,
-    )
-    for pid in pids:
-        if _is_leader(pid):
-            _killpg(pid, signal.SIGTERM)
-        else:
-            _kill(pid, signal.SIGTERM)
-    await asyncio.sleep(grace)
-    for pid in pids:
-        if _is_leader(pid):
-            _killpg(pid, signal.SIGKILL)
-            _kill_matching(proc_root, signal.SIGKILL, pgid=pid)
-        else:
-            _kill(pid, signal.SIGKILL)
-            _kill_matching(proc_root, signal.SIGKILL, ppid=pid)
-    return len(pids)

@@ -62,7 +62,7 @@ hosted files and skills).
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
 | `APIPI_LOG_FORMAT` | `log_format` | `json` | `json` (one object per line on stderr) or `text` (laptop). |
 | `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Idle timer for `none` sessions. Kills Pi to free RAM. Hosted computers use the sandbox TTL instead. This follows environment type, not `APIPI_RUN_MODE`. The process that holds Pi runs the timer: combined `apipi serve`, or `apipi worker` in a split deploy. An agent or session `idle_ttl` overrides it. |
-| `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | `[sandbox.ttl].openai_hosted` | `1h` | Idle timer for an `openai_hosted` computer. One timer stops Pi and deletes the workspace together. There is no separate guest timeout. Transcript and published artifacts stay. `0` turns the timer off. `APIPI_WORKSPACE_TTL` / `workspace_ttl` is an alias. An agent or session `idle_ttl` overrides it. |
+| `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | `[sandbox.ttl].openai_hosted` | `1h` | Idle timer for an `openai_hosted` computer. One timer stops Pi and deletes the workspace together. There is no separate guest timeout. Transcript and published artifacts stay. `0` turns the timer off. An agent or session `idle_ttl` overrides it. |
 | `APIPI_MAX_SESSIONS` | `max_sessions` | `32` | Live Pi processes on this node. A new turn that would pass the cap returns `429` with code `capacity`. Idle reap frees a slot. Postgres session rows are not counted. Workers advertise this as `capacity`. |
 | `APIPI_MAX_SESSIONS_PER_TENANT` | `max_sessions_per_tenant` | `32` | Live Pi processes for one tenant. A new turn that would pass the cap returns `429` with code `capacity_tenant`. The node cap still applies. |
 | `APIPI_WORKER_MEMORY_MB` | `worker_memory_mb` | `max_sessions × mem_mib` (16384 at defaults) | RAM budget this worker (or combined node) will run, in MiB. Sum of guest `mem_mib` for live leases must stay under this. Set it to usable host RAM minus OS and worker reserve. Do not read `/proc/meminfo` automatically. |
@@ -353,7 +353,7 @@ Firecracker.
 | `APIPI_PI_MEM_MIB` | `[pi].mem_mib` | unset | Soft ceiling for one host Pi (`none` / `chat`) in MiB. Unset is off. Sets Node `NODE_OPTIONS=--max-old-space-size` and kills the process group when RSS goes over the limit (`apipi_pi_kill_total` reason `memory`). A turn in progress fails with `pi_memory`. Not a microVM hard cap. |
 | `APIPI_PI_SYSTEM_PROMPT` | `[pi].system_prompt` | unset | Replaces Pi's harness default system prompt. Unset or empty keeps Pi's default. This does not replace the platform prompt, agent instructions, context files, or skills. It does drop Pi's tool list and all tool guidelines, including MCP guidance. The tools stay callable. |
 | `APIPI_PLATFORM_NAME` | `[pi].platform_name` | `ApiPi` | Name in the identity line and in `${platform_name}`. Does not replace Pi. |
-| `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | file in `src/apipi/worker/pi/prompts/` | Main platform prompt for every environment type that has no per-type override. Unset keeps the shipped file. Set to `""` to disable the main block. A non-empty value replaces the file entirely. Per-type settings such as `APIPI_PLATFORM_PROMPT_HOSTED` win for that type. Each fragment also has a `*_FILE` variant. Set the text or the file, not both. |
+| `APIPI_PLATFORM_PROMPT` | `[pi].platform_prompt` | file in `src/apipi/worker/pi/prompts/` | Main platform prompt for every environment type that has no per-type override. Unset keeps the shipped file. Set to `""` to disable the main block. A non-empty value replaces the file entirely. Per-type overrides live in `[pi.prompts]`. |
 | `APIPI_PLATFORM_PROMPT_ADDITIONAL` | `[pi].platform_prompt_additional` | empty | Optional extra platform text appended after the main block. Does not replace the main prompt. |
 | `APIPI_MODEL_RETRY_ENABLED` | `[pi].model_retry_enabled` | on | Pi `retry.enabled`. When on, Pi retries a failed model call. ApiPi does not retry the turn. |
 | `APIPI_MODEL_MAX_RETRIES` | `[pi].model_max_retries` | `3` | Pi `retry.maxRetries`. Retries after the first attempt. |
@@ -398,11 +398,14 @@ thinking_levels = { high = "high", minimal = null }
 For a model in the registry, an unsupported level is `400`. Models not
 in the registry still pass the level through, and Pi may clamp it.
 `off` does not pass `--thinking`. The process default is
-`[pi].thinking`. A session may set `metadata["apipi.thinking"]` or
-`reasoning.effort`. A saved agent may set the same key or
-`reasoning.effort`. `none` is stored as `off`. On update,
-`reasoning.effort` replaces the stored level. A `400` happens only when
-the same request also sets a different `apipi.thinking`. `summary` and
+`[pi].thinking`. A session may set `reasoning.effort`; a saved agent may set
+`reasoning.effort`. `metadata["apipi.thinking"]` is removed as client input and is `400`.
+`none` is stored as `off`. On update,
+`reasoning.effort` replaces the stored level, and `null` clears it. The gateway keeps
+the resolved level in stored metadata under `apipi.thinking` but strips it from
+public session/agent `metadata` (the `reasoning` field shows the level), so posting
+returned metadata back is safe. Template bundles carry the level in `reasoning`.
+`summary` and
 `text` are `not_implemented`. `service_tier` of `null` or `auto` is
 ignored. Any other tier is `not_implemented`. Resolve order is session,
 then agent, then the process default. Inline agents copy that key onto
@@ -465,14 +468,13 @@ Shipped prompt text lives in `src/apipi/worker/pi/prompts/`. `apipi
 serve` and `apipi worker` read those files at startup and keep them in
 memory. A missing file or an unknown `${...}` is a config error. There
 is no copy of that text in code. Edit a file and restart to change a
-default. An env var or `*_FILE` override still replaces one fragment.
-Set the text or the file, not both. `APIPI_PLATFORM_IDENTITY` replaces
-both identity files when the per-type identity env is unset.
+default. Per-fragment overrides live in `[pi.prompts]` and replace one
+shipped fragment.
 
 The extension replaces only Pi's intro line, `You are an expert coding
 assistant operating inside pi`. The rest of Pi's prompt stays. If that
 line is missing, Pi's prompt is kept and a log line is written.
-Computer sessions (`openai_hosted` and `hosted`) use
+Computer sessions (`openai_hosted`) use
 `identity-computer.txt`: `You are a ${platform_name} agent running in a
 sandbox using Pi as your harness.` Chat and `environment.type` `none`
 use `identity-none.txt`, the same line without `running in a sandbox`.
@@ -496,13 +498,12 @@ browser.
 | Fragment | When it is appended |
 | --- | --- |
 | No-computer main prompt | Chat, or `environment.type` is `none` or omitted. No `/workspace`, size, or browser text. |
-| Hosted main prompt | `openai_hosted` (and the `hosted` alias) and not chat. Names `/workspace`, an idle stop with no duration, `inputs/`, and `outputs/`. |
+| Hosted main prompt | `openai_hosted` and not chat. Names `/workspace`, an idle stop with no duration, `inputs/`, and `outputs/`. |
 
 | Operator main prompt | `APIPI_PLATFORM_PROMPT` is set. Replaces the built-in main block. `""` drops it. |
 | Additional platform text | `APIPI_PLATFORM_PROMPT_ADDITIONAL` is non-empty. Always, after the main block. |
-| Size | Hosted microvm only, and only when the size fragment is overridden. The built-in capability line names the image, RAM, and vCPUs. It does not claim a browser unless the image is `browser`. |
-| Network | Hosted microvm only, and only when `network.access` is `enabled` or `restricted`. Omitted when unset or `disabled`. |
-| Browser capability | Hosted microvm only, and only when the image is `browser`. The text is `browser.txt`. It tells the model to use the `browser` skill. Override with `APIPI_PLATFORM_BROWSER` or `APIPI_PLATFORM_BROWSER_FILE`. |
+| Per-fragment override | `[pi.prompts]` sets a fragment (`identity.none`, `identity.computer`, `main.none`, `main.hosted`, `additional.none`, `additional.hosted`, `capability`, `browser`, `mcp_tool`). Replaces the shipped file for that fragment. |
+| Browser capability | Hosted microvm only, and only when the image is `browser`. The text is `browser.txt`. It tells the model to use the `browser` skill. Override with `[pi.prompts]` `browser`. |
 | `system_prompt` / skills | Operator or caller owned. A replacement system prompt keeps the platform blocks, instructions, context files, and skills. It removes Pi's tool list and MCP tool guidelines. |
 
 ```toml
@@ -519,7 +520,20 @@ Override the main prompt, or keep it and append a sentence:
 [pi]
 platform_prompt = ""
 platform_prompt_additional = "Always answer in German."
+
+[pi.prompts]
+"main.hosted" = "You are a hosted agent."
 ```
+
+`[pi.prompts]` replaces one shipped fragment. Keys are fragment names
+(`identity.none`, `identity.computer`, `main.none`, `main.hosted`,
+`additional.none`, `additional.hosted`, `capability`, `browser`,
+`mcp_tool`). Values are prompt text with the same `${...}` variables
+as the shipped files. Unknown keys and unknown variables fail at
+startup. The old `APIPI_PLATFORM_*` fragment env vars are removed.
+Use `[pi.prompts]` instead. `APIPI_PLATFORM_PROMPT`,
+`APIPI_PLATFORM_PROMPT_ADDITIONAL`, `APIPI_PI_SYSTEM_PROMPT`, and
+`metadata["apipi.system_prompt"]` are unchanged.
 
 ### Context files
 
@@ -565,9 +579,8 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
 | `APIPI_RUN_MODE` | `[sandbox].backend` | `none` | `none` \| `chat` \| `microvm` \| `package.mod:Class`. `chat` is the same host backend as `none` with a distinct pool label. |
-| `APIPI_MICROVM_KERNEL` | `[sandbox].kernel` | `$XDG_CACHE_HOME/apipi/microvm/vmlinux` when that file exists | Guest kernel image. Required when the backend is `microvm` unless `apipi install --microvm` has already written the cache file. |
-| `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | `$XDG_CACHE_HOME/apipi/microvm/rootfs.ext4` when that file exists | Guest rootfs for `image = "default"`. Required when the backend is `microvm` unless the cache file exists. Build with `apipi install --microvm`, `./images/build.sh default`, or `./scripts/microvm-rootfs`. |
-| `APIPI_MICROVM_ROOTFS_BROWSER` | `[sandbox].rootfs_browser` | `$XDG_CACHE_HOME/apipi/microvm/rootfs-browser.ext4` when that file exists | Guest rootfs for `image = "browser"`. Required when that image is selected unless the cache file exists. Build with `apipi install --microvm --image browser`. |
+| `APIPI_MICROVM_KERNEL` | `[sandbox].kernel` | unset | Dev-only guest kernel override. Leave unset to use the image store. When set, must be a `vmlinux` file. |
+| `APIPI_MICROVM_ROOTFS` | `[sandbox].rootfs` | unset | Dev-only guest rootfs override. Leave unset to use the image store. When set, must be an ext4 file. |
 | `APIPI_IMAGE_SOURCE` | `[sandbox].image_source` | unset | Base above the `v<version>/` prefixes. `s3://bucket/prefix`, `https://host/path`, or `file:///path`. `apipi images push` uses this when `--to` is omitted. |
 | `APIPI_IMAGE_STORE_VERSION` | `[sandbox].image_store_version` | running ApiPi version | Store prefix to pull. Unset uses `v<__version__>`. Set it to roll back. An explicit missing version fails. |
 | `APIPI_IMAGE_S3_ENDPOINT` | `[sandbox].image_s3_endpoint` | `APIPI_S3_ENDPOINT` | S3 endpoint for the guest image store. Unset uses the artifact endpoint. |
@@ -578,19 +591,16 @@ exits. There is no silent fallback. `host` and `jail` are not valid.
 | `APIPI_IMAGE_S3_PROFILE` | env only | unset | AWS profile for the image store. Do not set this and the access keys together. Not a TOML key. If none of the image credential vars is set, the process uses the standard AWS credential chain. |
 | `APIPI_IMAGES_DIR` | `[sandbox].images_dir` | `$XDG_CACHE_HOME/apipi/images` | Local images directory. Root uses the same home rule as the MicroVM cache, so `sudo apipi install` and the worker agree. |
 | `APIPI_SANDBOX_IMAGES` | `[sandbox].images` | unset (every id in the index) | Image ids this host pulls and serves. |
-| `APIPI_MICROVM_IMAGE` | `[sandbox].image` | `default` | `default` \| `browser` \| `work`. Used by `apipi install` and `apipi microvm shell`. Live session guests follow `sandbox_image`, not this process-wide setting. When the image is omitted, size `L` selects `browser` and other sizes use the default image. Explicit `kernel` / `rootfs` / `rootfs_browser` override the images dir for `default` and `browser` only. Other ids, including `work`, come from the images dir. Resolution is explicit path, then `<id>/current` in the images dir, then the legacy `~/.cache/apipi/microvm` files for `default` and `browser`. |
-| `APIPI_SANDBOX_DEFAULT_IMAGE` | `[sandbox].default_image` | `default` | Guest image when the session does not set `environment.sandbox_image` or `metadata["apipi.sandbox_image"]`, and the size is not `L`. `L` still selects `browser`. This is not `APIPI_MICROVM_IMAGE`, which only selects the image for `apipi install` and `apipi microvm shell`. |
-| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size` or `metadata["apipi.sandbox_size"]`. `L` as default needs the browser rootfs and a RAM budget for ~2 GiB guests. Size `L` still selects that image when none is set. Install that rootfs with `apipi install --microvm --image browser`. |
-| `APIPI_SANDBOX_AUTO_PLAYWRIGHT` | `[sandbox.browser]` | removed | Warned about and ignored. Playwright MCP is gone. The browser image packs the `browser` skill instead. |
+| `APIPI_SANDBOX_DEFAULT_IMAGE` | `[sandbox].default_image` | `default` | Guest image when the session does not set `environment.sandbox_image` or `metadata["apipi.sandbox_image"]`, and the size is not `L`. `L` still selects `browser`. Used by `apipi install` and `apipi microvm shell` (or `--image`). Live session guests follow `sandbox_image`. |
+| `APIPI_SANDBOX_DEFAULT_SIZE` | `[sandbox].default_size` | `S` | `S` \| `M` \| `L`. Gateway default when the session does not set `environment.sandbox_size`. `L` as default needs the browser image and a RAM budget for ~2 GiB guests. Size `L` still selects that image when none is set. Pull it with `apipi images pull browser`. |
 | `APIPI_SANDBOX_EAGER_BOOT` | `[sandbox].eager_boot` | off | When on, creating an `openai_hosted` session starts the computer before the first turn. Off keeps the default: boot on the first turn. A session or agent `metadata["apipi.sandbox_eager_boot"]` overrides this. `on` or `off`. |
 
 ```toml
 [sandbox]
 backend = "microvm"
-kernel = "/var/lib/apipi/vmlinux"
-rootfs = "/var/lib/apipi/rootfs.ext4"
-rootfs_browser = "/var/lib/apipi/rootfs-browser.ext4"
-image = "default"
+# kernel and rootfs are dev-only overrides; leave unset to use the image store.
+# kernel = "/var/lib/apipi/vmlinux"
+# rootfs = "/var/lib/apipi/rootfs.ext4"
 default_size = "S"
 ```
 
@@ -725,10 +735,6 @@ auto_compact = true
 
 [sandbox]
 backend = "microvm"
-kernel = "/var/lib/apipi/vmlinux"
-rootfs = "/var/lib/apipi/rootfs.ext4"
-rootfs_browser = "/var/lib/apipi/rootfs-browser.ext4"
-image = "default"
 default_size = "S"
 
 [sandbox.resources]

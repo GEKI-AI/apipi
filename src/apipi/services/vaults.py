@@ -1,5 +1,5 @@
 import uuid
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
@@ -48,12 +48,6 @@ async def encrypt_plaintext_vault_tokens(store: Store, settings: Settings) -> in
 class VaultWrite(StrictModel):
     name: str | None = None
     metadata: dict[str, Any] | None = None
-
-
-class StaticBearerAuth(StrictModel):
-    type: Literal["static_bearer"]
-    mcp_server_url: str
-    token: str
 
 
 class CredentialWrite(StrictModel):

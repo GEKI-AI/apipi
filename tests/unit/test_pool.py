@@ -154,7 +154,7 @@ async def test_hosted_reap_uses_sandbox_ttl() -> None:
             database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
             run_mode="none",
             idle_ttl=timedelta(seconds=1),
-            workspace_ttl=timedelta(hours=1),
+            sandbox_ttl_openai_hosted=timedelta(hours=1),
         )
     )
     hosted = uuid.uuid4()
@@ -238,7 +238,7 @@ async def test_hosted_reap_kills_after_sandbox_ttl() -> None:
             database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
             run_mode="none",
             idle_ttl=timedelta(hours=24),
-            workspace_ttl=timedelta(seconds=1),
+            sandbox_ttl_openai_hosted=timedelta(seconds=1),
         )
     )
     hosted = uuid.uuid4()

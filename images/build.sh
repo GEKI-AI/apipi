@@ -24,6 +24,8 @@ Usage: $0 <image-id|path-to-image-dir> [OUT_DIR]
 Writes rootfs.ext4 for default, rootfs-browser.ext4 for browser, and
 rootfs-<id>.ext4 for any other id. Also downloads vmlinux into OUT_DIR.
 The guest is Debian trixie slim. There is no Alpine path.
+Prefer `apipi images build <id>` which packages the output into a
+versioned build directory for `apipi images push`.
 EOF
 }
 
@@ -37,7 +39,7 @@ fi
 
 TARGET=$1
 shift
-OUT=${1:-"${XDG_CACHE_HOME:-$HOME/.cache}/apipi/microvm"}
+OUT=${1:-"${XDG_CACHE_HOME:-$HOME/.cache}/apipi/image-build"}
 if [[ $# -gt 1 ]]; then
   echo "unexpected argument: $2" >&2
   usage >&2
@@ -312,15 +314,10 @@ echo "rootfs: $ROOTFS"
 if [[ -f "$KERNEL" ]]; then
   echo "kernel: $KERNEL"
 fi
-if [[ "$IMAGE_ID" == browser ]]; then
-  echo "export APIPI_MICROVM_ROOTFS_BROWSER=$ROOTFS"
-  echo "export APIPI_MICROVM_IMAGE=browser"
-elif [[ "$IMAGE_ID" == default ]]; then
-  echo "export APIPI_MICROVM_ROOTFS=$ROOTFS"
+if [[ "$IMAGE_ID" == browser || "$IMAGE_ID" == default ]]; then
+  echo "use \`apipi images build\` to package this output, then \`apipi images push --store-version <v>\` and \`apipi images pull $IMAGE_ID\`"
+  echo "APIPI_MICROVM_KERNEL and APIPI_MICROVM_ROOTFS are dev-only overrides; leave them unset to use the image store."
 else
   echo "use \`apipi images build\` or \`apipi images pull\`, then set sandbox_image=$IMAGE_ID"
   echo "do not export APIPI_MICROVM_ROOTFS to this file; that replaces the default image"
-fi
-if [[ -f "$KERNEL" ]]; then
-  echo "export APIPI_MICROVM_KERNEL=$KERNEL"
 fi

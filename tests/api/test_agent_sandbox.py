@@ -18,7 +18,7 @@ async def _agent(client: AsyncClient, token: str, **extra: object) -> str:
     return str(created.json()["id"])
 
 
-async def test_agent_rejects_bad_sandbox_size(client: AsyncClient) -> None:
+async def test_agent_rejects_removed_sandbox_size(client: AsyncClient) -> None:
     token = "agent-size-bad"
     created = await client.post(
         "/v1/agents",
@@ -26,7 +26,7 @@ async def test_agent_rejects_bad_sandbox_size(client: AsyncClient) -> None:
         json={"name": "bot", "metadata": {"apipi.sandbox_size": "xl"}},
     )
     assert created.status_code == 400
-    assert created.json()["error"]["code"] == "invalid_request"
+    assert "container_size" in created.json()["error"]["message"]
     agent_id = await _agent(client, token)
     updated = await client.post(
         f"/v1/agents/{agent_id}",
@@ -34,10 +34,7 @@ async def test_agent_rejects_bad_sandbox_size(client: AsyncClient) -> None:
         json={"metadata": {"apipi.sandbox_size": "xl"}},
     )
     assert updated.status_code == 400
-    assert "sandbox_size" in updated.json()["error"]["message"]
-    got = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
-    assert got.status_code == 200
-    assert "apipi.sandbox_size" not in got.json()["metadata"]
+    assert "container_size" in updated.json()["error"]["message"]
 
 
 async def test_agent_rejects_unknown_sandbox_image(
@@ -72,21 +69,19 @@ async def test_agent_rejects_unknown_sandbox_image(
 
 async def test_agent_rejects_browser_below_min_size(client: AsyncClient) -> None:
     token = "agent-browser-s"
-    body = {"metadata": {"apipi.sandbox_image": "browser", "apipi.sandbox_size": "S"}}
     created = await client.post(
         "/v1/agents",
         headers=_auth(token),
-        json={"name": "bot", **body},
+        json={
+            "name": "bot",
+            "metadata": {"apipi.sandbox_image": "browser"},
+            "session_defaults": {
+                "environment": {"type": "openai_hosted", "sandbox_size": "S"}
+            },
+        },
     )
     assert created.status_code == 400
     assert "needs sandbox_size" in created.json()["error"]["message"]
-    agent_id = await _agent(client, token)
-    updated = await client.post(
-        f"/v1/agents/{agent_id}",
-        headers=_auth(token),
-        json=body,
-    )
-    assert updated.status_code == 400
 
 
 async def test_agent_sandbox_pair_is_inherited(client: AsyncClient) -> None:
@@ -94,12 +89,18 @@ async def test_agent_sandbox_pair_is_inherited(client: AsyncClient) -> None:
     agent_id = await _agent(
         client,
         token,
-        metadata={"apipi.sandbox_image": "browser", "apipi.sandbox_size": "M"},
+        metadata={"apipi.sandbox_image": "browser"},
+        session_defaults={
+            "environment": {"type": "openai_hosted", "sandbox_size": "M"}
+        },
     )
     created = await client.post(
         "/v1/agents/sessions",
         headers=_auth(token),
-        json={"agent_id": agent_id, "environment": {"type": "none"}},
+        json={
+            "agent_id": agent_id,
+            "environment": {"type": "openai_hosted", "sandbox_size": "M"},
+        },
     )
     assert created.status_code == 200
     environment = created.json()["environment"]

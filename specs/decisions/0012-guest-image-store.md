@@ -31,8 +31,8 @@ prefix both work:
 - `index.json`
 
 Schema `2` is a versioned store: one immutable `v<version>/` prefix,
-no `latest`, and `manifest_sha256`. Schema `1` is the old flat store.
-It is still read, with a deprecation warning. The official store is
+no `latest`, and `manifest_sha256`. Schema `1` flat stores are no longer
+written. `apipi images push` requires `--store-version`. The official store is
 the GitHub release at
 `https://github.com/GEKI-AI/apipi/releases/download/v<version>/`.
 Signing is a Sigstore bundle over `SHA256SUMS`. The identity is the
@@ -100,14 +100,13 @@ holds exactly one row per `(id, arch)` and uses no `latest` flag.
 Pull uses that entry, then checks the manifest. If it is not
 compatible, pull fails. It does not silently pick an older version.
 
-`apipi images push` writes new objects first and rewrites `index.json`
-last. `apipi images publish` is the same command. For each image id
+`apipi images push --store-version <v>` writes new objects first and rewrites `index.json`
+last. For each image id
 and arch it uploads only the newest local build, chosen by manifest
 `created_at`. Older manifests left in the build directory are ignored.
 If that exact `(id, version, arch)` is already in the store and the
 compressed sha256 matches, push skips it and exits 0. `--force`
-uploads again. The pushed version becomes `latest` for that id and
-arch. `--to` defaults to `APIPI_IMAGE_SOURCE`. A missing bucket fails
+is refused for a versioned store prefix. `--to` defaults to `APIPI_IMAGE_SOURCE`. A missing bucket fails
 with a clear error instead of starting a new index. A missing
 `index.json` in an existing bucket still starts a new index.
 

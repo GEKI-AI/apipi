@@ -10,10 +10,8 @@ from typing import TextIO
 
 from apipi.config import ConfigError, Settings
 from apipi.worker.pi.microvm import (
-    default_kernel_path,
     firecracker_bin_dirs,
     kvm_available,
-    microvm_image_dir,
     microvm_net_binaries,
 )
 from apipi.worker.pi.model_host import installed_pi_version
@@ -309,36 +307,12 @@ def _require_microvm_host() -> None:
     microvm_net_binaries()
 
 
-def _print_microvm_snippet(image: str, stream: TextIO) -> None:
-    kernel = default_kernel_path()
-    rootfs = microvm_image_dir() / rootfs_output_name(image)
-    print(f"export APIPI_MICROVM_KERNEL={kernel}", file=stream)
-    if image == "browser":
-        print(f"export APIPI_MICROVM_ROOTFS_BROWSER={rootfs}", file=stream)
-        print("export APIPI_MICROVM_IMAGE=browser", file=stream)
-    elif image == "default":
-        print(f"export APIPI_MICROVM_ROOTFS={rootfs}", file=stream)
-    else:
-        print(
-            f"use apipi images pull and sandbox_image={image}. "
-            "Do not set APIPI_MICROVM_ROOTFS to this file.",
-            file=stream,
-        )
-        return
-    print(
-        "Unset, apipi uses those files when they exist. "
-        "apipi microvm shell re-runs under sudo if TAP/jailer need root.",
-        file=stream,
-    )
-
-
 def install_microvm(
     settings: Settings | None = None,
     *,
     image: str = "default",
     force: bool = False,
     dry_run: bool = False,
-    build: bool = False,
     out: TextIO | None = None,
 ) -> int:
     stream: TextIO = sys.stdout if out is None else out
@@ -349,16 +323,9 @@ def install_microvm(
     fc = dest_dir / "firecracker"
     jailer = dest_dir / "jailer"
     url = firecracker_release_url()
-    out_dir = microvm_image_dir()
-    rootfs = out_dir / rootfs_output_name(image)
-    kernel = default_kernel_path()
-    args = rootfs_build_args(image, out_dir)
     if dry_run:
         print(url, file=stream)
-        if build:
-            print(" ".join(args), file=stream)
-        else:
-            print(f"apipi images pull {image}", file=stream)
+        print(f"apipi images pull {image}", file=stream)
         return 0
     if _release_bins_ok(dest_dir) and not force:
         print(
@@ -378,28 +345,12 @@ def install_microvm(
                 "firecracker and jailer --version must both match "
                 f"Firecracker {PINNED_FIRECRACKER}"
             )
-    if kernel.is_file() and rootfs.is_file() and not force:
-        ensure_guest_kernel(kernel, stream=stream)
-        print(f"MicroVM {image} image is already installed", file=stream)
-    elif build:
-        env = os.environ.copy()
-        env["PINNED_PI"] = PINNED_PI
-        out_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            subprocess.run(args, check=True, env=env)
-        except subprocess.CalledProcessError as exc:
-            raise ConfigError("could not build the microVM guest image") from exc
-        if not kernel.is_file() or not rootfs.is_file():
-            raise ConfigError(f"rootfs build did not write {kernel} and {rootfs}")
-    else:
-        from apipi.worker.pi.image_pull import configured_images_dir, pull_images
+    from apipi.worker.pi.image_pull import configured_images_dir, pull_images
 
-        resolved = settings if settings is not None else Settings()
-        pull_images(resolved, ids=[image], force=force)
-        print(f"Pulled MicroVM image {image}", file=stream)
-        _print_pulled_snippet(image, configured_images_dir(resolved), stream)
-        return 0
-    _print_microvm_snippet(image, stream)
+    resolved = settings if settings is not None else Settings()
+    pull_images(resolved, ids=[image], force=force)
+    print(f"Pulled MicroVM image {image}", file=stream)
+    _print_pulled_snippet(image, configured_images_dir(resolved), stream)
     return 0
 
 
@@ -503,7 +454,6 @@ def run_install(
     image: str | None = None,
     force: bool = False,
     dry_run: bool = False,
-    build: bool = False,
     tty: bool | None = None,
     inp: TextIO | None = None,
     out: TextIO | None = None,
@@ -529,7 +479,6 @@ def run_install(
             image=flavor,
             force=force,
             dry_run=dry_run,
-            build=build,
             out=stream,
         )
     return 0

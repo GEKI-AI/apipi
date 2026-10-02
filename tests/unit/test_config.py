@@ -5,7 +5,6 @@ import pytest
 
 from apipi.cli import main
 from apipi.config import (
-    FLAT_TOML_WARNING,
     ConfigError,
     Settings,
     default_sqlite_url,
@@ -185,37 +184,35 @@ def test_pi_mem_mib_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
         load_settings()
 
 
-def test_workspace_ttl_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sandbox_ttl_openai_hosted_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_WORKSPACE_TTL", "2h")
-    assert Settings().workspace_ttl == timedelta(hours=2)
+    monkeypatch.setenv("APIPI_SANDBOX_TTL_OPENAI_HOSTED", "2h")
+    assert Settings().sandbox_ttl_openai_hosted == timedelta(hours=2)
 
 
 def test_sandbox_ttl_openai_hosted_alias(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.delenv("APIPI_WORKSPACE_TTL", raising=False)
     monkeypatch.setenv("APIPI_SANDBOX_TTL_OPENAI_HOSTED", "45m")
     settings = Settings()
-    assert settings.workspace_ttl == timedelta(minutes=45)
+    assert settings.sandbox_ttl_openai_hosted == timedelta(minutes=45)
     assert settings.sandbox_ttl_for("openai_hosted") == timedelta(minutes=45)
 
 
 def test_sandbox_ttl_zero_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.delenv("APIPI_WORKSPACE_TTL", raising=False)
     monkeypatch.setenv("APIPI_SANDBOX_TTL_OPENAI_HOSTED", "0")
     settings = Settings()
-    assert settings.workspace_ttl is None
+    assert settings.sandbox_ttl_openai_hosted is None
     assert settings.sandbox_ttl_for("openai_hosted") is None
     assert settings.pi_idle_ttl_for("openai_hosted") is None
     assert settings.pi_idle_ttl_for("none") == timedelta(minutes=15)
 
 
-def test_workspace_ttl_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_sandbox_ttl_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "none")
-    monkeypatch.setenv("APIPI_WORKSPACE_TTL", "nope")
+    monkeypatch.setenv("APIPI_SANDBOX_TTL_OPENAI_HOSTED", "nope")
     with pytest.raises(
         ConfigError, match="APIPI_SANDBOX_TTL_OPENAI_HOSTED must be like"
     ):
@@ -234,7 +231,7 @@ def test_run_mode_host_is_not_valid(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "host")
-    with pytest.raises(ConfigError, match="APIPI_RUN_MODE=host is not valid"):
+    with pytest.raises(ConfigError, match=r"none, chat, microvm"):
         load_settings()
 
 
@@ -244,7 +241,7 @@ def test_run_mode_jail_is_not_valid(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "jail")
-    with pytest.raises(ConfigError, match="APIPI_RUN_MODE=jail is not valid"):
+    with pytest.raises(ConfigError, match=r"none, chat, microvm"):
         load_settings()
 
 
@@ -319,31 +316,20 @@ def test_forward_models_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().forward_models is True
 
 
-def test_microvm_image_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_microvm_image_settings_removed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.delenv("APIPI_MICROVM_IMAGE", raising=False)
-    assert Settings().microvm_image == "default"
-    assert Settings().microvm_rootfs_browser is None
+    assert not hasattr(Settings(), "microvm_image")
+    assert not hasattr(Settings(), "microvm_rootfs_browser")
 
 
-def test_microvm_image_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_microvm_image_env_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_MICROVM_IMAGE", "browser")
     monkeypatch.setenv("APIPI_MICROVM_ROOTFS_BROWSER", "/tmp/rootfs-browser.ext4")
     settings = Settings()
-    assert settings.microvm_image == "browser"
-    assert settings.microvm_rootfs_browser == "/tmp/rootfs-browser.ext4"
-
-
-def test_microvm_image_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "none")
-    monkeypatch.setenv("APIPI_MICROVM_IMAGE", "gpu")
-    with pytest.raises(
-        ConfigError, match="APIPI_MICROVM_IMAGE must be default, browser, or work"
-    ):
-        load_settings()
+    assert not hasattr(settings, "microvm_image")
+    assert not hasattr(settings, "microvm_rootfs_browser")
+    assert settings.sandbox_default_image == "default"
 
 
 def test_otel_endpoint_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -421,7 +407,7 @@ def test_new_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.microvm_egress_allowlist is False
     assert settings.microvm_egress_hosts == ""
     assert settings.microvm_egress_mbit == 50
-    assert settings.workspace_ttl == timedelta(hours=1)
+    assert settings.sandbox_ttl_openai_hosted == timedelta(hours=1)
     assert settings.usage_store == "turns"
     assert settings.env_none_placement == "chat"
     assert settings.usage_retention == timedelta(days=15)
@@ -654,8 +640,6 @@ def test_nested_toml_sandbox_and_pi(
         'backend = "microvm"\n'
         'kernel = "/tmp/vmlinux"\n'
         'rootfs = "/tmp/rootfs.ext4"\n'
-        'rootfs_browser = "/tmp/rootfs-browser.ext4"\n'
-        'image = "browser"\n'
         'default_size = "M"\n'
         "[sandbox.resources]\n"
         "mem_mib = 1024\n"
@@ -682,8 +666,6 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.run_mode == "microvm"
     assert settings.microvm_kernel == "/tmp/vmlinux"
     assert settings.microvm_rootfs == "/tmp/rootfs.ext4"
-    assert settings.microvm_rootfs_browser == "/tmp/rootfs-browser.ext4"
-    assert settings.microvm_image == "browser"
     assert settings.sandbox_default_size == "M"
     assert settings.microvm_mem_mib == 1024
     assert settings.sandbox_m_mem_mib == 1536
@@ -693,7 +675,7 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.microvm_egress_allowlist is False
     assert settings.microvm_egress_hosts == "mcp.example.com"
     assert settings.microvm_egress_mbit == 25
-    assert settings.workspace_ttl == timedelta(minutes=45)
+    assert settings.sandbox_ttl_openai_hosted == timedelta(minutes=45)
     assert not hasattr(settings, "sandbox_auto_playwright")
 
 
@@ -716,7 +698,7 @@ def test_nested_toml_platform_prompt(
     assert settings.platform_prompt_additional == "Always answer in German."
 
 
-def test_legacy_flat_toml_warns(
+def test_legacy_flat_toml_loads_without_warning(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -729,9 +711,7 @@ def test_legacy_flat_toml_warns(
     caplog.set_level("WARNING", logger="apipi")
     settings = load_settings()
     assert settings.run_mode == "none"
-    assert FLAT_TOML_WARNING.format(key="run_mode", path="[sandbox].backend") in (
-        caplog.text
-    )
+    assert "deprecated" not in caplog.text
 
 
 def test_nested_and_flat_conflict(
@@ -903,7 +883,7 @@ def test_removed_playwright_mcp_is_ignored(
     caplog.set_level("WARNING", logger="apipi")
     loaded = load_settings()
     assert not hasattr(loaded, "sandbox_playwright_mcp")
-    assert "playwright_mcp was removed and is ignored" in caplog.text
+    assert "unknown [sandbox.browser] key playwright_mcp is ignored" in caplog.text
 
 
 def test_pi_thinking_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
