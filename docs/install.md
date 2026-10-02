@@ -37,8 +37,9 @@ project. S3-compatible artifact storage is an extra:
 `apipi dev` is for local development. It runs `apipi migrate`, creates
 or reuses a worker token in `.apipi/dev-worker-token` (mode `0600`),
 and starts `apipi serve` and `apipi worker` as two child processes
-with their log output combined. `APIPI_LOCAL_STORE_DIR` defaults to
-`.apipi/store` for both processes. The worker run mode comes from
+with their log output combined. Both processes start in the current
+directory, so they share the default `APIPI_LOCAL_STORE_DIR`
+(`.apipi/store`) unless you set it. The worker run mode comes from
 `APIPI_RUN_MODE` and defaults to `none`, and the worker logs a warning
 for that. Press Ctrl-C to stop both processes. If either process
 exits, `apipi dev` stops the other one. `--config` sets the TOML file

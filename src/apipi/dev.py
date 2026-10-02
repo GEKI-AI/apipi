@@ -67,7 +67,6 @@ def child_environments(
     token_file: Path, *, host: str, port: int
 ) -> tuple[dict[str, str], dict[str, str]]:
     api = dict(os.environ)
-    api.setdefault("APIPI_LOCAL_STORE_DIR", str((DEV_DIR / "store").resolve()))
     worker = dict(api)
     worker.pop("DATABASE_URL", None)
     worker["APIPI_API_URL"] = f"http://{_client_host(host)}:{port}"
@@ -87,6 +86,12 @@ def _stop(procs: list[subprocess.Popen[bytes]]) -> None:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+def _exit_code(returncode: int | None) -> int:
+    if returncode is None:
+        return 0
+    return 128 - returncode if returncode < 0 else returncode
 
 
 class _Stop(Exception):
@@ -116,7 +121,7 @@ def run_dev(*, config_path: str | None, host: str, port: int) -> int:
         while True:
             exited = [proc for proc in procs if proc.poll() is not None]
             if exited:
-                code = exited[0].returncode or 0
+                code = _exit_code(exited[0].returncode)
                 break
             time.sleep(0.2)
     except (KeyboardInterrupt, _Stop):

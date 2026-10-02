@@ -5,6 +5,7 @@ import pytest
 
 from apipi.config import Settings
 from apipi.dev import (
+    _exit_code,
     child_commands,
     child_environments,
     ensure_dev_token,
@@ -63,14 +64,12 @@ def test_child_environments_split_database_and_share_the_store(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", "sqlite:///dev.db")
-    monkeypatch.delenv("APIPI_LOCAL_STORE_DIR", raising=False)
     monkeypatch.delenv("APIPI_RUN_MODE", raising=False)
     token = tmp_path / "token"
     api, worker = child_environments(token, host="0.0.0.0", port=9001)
     assert api["DATABASE_URL"] == "sqlite:///dev.db"
     assert "DATABASE_URL" not in worker
-    assert api["APIPI_LOCAL_STORE_DIR"] == worker["APIPI_LOCAL_STORE_DIR"]
-    assert api["APIPI_LOCAL_STORE_DIR"].endswith("/.apipi/store")
+    assert api.get("APIPI_LOCAL_STORE_DIR") == worker.get("APIPI_LOCAL_STORE_DIR")
     assert worker["APIPI_API_URL"] == "http://127.0.0.1:9001"
     assert worker["APIPI_WORKER_TOKEN_FILE"] == str(token.resolve())
     assert worker["APIPI_RUN_MODE"] == "none"
@@ -110,3 +109,11 @@ def test_worker_gets_the_config_unless_it_holds_the_database_url(
     api, worker = child_commands(config_path=str(with_db), host="h", port=1)
     assert api[-2:] == ["--config", str(with_db)]
     assert "--config" not in worker
+
+
+def test_exit_code_maps_signals_to_the_shell_convention() -> None:
+    assert _exit_code(None) == 0
+    assert _exit_code(0) == 0
+    assert _exit_code(3) == 3
+    assert _exit_code(-9) == 137
+    assert _exit_code(-15) == 143

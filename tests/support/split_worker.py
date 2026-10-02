@@ -269,11 +269,6 @@ async def spawn_split_worker(
         _images_patch,
     )
     await worker.wait_ready()
-    # Expose the worker-side harness and pool to tests that inspect
-    # `app.state.harness` / `app.state.pi_pool` today.
-    app.state.harness = harness
-    if worker.pool is not None:
-        app.state.pi_pool = worker.pool
     return worker
 
 
@@ -330,8 +325,7 @@ async def split_client_for(
     `app = create_app(settings, store=store)` followed by an
     inline `AsyncClient`, so the test body (which keeps using `app` and
     `client`) runs against the split production path. `harness` lands on
-    the worker side; `app.state.harness` / `app.state.pi_pool` are
-    patched to the worker objects. Extra `create_app` keyword arguments
+    the worker side. Extra `create_app` keyword arguments
     (`authorize=`, `blobs=`, ...) go to the API side. `tracing=` is the
     worker side and `api_tracing=` the API side; when only one is given
     it is shared by both (single-exporter tests). `metrics=`/`pool=`

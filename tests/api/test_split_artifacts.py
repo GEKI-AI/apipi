@@ -4,8 +4,8 @@ The worker holds no object-store credentials and performs no
 artifact/file database writes. All uploads go through
 `artifact.presign` -> reply -> PUT (S3) or shared-root write
 (filesystem) -> `artifact.completed`, for artifact, pi_session, and
-input_image kinds, via the outbox. Combined mode keeps the direct
-path. Quota errors surface with today's codes.
+input_image kinds, via the outbox. Quota errors surface with today's
+codes.
 """
 
 from __future__ import annotations
@@ -994,7 +994,7 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
     async with store.session() as db:
         artifacts = await list_artifacts(db, tenant_id, session_id)
         assert artifacts is not None and len(artifacts) == first_count
-    # Only the Pi blob re-uploads (same key, as in combined mode); the
+    # Only the Pi blob re-uploads (same key); the
     # unchanged workspace file answers `unchanged` with no PUT.
     assert len(put_keys) == puts_before + 1
     assert put_keys[-1].endswith(str(pi_blob))
