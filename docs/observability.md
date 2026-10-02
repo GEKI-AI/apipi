@@ -101,7 +101,7 @@ Worker metric sets (same scrape, metrics on):
 | --- | --- | --- |
 | Worker util | All run modes | `apipi_worker_{capacity,sessions,memory_mib_*}` |
 | Sandbox lifecycle | Any spawn through `PiPool` | `apipi_sandbox_*` |
-| Host Pi | `chat` / `none` (no `vm_id`) | `apipi_pi_processes`, `apipi_pi_rss_bytes`, `apipi_pi_pss_bytes`, `apipi_pi_spawn_total`, `apipi_pi_kill_total` |
+| Host Pi | `none` (no `vm_id`) | `apipi_pi_processes`, `apipi_pi_rss_bytes`, `apipi_pi_pss_bytes`, `apipi_pi_spawn_total`, `apipi_pi_kill_total` |
 | MicroVM guest | `vm_id` set | `apipi_guest_*` |
 
 `apipi_worker_memory_mib_used` is reserved guest budget for placement. `apipi_pi_rss_bytes` is actual host Pi RAM (process group, including MCP children Pi started). Guest jailer cgroup is `apipi_guest_memory_bytes`. Do not mix them.
@@ -170,7 +170,7 @@ bill. See [usage](usage.md#session-lifecycle-export).
 | HTTP `429` with `capacity` / `event=worker.assign.failed` | Node or tenant full |
 | `apipi_sandbox_boot_total{result="error"}` / `event=sandbox.boot.failed` | Guests not starting |
 | `apipi_worker_sessions` near `apipi_worker_capacity` | Packing too tight |
-| `apipi_pi_rss_bytes` near host RAM on a chat worker | Dense Pi packing |
+| `apipi_pi_rss_bytes` near host RAM on a `none` worker | Dense Pi packing |
 | `apipi_worker_assign_seconds` p95 | Lease wait |
 | `apipi_usage_export_total{result="drop"}` | Warehouse gaps |
 | `apipi_lifecycle_export_total{result="overflow"}` | Lifecycle queue full; live intervals may be missing |

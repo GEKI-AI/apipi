@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- The `/v1/apipi/chat` facade is removed (all 11 routes return `404`). Text-only sessions are Agents API sessions with `environment.type=none`, which allows function tools and HTTP MCP with `server_url` only (anything else is `400`). The `chat` run mode, `src/apipi/worker/pi/isolation/chat.py`, the `apipi.session_kind` metadata key, and `APIPI_ENV_NONE_PLACEMENT` / `[placement].env_none` are removed. Saved agents that still carry `apipi.session_kind=chat` are ignored for placement; bundle import drops the key with a warning and exports no longer carry it. Workers now advertise an accepts set with `APIPI_WORKER_ACCEPTS` / `[worker].accepts` (comma list from `none`, `microvm`; default `none,microvm` on a microVM backend, else `none`). If `microvm` is listed but the microVM backend cannot run, the worker fails fast before it registers. Pi for `type=none` always runs directly on the worker host. `placement_for` returns `none` for `type=none` and `microvm` otherwise; `pick` uses set membership with least-loaded logic and no fallback (`429` `capacity`). Migrate:
+
+  | Old | New |
+  | --- | --- |
+  | `POST /v1/apipi/chat/sessions` | `POST /v1/agents/sessions` with `"environment": {"type": "none"}` |
+  | `GET /v1/apipi/chat/sessions` | `GET /v1/agents/sessions` |
+  | `GET` / `POST` / `DELETE /v1/apipi/chat/sessions/{id}` | the same verbs on `/v1/agents/sessions/{id}` |
+  | `POST` / `GET /v1/apipi/chat/sessions/{id}/events` | `/v1/agents/sessions/{id}/events` |
+  | `GET /v1/apipi/chat/sessions/{id}/turns[/{turn_id}]` | `/v1/agents/sessions/{id}/turns[/{turn_id}]` |
+  | `GET /v1/apipi/chat/sessions/{id}/items` | `/v1/agents/sessions/{id}/items` |
+  | `GET /v1/apipi/chat/sessions/{id}/export` | `GET /v1/apipi/sessions/{id}/export` |
+  | `APIPI_RUN_MODE=chat` workers | workers with `APIPI_WORKER_ACCEPTS=none` |
+  | `APIPI_ENV_NONE_PLACEMENT` | removed; `type=none` goes to any worker whose accepts set contains `none` |
+  | `apipi.session_kind=chat` | `environment.type=none` |
 - `environment.type=self_hosted` is not supported for now. Session create, agent `session_defaults`, and template import with that type return `400` with type `not_implemented` and the message `environment type self_hosted is not supported`. The runner WebSocket (`/v1/environments/{environment_id}`), `EnvironmentHub`, runner client (`examples/self_hosted_runner.py`), `APIPI_SANDBOX_TTL_SELF_HOSTED` / `[sandbox.ttl].self_hosted`, and the `self_hosted` prompt fragments are removed. `GET /v1/agents/environments/{id}` stays for hosted computers. The type may come back later on worker protocol v2. Use `openai_hosted` as the workaround.
 - Old route aliases outside `/v1/apipi` are removed and return `404`. Routers now serve directly under `/v1/apipi/...`. Migrate:
   - `GET /v1/usage` -> `GET /v1/apipi/usage`

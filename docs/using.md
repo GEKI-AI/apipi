@@ -163,7 +163,7 @@ The response is `{"id": "…", "deleted": true}`.
 
 - [Concepts](concepts.md) for agents, sessions, files, and artifacts.
 - [API](api.md) for routes, events, and compatibility.
-- [Chat fleets](chat.md) for `/v1/apipi/chat` and chat vs microVM workers.
+- [Sandbox workers](workers.md#placement) for `APIPI_WORKER_ACCEPTS` and `none` vs microVM workers.
 - [Environments](environments.md) for the local directory, `none`, and
   `openai_hosted`.
 - [Tools and skills](tools.md) for function tools, MCP, and `SKILL.md`.

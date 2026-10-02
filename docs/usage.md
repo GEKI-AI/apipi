@@ -82,7 +82,7 @@ on, POSTs the full object.
 | `mcp_names` | MCP server labels used |
 | `mcp_counts` | Calls per MCP server |
 | `environment_type` | `none` \| `openai_hosted` |
-| `run_mode` | `none` \| `chat` \| `microvm` \| custom backend `name` |
+| `run_mode` | `none` \| `microvm` \| custom backend `name` |
 | `instance_id` | Process name, if set |
 | `artifact_bytes` | Bytes published this turn |
 | `request_id` | Request id |
@@ -217,9 +217,8 @@ digest is `rootfs.sha256` from that version's `manifest.json`. A dev
 rootfs override reports null for both version and digest.
 `none` and non-microvm run modes send null for all three image fields.
 `sandbox_size` is still set, because it drives the memory budget in
-every run mode. Chat sessions are `environment_type: "none"` with
-`run_mode: "chat"`. Split sandbox time from chat concurrency with
-those two fields.
+every run mode. `type=none` sessions are `environment_type: "none"`.
+Split sandbox time from text-only concurrency with those two fields.
 
 The version and digest are captured when the process is spawned and
 stored on that live interval. A later `apipi images pull` that flips
@@ -441,7 +440,7 @@ labels. Host Pi series have no `size` label.
 | --- | --- | --- |
 | Worker util | All run modes | `apipi_worker_{capacity,sessions,memory_mib_*}` |
 | Sandbox lifecycle | Any `PiPool` spawn | `apipi_sandbox_*` |
-| Host Pi | `chat` / `none` | `apipi_pi_*` (RSS/PSS of the Pi process group) |
+| Host Pi | `none` | `apipi_pi_*` (RSS/PSS of the Pi process group) |
 | MicroVM guest | jailer `vm_id` | `apipi_guest_*` |
 
 | Layer | What | Default | How |

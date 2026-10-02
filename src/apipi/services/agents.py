@@ -9,7 +9,7 @@ from apipi.config import Settings
 from apipi.env.spec import EnvironmentSpec
 from apipi.gateway.auth import not_found
 from apipi.gateway.schemas import StrictModel
-from apipi.services.chat_tools import is_chat_profile, reject_disallowed_chat_tools
+from apipi.services.env_none import is_env_none, reject_tools_for_env_none
 from apipi.services.session_defaults import (
     mirror_sandbox_metadata,
     normalize_sandbox_aliases,
@@ -48,6 +48,13 @@ from apipi.worker.pi.settings_json import (
 _UNIMPLEMENTED = ("multi_agent", "tool_search", "programmatic_tool_calling")
 
 _SERVER_LABEL = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _defaults_environment(defaults: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(defaults, dict):
+        return None
+    env = defaults.get("environment")
+    return env if isinstance(env, dict) else None
 
 
 class FunctionTool(StrictModel):
@@ -327,8 +334,8 @@ class AgentService:
         validate_idle_metadata(payload.get("metadata"))
         validate_sandbox_metadata(self.settings, payload.get("metadata"))
         validate_defaults_shape(self.settings, payload.get("session_defaults"))
-        if is_chat_profile(payload.get("metadata")):
-            reject_disallowed_chat_tools(payload.get("tools"))
+        if is_env_none(_defaults_environment(payload.get("session_defaults"))):
+            reject_tools_for_env_none(payload.get("tools"))
         if check_model:
             await require_saved_model(self.settings, payload.get("model"), api_key)
         async with self.store.session() as db:
@@ -428,8 +435,19 @@ class AgentService:
                 validate_defaults_shape(self.settings, payload["session_defaults"])
                 await require_default_refs(db, tenant_id, payload["session_defaults"])
             tools = payload.get("tools", existing.tools)
-            if is_chat_profile(metadata):
-                reject_disallowed_chat_tools(tools)
+            if "session_defaults" in payload:
+                effective_defaults = payload["session_defaults"]
+            else:
+                effective_defaults = (
+                    existing.session_defaults
+                    if isinstance(existing.session_defaults, dict)
+                    else None
+                )
+            env = _defaults_environment(
+                effective_defaults if isinstance(effective_defaults, dict) else None
+            )
+            if is_env_none(env):
+                reject_tools_for_env_none(tools if isinstance(tools, list) else None)
             agent = await update_agent(db, tenant_id, agent_id, changes=payload)
             if agent is None:
                 not_found()

@@ -62,7 +62,7 @@ Session create may include `environment.sandbox_size` with value `S`,
 `environment.container_size` (`small` / `medium` / `large`) instead,
 which is stored as `sandbox_size`. Other `metadata` keys stay
 opaque tags. The `apipi.` prefix is reserved. The gateway reads
-`apipi.sandbox_image` and `apipi.session_kind` (placement).
+`apipi.sandbox_image`.
 Extenders may set `apipi.actor_type`, `apipi.schedule_id`, and
 `apipi.source`. The gateway stores those keys and does not schedule
 from them. The full list is in
@@ -181,7 +181,7 @@ copy that one file to `outputs/`.
 A hosted microvm session gets a capability line that names the image,
 size, RAM, vCPUs, and network. It does not claim a browser because the
 size is `L`. The browser sentence is present only when the image is
-`browser`. Chat sessions and `environment.type` `none` get no sandbox,
+`browser`. `environment.type` `none` gets no sandbox,
 size, or `/workspace` text. The full fragment table is in
 [config](config.md#pi).
 
@@ -234,7 +234,7 @@ agent turn that needs the computer:
    `pip` is available, prep fails
    with a clear message. It does not try to install `pip` with `apt`.
    npm packages install under `.npm` in the same workspace
-   (`npm install -g --prefix`). On isolation `none` and `chat`, Pi's
+   (`npm install -g --prefix`). On isolation `none`, Pi's
    `PATH` puts `.venv/bin` and `.npm/bin` first when those directories
    exist. On `microvm`, guest init does the same after prep, before Pi
    starts. `packages.system` uses `apt-get` after `apt-get update`. Isolation
@@ -287,11 +287,12 @@ in the workspace before the turn. `none` rejects packages, setup commands, env, 
 
 ## `none`
 
-No computer. Pi still runs the loop. Function tools and MCP still
-work. There is no session directory and no shell. This type is an
-Agents API field. `/v1/apipi/chat` never asks clients to set it and never
-returns `environment`. Chat sessions still store `type=none` internally
-so placement can use chat workers. See [chat fleets](chat.md).
+No computer. Pi still runs the loop. Function tools and HTTP MCP with
+`server_url` still work; anything else is `400`. There is no session
+directory and no shell. Pi for `type=none` always runs directly on the
+worker host. Saved agents that still carry
+`metadata.apipi.session_kind=chat` are ignored for placement now.
+See [sandbox workers](workers.md#placement).
 
 ## `self_hosted`
 

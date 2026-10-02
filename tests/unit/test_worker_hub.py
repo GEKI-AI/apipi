@@ -28,7 +28,13 @@ def _settings() -> Settings:
     )
 
 
-def _conn(*, capacity: int, memory_mb: int, run_mode: str = "chat") -> WorkerConnection:
+def _conn(
+    *,
+    capacity: int,
+    memory_mb: int,
+    run_mode: str = "none",
+    accepts: frozenset[str] | None = None,
+) -> WorkerConnection:
     return WorkerConnection(
         worker_id=uuid.uuid4(),
         generation=1,
@@ -36,6 +42,13 @@ def _conn(*, capacity: int, memory_mb: int, run_mode: str = "chat") -> WorkerCon
         capacity=capacity,
         memory_mb=memory_mb,
         run_mode=run_mode,
+        accepts=accepts
+        if accepts is not None
+        else (
+            frozenset({"none", "microvm"})
+            if run_mode == "microvm"
+            else frozenset({"none"})
+        ),
     )
 
 
@@ -48,14 +61,14 @@ def test_pick_filters_image_before_capacity() -> None:
     full.images = {"browser": image}
     full.leases.add(uuid.uuid4())
     plain = _conn(capacity=8, memory_mb=4096, run_mode="microvm")
-    chat = _conn(capacity=8, memory_mb=4096, run_mode="chat")
+    none_only = _conn(capacity=8, memory_mb=16384, run_mode="none")
     hub._conns[browser.worker_id] = browser
     hub._conns[full.worker_id] = full
     hub._conns[plain.worker_id] = plain
-    hub._conns[chat.worker_id] = chat
-    assert hub.pick(512, run_mode="microvm", image="browser") is browser
+    hub._conns[none_only.worker_id] = none_only
+    assert hub.pick(512, kind="microvm", image="browser") is browser
     assert hub.has_image("microvm", "missing") is False
-    assert hub.pick(512, run_mode="chat") is chat
+    assert hub.pick(512, kind="none") is none_only
 
 
 def test_legacy_worker_without_images_has_default_and_browser() -> None:
@@ -63,7 +76,7 @@ def test_legacy_worker_without_images_has_default_and_browser() -> None:
     assert set(images) == {"default", "browser"}
     arm = images_from_message({"type": "register", "arch": "aarch64"}, "microvm")
     assert set(arm) == {"default"}
-    assert images_from_message({"type": "register"}, "chat") == {}
+    assert images_from_message({"type": "register"}, "none") == {}
     assert images_from_message({"images": []}, "microvm") == {}
 
 
@@ -73,7 +86,7 @@ def test_pick_prefers_more_free_ram() -> None:
     high = _conn(capacity=8, memory_mb=4096)
     hub._conns[low.worker_id] = low
     hub._conns[high.worker_id] = high
-    assert hub.pick(run_mode="chat") is high
+    assert hub.pick(kind="none") is high
 
 
 def test_pick_rejects_ram_cap_with_session_slots() -> None:
@@ -81,7 +94,7 @@ def test_pick_rejects_ram_cap_with_session_slots() -> None:
     conn = _conn(capacity=8, memory_mb=512)
     conn.leases.add(uuid.uuid4())
     hub._conns[conn.worker_id] = conn
-    assert hub.pick(run_mode="chat") is None
+    assert hub.pick(kind="none") is None
 
 
 def test_pick_rejects_session_cap_with_ram() -> None:
@@ -89,7 +102,7 @@ def test_pick_rejects_session_cap_with_ram() -> None:
     conn = _conn(capacity=1, memory_mb=8192)
     conn.leases.add(uuid.uuid4())
     hub._conns[conn.worker_id] = conn
-    assert hub.pick(run_mode="chat") is None
+    assert hub.pick(kind="none") is None
 
 
 def test_pick_uses_lease_mem_for_mixed_sizes() -> None:
@@ -99,8 +112,8 @@ def test_pick_uses_lease_mem_for_mixed_sizes() -> None:
     conn.leases.add(lease)
     conn.lease_mem[lease] = 2048
     hub._conns[conn.worker_id] = conn
-    assert hub.pick(512, run_mode="chat") is conn
-    assert hub.pick(1024, run_mode="chat") is None
+    assert hub.pick(512, kind="none") is conn
+    assert hub.pick(1024, kind="none") is None
 
 
 def test_pick_tie_break_fewer_leases() -> None:
@@ -110,19 +123,19 @@ def test_pick_tie_break_fewer_leases() -> None:
     idle = _conn(capacity=8, memory_mb=3584)
     hub._conns[busy.worker_id] = busy
     hub._conns[idle.worker_id] = idle
-    assert hub.pick(run_mode="chat") is idle
+    assert hub.pick(kind="none") is idle
 
 
 def test_observe_labels_workers_by_run_mode() -> None:
     metrics = Metrics()
     hub = WorkerHub(_settings(), metrics=metrics)
-    hub._conns[uuid.uuid4()] = _conn(capacity=1, memory_mb=512, run_mode="chat")
+    hub._conns[uuid.uuid4()] = _conn(capacity=1, memory_mb=512, run_mode="none")
     hub._conns[uuid.uuid4()] = _conn(capacity=1, memory_mb=512, run_mode="microvm")
     hub._observe()
     body = metrics.scrape().decode()
-    assert metric_line(body, "apipi_workers", run_mode="chat").endswith(" 1.0")
+    assert metric_line(body, "apipi_workers", run_mode="none").endswith(" 1.0")
     assert metric_line(body, "apipi_workers", run_mode="microvm").endswith(" 1.0")
-    assert metric_line(body, "apipi_worker_leases", run_mode="chat").endswith(" 0.0")
+    assert metric_line(body, "apipi_worker_leases", run_mode="none").endswith(" 0.0")
 
 
 async def test_dispatch_reports_escaped_turn(
@@ -214,3 +227,43 @@ async def test_dispatch_logs_4xx_and_does_not_raise(
     assert matched
     assert matched[-1].levelno == logging.WARNING
     assert matched[-1].__dict__["failure_source"] == "user"
+
+
+def test_pick_accepts_sets() -> None:
+    hub = WorkerHub(_settings())
+    both = _conn(
+        capacity=8,
+        memory_mb=8192,
+        run_mode="microvm",
+        accepts=frozenset({"none", "microvm"}),
+    )
+    hub._conns[both.worker_id] = both
+    assert hub.pick(kind="none") is both
+    assert hub.pick(kind="microvm") is both
+
+
+def test_pick_microvm_only_never_gets_none() -> None:
+    hub = WorkerHub(_settings())
+    microvm_only = _conn(
+        capacity=8, memory_mb=8192, run_mode="microvm", accepts=frozenset({"microvm"})
+    )
+    hub._conns[microvm_only.worker_id] = microvm_only
+    assert hub.pick(kind="microvm") is microvm_only
+    assert hub.pick(kind="none") is None
+
+
+def test_pick_none_only_never_gets_microvm() -> None:
+    hub = WorkerHub(_settings())
+    none_only = _conn(capacity=8, memory_mb=4096, run_mode="none")
+    hub._conns[none_only.worker_id] = none_only
+    assert hub.pick(kind="none") is none_only
+    assert hub.pick(kind="microvm") is None
+
+
+def test_pick_no_matching_worker_is_none() -> None:
+    hub = WorkerHub(_settings())
+    microvm_only = _conn(
+        capacity=8, memory_mb=8192, run_mode="microvm", accepts=frozenset({"microvm"})
+    )
+    hub._conns[microvm_only.worker_id] = microvm_only
+    assert hub.pick(kind="none") is None

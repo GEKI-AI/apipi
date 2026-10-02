@@ -28,7 +28,7 @@ async def _log_stderr(stream: asyncio.StreamReader | None) -> None:
 class NoneIsolation:
     name = "none"
     needs_probe = False
-    warn_not_production = True
+    warn_not_production = False
 
     def require(self, settings: Settings | None) -> None:
         del settings

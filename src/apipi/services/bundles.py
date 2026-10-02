@@ -20,7 +20,6 @@ _PORTABLE = frozenset(
         "apipi.thinking",
         "apipi.system_prompt",
         "apipi.idle_ttl",
-        "apipi.session_kind",
     }
 )
 _DROP = frozenset(
@@ -28,6 +27,7 @@ _DROP = frozenset(
         "apipi.actor_type",
         "apipi.schedule_id",
         "apipi.source",
+        "apipi.session_kind",
         "apipi.template_id",
         "apipi.template_updated_at",
         "apipi.sandbox_image",

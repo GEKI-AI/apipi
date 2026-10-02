@@ -70,20 +70,23 @@ def test_additional_without_touching_main() -> None:
     assert compose_instructions(settings, None) == (f"{_main('none')}\n\nBe terse.")
 
 
-def test_none_and_chat_omit_workspace() -> None:
+def test_none_omits_workspace() -> None:
     settings = _settings(run_mode="microvm")
-    for env_type, chat in (("none", False), ("openai_hosted", True), (None, True)):
+    for env_type in ("none", "openai_hosted", None):
         text = compose_instructions(
             settings,
             None,
             env_type=env_type,
-            chat=chat,
             sandbox_size="L",
             mem_mib=2048,
         )
-        assert text == _main("none")
-        assert text is not None
-        assert "/workspace" not in text
+        if env_type == "openai_hosted":
+            assert text is not None
+            assert "/workspace" in text
+        else:
+            assert text == _main("none")
+            assert text is not None
+            assert "/workspace" not in text
 
 
 def test_hosted_prompt_names_workspace() -> None:

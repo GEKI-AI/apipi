@@ -105,7 +105,7 @@ yours.
 | `GET /v1/apipi/agents/{id}/export` | ApiPi route. |
 | `GET …/turns`, `GET …/items`, `GET/DELETE …/artifacts` | Same API |
 | `GET /v1/apipi/usage` | ApiPi route (tokens and turn counts). |
-| `/v1/apipi/templates`, `/v1/apipi/uploads`, `/v1/apipi/chat/sessions` | ApiPi routes. |
+| `/v1/apipi/templates`, `/v1/apipi/uploads` | ApiPi routes. |
 | `POST /v1/apipi/auth/invalidate` | ApiPi route (drop cached auth identities for the caller's tenant). |
 | `GET /health`, `GET /metrics` | ApiPi operator routes |
 | `POST/GET/DELETE /v1/files`, `GET /v1/files/{id}/content` | Same API (purpose `user_data` or `assistants`; max `APIPI_MAX_FILE_BYTES`) |
@@ -131,7 +131,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | Metadata | `apipi.sandbox_image` | Stock SDK input. |
 | Metadata | `apipi.sandbox_eager_boot` | Session or agent metadata override for eager boot. |
 | Metadata | `apipi.system_prompt`, `apipi.idle_ttl` | Pi and idle overrides. Thinking is `reasoning.effort` (`none` is `off`); `metadata["apipi.thinking"]` is removed as client input (`400`) and stripped from response metadata. On update, `reasoning.effort` replaces the stored level and `null` clears it. |
-| Metadata | `apipi.session_kind` | `chat` for chat sessions. |
+| Metadata | `apipi.session_kind` | Removed former chat marker. Ignored now; use `environment.type=none`. |
 | Event data | `data.sandbox` | Hosted `environment.*` events. |
 | Route | `/v1/apipi/agents/{id}/export` | Agent zip. |
 | Route | `/v1/apipi/sessions/{id}/export` | Session export. |
@@ -139,7 +139,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | Route | `/v1/apipi/templates` | Agent templates. |
 | Route | `/v1/apipi/uploads` | Presigned uploads. |
 | Route | `/v1/apipi/usage` | Usage totals. |
-| Route | `/v1/apipi/chat/sessions` | Chat facade. Environment is forced to `none`. |
+| Route | `/v1/agents/sessions` with `"environment": {"type": "none"}` | Text-only sessions. Function tools and HTTP MCP only. |
 
 ## Agent fields and tools
 

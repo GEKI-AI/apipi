@@ -22,29 +22,30 @@ def test_worker_heartbeat_omits_drain_by_default() -> None:
     payload = worker_heartbeat(
         Settings(
             database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-            run_mode="chat",
+            run_mode="none",
         )
     )
     assert payload["type"] == "heartbeat"
     assert "drain" not in payload
+    assert payload["accepts"] == ["none"]
 
 
 def test_worker_heartbeat_sets_drain_true() -> None:
     payload = worker_heartbeat(
         Settings(
             database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-            run_mode="chat",
+            run_mode="none",
         ),
         drain=True,
     )
     assert payload["drain"] is True
-    assert payload["run_mode"] == "chat"
+    assert payload["run_mode"] == "none"
 
 
 def test_drain_timeout_defaults_to_idle_ttl() -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="chat",
+        run_mode="none",
         idle_ttl=timedelta(minutes=15),
     )
     assert drain_timeout_seconds(settings, None) == 900.0

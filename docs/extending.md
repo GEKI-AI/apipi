@@ -77,7 +77,6 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 gateway.configure(app)
 app.include_router(gateway.routers.sessions)
-app.include_router(gateway.routers.chat)
 app.include_router(gateway.routers.vaults)
 app.include_router(gateway.routers.files)
 app.include_router(gateway.routers.uploads)
@@ -192,7 +191,7 @@ Unknown top-level fields are rejected.
 | `apipi.thinking` | Gateway (from `reasoning.effort`) | Removed as client input: sending it is `400`. Set `reasoning.effort` instead. The gateway still stores the resolved level under this key but strips it from public `metadata` in session/agent responses (the `reasoning` field shows the level), so echoing returned metadata back is safe. Bundles carry the level in `reasoning`. See [config](config.md#pi). |
 | `apipi.idle_ttl` | Client | Stock-SDK alias of the session `idle_ttl` field. The field wins when both are set. Same duration shape as the agent field. Session wins over agent, then the environment-type default. |
 | `apipi.system_prompt` | Client or agent | Replaces Pi's harness default. Session wins over agent, then `[pi].system_prompt`. Does not replace the platform prompt, instructions, context files, or skills. Drops Pi's tool list and all tool guidelines, including MCP guidance. The tools stay callable. See [config](config.md#pi). |
-| `apipi.session_kind` | Gateway on chat create, or the client on a saved agent | `chat` places the session on chat workers. |
+| `apipi.session_kind` | Removed | Former chat marker. Ignored for placement now; bundle import drops it with a warning and exports no longer carry it. Use `environment.type=none` for text-only sessions. |
 | `apipi.actor_type` | Extender | Stored and returned. Not interpreted. |
 | `apipi.schedule_id` | Extender | Stored and returned. Not interpreted. |
 | `apipi.source` | Extender | Stored and returned. Not interpreted. |
@@ -201,7 +200,7 @@ Unknown top-level fields are rejected.
 
 Template export keeps host keys (anything that does not start with
 `apipi.`) and the portable agent keys `apipi.thinking`,
-`apipi.system_prompt`, `apipi.idle_ttl`, and `apipi.session_kind`.
+`apipi.system_prompt`, and `apipi.idle_ttl`.
 Other `apipi.` keys are dropped on export. On import, a non-portable
 `apipi.` key is ignored and listed in `warnings`. Sandbox size and
 image travel in `session_defaults`, not in metadata.
@@ -365,9 +364,9 @@ The worker WebSocket stays `gateway.workers`.
 | `Authenticate`, `AuthIdentity`, `AuthReject` | Auth callback types |
 | `Authorize`, `AuthFilter` | Authorization hook types |
 
-ApiPi-only HTTP routes live under `/v1/apipi/` (templates, uploads, usage, chat, exports, and presigned downloads). An extender that copies `include_router` calls should include the same routers so those paths exist.
+ApiPi-only HTTP routes live under `/v1/apipi/` (templates, uploads, usage, exports, and presigned downloads). An extender that copies `include_router` calls should include the same routers so those paths exist.
 
-`gateway.routers` names: `sessions`, `chat`, `agents`, `vaults`, `files`, `uploads`, `skills`, `templates`,
+`gateway.routers` names: `sessions`, `agents`, `vaults`, `files`, `uploads`, `skills`, `templates`,
 `environments`, `usage`, `models`, `workers`, `health`.
 
 Everything else under `apipi` is internal unless a product page says

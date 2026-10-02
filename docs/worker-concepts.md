@@ -27,8 +27,8 @@ The split is:
 
 Combined serve is the embedded worker: the same in-process adapter the
 project started with. Production is API-only plus one or more workers.
-Chat without a computer uses `APIPI_RUN_MODE=chat` workers on that
-same API. See [chat fleets](chat.md).
+Sessions without a computer (`environment.type=none`) run on workers whose
+accepts set contains `none`, on that same API. See [sandbox workers](workers.md#placement).
 
 ## How a turn moves
 

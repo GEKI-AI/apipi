@@ -132,7 +132,7 @@ async def test_session_uses_and_overrides_defaults(client: AsyncClient) -> None:
     assert session.json()["vault_ids"] == [vault_id, other]
 
 
-async def test_inherit_false_and_chat_type_rule(client: AsyncClient) -> None:
+async def test_inherit_false_skips_defaults(client: AsyncClient) -> None:
     token = "defaults-opt-out"
     created = await client.post(
         "/v1/agents",
@@ -164,12 +164,12 @@ async def test_inherit_false_and_chat_type_rule(client: AsyncClient) -> None:
     assert opted.status_code == 200, opted.text
     assert "env" not in opted.json()["environment"]
     assert opted.json()["environment"]["sandbox_size"] == "S"
-    chat = await client.post(
-        "/v1/apipi/chat/sessions",
+    none_session = await client.post(
+        "/v1/agents/sessions",
         headers=_auth(token),
-        json={"agent_id": agent_id},
+        json={"agent_id": agent_id, "environment": {"type": "none"}},
     )
-    assert chat.status_code == 200, chat.text
+    assert none_session.status_code == 200, none_session.text
 
 
 async def test_unknown_and_dangling_refs(client: AsyncClient) -> None:

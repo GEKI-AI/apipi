@@ -17,8 +17,8 @@ Firecracker, jailer, TAP, and the guest live on the **worker**.
 TAP device. Combined `apipi serve` (no `--api-only`) is the
 single-host embedded worker: the same in-process adapter as today,
 for a laptop or one box. Production is API-only plus one or more
-`apipi worker` hosts. Chat fleets add workers with
-`APIPI_RUN_MODE=chat` next to `microvm`. See [chat fleets](chat.md).
+`apipi worker` hosts. Fleet layouts (one worker type that does both,
+separate `microvm` and `none` workers, or `none`-only) are below.
 
 `apipi worker` reads its token from `APIPI_WORKER_TOKEN_FILE` and
 probes the configured run mode before it connects. If
@@ -105,9 +105,9 @@ The first worker message must be `register` with `protocol: 2`:
 | `protocol` | Must be `2`. Anything else closes the socket with code `1008` and reason `unsupported_protocol`. There is no fallback for old workers. |
 | `id` | Optional worker UUID. When omitted, the API assigns the token's bound `worker_id` (or mints and binds one on first register). |
 | `capabilities` | Free-form object, reserved for later steps. |
-| `accepts` | Optional list of session kinds. Reserved for placement work; it carries no behavior yet. |
+| `accepts` | List of session kinds from `none`, `microvm`. What this worker runs. See [Placement](#placement). |
 | `running` | Sessions this worker still holds: `[{session_id, lease_id, last_seq}]`. `last_seq` continues from the API's value on reconnect. |
-| `capacity`, `memory_mb`, `run_mode`, `arch`, `images` | Placement advertisement, as before. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB (default `capacity ×` guest `mem_mib`). `run_mode` is the placement class this process serves. `arch` is the worker machine. `images` lists `{id, version, digest, min_size}` for guest images on this host. A v2 microvm worker that omits `images` is treated as having `default` and `browser`, except on aarch64, which is treated as having `default` only. |
+| `capacity`, `memory_mb`, `run_mode`, `arch`, `images` | Placement advertisement, as before. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB (default `capacity ×` guest `mem_mib`). `run_mode` is the process backend (`none`, `microvm`, or a custom class). `arch` is the worker machine. `images` lists `{id, version, digest, min_size}` for guest images on this host. A v2 worker that accepts `microvm` and omits `images` is treated as having `default` and `browser`, except on aarch64, which is treated as having `default` only. |
 
 The API answers with `hello.reply`:
 
@@ -132,7 +132,7 @@ Worker to API:
 | `type` | Fields | What |
 | --- | --- | --- |
 | `register` | See [Handshake](#handshake) | Create or reconnect the worker. |
-| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `arch` (optional), `drain` (optional bool), `images` (optional list) | Refresh `last_seen`. May update caps, advertised `run_mode`, architecture, drain posture, and the image list. |
+| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `accepts` (optional), `arch` (optional), `drain` (optional bool), `images` (optional list) | Refresh `last_seen`. May update caps, advertised `run_mode` and accepts set, architecture, drain posture, and the image list. |
 | `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. |
 | `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |
@@ -202,28 +202,72 @@ and session create stay store-backed on any replica.
 
 ## Placement
 
-`WorkerHub.pick` matches **placement class** before capacity or RAM.
-A session is assigned only to a connected worker whose advertised
-`run_mode` equals that class. There is no fallback to another mode.
+`WorkerHub.pick` matches the **accepts set** before capacity or RAM.
+`placement_for` returns `none` for `environment.type=none` and
+`microvm` for every other type. A session is assigned only to a
+connected worker whose accepts set contains that kind, using the
+existing least-loaded logic (most free RAM, then fewer leases).
+There is no fallback to another kind.
 
-| Session | Required worker `run_mode` |
+`APIPI_WORKER_ACCEPTS` (`[worker].accepts`) is a comma list from
+`none`, `microvm`. One code path covers three layouts:
+
+| `APIPI_WORKER_ACCEPTS` | Layout |
 | --- | --- |
-| Session metadata `apipi.session_kind=chat` (`/v1/chat`) | `chat` always |
-| Agents with a computer (`openai_hosted` or `hosted`) | `microvm` |
-| Agents with `environment.type=none` | `APIPI_ENV_NONE_PLACEMENT` / `[placement].env_none`: `chat` (default), `microvm`, or `reject` |
+| `none,microvm` | One worker does both. `environment.type=none` runs Pi directly on the worker host, and every other type runs in a microVM. |
+| `microvm` | MicroVM sessions only. |
+| `none` | `type=none` sessions only. No KVM needed. |
 
-`reject` fails the turn with `400` and code `placement`. No matching
-worker is `429` with code `capacity`, as today.
+The default follows the backend: a worker whose backend can run
+microVMs accepts `none,microvm`, and a worker without a microVM
+backend accepts only `none`. In practice that means
+`APIPI_RUN_MODE=microvm` defaults to both and `APIPI_RUN_MODE=none`
+defaults to `none`-only. Startup validation fails fast before register
+when `microvm` is in the list but the microVM backend cannot run
+(KVM, Firecracker, or images missing).
 
-Commands include `run_mode` in the payload. The worker compares that
-to its process `APIPI_RUN_MODE` and does not start Pi when they do not
-match. `APIPI_RUN_MODE=chat` is the process name for a chat pool. It
-uses the same host backend as `none`. Isolation `none` may still run a
-`chat` command. A `none` or `chat` worker must not run a `microvm`
-command, and a `microvm` worker must not run a `chat` command.
+Run one API-only gateway with the workers the fleet needs:
 
-Set `APIPI_RUN_MODE=chat` on dedicated chat workers so they advertise
-`chat`. Advertising `none` matches no Agents placement class.
+```
+apipi serve --api-only
+apipi workers token create --name none-1       # prints the secret once
+apipi workers token create --name computer-1
+APIPI_WORKER_ACCEPTS=none APIPI_WORKER_TOKEN_FILE=/run/apipi/none.token APIPI_API_URL=http://api.example:8000 apipi worker
+APIPI_WORKER_ACCEPTS=microvm APIPI_WORKER_TOKEN_FILE=/run/apipi/computer.token APIPI_API_URL=http://api.example:8000 apipi worker
+```
+
+| Process | `APIPI_WORKER_ACCEPTS` | What it serves |
+| --- | --- | --- |
+| `apipi serve --api-only` | unused for Pi | HTTP, store, placement |
+| `none` worker | `none` | Light Pi on the host. No Firecracker. Teardown kills the Pi process group. |
+| `microvm` worker | `microvm` or `none,microvm` | One KVM guest per computer session, plus host Pi for `type=none` when both are accepted. |
+
+Pi for `type=none` always runs directly on the worker host: no
+microVM and no small guest. This is acceptable because `none`
+sessions have no shell, file, or workspace tools. `type=none` allows
+function tools and HTTP MCP only; anything else is `400`.
+
+No matching worker with capacity is `429` with code `capacity`.
+
+Commands include `run_mode` in the payload carrying the required kind
+(`none` or `microvm`). The worker compares that to its accepts set
+and does not start Pi when it does not match.
+
+Host Pi sizing and supervision still apply per worker. Set
+`APIPI_PI_MEM_MIB` so one session cannot fill the worker. After a
+worker crash, the next start reaps leftover host Pi processes from
+that worker. Use `KillMode=control-group` on the systemd unit.
+`systemctl restart` sends SIGTERM so the worker drains, then starts
+again. Install `deploy/systemd/apipi-worker-drain.conf` so stop can
+wait for live Pi to empty. Scrape `apipi_pi_processes` and
+`apipi_pi_rss_bytes` on the worker when metrics are on. See
+[Drain and expiry](#drain-and-expiry) and
+[observability](observability.md#prometheus).
+
+Saved agents that still carry `metadata.apipi.session_kind=chat` are
+ignored for placement now. Bundle import drops that key with a
+warning; exports no longer carry it. Use
+`environment.type=none` for text-only sessions.
 
 ## Idle reap
 
@@ -270,7 +314,7 @@ guest and workspace were on the expired host. Start a new turn after
 that error. Heartbeats extend `lease_until` so a live worker does not
 expire mid-turn.
 
-Host Pi (`chat` / `none`) is a child of the worker. A graceful stop
+Host Pi (`none`) is a child of the worker. A graceful stop
 runs pool teardown. A `kill -9` of the worker leaves those children.
 The next worker start reaps leftovers stamped with a dead
 `APIPI_WORKER_PID`. Set `KillMode=control-group` on the systemd unit
@@ -292,7 +336,7 @@ The hub does not forward lifecycle events. See
 | Process | Trust | Needs |
 | --- | --- | --- |
 | `apipi serve --api-only` | Operator control plane | Postgres, no KVM |
-| `apipi worker` | Operator sandbox host | KVM, Firecracker, its token file, outbound to the API, the model host, the image store, and MCP upstreams |
+| `apipi worker` | Operator sandbox host | Its token file, outbound to the API, the model host, the image store, and MCP upstreams. KVM and Firecracker only when it accepts `microvm`. |
 | Combined `apipi serve` | Lab / one box | Whatever the run mode needs, including KVM when `microvm` |
 
 The worker still reads the session store today; later protocol steps

@@ -193,3 +193,47 @@ def test_procmem_falls_back_to_statm(tmp_path: Path) -> None:
     rss, pss = read_rss_pss(7, proc_root=tmp_path)
     assert rss > 0
     assert pss == 0
+
+
+async def test_pool_failed_guest_spawn_skips_host_pi_series(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = Metrics()
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="microvm",
+        ),
+        metrics=metrics,
+    )
+
+    async def _boom(*_args: object, **_kwargs: object) -> PiProc:
+        raise RuntimeError("guest failed")
+
+    monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", _boom)
+    with pytest.raises(RuntimeError):
+        await pool.get(uuid.uuid4(), cwd=None, tools=True, env_type="openai_hosted")
+    body = metrics.scrape().decode()
+    assert "apipi_pi_spawn_total" not in body or "apipi_pi_spawn_total{" not in body
+
+
+async def test_pool_failed_none_spawn_counts_host_pi_series(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metrics = Metrics()
+    pool = PiPool(
+        Settings(
+            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+            run_mode="microvm",
+        ),
+        metrics=metrics,
+    )
+
+    async def _boom(*_args: object, **_kwargs: object) -> PiProc:
+        raise RuntimeError("host failed")
+
+    monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", _boom)
+    with pytest.raises(RuntimeError):
+        await pool.get(uuid.uuid4(), cwd=None, tools=True, env_type="none")
+    body = metrics.scrape().decode()
+    assert metric_line(body, "apipi_pi_spawn_total", result="error").endswith(" 1.0")

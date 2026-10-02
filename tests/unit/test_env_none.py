@@ -1,21 +1,22 @@
 import pytest
 
 from apipi.gateway.errors import ApiError
-from apipi.services.chat_tools import (
-    CHAT_TOOL_HELP,
-    is_chat_profile,
-    reject_disallowed_chat_tools,
+from apipi.services.env_none import (
+    ENV_NONE_TOOL_HELP,
+    is_env_none,
+    reject_tools_for_env_none,
 )
 
 
-def test_chat_profile_metadata() -> None:
-    assert is_chat_profile({"apipi.session_kind": "chat"})
-    assert not is_chat_profile({})
-    assert not is_chat_profile(None)
+def test_env_none_detection() -> None:
+    assert is_env_none({"type": "none"})
+    assert not is_env_none({"type": "openai_hosted"})
+    assert not is_env_none({})
+    assert not is_env_none(None)
 
 
 def test_function_and_http_mcp_allowed() -> None:
-    reject_disallowed_chat_tools(
+    reject_tools_for_env_none(
         [
             {"type": "function", "name": "echo"},
             {
@@ -29,7 +30,7 @@ def test_function_and_http_mcp_allowed() -> None:
 
 def test_stdio_mcp_rejected() -> None:
     with pytest.raises(ApiError) as exc:
-        reject_disallowed_chat_tools(
+        reject_tools_for_env_none(
             [
                 {
                     "type": "mcp",
@@ -39,10 +40,10 @@ def test_stdio_mcp_rejected() -> None:
             ]
         )
     assert exc.value.code == "chat_tool"
-    assert exc.value.message == CHAT_TOOL_HELP
+    assert exc.value.message == ENV_NONE_TOOL_HELP
 
 
 def test_unknown_tool_rejected() -> None:
     with pytest.raises(ApiError) as exc:
-        reject_disallowed_chat_tools([{"type": "bash"}])
+        reject_tools_for_env_none([{"type": "bash"}])
     assert exc.value.code == "chat_tool"

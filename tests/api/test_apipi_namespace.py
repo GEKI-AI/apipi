@@ -34,7 +34,6 @@ _CANONICAL = frozenset(
         "/v1/apipi/usage",
         "/v1/apipi/templates",
         "/v1/apipi/uploads",
-        "/v1/apipi/chat/sessions",
         "/v1/apipi/agents/{agent_id}/export",
         "/v1/apipi/sessions/{session_id}/export",
         "/v1/apipi/sessions/{session_id}/artifacts/{artifact_id}/download",
