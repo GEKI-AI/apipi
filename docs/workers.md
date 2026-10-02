@@ -335,9 +335,9 @@ Pi. Combined `apipi serve` starts those loops in the API process.
 `apipi worker` starts the same loops. `apipi serve --api-only` does
 not kill idle guests; the worker that owns the session does. When the
 worker knows the session from a command context, the reaper uses the
-context's effective idle TTL and its last-seen time, with no database
-read; otherwise it resolves the TTL from the session and agent rows as
-before. `none` use `APIPI_IDLE_TTL`. Hosted computers use
+context's effective idle TTL measured from the last turn activity, with
+no database read; otherwise it resolves the TTL from the session and
+agent rows as before. `none` use `APIPI_IDLE_TTL`. Hosted computers use
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED`. A host Pi kill increments
 `apipi_pi_kill_total` with reason `idle` on the worker metrics
 endpoint. A process that exits by itself is `crash`. Worker drain

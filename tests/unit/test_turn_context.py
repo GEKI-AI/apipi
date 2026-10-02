@@ -169,17 +169,18 @@ async def test_reap_workspaces_uses_ttl_overrides_without_db(
         (directory / "note.txt").write_text("x", encoding="utf-8")
     pool = PiPool(settings)
     now = time.time()
-    await reap_workspaces(
+    wiped = await reap_workspaces(
         settings,
         store,
         pool,
         ttl_overrides={
-            str(fresh_id): (3600.0, now),
-            str(stale_id): (300.0, now - 3600.0),
+            str(fresh_id): (3600.0, now, "openai_hosted"),
+            str(stale_id): (300.0, now - 3600.0, "openai_hosted"),
         },
     )
     assert (root / str(tenant_id) / str(fresh_id)).is_dir()
     assert not (root / str(tenant_id) / str(stale_id)).exists()
+    assert wiped == [str(stale_id)]
 
 
 async def test_reap_workspaces_override_none_ttl_keeps_workspace(
@@ -202,6 +203,165 @@ async def test_reap_workspaces_override_none_ttl_keeps_workspace(
         settings,
         store,
         pool,
-        ttl_overrides={str(session_id): (None, time.time() - 10_000.0)},
+        ttl_overrides={str(session_id): (None, time.time() - 10_000.0, "openai_hosted")},
     )
     assert directory.is_dir()
+
+
+async def test_reap_workspaces_override_skips_non_hosted_env(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import apipi.worker.pi.artifacts as artifacts
+    from apipi.worker.pi.artifacts import reap_workspaces
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("reaper must not touch the database")
+
+    monkeypatch.setattr(artifacts, "get_session", _boom)
+    monkeypatch.setattr(artifacts, "get_agent", _boom)
+    tenant_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    directory = sessions_root(settings) / str(tenant_id) / str(session_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    pool = PiPool(settings)
+    wiped = await reap_workspaces(
+        settings,
+        store,
+        pool,
+        ttl_overrides={str(session_id): (300.0, time.time() - 3600.0, "none")},
+    )
+    assert directory.is_dir()
+    assert wiped == []
+
+
+async def test_reap_workspaces_sees_late_context_entries(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import apipi.worker.pi.artifacts as artifacts
+    from apipi.worker.pi.artifacts import reap_workspaces
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("reaper must not touch the database")
+
+    monkeypatch.setattr(artifacts, "get_session", _boom)
+    monkeypatch.setattr(artifacts, "get_agent", _boom)
+    tenant_id = uuid.uuid4()
+    early_id = uuid.uuid4()
+    late_id = uuid.uuid4()
+    root = sessions_root(settings)
+    early_dir = root / str(tenant_id) / str(early_id)
+    early_dir.mkdir(parents=True, exist_ok=True)
+    pool = PiPool(settings)
+    live: dict[str, tuple[float | None, float, str | None]] = {
+        str(early_id): (None, time.time(), "openai_hosted")
+    }
+    await reap_workspaces(settings, store, pool, ttl_overrides=live)
+    assert early_dir.is_dir()
+    late_dir = root / str(tenant_id) / str(late_id)
+    late_dir.mkdir(parents=True, exist_ok=True)
+    live[str(late_id)] = (300.0, time.time() - 3600.0, "openai_hosted")
+    wiped = await reap_workspaces(settings, store, pool, ttl_overrides=live)
+    assert early_dir.is_dir()
+    assert not late_dir.exists()
+    assert wiped == [str(late_id)]
+
+
+def _local_execution(settings: Settings, store: Store):
+    from apipi.services.runtime import EventHub, FakeHarness
+    from apipi.worker.execution import LocalExecution
+    from apipi.worker.pi.isolation import load_isolation
+
+    return LocalExecution(
+        settings,
+        pool=PiPool(settings),
+        harness=FakeHarness(),
+        isolation=load_isolation("none"),
+        hub=EventHub(),
+        store=store,
+    )
+
+
+def _worker_context(
+    seconds: float | None = 900.0, env_type: str | None = "openai_hosted"
+) -> dict:
+    return {
+        "session": {
+            "environment": {"type": env_type} if env_type else {},
+            "idle_ttl_seconds": seconds,
+        }
+    }
+
+
+async def test_reap_loop_passes_live_mapping_and_evicts(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import apipi.worker.execution as execution_module
+
+    seen: dict = {}
+
+    async def _stub(*args: object, **kwargs: object) -> None:
+        seen.update(kwargs)
+
+    monkeypatch.setattr(execution_module, "reap_workspace_loop", _stub)
+    execution = _local_execution(settings, store)
+    await execution.reap_workspace_loop()
+    assert seen["ttl_overrides"] is execution._context_ttl
+    session_id = uuid.uuid4()
+    execution.note_context_ttl(session_id, _worker_context())
+    assert str(session_id) in seen["ttl_overrides"]
+    seen["on_wiped"](str(session_id))
+    assert str(session_id) not in execution._context_ttl
+
+
+async def test_turn_end_refreshes_idle_clock(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import apipi.worker.execution as execution_module
+
+    async def _stub(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(execution_module, "run_turn", _stub)
+    clock = iter([100.0, 200.0])
+    monkeypatch.setattr(time, "time", lambda: next(clock))
+    execution = _local_execution(settings, store)
+    session_id = uuid.uuid4()
+    await execution.run_turn(
+        uuid.uuid4(),
+        session_id,
+        "hi",
+        turn_context=_worker_context(),  # type: ignore[arg-type]
+    )
+    assert execution._context_ttl[str(session_id)] == (900.0, 200.0, "openai_hosted")
+
+
+async def test_turn_error_still_refreshes_idle_clock(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import apipi.worker.execution as execution_module
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("turn failed")
+
+    monkeypatch.setattr(execution_module, "run_turn", _boom)
+    clock = iter([100.0, 200.0])
+    monkeypatch.setattr(time, "time", lambda: next(clock))
+    execution = _local_execution(settings, store)
+    session_id = uuid.uuid4()
+    with pytest.raises(RuntimeError):
+        await execution.run_turn(
+            uuid.uuid4(),
+            session_id,
+            "hi",
+            turn_context=_worker_context(),  # type: ignore[arg-type]
+        )
+    assert execution._context_ttl[str(session_id)] == (900.0, 200.0, "openai_hosted")
+
+
+async def test_teardown_forgets_context(settings: Settings, store: Store) -> None:
+    execution = _local_execution(settings, store)
+    session_id = uuid.uuid4()
+    execution.note_context_ttl(session_id, _worker_context())
+    assert str(session_id) in execution._context_ttl
+    await execution.teardown(session_id)
+    assert str(session_id) not in execution._context_ttl

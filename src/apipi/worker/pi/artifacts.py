@@ -4,7 +4,7 @@ import mimetypes
 import shutil
 import tarfile
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -394,10 +394,11 @@ async def reap_workspaces(
     pool: PiPool,
     *,
     now: datetime | None = None,
-    ttl_overrides: Mapping[str, tuple[float | None, float]] | None = None,
-) -> None:
+    ttl_overrides: Mapping[str, tuple[float | None, float, str | None]] | None = None,
+) -> list[str]:
     current = _utc(now or utc_now())
     now_epoch = current.timestamp()
+    wiped: list[str] = []
     root = sessions_root(settings)
     for tenant_dir in root.iterdir():
         if not tenant_dir.is_dir() or tenant_dir.name.startswith("."):
@@ -417,11 +418,14 @@ async def reap_workspaces(
                 continue
             override = ttl_overrides.get(str(session_id)) if ttl_overrides else None
             if override is not None:
-                ttl_seconds, last_seen = override
+                ttl_seconds, last_seen, env_type = override
+                if env_type != "openai_hosted":
+                    continue
                 if ttl_seconds is None:
                     continue
                 if now_epoch - last_seen >= ttl_seconds:
                     wipe_workspace(session_dir)
+                    wiped.append(str(session_id))
                 continue
             async with store.session() as db:
                 row = await get_session(db, tenant_id, session_id)
@@ -432,6 +436,7 @@ async def reap_workspaces(
                         agent_idle = agent.idle_ttl
             if row is None:
                 wipe_workspace(session_dir)
+                wiped.append(str(session_id))
                 continue
             env_type = row.environment.get("type")
             if env_type != "openai_hosted":
@@ -448,6 +453,8 @@ async def reap_workspaces(
                 continue
             if current - _utc(row.updated_at) >= ttl:
                 wipe_workspace(session_dir)
+                wiped.append(str(session_id))
+    return wiped
 
 
 async def reap_workspace_loop(
@@ -455,11 +462,17 @@ async def reap_workspace_loop(
     store: Store,
     pool: PiPool,
     *,
-    ttl_overrides: Mapping[str, tuple[float | None, float]] | None = None,
+    ttl_overrides: Mapping[str, tuple[float | None, float, str | None]] | None = None,
+    on_wiped: Callable[[str], None] | None = None,
 ) -> None:
     ttl = settings.sandbox_ttl_openai_hosted
     seconds = ttl.total_seconds() if ttl is not None else 15.0
     interval = min(1.0, max(0.02, seconds / 5))
     while True:
         await asyncio.sleep(interval)
-        await reap_workspaces(settings, store, pool, ttl_overrides=ttl_overrides)
+        wiped = await reap_workspaces(
+            settings, store, pool, ttl_overrides=ttl_overrides
+        )
+        if on_wiped is not None:
+            for session_id in wiped:
+                on_wiped(session_id)
