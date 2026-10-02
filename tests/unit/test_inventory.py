@@ -360,3 +360,32 @@ async def test_reconcile_unleased_released_session_gets_ttl_then_reaps(
     )
     assert wiped == [str(session_id)]
     assert not workspace.exists()
+
+
+def test_seed_reaper_ttl_never_moves_clock_backwards() -> None:
+    import time
+    from types import SimpleNamespace
+
+    from apipi.worker.hub import _seed_reaper_ttl
+
+    session_id = str(uuid.uuid4())
+    fresh = time.time()
+    seeded: dict[str, tuple[float | None, float, str | None]] = {
+        session_id: (60.0, fresh, "openai_hosted")
+    }
+    execution = SimpleNamespace(_context_ttl=seeded)
+    # An older row touch must not rewind the worker's own fresher
+    # turn-activity baseline.
+    _seed_reaper_ttl(
+        execution,
+        {session_id: {"idle_ttl_seconds": 60, "idle_since_epoch": fresh - 120}},
+    )
+    assert seeded[session_id][1] == fresh
+    # An unknown entry adopts the reply baseline instead.
+    unknown = str(uuid.uuid4())
+    since = fresh - 30
+    _seed_reaper_ttl(
+        execution,
+        {unknown: {"idle_ttl_seconds": 60, "idle_since_epoch": since}},
+    )
+    assert seeded[unknown][1] == since

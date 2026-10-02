@@ -2167,6 +2167,12 @@ def _seed_reaper_ttl(execution: Any, ttl: Any) -> None:
             last_seen = float(raw_since)
         else:
             last_seen = now
+        known = remember.get(session_id)
+        if known is not None:
+            # Never move the reaper clock backwards: the worker's own
+            # turn activity (`refresh_context_seen`) is newer than the
+            # row touch whenever the row is not updated per turn.
+            last_seen = max(last_seen, known[1])
         env_type = entry.get("env_type")
         remember[session_id] = (
             seconds,
