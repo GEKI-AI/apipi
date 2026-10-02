@@ -334,8 +334,11 @@ to the new replica. Duplicates are no-ops: the
 the batch transaction, so replays apply exactly once. Unacked
 commands are retransmitted
 with the same `command.id`, and the worker keeps recent ids per
-session: a retransmit is acked again but never dispatched twice, so
-a duplicate `turn.start` cannot start a second turn.
+session for its whole lifetime (not per connection, so a replay after
+a reconnect is still recognised): a retransmit is acked again but
+never dispatched twice, so
+a duplicate `turn.start` cannot start a second turn. Ids are forgotten
+when the session is torn down, stopped, or revoked.
 
 ## Inventory
 
@@ -344,7 +347,9 @@ as `inventory{sessions: [{session_id, lease_id, last_seq}]}`. The API
 compares it with the lease rows for that worker. Sessions leased
 here but not reported are orphaned: the API records
 `agent.session.error` with code `worker_orphaned` and clears the
-lease. Sessions the worker reports without a matching lease come
+lease, unless a command for that lease is still unacked (in flight
+to the worker, which cannot have reported it yet). Sessions the worker
+reports without a matching lease come
 back as `lease.revoke`, and the worker tears those guests down and
 drops their outbox buffers. Reported sessions that are still leased
 get their effective idle TTL in the reply, which seeds the worker
@@ -352,16 +357,25 @@ reaper without a database read. A restarted worker that reports an
 empty live set therefore fails its old turns once (on the API) and
 relearns TTLs as new commands arrive.
 
+The inventory also carries on-disk workspaces the worker holds no
+lease for (entries without `lease_id`), so leftovers from a crash or
+a stop while the worker was down are reconciled too. While such a
+session is still leased the API answers with its reaper TTL; once it
+is free the API revokes it and the worker wipes the directory and
+reports `workspace.reaped`, which deletes the session blobs.
+
 ## Leases
 
 A lease is durable on the session row (`worker_id`, `lease_id`,
 `lease_until`) and owned entirely by the API. Grant is a single
 conditional `UPDATE`: it only
 succeeds when there is no live lease. The replica holding the socket
-renews the lease on heartbeat and takes it over on reconnect with a
-conditional `UPDATE` that matches `worker_id` and `lease_id` and
-bumps `api_instance_id`, so reconnecting to another replica keeps
-running turns alive. Heartbeats extend all of that
+renews the lease on heartbeat. On reconnect the new replica takes the
+lease over: register already points `workers.api_instance_id` at it,
+and `restore_leases` renews exactly the leases the worker still
+reports with a conditional `UPDATE` matching `worker_id` and
+`lease_id`, so reconnecting to another replica keeps running turns
+alive without touching leases granted elsewhere. Heartbeats extend all of that
 worker's leases in one statement. Commands carry `lease_id`. A worker
 that does not hold that lease cannot ack, emit events, or release it.
 

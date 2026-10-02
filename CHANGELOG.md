@@ -129,6 +129,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/workers.md` (inventory, lease takeover), `docs/usage.md`
   (lifecycle export), and `docs/config.md` (lifecycle settings are
   API-only). No new migration.
+- Review fixes on top: command dedupe is worker-lifetime (a replay
+  after reconnect is still recognised; ids are forgotten on
+  teardown, stop, or revoke). Lease takeover renews exactly the
+  reported leases with a conditional `UPDATE` matching `worker_id`
+  and `lease_id` (register already points
+  `workers.api_instance_id` at the new replica); heartbeats still
+  extend all of the worker's leases. The orphan rule spares leases
+  with a command still unacked (marked before the grant commits, so
+  a grant in flight cannot orphan). Lifecycle identity always comes
+  from the session row (the worker only adds sandbox, run mode, and
+  timing fields, which also keeps the strict payload validation
+  happy), and exports are deferred past the ingest commit so a
+  replayed batch cannot export twice. Sandbox phase updates live in
+  one shared function used by the local transition path and the
+  ingest. The inventory also reports on-disk workspaces the worker
+  holds no lease for: leased ones get a TTL answer, free ones a
+  revoke that wipes the directory.
 
 ### Breaking
 

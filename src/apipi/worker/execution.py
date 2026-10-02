@@ -75,7 +75,6 @@ class LocalExecution:
         self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
         self.seen_hook: Callable[[list[uuid.UUID]], Awaitable[None]] | None = None
         self.db_fallback = True
-        self._identity: dict[str, dict[str, str]] = {}
         self._context_ttl: dict[str, tuple[float | None, float, str | None]] = {}
         self._session_dirs: dict[str, str] = {}
         if pool.on_kill is None:
@@ -115,24 +114,9 @@ class LocalExecution:
         seconds, _seen, env_type = remembered
         self._context_ttl[str(session_id)] = (seconds, time.time(), env_type)
 
-    def note_identity(
-        self, session_id: uuid.UUID, tenant_id: uuid.UUID, context: Any
-    ) -> None:
-        """Remember tenant/key for DB-free wipe and harvest paths."""
-        key_id = ""
-        if isinstance(context, dict):
-            session = context.get("session")
-            if isinstance(session, dict) and isinstance(session.get("key_id"), str):
-                key_id = session["key_id"]
-        self._identity[str(session_id)] = {
-            "tenant_id": str(tenant_id),
-            "key_id": key_id,
-        }
-
     def _forget_context(self, session_id: str) -> None:
         self._context_ttl.pop(session_id, None)
         self._session_dirs.pop(session_id, None)
-        self._identity.pop(session_id, None)
 
     def sink_for(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> ResultSink:
         """Per-session result sink; outbox-backed on a split worker."""
@@ -199,7 +183,6 @@ class LocalExecution:
         store = self.store
         assert store is not None
         self.note_context_ttl(session_id, turn_context)
-        self.note_identity(session_id, tenant_id, turn_context)
         try:
             await run_turn(
                 store,
@@ -251,7 +234,6 @@ class LocalExecution:
         store = self.store
         assert store is not None
         self.note_context_ttl(session_id, turn_context)
-        self.note_identity(session_id, tenant_id, turn_context)
         try:
             await continue_turn(
                 store,
@@ -507,7 +489,6 @@ class LocalExecution:
         if store is None:
             return
         self.note_context_ttl(session_id, turn_context)
-        self.note_identity(session_id, tenant_id, turn_context)
         from apipi.config import CapacityError
         from apipi.env.setup import SetupError
         from apipi.services.runtime import fail_environment, load_boot_kwargs
