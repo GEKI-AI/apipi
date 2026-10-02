@@ -44,6 +44,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `apipi_pg_notification_queue_usage`, and
   `apipi_event_bus_wake_sse_seconds`. SSE no longer needs sticky
   routing on a Postgres store (see `docs/scale.md`).
+- Worker commands (`turn.start`, `turn.continue`, `sandbox.boot`) carry a
+  `context` object built by the API: session environment and identity,
+  the resolved agent definition, the effective idle TTL, the HTTP MCP
+  servers with vault headers applied, the model key, and references
+  (never bytes) to workspace files, skills, and the Pi session blob.
+  The worker prepares the turn from the context instead of reading the
+  session, agent, file, and skill rows, so HTTP MCP tools work in split
+  mode on first and follow-up turns, including follow-ups on another API
+  replica. With `APIPI_ARTIFACT_STORE=s3` references are presigned GET
+  URLs; with the filesystem store they are paths relative to the shared
+  store root. Contexts are validated (bytes rejected, 256 KiB command
+  cap) and never logged. The workspace reaper uses the context TTL with
+  no database read when the worker knows the session.
+
 - Agent option to disable built-in tools: `metadata["apipi.builtin_tools"]`
   (`on`, `off`, default `on`) on the agent or session, with the session
   value winning over the agent. `off` starts Pi with

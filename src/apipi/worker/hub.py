@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import websockets
+from pydantic import ValidationError
 from starlette.websockets import WebSocket, WebSocketState
 
 from apipi.config import (
@@ -67,6 +68,15 @@ from apipi.worker.protocol import (
     HelloReply,
     RegisterMessage,
     WorkerEnvelope,
+)
+from apipi.worker.turn_context import (
+    COMMAND_CONTEXT_OPS,
+    CommandTooLarge,
+    ContextBytes,
+    check_command_size,
+    parse_turn_context,
+    summarize_context,
+)
 )
 
 WORKER_IN = frozenset({"register", "heartbeat", "lease.ack", "lease.release", "event"})
@@ -393,6 +403,7 @@ class WorkerHub:
                 _payload_with_run_mode(payload, required), image
             ),
         }
+        _check_command_context(op, command["payload"])
         self._unacked[lease_id] = command
         await _send(conn.websocket, command)
         metrics = self.metrics
@@ -450,6 +461,7 @@ class WorkerHub:
                 _payload_with_run_mode(payload, required), follow_image
             ),
         }
+        _check_command_context(op, command["payload"])
         self._unacked[lease_id] = command
         await _send(conn.websocket, command)
         return command
@@ -1125,7 +1137,61 @@ async def _reject_mismatched_turn(
         )
 
 
+def _check_command_context(op: str, payload: dict[str, Any]) -> None:
+    """Validate the turn context on worker commands before sending."""
+    raw = payload.get("context")
+    if raw is None:
+        return
+    try:
+        parse_turn_context(raw)
+    except (ContextBytes, ValidationError) as exc:
+        raise ApiError(
+            "invalid_request",
+            f"invalid turn context: {exc}",
+            code="invalid_request",
+            status_code=400,
+        ) from exc
+    try:
+        check_command_size(payload)
+    except CommandTooLarge as exc:
+        raise ApiError(
+            "invalid_request",
+            str(exc),
+            code="payload_too_large",
+            status_code=413,
+        ) from exc
+
+
 _TURN_OPS = frozenset({"turn.start", "turn.continue"})
+
+
+def _command_turn_context(op: object, payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate the command context on the worker; invalid fails the turn."""
+    if op not in COMMAND_CONTEXT_OPS:
+        return None
+    raw = payload.get("context")
+    if raw is None:
+        return None
+    try:
+        return parse_turn_context(raw).model_dump()
+    except (ContextBytes, ValidationError) as exc:
+        raise ApiError(
+            "invalid_request",
+            f"invalid turn context: {exc}",
+            code="invalid_request",
+            status_code=400,
+        ) from exc
+
+
+def _command_log_context(message: dict[str, Any]) -> dict[str, Any]:
+    """Secret-free context summary for the worker command log."""
+    payload = message.get("payload")
+    if not isinstance(payload, dict):
+        return {}
+    raw = payload.get("context")
+    if not isinstance(raw, dict):
+        return {}
+    return {"context": summarize_context(raw)}
 
 
 async def _report_escaped_turn(
@@ -1174,6 +1240,7 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
     raw_parent = payload.get("traceparent")
     token = attach_traceparent(raw_parent if isinstance(raw_parent, str) else None)
     try:
+        turn_context = _command_turn_context(op, payload)
         await _run_command(
             execution,
             op,
@@ -1185,6 +1252,7 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
             key_id=key_id,
             user_id=user_id,
             org_id=org_id,
+            turn_context=turn_context,
         )
     except ApiError as exc:
         command_failure = failure_for(exc.code or "internal", exc.message)
@@ -1236,6 +1304,7 @@ async def _run_command(
     key_id: str | None,
     user_id: str | None,
     org_id: str | None = None,
+    turn_context: dict[str, Any] | None = None,
 ) -> None:
     if op == "turn.start":
         required = payload.get("run_mode")
@@ -1291,6 +1360,7 @@ async def _run_command(
             key_id=key_id,
             user_id=user_id,
             org_id=org_id,
+            turn_context=turn_context,
         )
         return
     if op == "turn.continue":
@@ -1316,6 +1386,7 @@ async def _run_command(
             key_id=key_id,
             user_id=user_id,
             org_id=org_id,
+            turn_context=turn_context,
         )
         return
     if op == "turn.cancel":
@@ -1326,7 +1397,7 @@ async def _run_command(
         await _wipe_stopped_session(execution, tenant_id, session_id)
         return
     if op == "sandbox.boot":
-        await execution.boot_hosted(tenant_id, session_id)
+        await execution.boot_hosted(tenant_id, session_id, turn_context=turn_context)
 
 
 async def _wipe_stopped_session(
@@ -1635,6 +1706,7 @@ async def run_worker(
                         extra={
                             "op": message.get("op"),
                             "session_id": message.get("session_id"),
+                            **_command_log_context(message),
                         },
                     )
                     task = asyncio.create_task(dispatch_command(execution, message))

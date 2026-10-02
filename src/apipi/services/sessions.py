@@ -47,6 +47,7 @@ from apipi.services.runtime import (
 from apipi.services.session_defaults import merge_session_create, require_default_refs
 from apipi.services.skill_store import SkillService
 from apipi.services.skills import copy_capability_directories
+from apipi.services.turn_context import build_turn_context
 from apipi.services.usage import usage_from
 from apipi.services.vault_crypto import (
     VaultCryptoError,
@@ -370,6 +371,31 @@ class SessionService:
                     servers, _plain_vault_creds(self.settings, creds)
                 )
             return servers
+
+    async def _turn_context(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        servers: list[McpHttpServer] | None,
+        *,
+        api_key: str | None,
+        key_id: str | None,
+        user_id: str | None,
+        org_id: str | None,
+    ) -> dict[str, Any]:
+        """Build the worker command context from the database and vault."""
+        return await build_turn_context(
+            self.store,
+            self.settings,
+            tenant_id,
+            session_id,
+            mcp_servers=servers,
+            api_key=api_key,
+            key_id=key_id,
+            user_id=user_id,
+            org_id=org_id,
+            objects=self.files.objects,
+        )
 
     def _require_capacity(
         self,
@@ -733,6 +759,15 @@ class SessionService:
                         key_id=key_id or None,
                         user_id=user_id,
                         org_id=org_id,
+                        turn_context=await self._turn_context(
+                            tenant_id,
+                            session_id,
+                            servers,
+                            api_key=api_key,
+                            key_id=key_id or None,
+                            user_id=user_id,
+                            org_id=org_id,
+                        ),
                     )
                     await self._raise_if_first_turn_failed(tenant_id, session_id)
                 else:
@@ -751,6 +786,15 @@ class SessionService:
                                 key_id=key_id or None,
                                 user_id=user_id,
                                 org_id=org_id,
+                                turn_context=await self._turn_context(
+                                    tenant_id,
+                                    session_id,
+                                    servers,
+                                    api_key=api_key,
+                                    key_id=key_id or None,
+                                    user_id=user_id,
+                                    org_id=org_id,
+                                ),
                             )
                         except Exception as exc:
                             log.exception(
@@ -804,11 +848,21 @@ class SessionService:
                 agent_metadata=agent_metadata,
                 session_defaults=agent_defaults,
             ):
+                boot_servers = await self._mcp_servers(tenant_id, session_id)
                 task = asyncio.create_task(
                     self.execution.boot_hosted(
                         tenant_id,
                         session_id,
-                        mcp_http=await self._mcp_servers(tenant_id, session_id),
+                        mcp_http=boot_servers,
+                        turn_context=await self._turn_context(
+                            tenant_id,
+                            session_id,
+                            boot_servers,
+                            api_key=None,
+                            key_id=None,
+                            user_id=None,
+                            org_id=None,
+                        ),
                     )
                 )
                 self._turn_tasks.add(task)
@@ -1090,6 +1144,15 @@ class SessionService:
                     key_id=key_id,
                     user_id=user_id,
                     org_id=org_id,
+                    turn_context=await self._turn_context(
+                        tenant_id,
+                        session_id,
+                        turn_servers,
+                        api_key=api_key,
+                        key_id=key_id,
+                        user_id=user_id,
+                        org_id=org_id,
+                    ),
                 )
         else:
             if stale:
@@ -1117,6 +1180,15 @@ class SessionService:
                     key_id=key_id,
                     user_id=user_id,
                     org_id=org_id,
+                    turn_context=await self._turn_context(
+                        tenant_id,
+                        session_id,
+                        turn_servers,
+                        api_key=api_key,
+                        key_id=key_id,
+                        user_id=user_id,
+                        org_id=org_id,
+                    ),
                 )
         async with self.store.session() as db:
             row = await get_session(db, tenant_id, session_id)

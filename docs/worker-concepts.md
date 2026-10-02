@@ -56,7 +56,14 @@ load balancer. A worker already registered.
 ```
 
 The API does not spawn Pi. It sends `turn.start` (or `turn.continue` /
-`turn.cancel`) on the worker socket. The worker runs the turn through
+`turn.cancel`) on the worker socket. Each command carries a `context`
+object that the API builds just in time: the session environment and
+identity, the agent definition, the effective idle TTL, the HTTP MCP
+servers with vault headers applied, the model key, and references (never
+bytes) to workspace files, skills, and the Pi session blob. The worker
+holds the context in memory only and prepares the turn from it, without
+reading the database. Combined serve builds the same context in-process.
+The worker then runs the turn through
 the same execution contract combined serve uses in-process, then
 reports back in v2 envelopes: durable results (`item.added`,
 `turn.status`, `usage`, `artifact.completed`, `error`,

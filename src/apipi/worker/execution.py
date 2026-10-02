@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
@@ -65,10 +66,22 @@ class LocalExecution:
         self.metrics = metrics
         self.tracing = tracing
         self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
+        self._context_ttl: dict[str, tuple[float | None, float]] = {}
         if pool.on_kill is None:
             pool.on_kill = self._harvest_killed
         if pool.on_transition is None:
             pool.on_transition = self._sandbox_transition
+
+    def note_context_ttl(self, session_id: uuid.UUID, context: Any) -> None:
+        """Remember the effective idle TTL from a command context."""
+        seconds: float | None = None
+        if isinstance(context, dict):
+            session = context.get("session")
+            if isinstance(session, dict):
+                raw = session.get("idle_ttl_seconds")
+                if isinstance(raw, (int, float)) and raw >= 0:
+                    seconds = float(raw)
+        self._context_ttl[str(session_id)] = (seconds, time.time())
 
     def attach_store(self, store: Store) -> None:
         self.store = store
@@ -103,9 +116,11 @@ class LocalExecution:
         key_id: str | None = None,
         user_id: str | None = None,
         org_id: str | None = None,
+        turn_context: dict[str, Any] | None = None,
     ) -> None:
         store = self.store
         assert store is not None
+        self.note_context_ttl(session_id, turn_context)
         await run_turn(
             store,
             self.hub,
@@ -128,6 +143,7 @@ class LocalExecution:
             org_id=org_id,
             objects=self.objects,
             blobs=self.blobs,
+            turn_context=turn_context,
         )
 
     async def continue_turn(
@@ -146,9 +162,11 @@ class LocalExecution:
         key_id: str | None = None,
         user_id: str | None = None,
         org_id: str | None = None,
+        turn_context: dict[str, Any] | None = None,
     ) -> None:
         store = self.store
         assert store is not None
+        self.note_context_ttl(session_id, turn_context)
         await continue_turn(
             store,
             self.hub,
@@ -172,6 +190,7 @@ class LocalExecution:
             user_id=user_id,
             org_id=org_id,
             blobs=self.blobs,
+            turn_context=turn_context,
         )
 
     async def cancel(self, session_id: uuid.UUID, *, status: str) -> None:
@@ -196,7 +215,9 @@ class LocalExecution:
     async def reap_workspace_loop(self) -> None:
         store = self.store
         assert store is not None
-        await reap_workspace_loop(self.settings, store, self.pool)
+        await reap_workspace_loop(
+            self.settings, store, self.pool, ttl_overrides=dict(self._context_ttl)
+        )
 
     async def observe_loop(self) -> None:
         interval = 5.0
@@ -342,10 +363,12 @@ class LocalExecution:
         session_id: uuid.UUID,
         *,
         mcp_http: list[Any] | None = None,
+        turn_context: dict[str, Any] | None = None,
     ) -> None:
         store = self.store
         if store is None:
             return
+        self.note_context_ttl(session_id, turn_context)
         from apipi.config import CapacityError
         from apipi.env.setup import SetupError
         from apipi.services.runtime import fail_environment, load_boot_kwargs
@@ -358,6 +381,7 @@ class LocalExecution:
                 tenant_id,
                 session_id,
                 mcp_http=mcp_http,
+                turn_context=turn_context,
             )
         except (SetupError, ApiError) as exc:
             code = exc.code if isinstance(exc, ApiError) and exc.code else None
@@ -530,6 +554,11 @@ class RemoteExecution:
             payload["traceparent"] = parent
         return payload
 
+    def _context_extra(self, turn_context: dict[str, Any] | None) -> dict[str, Any]:
+        if turn_context is None:
+            return {}
+        return {"context": turn_context}
+
     async def _wait(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> None:
         store = self.store
         assert store is not None
@@ -588,8 +617,8 @@ class RemoteExecution:
         key_id: str | None = None,
         user_id: str | None = None,
         org_id: str | None = None,
+        turn_context: dict[str, Any] | None = None,
     ) -> None:
-        del mcp_http
         store = self.store
         assert store is not None
         sent = await self.workers.command(
@@ -599,7 +628,12 @@ class RemoteExecution:
             op="turn.start",
             payload=self._payload(
                 tenant_id,
-                {"text": text, "images": images or [], "parts": parts or []},
+                {
+                    "text": text,
+                    "images": images or [],
+                    "parts": parts or [],
+                    **self._context_extra(turn_context),
+                },
                 request_id=request_id,
                 api_key=api_key,
                 key_id=key_id,
@@ -615,7 +649,12 @@ class RemoteExecution:
                 op="turn.start",
                 payload=self._payload(
                     tenant_id,
-                    {"text": text, "images": images or [], "parts": parts or []},
+                    {
+                        "text": text,
+                        "images": images or [],
+                        "parts": parts or [],
+                        **self._context_extra(turn_context),
+                    },
                     request_id=request_id,
                     api_key=api_key,
                     key_id=key_id,
@@ -643,8 +682,8 @@ class RemoteExecution:
         key_id: str | None = None,
         user_id: str | None = None,
         org_id: str | None = None,
+        turn_context: dict[str, Any] | None = None,
     ) -> None:
-        del mcp_http
         store = self.store
         assert store is not None
         sent = await self.workers.command(
@@ -660,6 +699,7 @@ class RemoteExecution:
                     "success": success,
                     "output": output,
                     "error": error,
+                    **self._context_extra(turn_context),
                 },
                 request_id=request_id,
                 api_key=api_key,
@@ -787,19 +827,20 @@ class RemoteExecution:
         session_id: uuid.UUID,
         *,
         mcp_http: list[Any] | None = None,
+        turn_context: dict[str, Any] | None = None,
     ) -> None:
-        del mcp_http
         store = self.store
         if store is None:
             return
         from apipi.services.runtime import fail_environment
 
+        payload = {"tenant_id": str(tenant_id), **self._context_extra(turn_context)}
         sent = await self.workers.command(
             store,
             tenant_id,
             session_id,
             op="sandbox.boot",
-            payload={"tenant_id": str(tenant_id)},
+            payload=payload,
         )
         if sent is None:
             sent = await self.workers.acquire(
@@ -807,7 +848,7 @@ class RemoteExecution:
                 tenant_id,
                 session_id,
                 op="sandbox.boot",
-                payload={"tenant_id": str(tenant_id)},
+                payload=payload,
             )
         if sent is None:
             async with store.session() as db:

@@ -4,6 +4,7 @@ import mimetypes
 import shutil
 import tarfile
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -393,8 +394,10 @@ async def reap_workspaces(
     pool: PiPool,
     *,
     now: datetime | None = None,
+    ttl_overrides: Mapping[str, tuple[float | None, float]] | None = None,
 ) -> None:
     current = _utc(now or utc_now())
+    now_epoch = current.timestamp()
     root = sessions_root(settings)
     for tenant_dir in root.iterdir():
         if not tenant_dir.is_dir() or tenant_dir.name.startswith("."):
@@ -411,6 +414,14 @@ async def reap_workspaces(
             except ValueError:
                 continue
             if pool.alive(session_id) or pool.held(session_id):
+                continue
+            override = ttl_overrides.get(str(session_id)) if ttl_overrides else None
+            if override is not None:
+                ttl_seconds, last_seen = override
+                if ttl_seconds is None:
+                    continue
+                if now_epoch - last_seen >= ttl_seconds:
+                    wipe_workspace(session_dir)
                 continue
             async with store.session() as db:
                 row = await get_session(db, tenant_id, session_id)
@@ -439,10 +450,16 @@ async def reap_workspaces(
                 wipe_workspace(session_dir)
 
 
-async def reap_workspace_loop(settings: Settings, store: Store, pool: PiPool) -> None:
+async def reap_workspace_loop(
+    settings: Settings,
+    store: Store,
+    pool: PiPool,
+    *,
+    ttl_overrides: Mapping[str, tuple[float | None, float]] | None = None,
+) -> None:
     ttl = settings.sandbox_ttl_openai_hosted
     seconds = ttl.total_seconds() if ttl is not None else 15.0
     interval = min(1.0, max(0.02, seconds / 5))
     while True:
         await asyncio.sleep(interval)
-        await reap_workspaces(settings, store, pool)
+        await reap_workspaces(settings, store, pool, ttl_overrides=ttl_overrides)
