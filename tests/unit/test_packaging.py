@@ -47,4 +47,5 @@ def test_alembic_revisions_chain() -> None:
         "0025_worker_tokens.py",
         "0026_worker_ingest.py",
         "0027_artifact_uploads.py",
+        "0028_search_usage.py",
     ]

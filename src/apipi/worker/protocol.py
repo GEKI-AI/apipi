@@ -409,6 +409,48 @@ class ArtifactPresignReply(WireModel):
     message: str | None = None
 
 
+class SearchRequest(WireModel):
+    """Worker to API. One `web_search` call, a synchronous request.
+
+    It is not an envelope: it never enters the outbox, has no `seq`, and
+    is never acked or replayed. The worker waits for the matching
+    `search.reply` with a timeout. A dropped socket fails the waiter and
+    the model gets a tool error. It carries no provider name and no key.
+    """
+
+    type: Literal["search.request"] = "search.request"
+    request_id: uuid.UUID
+    session_id: uuid.UUID
+    turn_id: uuid.UUID
+    query: str
+    max_results: int | None = Field(default=None, ge=1)
+
+
+class SearchResultItem(WireModel):
+    title: str
+    url: str
+    snippet: str = ""
+    published_date: str | None = None
+
+
+class SearchReply(WireModel):
+    """API to worker. Answer to one `search.request`.
+
+    `results` has the same shape for every provider. A failure arrives
+    as `ok: False` with a short `code` (`search_denied`,
+    `search_unavailable`, `search_timeout`, `search_failed`,
+    `invalid_request`) and a `message` that is safe to show the model.
+    """
+
+    type: Literal["search.reply"] = "search.reply"
+    session_id: uuid.UUID
+    request_id: uuid.UUID
+    ok: bool = True
+    results: list[SearchResultItem] = Field(default_factory=list)
+    code: str | None = None
+    message: str | None = None
+
+
 class LeaseAck(WireModel):
     """Worker to API. Command receipt; retransmits of the same id are safe."""
 

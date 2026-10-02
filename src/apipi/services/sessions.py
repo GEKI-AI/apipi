@@ -44,6 +44,7 @@ from apipi.services.runtime import (
     fail_stale_in_progress,
     persist_event,
 )
+from apipi.services.search import SearchResolver, require_search
 from apipi.services.session_defaults import merge_session_create, require_default_refs
 from apipi.services.skill_store import SkillService
 from apipi.services.skills import copy_capability_directories
@@ -324,8 +325,10 @@ class SessionService:
         skill_store: SkillService,
         tracing: Tracing | None,
         metrics: Metrics | None = None,
+        search: SearchResolver | None = None,
     ) -> None:
         self.settings = settings
+        self.search = search if search is not None else SearchResolver(settings)
         self.store = store
         self.event_hub = event_hub
         self.execution = execution
@@ -394,6 +397,7 @@ class SessionService:
             user_id=user_id,
             org_id=org_id,
             objects=self.files.objects,
+            search=self.search,
         )
 
     def _require_capacity(
@@ -583,6 +587,14 @@ class SessionService:
                 validate_env_none(metadata, agent_metadata, raw_tools)
             else:
                 reject_codemode_without_builtin_tools(metadata, agent_metadata)
+            if agent is not None and agent.tools is not None:
+                await require_search(
+                    self.search,
+                    raw_tools,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    org_id=org_id,
+                )
             require_thinking_supported(
                 self.settings,
                 model,

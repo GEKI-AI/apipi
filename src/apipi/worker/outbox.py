@@ -103,6 +103,23 @@ class Outbox:
             return 0
         return buffer.issued
 
+    def acked_seq(self, session_id: uuid.UUID) -> int:
+        buffer = self._sessions.get(session_id)
+        if buffer is None:
+            return 0
+        return buffer.acked
+
+    async def wait_acked(
+        self, session_id: uuid.UUID, seq: int, *, timeout: float
+    ) -> bool:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while self.acked_seq(session_id) < seq:
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(0.01)
+        return True
+
     def append(
         self,
         session_id: uuid.UUID,

@@ -22,6 +22,11 @@ def _user_id(request: Request) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _org_id(request: Request) -> str | None:
+    value = getattr(request.state, "org_id", None)
+    return value if isinstance(value, str) and value else None
+
+
 @router.post("/v1/apipi/templates")
 async def create_template(
     body: TemplateCreate,
@@ -170,7 +175,12 @@ async def create_agent_from_template(
         request, action="agent.write", resource_type="agent", resource_id=None
     )
     return await _templates(request).create_agent(
-        tenant.id, template_id, body, api_key=model_key(request)
+        tenant.id,
+        template_id,
+        body,
+        api_key=model_key(request),
+        user_id=_user_id(request),
+        org_id=_org_id(request),
     )
 
 

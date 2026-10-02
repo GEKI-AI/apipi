@@ -313,6 +313,7 @@ def pi_env(
     api_key: str | None = None,
     broker: Any | None = None,
     extra_env: dict[str, str] | None = None,
+    web_search: bool = False,
 ) -> dict[str, str]:
     from apipi.worker.pi.broker import DUMMY_KEY
     from apipi.worker.pi.model_host import pi_agent_dir
@@ -350,6 +351,10 @@ def pi_env(
                     env[f"{prefix}_{safe}"] = value
     if extra_env:
         env.update(extra_env)
+    for name in [name for name in env if name.startswith("APIPI_SEARCH_")]:
+        del env[name]
+    if web_search and broker is not None:
+        env["APIPI_SEARCH_URL"] = broker.search_url
     if settings.pi_mem_mib is not None:
         env["NODE_OPTIONS"] = f"--max-old-space-size={settings.pi_mem_mib}"
     return env
@@ -371,6 +376,7 @@ def pi_command_args(
     codemode: str = "off",
     env_type: str | None = None,
     session_id: str | None = None,
+    web_search: bool = False,
 ) -> list[str]:
     from apipi.worker.pi.model_host import PI_PROVIDER
 
@@ -406,10 +412,13 @@ def pi_command_args(
     if level != "off":
         args.extend(["--thinking", level])
     if not effective_tools:
-        has_custom = bool(mcp_http) or bool(function_tools)
+        has_custom = bool(mcp_http) or bool(function_tools) or web_search
         args.append("--no-builtin-tools" if has_custom else "--no-tools")
     if codemode_on and effective_tools:
-        args.extend(["--tools", "read,bash,edit,write,codemode"])
+        names = "read,bash,edit,write,codemode"
+        if web_search:
+            names += ",web_search"
+        args.extend(["--tools", names])
     if effective_skills is not None:
         args.append("--no-skills")
         for path in effective_skills:
@@ -449,6 +458,7 @@ async def spawn_pi(
     codemode: str = "off",
     env_type: str | None = None,
     session_id: str | None = None,
+    web_search: bool = False,
 ) -> PiProc:
     from apipi.worker.pi.isolation import load_isolation
 
@@ -456,6 +466,7 @@ async def spawn_pi(
         backend = load_isolation("none")
     else:
         backend = load_isolation(settings.run_mode)
+    optional: dict[str, Any] = {"web_search": True} if web_search else {}
     return await backend.spawn(
         settings,
         cwd=cwd,
@@ -475,4 +486,5 @@ async def spawn_pi(
         codemode=codemode,
         env_type=env_type,
         session_id=session_id,
+        **optional,
     )

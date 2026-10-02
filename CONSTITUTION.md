@@ -15,8 +15,10 @@ file rarely. Edit in place. Do not keep an amendment log.
 
 3. **The computer is replaceable.**
     none, local directory, or `self_hosted`. Independent of run mode
-    (`none` / `microvm`). Search is MCP, not built in. The guest
-    browser is a skill in the browser image, not a gateway feature.
+    (`none` / `microvm`). Search is either MCP or the built-in
+    `web_search` tool, which the API routes to an external provider.
+    ApiPi does not crawl or index. The guest browser is a skill in the
+    browser image, not a gateway feature.
    OpenAI's field `openai_hosted` is a local session directory, not OpenAI's
    cloud. `hosted` is the same local directory.
 

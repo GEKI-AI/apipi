@@ -81,6 +81,12 @@ on SSE. If the SSE connection sits on another API replica, that
 replica wakes over the event bus. Pi does not have to live on the API
 node.
 
+The built-in `web_search` tool is the one call that does not use the
+outbox. The worker sends a synchronous `search.request` and waits for a
+`search.reply`, because the search provider key lives only on the API.
+A lost socket is a tool error, not a turn failure, and the worker does
+not replay the request. See [workers](workers.md#search-requests).
+
 If no worker can take a lease (session cap or RAM budget), the turn
 returns `429` with code `capacity`. If workers are live for the run
 mode but none has the session's guest image, the turn returns `503`

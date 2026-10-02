@@ -61,6 +61,7 @@ class PiPool:
         self._instructions: dict[uuid.UUID, str | None] = {}
         self._thinking: dict[uuid.UUID, str] = {}
         self._codemodes: dict[uuid.UUID, str] = {}
+        self._web_search: dict[uuid.UUID, bool] = {}
         self._system_prompts: dict[uuid.UUID, str | None] = {}
         self._ttls: dict[uuid.UUID, float | None] = {}
         self._key_ids: dict[uuid.UUID, str | None] = {}
@@ -99,6 +100,7 @@ class PiPool:
         system_prompt: str | None = None,
         system_prompt_set: bool = False,
         codemode: str = "off",
+        web_search: bool = False,
         idle_ttl: timedelta | None = None,
         idle_ttl_set: bool = False,
         agent_id: str | None = None,
@@ -135,6 +137,7 @@ class PiPool:
                             prompt=prompt,
                             key_id=key_id,
                             codemode=codemode,
+                            web_search=web_search,
                         )
                     ):
                         await self.kill(session_id, reason="respawn")
@@ -189,6 +192,7 @@ class PiPool:
                 session_id=session_id,
                 lock_wait_ms=lock_wait_ms,
             ):
+                optional: dict[str, Any] = {"web_search": True} if web_search else {}
                 proc = await spawn_pi(
                     self.settings,
                     cwd=cwd,
@@ -208,6 +212,7 @@ class PiPool:
                     codemode=codemode,
                     env_type=env_type,
                     session_id=str(session_id),
+                    **optional,
                 )
         except Exception as exc:
             self._observe_boot(size, "error", time.monotonic() - started)
@@ -229,6 +234,7 @@ class PiPool:
                 prompt=prompt,
                 key_id=key_id,
                 codemode=codemode,
+                web_search=web_search,
                 env_type=env_type,
                 session_mem=session_mem,
                 size=size,
@@ -275,12 +281,14 @@ class PiPool:
         prompt: str | None,
         key_id: str | None,
         codemode: str = "off",
+        web_search: bool = False,
     ) -> bool:
         same = self._spawn_tools.get(session_id) == tools
         same = same and self._models.get(session_id) == model
         same = same and self._instructions.get(session_id) == instructions
         same = same and self._thinking.get(session_id) == level
         same = same and self._codemodes.get(session_id, "off") == codemode
+        same = same and self._web_search.get(session_id, False) == web_search
         same = same and self._system_prompts.get(session_id) == prompt
         return same and self._key_ids.get(session_id) == key_id
 
@@ -363,6 +371,7 @@ class PiPool:
         prompt: str | None,
         key_id: str | None,
         codemode: str,
+        web_search: bool,
         env_type: str | None,
         session_mem: int,
         size: str,
@@ -380,6 +389,7 @@ class PiPool:
         self._instructions[session_id] = instructions
         self._thinking[session_id] = level
         self._codemodes[session_id] = codemode
+        self._web_search[session_id] = web_search
         self._system_prompts[session_id] = prompt
         self._key_ids[session_id] = key_id
         self._env_types[session_id] = env_type
@@ -509,6 +519,7 @@ class PiPool:
         self._instructions.pop(session_id, None)
         self._thinking.pop(session_id, None)
         self._codemodes.pop(session_id, None)
+        self._web_search.pop(session_id, None)
         self._system_prompts.pop(session_id, None)
         self._ttls.pop(session_id, None)
         self._key_ids.pop(session_id, None)

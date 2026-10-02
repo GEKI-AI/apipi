@@ -4,14 +4,14 @@ The base tools are Pi's four: read, write, edit, and bash. Those exist
 when the session has a computer (`openai_hosted` or a connected
 host computer). They do not exist when `environment.type` is
 `none`. Everything else is attached per agent: function tools, MCP
-servers, and skills.
+servers, the built-in `web_search` tool, and skills.
 
 `environment.type=none` sessions have no computer, so built-in tools
 are always off and cannot be turned on (`apipi.builtin_tools=on` is
-`400` with code `builtin_tools`). Only function tools and HTTP MCP
-with `server_url` are allowed; anything else is `400` with code
-`tool_not_allowed`. These checks run on agent create and update (when
-the agent's `session_defaults.environment.type` is `none`), on
+`400` with code `builtin_tools`). Only function tools, HTTP MCP with
+`server_url`, and `web_search` are allowed; anything else is `400`
+with code `tool_not_allowed`. These checks run on agent create and
+update (when the agent's `session_defaults.environment.type` is `none`), on
 session create (using the effective environment, tools, and metadata),
 on session update (whenever metadata changes on a `type=none`
 session), and on template import. An agent saved for hosted use with
@@ -20,7 +20,7 @@ tools or metadata that conflict with `type=none` cannot be used for a
 even if a bad flag got through, and logs `pi.builtin_tools_forced_off`.
 See [API](api.md) and [environments](environments.md#none).
 
-Copy-paste configs live in `examples/` at the repo root (Tavily).
+Copy-paste configs live in `examples/` at the repo root (Tavily MCP).
 The browser example is `examples/sessions/browser_screenshot.py`.
 
 ## Built-in tools
@@ -111,15 +111,19 @@ in API process memory between turns.
 A bash call with no `timeout` is capped at 120 seconds so a stuck
 command cannot hold the turn until `APIPI_TURN_TIMEOUT`.
 
-Search goes through MCP.
+Search over MCP is one of two ways to search. The other is the
+built-in [`web_search` tool](#web-search).
 
-### Search — Tavily example
+### Search over MCP: Tavily example
 
 Tavily's hosted MCP is one search option. Create a vault credential with
 auth type `static_bearer`, `mcp_server_url` `https://mcp.tavily.com/mcp`, and
 the Tavily key as the token, then attach `vault_ids` on the session. See
 `examples/tavily.yaml`. You can swap that for Brave, Exa, or any other
-server that speaks MCP.
+server that speaks MCP. This path keeps working. Use it when a tenant
+must bring its own search key, or when you need a provider that ApiPi
+does not support. For one operator key and central counting, use the
+built-in tool below.
 
 ### Browser
 
@@ -135,6 +139,92 @@ not claim a browser from sandbox size alone.
 screenshots stay in `/workspace/.browser`. Copy a screenshot to
 `outputs/` only when the user asked for that file. A small client is
 `examples/sessions/browser_screenshot.py`.
+
+## Web search
+
+`web_search` is a built-in tool. Search runs on a provider that the
+operator configures once on the API (Tavily or Staan, see
+[config](config.md#search)). The agent does not name a provider, and no
+search key reaches a worker or a guest. ApiPi does not crawl or index
+the web. It calls the provider and passes the results to the model.
+
+### Turn it on per agent
+
+Add the OpenAI tool shape to the agent `tools` (or to the inline
+session `agent`). Sessions and templates inherit it like any other
+tool.
+
+```json
+{
+  "type": "web_search",
+  "filters": {"allowed_domains": ["docs.python.org", "peps.python.org"]}
+}
+```
+
+| Field | What |
+| --- | --- |
+| `type` | Required. `web_search`. |
+| `filters.allowed_domains` | Optional list of at most 10 domains. When set, results come only from those domains. Both providers take it as an include list. |
+
+`search_context_size` and `user_location` return `not_implemented`.
+The `web_search_preview` type returns `not_implemented`. Any other
+unknown field returns `unknown_field`. See
+[OpenAI compatibility](openai-compatibility.md#agent-fields-and-tools).
+
+An agent with no `web_search` tool has no search tool in Pi. Creating
+or updating an agent that includes `web_search` fails with `400` and
+code `search_not_configured` when the operator has not configured a
+search provider for the caller. ApiPi never drops the tool silently.
+
+`web_search` works on `environment.type=none` sessions and on
+`microvm` sessions. In a microVM the guest still reaches only the host
+broker, as it does for the model and for MCP.
+
+### What the model sees
+
+The model gets a tool named `web_search` with these parameters.
+
+| Parameter | What |
+| --- | --- |
+| `query` | Required. The search text. |
+| `max_results` | Optional. How many results to return. The operator setting `APIPI_SEARCH_MAX_RESULTS` is a cap: a larger value is lowered to it. |
+
+The result is a short numbered text list. Each entry has the title,
+the URL, a snippet, and the publish date when the provider knows it.
+Both providers produce the same list, so changing the provider does not
+change what the model sees. The text is untrusted: it comes from pages
+on the open web and can contain instructions aimed at the model. ApiPi
+does not filter it, so write agent instructions that treat search
+results as data.
+
+A search that fails returns a tool error with a short message. The turn
+does not fail, and the model may try again. A tool error happens when
+the provider rejects the call, the provider call times out
+(`APIPI_SEARCH_TIMEOUT`), the provider is unreachable, the query is
+invalid, search is no longer allowed for the session, or the worker
+loses its connection to the API while it waits. The API never
+replays a search after a reconnect.
+
+If the agent has the tool but search is not allowed when a turn starts
+(for example the operator removed the provider after the agent was
+saved), the turn still runs. The tool is not loaded for that turn, and
+the API logs a `search.denied` warning with no query text.
+
+### How it differs from search over MCP
+
+| | `web_search` tool | Search over MCP |
+| --- | --- | --- |
+| Key | One operator key on the API | A vault credential per session |
+| Where the key lives | API only | Host broker of the session |
+| Provider | Operator's choice, swappable with no agent change | Fixed by the MCP server URL |
+| Usage | Counted by the API per turn and day (`search_calls`, `search_units`) | Counted as an MCP call (`mcp_counts`) |
+| Event log item | `web_search_call` | `mcp_call` |
+| Tenant brings its own key | Not yet | Yes, with a vault |
+
+Each search appears in the event log as a `web_search_call` item with
+the query and a status of `in_progress`, `completed`, or `failed`. It
+is not a `command_execution` or an `mcp_call` item. See
+[API](api.md#turns-items-artifacts) and [usage](usage.md#search).
 
 ## Codemode
 
@@ -192,8 +282,8 @@ computer.
 
 ## Per agent
 
-MCP and function tools live on the saved agent (or the inline session
-`agent`). Skills live on the computer, pointed at by
+MCP, function, and `web_search` tools live on the saved agent (or the
+inline session `agent`). Skills live on the computer, pointed at by
 `capability_directories` or unpacked from `environment.skills`.
 Changing tools later means updating the
 saved agent; it does not rewrite history on existing sessions.

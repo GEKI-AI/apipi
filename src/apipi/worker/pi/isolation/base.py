@@ -35,4 +35,5 @@ class Isolation(Protocol):
         codemode: str = "off",
         env_type: str | None = None,
         session_id: str | None = None,
+        web_search: bool = False,
     ) -> PiProc: ...

@@ -8,6 +8,7 @@ from apipi.store.repo import (
     get_session,
     get_turn,
     get_turn_log,
+    search_usage_for_turn,
     usage_day,
     usage_totals,
 )
@@ -19,6 +20,8 @@ _EMPTY_TURN = {
     "cache_write_tokens": 0,
     "total_tokens": 0,
     "turns": 0,
+    "search_calls": 0,
+    "search_units": 0,
 }
 
 
@@ -58,7 +61,10 @@ class UsageService:
                     not_found()
                 row = await get_turn_log(db, tenant_id, turn_id)
                 if row is None:
-                    return dict(_EMPTY_TURN)
+                    calls, units, _ = await search_usage_for_turn(
+                        db, tenant_id, turn_id
+                    )
+                    return {**_EMPTY_TURN, "search_calls": calls, "search_units": units}
                 return {
                     "prompt_tokens": row.prompt_tokens,
                     "completion_tokens": row.completion_tokens,
@@ -66,6 +72,8 @@ class UsageService:
                     "cache_write_tokens": row.cache_write_tokens,
                     "total_tokens": row.total_tokens,
                     "turns": 1,
+                    "search_calls": row.search_calls,
+                    "search_units": row.search_units,
                 }
             if day is not None:
                 return await usage_day(db, tenant_id, day)

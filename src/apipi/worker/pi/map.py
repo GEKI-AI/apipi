@@ -13,6 +13,10 @@ COMPACTION_STARTED = "agent.session.turn.compaction.started"
 COMPACTION_COMPLETED = "agent.session.turn.compaction.completed"
 RETRYING = "agent.session.turn.retrying"
 RETRY_COMPLETED = "agent.session.turn.retry.completed"
+WEB_SEARCH_TOOL = "web_search"
+WEB_SEARCH_ITEM = "web_search_call"
+WEB_SEARCH_QUERY_CHARS = 2000
+WEB_SEARCH_ERROR_CHARS = 200
 
 
 def _tool_details(event: dict[str, Any]) -> dict[str, Any]:
@@ -28,6 +32,8 @@ def _tool_details(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tool_item_type(name: object, details: dict[str, Any] | None = None) -> str:
+    if name == WEB_SEARCH_TOOL:
+        return WEB_SEARCH_ITEM
     if details:
         server = details.get("server")
         if isinstance(server, str) and server:
@@ -50,6 +56,34 @@ def _tool_names(
     if isinstance(name, str):
         return name, None
     return "", None
+
+
+def _search_query(*sources: object) -> str | None:
+    for source in sources:
+        if isinstance(source, dict):
+            query = source.get("query")
+            if isinstance(query, str) and query.strip():
+                return query.strip()[:WEB_SEARCH_QUERY_CHARS]
+    return None
+
+
+def _search_action(query: str | None) -> dict[str, Any]:
+    action: dict[str, Any] = {"type": "search"}
+    if query is not None:
+        action["query"] = query
+    return action
+
+
+def _error_text(result: object) -> str:
+    if isinstance(result, dict):
+        content = result.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    text = " ".join(part["text"].split())
+                    if text:
+                        return text[:WEB_SEARCH_ERROR_CHARS]
+    return "Web search failed"
 
 
 def _host_error(raw: object) -> list[tuple[str, dict[str, Any]]]:
@@ -110,6 +144,9 @@ def map_pi_event(event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         }
         if server_label is not None:
             data["server_label"] = server_label
+        if item_type == WEB_SEARCH_ITEM:
+            data["status"] = "in_progress"
+            data["action"] = _search_action(_search_query(event.get("args")))
         if isinstance(parent, str) and parent:
             data["parent_call_id"] = parent
             return [("agent.session.turn.item.nested", data)]
@@ -119,14 +156,23 @@ def map_pi_event(event: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         parent = event.get("parentToolCallId")
         call_id = event.get("toolCallId")
         name, server_label = _tool_names(event, details)
+        item_type = _tool_item_type(name, details)
         data = {
-            "item_type": _tool_item_type(name, details),
+            "item_type": item_type,
             "call_id": call_id,
             "is_error": bool(event.get("isError")),
         }
         if server_label is not None:
             data["server_label"] = server_label
             data["name"] = name
+        if item_type == WEB_SEARCH_ITEM:
+            data["name"] = name
+            data["action"] = _search_action(_search_query(details, event.get("args")))
+            if event.get("isError"):
+                data["status"] = "failed"
+                data["error"] = _error_text(event.get("result"))
+            else:
+                data["status"] = "completed"
         if isinstance(parent, str) and parent:
             data["parent_call_id"] = parent
             return [("agent.session.turn.item.nested", data)]

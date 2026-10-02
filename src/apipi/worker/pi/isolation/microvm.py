@@ -38,6 +38,7 @@ class MicrovmIsolation:
         codemode: str = "off",
         env_type: str | None = None,
         session_id: str | None = None,
+        web_search: bool = False,
     ) -> PiProc:
         return await spawn_microvm_pi(
             settings,
@@ -58,4 +59,5 @@ class MicrovmIsolation:
             codemode=codemode,
             env_type=env_type,
             session_id=session_id,
+            web_search=web_search,
         )

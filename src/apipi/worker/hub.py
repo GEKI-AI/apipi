@@ -93,6 +93,7 @@ WORKER_IN = frozenset(
         "store.proof",
         "inventory",
         "sandbox.seen",
+        "search.request",
     }
 )
 DELTA_RATE_LIMIT = 100
@@ -2421,6 +2422,8 @@ async def _serve_connection(
         )
 
     execution.seen_hook = report_seen
+    if hasattr(execution, "search_sender"):
+        execution.search_sender = send_json
 
     async def send_inventory() -> None:
         unleased = _unleased_session_dirs(
@@ -2497,6 +2500,11 @@ async def _serve_connection(
                 waiters = getattr(execution, "presign_waiters", None)
                 if isinstance(waiters, dict):
                     handle_presign_reply(waiters, message)
+                continue
+            if message.get("type") == "search.reply":
+                handle_search_reply = getattr(execution, "handle_search_reply", None)
+                if callable(handle_search_reply):
+                    handle_search_reply(message)
                 continue
             if message.get("type") == "inventory.reply":
                 await _apply_inventory_reply(
@@ -2604,6 +2612,11 @@ async def _serve_connection(
     finally:
         if getattr(execution, "seen_hook", None) is report_seen:
             execution.seen_hook = None
+        if getattr(execution, "search_sender", None) is send_json:
+            execution.search_sender = None
+            fail_search_waiters = getattr(execution, "fail_search_waiters", None)
+            if callable(fail_search_waiters):
+                fail_search_waiters()
         relay.detach()
         pump.cancel()
         with contextlib.suppress(asyncio.CancelledError):

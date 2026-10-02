@@ -165,6 +165,7 @@ Worker to API:
 | `inventory` | `sessions: [{session_id, lease_id, last_seq}]` | The worker live set, sent on hello (as `running`) and about every 60s after. Drives reconciliation and the lifecycle heartbeat (see [Inventory](#inventory)). |
 | `sandbox.seen` | `session_ids` | Live sandbox ids, about every 5s. The API applies the same `touch_seen` update the worker used to write itself; ids not leased to this connection are ignored. |
 | `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |
+| `search.request` | `request_id`, `session_id`, `turn_id`, `query`, `max_results` (nullable) | One `web_search` call from the Pi tool, forwarded by the session broker. A synchronous request, not an envelope. See [Search requests](#search-requests). |
 | envelope (`v: 2`) | `session_id`, `turn_id`, `seq`, `type`, `payload` | Ephemeral deltas (`delta.text`, `delta.reasoning`; see [Live deltas](#live-deltas)) and durable envelopes below. Artifact and file bytes never travel here, only ids, paths, sizes, and checksums. |
 
 The v2 envelope (`{v: 2, session_id, turn_id | null, seq, type,
@@ -182,6 +183,7 @@ API to worker:
 | `hello` | `ok`, `protocol`, `worker_id`, `generation`, `sessions`, `store_check` | Register succeeded. `store_check` is present only for the filesystem store. |
 | `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. |
 | `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
+| `search.reply` | `session_id`, `request_id`, `ok`, `results`, `code`, `message` | Answer to one `search.request`. `results` is a list of `title`, `url`, `snippet`, and `published_date` (nullable), the same for every provider. On failure `ok` is false, `code` is one of `search_denied`, `search_unavailable`, `search_timeout`, `search_failed`, or `invalid_request`, and `message` is a short text that is safe to show the model. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
 | `inventory.reply` | `revoke: [lease.revoke]`, `ttl: {session_id: {...}}` | Answer to `inventory` (and part of `hello.reply`): sessions to tear down plus reaper TTLs. |
 | error object | `ok: false`, `error` | Auth or register failed, then the socket closes. |
@@ -192,6 +194,7 @@ Message classes:
 | --- | --- | --- |
 | Durable | `item.added`, `item.done`, `turn.status`, `usage`, `event`, `session.status`, `artifact.presign`, `artifact.completed`, `session.stopped`, `workspace.reaped`, `lifecycle.start`, `lifecycle.stop`, `error`, `sandbox.status` | Kept in the worker outbox until the cumulative `ack{last_seq}`. Ingested idempotently. |
 | Ephemeral | `delta.text`, `delta.reasoning` | At-most-once, never persisted, never acked. The final item is the source of truth. |
+| Synchronous request | `search.request`, `search.reply` | One request and one reply keyed by `request_id`. Not durable, not in the outbox, not acked, never replayed. |
 
 `item.added` carries the full item (the API creates the row; the
 runtime reports the added and done public events as `event`
@@ -234,6 +237,48 @@ failure itself). Envelopes are capped at 1 MiB. A bounded disk spool
 (`APIPI_WORKER_OUTBOX_DIR`) keeps a write-through copy of buffered
 envelopes so they survive a worker restart.
 
+## Search requests
+
+The built-in [`web_search` tool](tools.md#web-search) works through the
+worker socket, because only the API holds the search provider key. The
+Pi tool calls the session broker, the broker hands the call to the
+worker, and the worker sends `search.request` with the `session_id`,
+the `turn_id`, the query, and the optional `max_results`. The
+message carries no provider name, no key, and no domain list. The API
+reads `filters.allowed_domains` from the session's effective agent
+definition, so the worker cannot widen it.
+
+The API treats the worker as untrusted. On every request it checks
+that the session belongs to the tenant of the connection's lease, that
+the turn is running, that the effective agent tools include
+`web_search`, and that the search resolver still allows search for the
+session's tenant and subject. It then calls the provider, records
+usage (see [usage](usage.md#search)), and sends `search.reply`. The
+reply is sent before the tool result reaches Pi, so the counts are
+stored before the turn's `usage` envelope is ingested.
+
+Search is not durable. It does not use the outbox or the ingest batch.
+Before it sends a request, the worker waits until the API has
+acknowledged every envelope the session produced so far, for at most
+five seconds, so the API already knows that the turn is running. If the
+acknowledgements do not arrive in that time, the model gets a tool
+error and no request is sent. The
+worker keeps one waiter per `request_id` and waits for the reply
+for at most 30 seconds. These are the failure rules:
+
+| Case | What the model sees |
+| --- | --- |
+| The provider fails or times out | A tool error. The reply has `ok: false` with `search_unavailable`, `search_timeout`, or `search_failed`. |
+| Search is not allowed (no tool on the agent, no provider, a resolver denial, or the turn is not running) | A tool error. The reply has `ok: false` with `search_denied`. |
+| The request is malformed or the query is empty or too long | A tool error. The reply has `invalid_request`. |
+| No reply in 30 seconds | A tool error from the worker. |
+| The socket drops | Every waiter fails at once with a connection error, which is a tool error. |
+
+None of these fails the turn. The model may call the tool again. After
+a reconnect the worker does not replay old requests, and the worker
+ignores a late reply for a waiter that no longer exists. A search that was already
+charged by the provider before the failure is still counted in usage.
+
 ## Live deltas
 
 The worker coalesces model text fragments over about 40ms per
@@ -270,7 +315,7 @@ and never logs it. The schemas live in
 | Field | What |
 | --- | --- |
 | `session` | The resolved environment, metadata, `required_actions`, identity (`user_id`, `org_id`, `key_id`), status, and the effective idle TTL in seconds (resolved on the API, so the worker reaper needs no database read). |
-| `agent` | The resolved definition: model, instructions, function tools, metadata, `builtin_tools`, `codemode`, and the thinking level. |
+| `agent` | The resolved definition: model, instructions, function tools, metadata, `builtin_tools`, `codemode`, the thinking level, and `web_search`. `web_search` is only a boolean: it says the Pi tool is loaded for this turn. The API sets it from the agent tools and the search resolver. The context never carries the provider name, the key, or the domain list. |
 | `mcp` | The resolved HTTP MCP servers (`server_label`, `server_url`, vault-applied `headers`, `allowed_tools`). Rebuilt from the database and the vault on every turn, so a follow-up on another API replica works. |
 | `model` | The model base URL override (if any) and the model key. |
 | `files`, `skills` | References only, never bytes. |
@@ -457,7 +502,7 @@ APIPI_WORKER_ACCEPTS=microvm APIPI_WORKER_TOKEN_FILE=/run/apipi/computer.token A
 Pi for `type=none` always runs directly on the worker host: no
 microVM and no small guest. This is acceptable because `none`
 sessions have no shell, file, or workspace tools. `type=none` allows
-function tools and HTTP MCP only; anything else is `400`.
+function tools, HTTP MCP, and `web_search` only; anything else is `400`.
 
 No matching worker with capacity is `429` with code `capacity`.
 
@@ -557,7 +602,7 @@ See
 | Process | Trust | Needs |
 | --- | --- | --- |
 | `apipi serve` | Operator control plane | Postgres, no KVM |
-| `apipi worker` | Operator sandbox host | Its token file, outbound to the API, the model host, the image store, and MCP upstreams. KVM and Firecracker only when it accepts `microvm`. No Postgres, no object-store credentials. |
+| `apipi worker` | Operator sandbox host | Its token file, outbound to the API, the model host, the image store, and MCP upstreams. KVM and Firecracker only when it accepts `microvm`. No Postgres, no object-store credentials, no search provider name or key. |
 
 The worker holds its running sessions in memory only and makes no
 database queries: turns run from the command context, results go

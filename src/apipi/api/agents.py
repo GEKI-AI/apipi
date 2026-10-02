@@ -16,6 +16,11 @@ def _agents(request: Request) -> Any:
     return request.app.state.gateway.agents
 
 
+def _state_str(request: Request, name: str) -> str | None:
+    value = getattr(request.state, name, None)
+    return value if isinstance(value, str) and value else None
+
+
 async def _existing_agent_id(
     request: Request, tenant_id: uuid.UUID, agent_id: uuid.UUID
 ) -> bool:
@@ -45,7 +50,13 @@ async def create_saved_agent(
     await check_authorize(
         request, action="agent.write", resource_type="agent", resource_id=None
     )
-    return await _agents(request).create(tenant.id, body, api_key=model_key(request))
+    return await _agents(request).create(
+        tenant.id,
+        body,
+        api_key=model_key(request),
+        user_id=_state_str(request, "user_id"),
+        org_id=_state_str(request, "org_id"),
+    )
 
 
 @router.get("/v1/agents")
@@ -99,7 +110,12 @@ async def update_saved_agent(
         resource_id=str(agent_id),
     )
     return await _agents(request).update(
-        tenant.id, agent_id, body, api_key=model_key(request)
+        tenant.id,
+        agent_id,
+        body,
+        api_key=model_key(request),
+        user_id=_state_str(request, "user_id"),
+        org_id=_state_str(request, "org_id"),
     )
 
 

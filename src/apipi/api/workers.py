@@ -33,12 +33,15 @@ from apipi.worker.protocol import (
     UNSUPPORTED_PROTOCOL_REASON,
     WORKER_CLOSE_CODE,
     CumulativeAck,
+    SearchReply,
     UnsupportedProtocol,
     WorkerEnvelope,
     parse_register,
 )
 
 log = logging.getLogger("apipi.worker")
+
+SEARCH_MAX_INFLIGHT = 32
 
 router = APIRouter()
 
@@ -85,6 +88,54 @@ def _log_garbage(hub: WorkerHub, metrics: Any, message: dict[str, Any]) -> None:
         metrics.observe_worker_protocol("envelope_rejected")
 
 
+async def _answer_search(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+    service: Any,
+    conn: Any,
+    message: dict[str, Any],
+) -> None:
+    reply: dict[str, Any] | None = None
+    try:
+        reply = await service.handle_request(
+            message, worker_id=conn.worker_id, leases=set(conn.leases)
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception(
+            "search request failed",
+            extra={"event": "search.request", "error_code": "search_failed"},
+        )
+        reply = _search_failure(message, "search_failed", "search failed")
+    if reply is None:
+        return
+    try:
+        async with send_lock:
+            await websocket.send_json(reply)
+    except Exception:
+        log.warning(
+            "search reply not sent",
+            extra={"event": "search.reply.failed", "error_code": "socket_closed"},
+        )
+
+
+def _search_failure(
+    message: dict[str, Any], code: str, text: str
+) -> dict[str, Any] | None:
+    session_id = _uuid(message.get("session_id"))
+    request_id = _uuid(message.get("request_id"))
+    if session_id is None or request_id is None:
+        return None
+    return SearchReply(
+        session_id=session_id,
+        request_id=request_id,
+        ok=False,
+        code=code,
+        message=text,
+    ).model_dump(mode="json")
+
+
 async def _flush_envelopes(
     store: Store,
     event_hub: EventBus,
@@ -94,6 +145,7 @@ async def _flush_envelopes(
     metrics: Any,
     websocket: WebSocket,
     objects: Any | None = None,
+    send_lock: asyncio.Lock | None = None,
 ) -> None:
     queued = batcher.take()
     if not queued:
@@ -108,16 +160,19 @@ async def _flush_envelopes(
         objects=objects,
         run_mode=conn.run_mode,
     )
+    lock = send_lock if send_lock is not None else asyncio.Lock()
     for session_id, last_seq in sorted(
         outcome.acks.items(), key=lambda item: str(item[0])
     ):
-        await websocket.send_json(
-            CumulativeAck(session_id=session_id, last_seq=last_seq).model_dump(
-                mode="json"
+        async with lock:
+            await websocket.send_json(
+                CumulativeAck(session_id=session_id, last_seq=last_seq).model_dump(
+                    mode="json"
+                )
             )
-        )
     for reply in outcome.presign_replies:
-        await websocket.send_json(reply)
+        async with lock:
+            await websocket.send_json(reply)
     for session_id, body in outcome.wakes:
         await event_hub.publish(session_id, body)
     if outcome.lifecycle and lifecycle is not None:
@@ -256,6 +311,8 @@ async def worker_socket(websocket: WebSocket) -> None:
     metrics = websocket.app.state.metrics
     batcher = IngestBatcher(max_messages=settings.worker_ingest_batch_size)
     window = settings.worker_ingest_batch_window.total_seconds()
+    send_lock = asyncio.Lock()
+    search_tasks: set[asyncio.Task[None]] = set()
     try:
         while True:
             timeout = batcher.poll_timeout(window)
@@ -279,6 +336,7 @@ async def worker_socket(websocket: WebSocket) -> None:
                         metrics,
                         websocket,
                         websocket.app.state.objects,
+                        send_lock,
                     )
                 if message is None:
                     continue
@@ -297,6 +355,7 @@ async def worker_socket(websocket: WebSocket) -> None:
                         metrics,
                         websocket,
                         websocket.app.state.objects,
+                        send_lock,
                     )
                 continue
             if kind == "ephemeral" and envelope is not None:
@@ -345,15 +404,32 @@ async def worker_socket(websocket: WebSocket) -> None:
                     store, event_hub, conn.worker_id, reported, unleased
                 )
                 hub.observe_protocol("inventory")
-                await websocket.send_json(
-                    {
-                        "type": "inventory.reply",
-                        "revoke": [
-                            {"type": "lease.revoke", **entry} for entry in revoke
-                        ],
-                        "ttl": ttl,
-                    }
+                async with send_lock:
+                    await websocket.send_json(
+                        {
+                            "type": "inventory.reply",
+                            "revoke": [
+                                {"type": "lease.revoke", **entry} for entry in revoke
+                            ],
+                            "ttl": ttl,
+                        }
+                    )
+                continue
+            if msg_type == "search.request":
+                search = getattr(websocket.app.state, "search", None)
+                if len(search_tasks) >= SEARCH_MAX_INFLIGHT or search is None:
+                    busy = _search_failure(
+                        message, "search_unavailable", "search is busy"
+                    )
+                    if busy is not None:
+                        async with send_lock:
+                            await websocket.send_json(busy)
+                    continue
+                task = asyncio.create_task(
+                    _answer_search(websocket, send_lock, search, conn, message)
                 )
+                search_tasks.add(task)
+                task.add_done_callback(search_tasks.discard)
                 continue
             if msg_type == "sandbox.seen":
                 seen_ids = _parse_seen_ids(message)
@@ -425,6 +501,11 @@ async def worker_socket(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        pending = list(search_tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         await hub.detach(conn.worker_id, conn)
         async with store.session() as db:
             await clear_worker_api_instance(

@@ -64,6 +64,9 @@ class PiHarness:
         codemode = raw_codemode if isinstance(raw_codemode, str) else "off"
         raw_turn = _kwargs.get("turn_id")
         turn_id = str(raw_turn) if raw_turn else None
+        web_search = _kwargs.get("web_search") is True
+        raw_search = _kwargs.get("search")
+        search = raw_search if web_search and callable(raw_search) else None
         agent_id = str(raw_agent) if raw_agent else None
         proc = await self.pool.get(
             session_id,
@@ -85,6 +88,7 @@ class PiHarness:
             system_prompt=system_prompt,
             system_prompt_set=system_prompt_set,
             codemode=codemode,
+            web_search=web_search,
             idle_ttl=idle_ttl,
             idle_ttl_set=idle_ttl_set,
             agent_id=agent_id,
@@ -99,6 +103,9 @@ class PiHarness:
             set_turn = getattr(broker, "set_turn", None)
             if callable(set_turn):
                 set_turn(turn_id)
+            set_search = getattr(broker, "set_search", None)
+            if callable(set_search):
+                set_search(search)
         settled = False
         thinking = ThinkingTracker()
         abort = _kwargs.get("abort")

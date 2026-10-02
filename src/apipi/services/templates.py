@@ -211,6 +211,8 @@ class TemplateService:
         body: TemplateAgentCreate,
         *,
         api_key: str | None,
+        user_id: str | None = None,
+        org_id: str | None = None,
     ) -> dict[str, Any]:
         row, parsed = await self._load(tenant_id, template_id)
         tool_ids, vault_ids = await self._split_mappings(tenant_id, body.credentials)
@@ -241,6 +243,8 @@ class TemplateService:
                 AgentWrite.model_validate(agent_body),
                 api_key=api_key,
                 check_model=False,
+                user_id=user_id,
+                org_id=org_id,
             )
         except Exception:
             await self._rollback(tenant_id, created_skills, created_files)

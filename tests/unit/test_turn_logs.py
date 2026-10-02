@@ -75,6 +75,8 @@ async def test_turn_logs_are_tenant_scoped(db: AsyncSession) -> None:
         "cache_write_tokens": 0,
         "total_tokens": 0,
         "turns": 1,
+        "search_calls": 0,
+        "search_units": 0,
     }
     assert await usage_totals(db, b.id, session_id=session_row.id) == {
         "prompt_tokens": 0,
@@ -83,6 +85,8 @@ async def test_turn_logs_are_tenant_scoped(db: AsyncSession) -> None:
         "cache_write_tokens": 0,
         "total_tokens": 0,
         "turns": 0,
+        "search_calls": 0,
+        "search_units": 0,
     }
 
 
@@ -145,6 +149,8 @@ async def test_usage_totals_by_day(db: AsyncSession) -> None:
         "cache_write_tokens": 0,
         "total_tokens": 4,
         "turns": 1,
+        "search_calls": 0,
+        "search_units": 0,
     }
     assert await usage_totals(db, tenant.id, session_id=session_row.id) == {
         "prompt_tokens": 7,
@@ -153,6 +159,8 @@ async def test_usage_totals_by_day(db: AsyncSession) -> None:
         "cache_write_tokens": 0,
         "total_tokens": 7,
         "turns": 2,
+        "search_calls": 0,
+        "search_units": 0,
     }
 
 
@@ -188,6 +196,8 @@ async def test_usage_rollup_and_purge(db: AsyncSession) -> None:
         "cache_write_tokens": 0,
         "total_tokens": 4,
         "turns": 1,
+        "search_calls": 0,
+        "search_units": 0,
     }
     deleted = await purge_turn_logs(db, datetime(2021, 1, 1, tzinfo=UTC))
     assert deleted == 1

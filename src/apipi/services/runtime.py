@@ -66,6 +66,8 @@ from apipi.store.repo import (
     get_session_turn,
     list_items,
     list_turns,
+    lock_turn,
+    search_usage_for_turn,
     update_session,
 )
 from apipi.worker.outbox import OutboxFull
@@ -579,6 +581,10 @@ async def _write_turn_log(
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is None:
         return
+    await lock_turn(db, tenant_id, session_id, turn_id)
+    search_calls, search_units, search_counts = await search_usage_for_turn(
+        db, tenant_id, turn_id
+    )
     if turn_context is not None:
         agent_id = _uuid_or_none(turn_context.session.agent_id)
         key_id = turn_context.session.key_id
@@ -634,6 +640,9 @@ async def _write_turn_log(
         tool_counts=tool_counts,
         mcp_names=mcp_names,
         mcp_counts=mcp_counts,
+        search_calls=search_calls,
+        search_units=search_units,
+        search_counts=search_counts,
         environment_type=environment_type,
         run_mode=run_mode,
         instance_id=instance_id,
@@ -672,6 +681,9 @@ async def _write_turn_log(
             tool_counts=tool_counts,
             mcp_names=mcp_names,
             mcp_counts=mcp_counts,
+            search_calls=search_calls,
+            search_units=search_units,
+            search_counts=search_counts,
             key_id=key_id,
             environment_type=environment_type,
             run_mode=run_mode,
@@ -690,6 +702,8 @@ async def _write_turn_log(
             total_tokens=stored["total_tokens"],
             turns=1,
             artifact_bytes=artifact_bytes,
+            search_calls=search_calls,
+            search_units=search_units,
         )
     if status == "failed" and failure is not None:
         log_event(

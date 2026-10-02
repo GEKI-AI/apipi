@@ -24,6 +24,15 @@ command = "pi"
 auto_compact = true
 thinking = "off"
 
+# Built-in web_search tool. The key is set with APIPI_SEARCH_API_KEY, not here.
+# [search]
+# provider = "tavily"
+# timeout = "15s"
+# max_results = 5
+# tavily_depth = "basic"
+# staan_market = "en-us"
+# base_url = "https://api.tavily.com"
+
 [sandbox]
 backend = "none"
 default_size = "S"

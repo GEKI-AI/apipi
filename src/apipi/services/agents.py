@@ -14,6 +14,7 @@ from apipi.services.env_none import (
     reject_builtin_tools_for_env_none,
     reject_tools_for_env_none,
 )
+from apipi.services.search import SearchResolver, require_search
 from apipi.services.session_defaults import (
     mirror_sandbox_metadata,
     normalize_sandbox_aliases,
@@ -157,7 +158,50 @@ class McpTool(StrictModel):
         )
 
 
-AgentTool = Annotated[FunctionTool | McpTool, Field(discriminator="type")]
+MAX_ALLOWED_DOMAINS = 10
+_DOMAIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
+
+
+class WebSearchFilters(StrictModel):
+    allowed_domains: list[str] | None = None
+
+    @model_validator(mode="after")
+    def domains_valid(self) -> Self:
+        domains = self.allowed_domains
+        if domains is None:
+            return self
+        if len(domains) > MAX_ALLOWED_DOMAINS or not all(
+            _DOMAIN.fullmatch(item) for item in domains
+        ):
+            raise PydanticCustomError(
+                "invalid_value",
+                "{field} is invalid",
+                {"field": "allowed_domains"},
+            )
+        return self
+
+
+class WebSearchTool(StrictModel):
+    type: Literal["web_search"]
+    filters: WebSearchFilters | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unimplemented(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for field in ("search_context_size", "user_location"):
+                if field in data:
+                    raise PydanticCustomError(
+                        "not_implemented",
+                        "{field} is not implemented",
+                        {"field": field},
+                    )
+        return data
+
+
+AgentTool = Annotated[
+    FunctionTool | McpTool | WebSearchTool, Field(discriminator="type")
+]
 
 
 class SessionDefaults(StrictModel):
@@ -196,6 +240,15 @@ class AgentWrite(StrictModel):
     @classmethod
     def reject_unimplemented(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            tools = data.get("tools")
+            for tool in tools if isinstance(tools, list) else []:
+                kind = tool.get("type") if isinstance(tool, dict) else None
+                if isinstance(kind, str) and kind.startswith("web_search_preview"):
+                    raise PydanticCustomError(
+                        "not_implemented",
+                        "{field} is not implemented",
+                        {"field": "web_search_preview"},
+                    )
             for field in (*_UNIMPLEMENTED, "service_tier", "text"):
                 if field not in data:
                     continue
@@ -307,9 +360,15 @@ def write_payload(body: AgentWrite) -> dict[str, Any]:
 
 
 class AgentService:
-    def __init__(self, store: Store, settings: Settings) -> None:
+    def __init__(
+        self,
+        store: Store,
+        settings: Settings,
+        search: SearchResolver | None = None,
+    ) -> None:
         self.store = store
         self.settings = settings
+        self.search = search if search is not None else SearchResolver(settings)
 
     async def create(
         self,
@@ -318,6 +377,8 @@ class AgentService:
         *,
         api_key: str | None = None,
         check_model: bool = True,
+        user_id: str | None = None,
+        org_id: str | None = None,
     ) -> dict[str, Any]:
         payload = write_payload(body)
         incoming_meta = payload.get("metadata")
@@ -343,6 +404,13 @@ class AgentService:
         if is_env_none(_defaults_environment(payload.get("session_defaults"))):
             reject_tools_for_env_none(payload.get("tools"))
             reject_builtin_tools_for_env_none(payload.get("metadata"), None)
+        await require_search(
+            self.search,
+            payload.get("tools"),
+            tenant_id=tenant_id,
+            user_id=user_id,
+            org_id=org_id,
+        )
         if check_model:
             await require_saved_model(self.settings, payload.get("model"), api_key)
         async with self.store.session() as db:
@@ -379,6 +447,8 @@ class AgentService:
         body: AgentWrite,
         *,
         api_key: str | None = None,
+        user_id: str | None = None,
+        org_id: str | None = None,
     ) -> dict[str, Any]:
         payload = write_payload(body)
         incoming_meta = payload.get("metadata")
@@ -460,6 +530,14 @@ class AgentService:
             if is_env_none(env):
                 reject_tools_for_env_none(tools if isinstance(tools, list) else None)
                 reject_builtin_tools_for_env_none(stored, None)
+            if "tools" in payload:
+                await require_search(
+                    self.search,
+                    payload["tools"],
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    org_id=org_id,
+                )
             agent = await update_agent(db, tenant_id, agent_id, changes=payload)
             if agent is None:
                 not_found()

@@ -25,6 +25,8 @@ def _auth(token: str) -> dict[str, str]:
 def _expected(turns: int) -> dict[str, int]:
     body = {key: FAKE_USAGE[key] * turns for key in _TOKEN_KEYS}
     body["turns"] = turns
+    body["search_calls"] = 0
+    body["search_units"] = 0
     return body
 
 
