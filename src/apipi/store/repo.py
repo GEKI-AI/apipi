@@ -319,8 +319,15 @@ async def create_turn(
     *,
     status: str,
     usage: dict[str, Any] | None = None,
+    turn_id: uuid.UUID | None = None,
 ) -> Turn:
-    turn = Turn(tenant_id=tenant_id, session_id=session_id, status=status, usage=usage)
+    turn = Turn(
+        id=turn_id if turn_id is not None else uuid.uuid4(),
+        tenant_id=tenant_id,
+        session_id=session_id,
+        status=status,
+        usage=usage,
+    )
     db.add(turn)
     await db.flush()
     return turn
@@ -334,6 +341,14 @@ async def get_turn(
     )
 
 
+async def get_item(
+    db: AsyncSession, tenant_id: uuid.UUID, item_id: uuid.UUID
+) -> Item | None:
+    return await db.scalar(
+        select(Item).where(Item.tenant_id == tenant_id, Item.id == item_id)
+    )
+
+
 async def create_item(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -342,8 +357,10 @@ async def create_item(
     type: str,
     data: dict[str, Any] | None = None,
     turn_id: uuid.UUID | None = None,
+    item_id: uuid.UUID | None = None,
 ) -> Item:
     item = Item(
+        id=item_id if item_id is not None else uuid.uuid4(),
         tenant_id=tenant_id,
         session_id=session_id,
         turn_id=turn_id,

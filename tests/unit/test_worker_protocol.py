@@ -167,6 +167,15 @@ def test_every_message_type_round_trips() -> None:
             "prompt_tokens": 3,
             "completion_tokens": 4,
         },
+        "event": {
+            "type": "agent.session.turn.retrying",
+            "data": {"turn_id": str(turn_id)},
+            "turn_id": str(turn_id),
+        },
+        "session.status": {
+            "status": "idle",
+            "required_actions": [],
+        },
         "artifact.completed": {
             "artifact_id": str(uuid.uuid4()),
             "name": "out.txt",

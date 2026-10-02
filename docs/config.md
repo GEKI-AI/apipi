@@ -76,6 +76,11 @@ hosted files and skills).
 | `APIPI_API_URL` | `api_url` | unset (`http://127.0.0.1:8000` for `apipi worker`) | Base URL the worker uses to open `/internal/worker`. |
 | `APIPI_API_ONLY` | `api_only` | off | Control plane only. Turns lease a worker. `apipi serve --api-only` sets this. |
 | `APIPI_WORKER_ACCEPTS` | `[worker].accepts` | backend default (`none,microvm` for a microVM backend, else `none`) | Comma list from `none`, `microvm`. What this worker runs. `none,microvm` does both on one worker (`type=none` on the host, the rest in microVMs), `microvm` is computer sessions only, `none` is text-only sessions only with no KVM. If `microvm` is listed but the microVM backend cannot run, the worker fails fast before it registers. See [workers](workers.md#placement). |
+| `APIPI_WORKER_OUTBOX_DIR` | `[worker].outbox_dir` | unset | Directory for the worker outbox disk spool. Buffered durable envelopes are written through to one JSONL file per session so they survive a worker restart and replay after the next `hello.reply`. Unset keeps the outbox in memory only. See [workers](workers.md#messages). |
+| `APIPI_WORKER_OUTBOX_MAX_MESSAGES` | `[worker].outbox_max_messages` | `10000` | How many unacked durable envelopes the worker buffers per outbox. Past the cap the turn fails with code `worker_outbox_full`. |
+| `APIPI_WORKER_OUTBOX_MAX_BYTES` | `[worker].outbox_max_bytes` | `67108864` (64 MiB) | How many bytes of unacked durable envelopes the worker buffers. Past the cap the turn fails with code `worker_outbox_full`. |
+| `APIPI_WORKER_INGEST_BATCH_SIZE` | `[worker].ingest_batch_size` | `100` | How many worker envelopes the API ingests in one transaction per worker connection. |
+| `APIPI_WORKER_INGEST_BATCH_WINDOW` | `[worker].ingest_batch_window` | `50ms` | How long the API waits to fill an ingest batch before it commits a partial one. Lower is less added latency; higher batches better. |
 | `APIPI_EVENT_BUS` | `event_bus` | `auto` | `auto`, `memory`, or `postgres`. `auto` is `postgres` on Postgres and `memory` on SQLite. `postgres` fans stored-event wakes and live deltas out over `LISTEN`/`NOTIFY` so SSE works on any replica; explicit `postgres` on SQLite fails at startup. See [multiple nodes](scale.md#event-fan-out). |
 | `APIPI_EVENT_BUS_FALLBACK_POLL` | `event_bus_fallback_poll` | `3s` | How often an SSE stream re-reads the store when no wake arrives. This covers lost notifications and listener reconnects; `2s` to `5s` is the recommended range. An idle stream queries the store no more often than this. |
 | `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache success and `401` rejects by SHA-256 of the bearer, never the raw key. `429` rejects are not cached. |
@@ -772,6 +777,11 @@ openai_hosted = "1h"
 
 [worker]
 accepts = "none,microvm"
+outbox_dir = "/var/lib/apipi/outbox"
+outbox_max_messages = 10000
+outbox_max_bytes = 67108864
+ingest_batch_size = 100
+ingest_batch_window = "50ms"
 ```
 
 ## Compatibility

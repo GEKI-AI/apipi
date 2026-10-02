@@ -47,9 +47,10 @@ load balancer. A worker already registered.
   apipi worker
        |  Firecracker guest (or none)
        |  Pi talks to OPENAI_BASE_URL
-       |  persist public events in Postgres
+       |  durable results buffered in the outbox, sent as v2 envelopes
        v
-  the same API replica
+  the same API replica (or any replica after a reconnect)
+       |  ingests envelopes idempotently, acks, then wakes SSE
        |  SSE reads the store (and a local hub)
        v
   client
@@ -66,12 +67,18 @@ reading the database. Combined serve builds the same context in-process.
 The worker then runs the turn through
 the same execution contract combined serve uses in-process, then
 reports back in v2 envelopes: durable results (`item.added`,
-`turn.status`, `usage`, `artifact.completed`, `error`,
-`sandbox.status`) that the API ingests idempotently, and ephemeral
+`turn.status`, `usage`, `event`, `session.status`, `error`, plus
+`artifact.completed` and `sandbox.status` for later steps) that the
+API ingests idempotently, and ephemeral
 streaming deltas (`delta.text`, `delta.reasoning`) that are never
-persisted. Public events land in the store before the client sees them
-on SSE. If the SSE connection sits on another API replica, that replica polls the
-store. Pi does not have to live on the API node.
+persisted. Only the API writes to Postgres: the worker buffers
+results in a bounded outbox (with an optional disk spool) until the
+cumulative ack, and replays after `hello.reply` on reconnect, so a
+dropped socket or an API restart mid-turn loses nothing and duplicates
+nothing. Public events land in the store before the client sees them
+on SSE. If the SSE connection sits on another API replica, that
+replica wakes over the event bus. Pi does not have to live on the API
+node.
 
 If no worker can take a lease (session cap or RAM budget), the turn
 returns `429` with code `capacity`. If workers are live for the run

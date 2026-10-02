@@ -162,6 +162,11 @@ _SANDBOX_TTL_TOML = {
 }
 _WORKER_TOML = {
     "accepts": "worker_accepts",
+    "outbox_dir": "worker_outbox_dir",
+    "outbox_max_messages": "worker_outbox_max_messages",
+    "outbox_max_bytes": "worker_outbox_max_bytes",
+    "ingest_batch_size": "worker_ingest_batch_size",
+    "ingest_batch_window": "worker_ingest_batch_window",
 }
 _MCP_TOML = {
     "allow_hosts": "mcp_allow_hosts",
@@ -559,6 +564,37 @@ class Settings(BaseSettings):
     worker_lease_ttl: IdleTtl = Field(
         default=timedelta(seconds=30),
         validation_alias=AliasChoices("APIPI_WORKER_LEASE_TTL", "worker_lease_ttl"),
+    )
+    worker_outbox_dir: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_WORKER_OUTBOX_DIR", "worker_outbox_dir"),
+    )
+    worker_outbox_max_messages: int = Field(
+        default=10_000,
+        ge=1,
+        validation_alias=AliasChoices(
+            "APIPI_WORKER_OUTBOX_MAX_MESSAGES", "worker_outbox_max_messages"
+        ),
+    )
+    worker_outbox_max_bytes: int = Field(
+        default=64 * 1024 * 1024,
+        ge=1024,
+        validation_alias=AliasChoices(
+            "APIPI_WORKER_OUTBOX_MAX_BYTES", "worker_outbox_max_bytes"
+        ),
+    )
+    worker_ingest_batch_size: int = Field(
+        default=100,
+        ge=1,
+        validation_alias=AliasChoices(
+            "APIPI_WORKER_INGEST_BATCH_SIZE", "worker_ingest_batch_size"
+        ),
+    )
+    worker_ingest_batch_window: IdleTtl = Field(
+        default=timedelta(milliseconds=50),
+        validation_alias=AliasChoices(
+            "APIPI_WORKER_INGEST_BATCH_WINDOW", "worker_ingest_batch_window"
+        ),
     )
     worker_memory_mb: int | None = Field(
         default=None,

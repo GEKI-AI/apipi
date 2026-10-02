@@ -34,6 +34,24 @@ from apipi.services.failures import (
 )
 from apipi.services.files import FileService
 from apipi.services.payload_export import export_payload
+from apipi.services.sink import (
+    LIVE_EVENT_TYPES,
+    ResultSink,
+    live_event_body,
+    resolve_sink,
+)
+from apipi.services.sink import (
+    PUBLIC_EVENT_TYPES as PUBLIC_EVENT_TYPES,
+)
+from apipi.services.sink import (
+    DirectSink as DirectSink,
+)
+from apipi.services.sink import (
+    event_body as event_body,
+)
+from apipi.services.sink import (
+    persist_event as persist_event,
+)
 from apipi.services.skill_store import SkillService
 from apipi.services.skills import discover_skill_dirs, unpack_skill_zip
 from apipi.services.turn_context import (
@@ -45,21 +63,19 @@ from apipi.services.turn_context import (
 from apipi.services.usage import add_usage, empty_usage, usage_event, usage_from
 from apipi.services.usage_export import export_usage
 from apipi.store.blobs import ArtifactBlobs, ObjectStore, ObjectStoreError, object_store
-from apipi.store.engine import Store, after_commit
-from apipi.store.events import append_event, list_events
-from apipi.store.models import Event, SessionRow, utc_now
+from apipi.store.engine import Store
+from apipi.store.events import list_events
+from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import (
     add_usage_rollup,
     append_turn_log,
     artifact_bytes_for_turn,
-    create_item,
-    create_turn,
     get_session,
     get_session_turn,
     list_items,
     list_turns,
-    update_session,
 )
+from apipi.worker.outbox import OutboxFull
 from apipi.worker.pi.artifacts import (
     ensure_openai_workspace,
     harvest_session,
@@ -104,61 +120,6 @@ class TurnFailed(Exception):
         self.message = message
         self.failure = failure or failure_for(code, message)
         self.code = self.failure.code
-
-
-PUBLIC_EVENT_TYPES = frozenset(
-    {
-        "agent.session.created",
-        "agent.session.in_progress",
-        "agent.session.idle",
-        "agent.session.requires_action",
-        "agent.session.failed",
-        "agent.session.error",
-        "agent.session.turn.created",
-        "agent.session.turn.in_progress",
-        "agent.session.turn.completed",
-        "agent.session.turn.failed",
-        "agent.session.turn.cancelled",
-        "agent.session.turn.output_text.delta",
-        "agent.session.turn.output_text.done",
-        "agent.session.turn.item.added",
-        "agent.session.turn.item.done",
-        "agent.session.turn.item.nested",
-        "agent.session.turn.thinking.started",
-        "agent.session.turn.thinking.completed",
-        "agent.session.turn.compaction.started",
-        "agent.session.turn.compaction.completed",
-        "agent.session.turn.retrying",
-        "agent.session.turn.retry.completed",
-        "agent.session.environment.pending",
-        "agent.session.environment.connected",
-        "agent.session.environment.disconnected",
-        "agent.session.environment.failed",
-    }
-)
-
-LIVE_EVENT_TYPES = frozenset({"agent.session.turn.output_text.delta"})
-
-
-def event_body(event: Event) -> dict[str, Any]:
-    return {
-        "id": str(event.id),
-        "type": event.type,
-        "seq": event.seq,
-        "session_id": str(event.session_id),
-        "created_at": event.created_at.isoformat(),
-        "data": event.data,
-    }
-
-
-def live_event_body(
-    session_id: uuid.UUID, *, type: str, data: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    return {
-        "type": type,
-        "session_id": str(session_id),
-        "data": data if data is not None else {},
-    }
 
 
 EventHub = InMemoryEventBus
@@ -269,30 +230,6 @@ class FakeHarness:
         yield ("agent.session.turn.output_text.delta", {"delta": reply})
         yield ("agent.session.turn.output_text.done", {"text": reply})
         yield ("usage", usage_from(self.usage))
-
-
-async def persist_event(
-    db: AsyncSession,
-    hub: EventBus,
-    tenant_id: uuid.UUID,
-    session_id: uuid.UUID,
-    *,
-    type: str,
-    data: dict[str, Any] | None = None,
-) -> Event | None:
-    if type not in PUBLIC_EVENT_TYPES:
-        return None
-    if type in LIVE_EVENT_TYPES:
-        await hub.publish(session_id, live_event_body(session_id, type=type, data=data))
-        return None
-    event = await append_event(db, tenant_id, session_id, type=type, data=data)
-    body = event_body(event)
-
-    async def _publish() -> None:
-        await hub.publish(session_id, body)
-
-    after_commit(db, _publish)
-    return event
 
 
 def _function_tools(tools: list[Any] | None) -> list[dict[str, Any]]:
@@ -465,7 +402,7 @@ async def _agent_tools_and_model(
 
 
 async def _emit_item(
-    db: AsyncSession,
+    db: AsyncSession | None,
     hub: EventBus,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -473,25 +410,27 @@ async def _emit_item(
     turn_id: uuid.UUID,
     type: str,
     data: dict[str, Any],
+    sink: ResultSink | None = None,
 ) -> None:
-    item = await create_item(
+    active = resolve_sink(sink)
+    item_id = await active.create_item(
         db, tenant_id, session_id, type=type, turn_id=turn_id, data=data
     )
-    await persist_event(
+    await active.append_event(
         db,
         hub,
         tenant_id,
         session_id,
         type="agent.session.turn.item.added",
-        data={"item_id": str(item.id), "item_type": type, "turn_id": str(turn_id)},
+        data={"item_id": str(item_id), "item_type": type, "turn_id": str(turn_id)},
     )
-    await persist_event(
+    await active.append_event(
         db,
         hub,
         tenant_id,
         session_id,
         type="agent.session.turn.item.done",
-        data={"item_id": str(item.id), "turn_id": str(turn_id)},
+        data={"item_id": str(item_id), "turn_id": str(turn_id)},
     )
 
 
@@ -526,10 +465,13 @@ async def _consume_generate(
     turn_id: uuid.UUID,
     events: AsyncIterator[tuple[str, dict[str, Any]]],
     retry_state: dict[str, Any] | None = None,
+    *,
+    sink: ResultSink | None = None,
 ) -> tuple[str, list[dict[str, Any]], dict[str, int]]:
     reply = ""
     pending: list[dict[str, Any]] = []
     usage = empty_usage()
+    active = resolve_sink(sink)
     state = retry_state if retry_state is not None else _new_retry_state()
     async for etype, data in events:
         if etype == "usage":
@@ -549,7 +491,7 @@ async def _consume_generate(
                 session_id, live_event_body(session_id, type=etype, data=payload)
             )
             continue
-        async with store.session() as db:
+        async with active.txn(store) as db:
             if etype == "function_call":
                 call_id = payload.get("call_id")
                 name = payload.get("name")
@@ -565,6 +507,7 @@ async def _consume_generate(
                     "arguments": arguments,
                 }
                 pending.append(call)
+                active.tally_tool(name)
                 await _emit_item(
                     db,
                     hub,
@@ -573,13 +516,23 @@ async def _consume_generate(
                     turn_id=turn_id,
                     type="function_call",
                     data=call,
+                    sink=active,
                 )
                 continue
+            if (
+                etype
+                in (
+                    "agent.session.turn.item.added",
+                    "agent.session.turn.item.nested",
+                )
+                and payload.get("item_type") == "mcp_call"
+            ):
+                active.tally_mcp(_mcp_name(payload))
             if etype == "agent.session.turn.output_text.done":
                 text_out = payload.get("text")
                 if isinstance(text_out, str):
                     reply = text_out
-            await persist_event(
+            await active.append_event(
                 db, hub, tenant_id, session_id, type=etype, data=payload
             )
     return reply, pending, usage
@@ -687,6 +640,10 @@ async def _write_turn_log(
     user_id: str | None = None,
     failure: Failure | None = None,
     turn_context: TurnContext | None = None,
+    tool_names: list[str] | None = None,
+    tool_counts: dict[str, int] | None = None,
+    mcp_names: list[str] | None = None,
+    mcp_counts: dict[str, int] | None = None,
 ) -> None:
     turn = await get_session_turn(db, tenant_id, session_id, turn_id)
     if turn is None:
@@ -717,9 +674,17 @@ async def _write_turn_log(
                 raw_tools = definition.get("tools")
                 labels = _mcp_labels(raw_tools if isinstance(raw_tools, list) else [])
     stored = usage_from(usage)
-    tool_names, tool_counts, mcp_names, mcp_counts = await _tool_mcp_for_turn(
-        db, tenant_id, session_id, turn_id, labels
-    )
+    if (
+        tool_names is None
+        or tool_counts is None
+        or mcp_names is None
+        or mcp_counts is None
+    ):
+        # Stale recovery (a turn this process never observed): fall back
+        # to the stored rows so the turn log keeps its tool summary.
+        tool_names, tool_counts, mcp_names, mcp_counts = await _tool_mcp_for_turn(
+            db, tenant_id, session_id, turn_id, labels
+        )
     latency_ms = _latency_ms(turn.created_at)
     if settings is not None:
         from apipi.worker.pi.isolation import isolation_name
@@ -928,7 +893,9 @@ async def _complete_turn(
     user_id: str | None = None,
     blobs: ArtifactBlobs | None = None,
     turn_context: TurnContext | None = None,
+    sink: ResultSink | None = None,
 ) -> None:
+    active = resolve_sink(sink)
     await _emit_item(
         db,
         hub,
@@ -937,13 +904,12 @@ async def _complete_turn(
         turn_id=turn_id,
         type="message",
         data={"role": "assistant", "content": reply},
+        sink=active,
     )
     stored = usage_from(usage)
-    turn = await get_session_turn(db, tenant_id, session_id, turn_id)
-    if turn is not None:
-        turn.status = "completed"
-        turn.usage = stored
-        turn.updated_at = utc_now()
+    await active.finish_turn(
+        db, tenant_id, session_id, turn_id, status="completed", usage=stored
+    )
     if settings is not None:
         _row, limit_error = await harvest_session(
             db,
@@ -969,9 +935,10 @@ async def _complete_turn(
                     code="artifact_store",
                     user_id=user_id,
                     turn_context=turn_context,
+                    sink=active,
                 )
                 return
-            await persist_event(
+            await active.append_event(
                 db,
                 hub,
                 tenant_id,
@@ -980,8 +947,9 @@ async def _complete_turn(
                 data={"message": str(limit_error), "code": limit_error.code},
             )
     published = await artifact_bytes_for_turn(db, tenant_id, turn_id)
-    await _write_turn_log(
+    await active.write_turn_log(
         db,
+        hub,
         tenant_id,
         session_id,
         turn_id,
@@ -995,7 +963,7 @@ async def _complete_turn(
         user_id=user_id,
         turn_context=turn_context,
     )
-    await persist_event(
+    await active.append_event(
         db,
         hub,
         tenant_id,
@@ -1003,13 +971,13 @@ async def _complete_turn(
         type="agent.session.turn.completed",
         data={"turn_id": str(turn_id), "usage": stored},
     )
-    await update_session(
+    await active.update_session(
         db,
         tenant_id,
         session_id,
         changes={"status": "idle", "required_actions": []},
     )
-    await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
+    await active.append_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
 
 async def _cancel_turn(
@@ -1025,14 +993,16 @@ async def _cancel_turn(
     settings: Settings | None = None,
     user_id: str | None = None,
     turn_context: TurnContext | None = None,
+    sink: ResultSink | None = None,
 ) -> None:
-    turn = await get_session_turn(db, tenant_id, session_id, turn_id)
-    if turn is not None:
-        turn.status = "cancelled"
-        turn.updated_at = utc_now()
+    active = resolve_sink(sink)
     cancelled = failure_for("cancelled", "Cancelled")
-    await _write_turn_log(
+    await active.finish_turn(
+        db, tenant_id, session_id, turn_id, status="cancelled", failure=cancelled
+    )
+    await active.write_turn_log(
         db,
+        hub,
         tenant_id,
         session_id,
         turn_id,
@@ -1046,7 +1016,7 @@ async def _cancel_turn(
         failure=cancelled,
         turn_context=turn_context,
     )
-    await persist_event(
+    await active.append_event(
         db,
         hub,
         tenant_id,
@@ -1054,13 +1024,13 @@ async def _cancel_turn(
         type="agent.session.turn.cancelled",
         data=cancel_data(str(turn_id)),
     )
-    await update_session(
+    await active.update_session(
         db,
         tenant_id,
         session_id,
         changes={"status": "idle", "required_actions": []},
     )
-    await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
+    await active.append_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
 
 def _lease_live(until: datetime | None) -> bool:
@@ -1077,7 +1047,9 @@ async def fail_stale_in_progress(
     session_id: uuid.UUID,
     *,
     message: str = "Turn interrupted",
+    sink: ResultSink | None = None,
 ) -> SessionRow | None:
+    active = resolve_sink(sink)
     row = await get_session(db, tenant_id, session_id)
     if row is None or row.status != "in_progress":
         return row
@@ -1095,15 +1067,16 @@ async def fail_stale_in_progress(
                     turn.id,
                     message,
                     code="turn_interrupted",
+                    sink=active,
                 )
                 return await get_session(db, tenant_id, session_id)
-    await update_session(
+    await active.update_session(
         db,
         tenant_id,
         session_id,
         changes={"status": "idle", "required_actions": []},
     )
-    await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
+    await active.append_event(db, hub, tenant_id, session_id, type="agent.session.idle")
     return await get_session(db, tenant_id, session_id)
 
 
@@ -1113,6 +1086,8 @@ async def prepare_for_new_turn(
     harness: Harness,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
+    *,
+    sink: ResultSink | None = None,
 ) -> None:
     async with store.session() as db:
         row = await get_session(db, tenant_id, session_id)
@@ -1129,7 +1104,56 @@ async def prepare_for_new_turn(
                     return
             await asyncio.sleep(0.05)
     async with store.session() as db:
-        await fail_stale_in_progress(db, hub, tenant_id, session_id)
+        await fail_stale_in_progress(db, hub, tenant_id, session_id, sink=sink)
+
+
+async def _fail_outbox_full(
+    store: Store,
+    hub: EventBus,
+    sink: ResultSink,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    *,
+    request_id: str | None = None,
+    metrics: Metrics | None = None,
+    tracing: Tracing | None = None,
+    settings: Settings | None = None,
+    user_id: str | None = None,
+) -> None:
+    """Fail a turn whose outbox is full, spending the emergency budget."""
+    from apipi.worker.outbox import OutboxFull
+
+    abort = hub.turn_abort(session_id)
+    if abort is not None:
+        abort.set()
+    try:
+        async with sink.emergency_mode(), store.session() as db:
+            await _fail_turn(
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                turn_id,
+                "Worker outbox is full",
+                request_id=request_id,
+                metrics=metrics,
+                tracing=tracing,
+                settings=settings,
+                code="worker_outbox_full",
+                user_id=user_id,
+                sink=sink,
+            )
+    except OutboxFull:
+        log.error(
+            "worker outbox full, turn failure dropped",
+            extra={
+                "session_id": str(session_id),
+                "turn_id": str(turn_id),
+                "event": "worker.outbox.dropped",
+                "error_code": "worker_outbox_full",
+            },
+        )
 
 
 async def _fail_turn(
@@ -1148,14 +1172,16 @@ async def _fail_turn(
     user_id: str | None = None,
     failure: Failure | None = None,
     turn_context: TurnContext | None = None,
+    sink: ResultSink | None = None,
 ) -> None:
+    active = resolve_sink(sink)
     resolved = failure or failure_for(code, message)
-    turn = await get_session_turn(db, tenant_id, session_id, turn_id)
-    if turn is not None:
-        turn.status = "failed"
-        turn.updated_at = utc_now()
-    await _write_turn_log(
+    await active.finish_turn(
+        db, tenant_id, session_id, turn_id, status="failed", failure=resolved
+    )
+    await active.write_turn_log(
         db,
+        hub,
         tenant_id,
         session_id,
         turn_id,
@@ -1169,7 +1195,7 @@ async def _fail_turn(
         failure=resolved,
         turn_context=turn_context,
     )
-    await persist_event(
+    await active.append_event(
         db,
         hub,
         tenant_id,
@@ -1177,7 +1203,7 @@ async def _fail_turn(
         type="agent.session.turn.failed",
         data=turn_failed_data(str(turn_id), resolved),
     )
-    await persist_event(
+    await active.append_event(
         db,
         hub,
         tenant_id,
@@ -1185,13 +1211,13 @@ async def _fail_turn(
         type="agent.session.error",
         data=session_error_data(resolved, mode=error_mode(settings)),
     )
-    await update_session(
+    await active.update_session(
         db,
         tenant_id,
         session_id,
         changes={"status": "idle", "required_actions": []},
     )
-    await persist_event(db, hub, tenant_id, session_id, type="agent.session.idle")
+    await active.append_event(db, hub, tenant_id, session_id, type="agent.session.idle")
 
 
 def _cache_expected(row: SessionRow) -> bool:
@@ -1226,8 +1252,10 @@ async def fail_session(
     message: str,
     *,
     code: str | None = None,
+    sink: ResultSink | None = None,
 ) -> None:
-    await update_session(
+    active = resolve_sink(sink)
+    await active.update_session(
         db,
         tenant_id,
         session_id,
@@ -1237,7 +1265,7 @@ async def fail_session(
         data = session_error_data(failure_for(code, message), mode="legacy")
     else:
         data = {"message": message}
-    await persist_event(
+    await active.append_event(
         db,
         hub,
         tenant_id,
@@ -1245,7 +1273,9 @@ async def fail_session(
         type="agent.session.error",
         data=data,
     )
-    await persist_event(db, hub, tenant_id, session_id, type="agent.session.failed")
+    await active.append_event(
+        db, hub, tenant_id, session_id, type="agent.session.failed"
+    )
 
 
 async def fail_environment(
@@ -1256,11 +1286,13 @@ async def fail_environment(
     message: str,
     *,
     code: str | None = None,
+    sink: ResultSink | None = None,
 ) -> None:
     from apipi.services.sandbox_status import note_failed
 
     data = await note_failed(db, hub, tenant_id, session_id, message, code=code)
-    await persist_event(
+    active = resolve_sink(sink)
+    await active.append_event(
         db,
         hub,
         tenant_id,
@@ -1268,7 +1300,7 @@ async def fail_environment(
         type="agent.session.environment.failed",
         data=data,
     )
-    await fail_session(db, hub, tenant_id, session_id, message, code=code)
+    await fail_session(db, hub, tenant_id, session_id, message, code=code, sink=active)
 
 
 async def load_boot_kwargs(
@@ -1500,8 +1532,10 @@ async def run_turn(
     objects: ObjectStore | None = None,
     blobs: ArtifactBlobs | None = None,
     turn_context: dict[str, Any] | None = None,
+    sink: ResultSink | None = None,
 ) -> None:
     abort = hub.watch_turn(session_id)
+    active = resolve_sink(sink)
     if pool is not None:
         pool.hold(session_id)
     try:
@@ -1672,7 +1706,7 @@ async def run_turn(
             except (SetupError, ApiError) as exc:
                 code = exc.code if isinstance(exc, ApiError) and exc.code else None
                 await fail_environment(
-                    db, hub, tenant_id, session_id, exc.message, code=code
+                    db, hub, tenant_id, session_id, exc.message, code=code, sink=active
                 )
                 return
             except ObjectStoreError:
@@ -1683,6 +1717,7 @@ async def run_turn(
                     session_id,
                     "Cannot read artifacts",
                     code="artifact_store",
+                    sink=active,
                 )
                 return
             builtin_tools = (
@@ -1730,7 +1765,7 @@ async def run_turn(
             sandbox_image = stored_image or image_for_size(sandbox_size)
             extra_env = session_env_from(row.environment)
             spawn_ids = _spawn_identity(row, user_id, org_id)
-            await update_session(
+            await active.update_session(
                 db,
                 tenant_id,
                 session_id,
@@ -1739,12 +1774,13 @@ async def run_turn(
                     "required_actions": [],
                 },
             )
-            await persist_event(
+            await active.append_event(
                 db, hub, tenant_id, session_id, type="agent.session.in_progress"
             )
-            turn = await create_turn(db, tenant_id, session_id, status="in_progress")
-            turn_id = turn.id
-            await persist_event(
+            turn_id = await active.create_turn(
+                db, tenant_id, session_id, status="in_progress"
+            )
+            await active.append_event(
                 db,
                 hub,
                 tenant_id,
@@ -1752,7 +1788,7 @@ async def run_turn(
                 type="agent.session.turn.created",
                 data={"turn_id": str(turn_id)},
             )
-            await persist_event(
+            await active.append_event(
                 db,
                 hub,
                 tenant_id,
@@ -1768,6 +1804,7 @@ async def run_turn(
                 turn_id=turn_id,
                 type="message",
                 data={"role": "user", "content": item_content},
+                sink=active,
             )
             if cache_error is not None:
                 await _fail_turn(
@@ -1784,6 +1821,7 @@ async def run_turn(
                     code="artifact_store",
                     user_id=user_id,
                     turn_context=ctx,
+                    sink=active,
                 )
                 return
         composed = compose_instructions(
@@ -1868,6 +1906,7 @@ async def run_turn(
                             turn_id,
                             generate,
                             retry_state,
+                            sink=active,
                         )
                     else:
                         async with asyncio.timeout(turn_timeout.total_seconds()):
@@ -1879,10 +1918,26 @@ async def run_turn(
                                 turn_id,
                                 generate,
                                 retry_state,
+                                sink=active,
                             )
+                except OutboxFull:
+                    await _fail_outbox_full(
+                        store,
+                        hub,
+                        active,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                        settings=settings,
+                        user_id=user_id,
+                    )
+                    return
                 except CapacityError as exc:
                     async with store.session() as db:
-                        await update_session(
+                        await active.update_session(
                             db,
                             tenant_id,
                             session_id,
@@ -1911,6 +1966,7 @@ async def run_turn(
                             user_id=user_id,
                             failure=exc.failure,
                             turn_context=ctx,
+                            sink=active,
                         )
                     return
                 except TimeoutError:
@@ -1936,6 +1992,7 @@ async def run_turn(
                             user_id=user_id,
                             failure=timed_out,
                             turn_context=ctx,
+                            sink=active,
                         )
                     return
                 except OSError as exc:
@@ -1954,6 +2011,7 @@ async def run_turn(
                             code="spawn_failed",
                             user_id=user_id,
                             turn_context=ctx,
+                            sink=active,
                         )
                     return
                 set_span(
@@ -1982,11 +2040,12 @@ async def run_turn(
                         settings=settings,
                         user_id=user_id,
                         turn_context=ctx,
+                        sink=active,
                     )
                     return
                 if pending:
                     actions = pending
-                    await update_session(
+                    await active.update_session(
                         db,
                         tenant_id,
                         session_id,
@@ -1995,7 +2054,7 @@ async def run_turn(
                             "required_actions": actions,
                         },
                     )
-                    await persist_event(
+                    await active.append_event(
                         db,
                         hub,
                         tenant_id,
@@ -2020,6 +2079,7 @@ async def run_turn(
                     user_id=user_id,
                     blobs=blobs,
                     turn_context=ctx,
+                    sink=active,
                 )
     finally:
         if pool is not None:
@@ -2052,6 +2112,7 @@ async def continue_turn(
     org_id: str | None = None,
     blobs: ArtifactBlobs | None = None,
     turn_context: dict[str, Any] | None = None,
+    sink: ResultSink | None = None,
 ) -> None:
     cwd_path: str | None
     tools: bool
@@ -2077,6 +2138,7 @@ async def continue_turn(
     resolved_base_url = (
         ctx.model.base_url if ctx is not None and ctx.model.base_url else None
     )
+    active = resolve_sink(sink)
     async with store.session() as db:
         row: Any
         if ctx is None:
@@ -2145,7 +2207,7 @@ async def continue_turn(
             and action.get("call_id") != call_id
         ]
         if remaining:
-            await update_session(
+            await active.update_session(
                 db,
                 tenant_id,
                 session_id,
@@ -2176,6 +2238,7 @@ async def continue_turn(
                             code="artifact_store",
                             user_id=user_id,
                             turn_context=ctx,
+                            sink=active,
                         )
                         return
                     raise
@@ -2200,6 +2263,7 @@ async def continue_turn(
                             code="artifact_store",
                             user_id=user_id,
                             turn_context=ctx,
+                            sink=active,
                         )
                         return
                 if context_pi is not None:
@@ -2232,7 +2296,13 @@ async def continue_turn(
             model = _bind_turn_model(settings, model)
         except ApiError as exc:
             await fail_environment(
-                db, hub, tenant_id, session_id, exc.message, code=exc.code or None
+                db,
+                hub,
+                tenant_id,
+                session_id,
+                exc.message,
+                code=exc.code or None,
+                sink=active,
             )
             return
         builtin_tools = (
@@ -2331,6 +2401,7 @@ async def continue_turn(
                             turn_id,
                             generate,
                             retry_state,
+                            sink=active,
                         )
                     else:
                         async with asyncio.timeout(turn_timeout.total_seconds()):
@@ -2342,7 +2413,23 @@ async def continue_turn(
                                 turn_id,
                                 generate,
                                 retry_state,
+                                sink=active,
                             )
+                except OutboxFull:
+                    await _fail_outbox_full(
+                        store,
+                        hub,
+                        active,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                        settings=settings,
+                        user_id=user_id,
+                    )
+                    return
                 except TurnFailed as exc:
                     async with store.session() as db:
                         await _fail_turn(
@@ -2360,6 +2447,7 @@ async def continue_turn(
                             user_id=user_id,
                             failure=exc.failure,
                             turn_context=ctx,
+                            sink=active,
                         )
                     return
                 except TimeoutError:
@@ -2384,6 +2472,7 @@ async def continue_turn(
                             user_id=user_id,
                             failure=timed_out,
                             turn_context=ctx,
+                            sink=active,
                         )
                     return
                 except OSError as exc:
@@ -2402,6 +2491,7 @@ async def continue_turn(
                             code="spawn_failed",
                             user_id=user_id,
                             turn_context=ctx,
+                            sink=active,
                         )
                     return
                 except CapacityError as exc:
@@ -2426,7 +2516,7 @@ async def continue_turn(
             async with store.session() as db:
                 if pending:
                     actions = pending
-                    await update_session(
+                    await active.update_session(
                         db,
                         tenant_id,
                         session_id,
@@ -2435,7 +2525,7 @@ async def continue_turn(
                             "required_actions": actions,
                         },
                     )
-                    await persist_event(
+                    await active.append_event(
                         db,
                         hub,
                         tenant_id,
@@ -2460,6 +2550,7 @@ async def continue_turn(
                     user_id=user_id,
                     blobs=blobs,
                     turn_context=ctx,
+                    sink=active,
                 )
     finally:
         if pool is not None:

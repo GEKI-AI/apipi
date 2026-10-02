@@ -37,7 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its sender so a replica never re-delivers its own broadcast.
   Until durable worker ingest (#446) the worker still writes events
   itself, so `apipi worker` builds the same bus from its own
-  `DATABASE_URL` and must point at the same database as the API. Live `output_text.delta`
+  `DATABASE_URL` and must point at the same database as the API (turn
+  context still comes from that database until #447). Live `output_text.delta`
   batches are coalesced over about 40ms and stay under the
   8000-byte `NOTIFY` limit (larger batches are split); deltas are
   never stored. New metrics: `apipi_event_bus_listener_reconnects_total`,
@@ -67,6 +68,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collects `outputs/` artifacts; the platform prompt uses the `none`
   fragment. An invalid value is `400` (`invalid_request`). The key is
   portable in agent bundles, and `apipi.codemode` is portable now too.
+- Durable worker events ingested by the API (#446). The turn runtime
+  reports turns, items, events, usage, and errors through a
+  `ResultSink` interface instead of writing to the store directly.
+  Combined `apipi serve` uses a direct-DB sink, so its behaviour is
+  unchanged. A split-mode worker buffers durable v2 envelopes
+  (`item.added`, `item.done`, `turn.status`, `usage`, `event`,
+  `session.status`, `error`) in a bounded per-session outbox until
+  the cumulative `ack{last_seq}`, with an optional disk spool
+  (`APIPI_WORKER_OUTBOX_DIR`, capped by
+  `APIPI_WORKER_OUTBOX_MAX_MESSAGES` and
+  `APIPI_WORKER_OUTBOX_MAX_BYTES`). The API ingests each
+  connection's envelopes in batches (about 50ms via
+  `APIPI_WORKER_INGEST_BATCH_WINDOW`, or
+  `APIPI_WORKER_INGEST_BATCH_SIZE` messages), one transaction per
+  batch: a `worker_ingest` ledger (`UNIQUE(session_id, worker_seq)`)
+  makes replays idempotent, the public `events.seq` stays
+  API-assigned, and `sessions.worker_seq` (migration `0026`)
+  records the ack cursor that `hello.reply` reports, so a reconnect
+  to any replica replays exactly what is missing. Ingest validates
+  the lease, the turn binding, and size limits; violations drop the
+  message, log `worker.event.rejected`, and count in
+  `apipi_worker_protocol_total{event="envelope_rejected"}`.
+  `artifact.completed` and `sandbox.status` stay rejected until
+  #448/#449 apply them. After commit the API sends the ack, then
+  publishes the `EventBus` wake. The worker keeps the turn running
+  across a dropped socket or an API restart within the lease TTL;
+  a full outbox fails the turn with `worker_outbox_full`. Tool and
+  MCP tallies for the turn log are collected in memory while the
+  turn runs. See `docs/workers.md`, `docs/worker-concepts.md`, and
+  `docs/config.md`.
 
 ### Breaking
 

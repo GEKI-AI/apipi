@@ -104,10 +104,13 @@ messages on the bus. Reasoning deltas (`delta.reasoning`) are
 accepted but never fanned out. SSE clients can sit on any replica;
 only the worker socket itself stays pinned to one API process.
 
-Until durable worker ingest lands (#446), the worker still writes
-its events to the store itself, so the worker builds the same bus
-from its own `DATABASE_URL`. Point every worker at the same database
-as the API, or worker commits only arrive via the fallback poll.
+Only the API writes turns, items, events, and usage: the worker
+buffers results in its outbox until the cumulative ack and replays
+after `hello.reply`, then the ingesting replica publishes the
+`EventBus` wake after commit. Turn context already arrives in
+commands, so the worker only needs the same database for artifacts
+and the workspace until later steps; keep pointing every worker at
+the same database as the API until then.
 
 ## nginx
 
