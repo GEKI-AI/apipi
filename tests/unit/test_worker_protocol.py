@@ -159,13 +159,22 @@ def test_every_message_type_round_trips() -> None:
             "item_type": "message",
             "data": {"text": "hi"},
         },
-        "item.done": {"item_id": str(item_id)},
+        "item.done": {"item_id": str(item_id), "data": {"note": "done"}},
         "turn.status": {"turn_id": str(turn_id), "status": "completed"},
         "usage": {
             "turn_id": str(turn_id),
             "model": "test",
             "prompt_tokens": 3,
             "completion_tokens": 4,
+        },
+        "event": {
+            "type": "agent.session.turn.retrying",
+            "data": {"turn_id": str(turn_id)},
+            "turn_id": str(turn_id),
+        },
+        "session.status": {
+            "status": "idle",
+            "required_actions": [],
         },
         "artifact.completed": {
             "artifact_id": str(uuid.uuid4()),

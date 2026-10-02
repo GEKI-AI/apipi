@@ -1,5 +1,6 @@
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -145,6 +146,44 @@ class Failure:
         if mode == "specific" or not self.legacy_code:
             return self.code
         return self.legacy_code
+
+
+def failure_dict(failure: Failure) -> dict[str, Any]:
+    """Serialize a failure for the worker `usage` envelope."""
+    return {
+        "message": failure.message,
+        "code": failure.code,
+        "failure_source": failure.failure_source,
+        "retryable": failure.retryable,
+        "upstream_status": failure.upstream_status,
+        "legacy_code": failure.legacy_code,
+        "upstream_attempts": failure.upstream_attempts,
+    }
+
+
+def failure_from_dict(data: Mapping[str, Any]) -> Failure:
+    """Rebuild a failure the worker serialized with :func:`failure_dict`."""
+    return Failure(
+        message=str(data.get("message") or ""),
+        code=str(data.get("code") or "internal"),
+        failure_source=str(data.get("failure_source") or "internal"),
+        retryable=bool(data.get("retryable", False)),
+        upstream_status=(
+            int(data["upstream_status"])
+            if isinstance(data.get("upstream_status"), int)
+            else None
+        ),
+        legacy_code=(
+            str(data["legacy_code"])
+            if isinstance(data.get("legacy_code"), str)
+            else None
+        ),
+        upstream_attempts=(
+            int(data["upstream_attempts"])
+            if isinstance(data.get("upstream_attempts"), int)
+            else None
+        ),
+    )
 
 
 def error_mode(settings: object | None) -> str:

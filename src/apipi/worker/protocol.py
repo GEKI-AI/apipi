@@ -23,10 +23,13 @@ Protocol v2 (see `specs/decisions/0015-worker-protocol-v2.md`):
   messages (streaming deltas) are at-most-once, never persisted, and
   never acked.
 
-Only the handshake and the version check are wired in this change.
-Durable ingest, the outbox, replay, and the cumulative ack land in
-later steps of the worker protocol v2 epic; the schemas below already
-describe that target so later steps do not redefine the wire.
+Only the handshake and the version check were wired first. Durable
+ingest, the outbox, replay, and the cumulative ack are wired now:
+the API ingests durable envelopes in batches (about 50ms or 100
+messages), one transaction per batch, and sends the cumulative ack
+after commit. The worker keeps unacked envelopes in a bounded outbox
+(`src/apipi/worker/outbox.py`), with an optional disk spool, and
+replays everything after `hello.reply` on reconnect.
 """
 
 import uuid
@@ -45,6 +48,8 @@ DURABLE_MESSAGE_TYPES = frozenset(
         "item.done",
         "turn.status",
         "usage",
+        "event",
+        "session.status",
         "artifact.completed",
         "error",
         "sandbox.status",
@@ -153,11 +158,14 @@ class WorkerEnvelope(WireModel):
 class ItemAddedPayload(StrictPayload):
     item_id: uuid.UUID
     item_type: str
+    turn_id: uuid.UUID | None = None
     data: dict[str, Any] = Field(default_factory=dict)
 
 
 class ItemDonePayload(StrictPayload):
     item_id: uuid.UUID
+    turn_id: uuid.UUID | None = None
+    data: dict[str, Any] | None = None
 
 
 class TurnStatusPayload(StrictPayload):
@@ -170,9 +178,22 @@ class TurnStatusPayload(StrictPayload):
 class UsagePayload(StrictPayload):
     turn_id: uuid.UUID
     model: str | None = None
+    status: str | None = None
     prompt_tokens: int = Field(default=0, ge=0)
     completion_tokens: int = Field(default=0, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
+    cache_read_tokens: int | None = Field(default=None, ge=0)
+    cache_write_tokens: int | None = Field(default=None, ge=0)
+    latency_ms: int | None = Field(default=None, ge=0)
+    request_id: str | None = None
+    user_id: str | None = None
+    error_code: str | None = None
+    artifact_bytes: int | None = Field(default=None, ge=0)
+    tool_names: list[str] | None = None
+    tool_counts: dict[str, int] | None = None
+    mcp_names: list[str] | None = None
+    mcp_counts: dict[str, int] | None = None
+    failure: dict[str, Any] | None = None
 
 
 class ArtifactCompletedPayload(StrictPayload):
@@ -185,6 +206,19 @@ class WorkerErrorPayload(StrictPayload):
     code: str
     message: str
     turn_id: uuid.UUID | None = None
+
+
+class WorkerEventPayload(StrictPayload):
+    """A public session event, applied as stored by the API."""
+
+    type: str
+    data: dict[str, Any] = Field(default_factory=dict)
+    turn_id: uuid.UUID | None = None
+
+
+class SessionStatusPayload(StrictPayload):
+    status: str | None = None
+    required_actions: list[Any] | None = None
 
 
 class SandboxStatusPayload(StrictPayload):
@@ -207,6 +241,8 @@ PAYLOAD_MODELS: dict[str, type[StrictPayload]] = {
     "item.done": ItemDonePayload,
     "turn.status": TurnStatusPayload,
     "usage": UsagePayload,
+    "event": WorkerEventPayload,
+    "session.status": SessionStatusPayload,
     "artifact.completed": ArtifactCompletedPayload,
     "error": WorkerErrorPayload,
     "sandbox.status": SandboxStatusPayload,

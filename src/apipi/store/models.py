@@ -141,6 +141,7 @@ class SessionRow(Base):
     lease_until: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    worker_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pi_session_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), nullable=True
     )
@@ -504,6 +505,25 @@ class Event(Base):
     type: Mapped[str] = mapped_column(String(128), nullable=False)
     data: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class WorkerIngest(Base):
+    """Idempotency ledger for worker protocol v2 durable envelopes.
+
+    One row per applied `(session_id, worker_seq)`. Ingest claims the
+    row inside the batch transaction; a duplicate claim means the
+    envelope was already applied and is skipped. The cumulative ack
+    cursor itself lives on `sessions.worker_seq`.
+    """
+
+    __tablename__ = "worker_ingest"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    worker_seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    envelope_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    applied_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
 

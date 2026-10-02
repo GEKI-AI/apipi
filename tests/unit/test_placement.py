@@ -155,6 +155,7 @@ async def test_mismatched_turn_persists_error(store: Store) -> None:
     execution.store = store
     execution.hub = hub
     execution.run_turn = AsyncMock()
+    execution.sink_for = MagicMock(return_value=None)
     await _run_command(
         execution,
         "turn.start",

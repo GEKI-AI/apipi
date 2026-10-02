@@ -8,6 +8,12 @@ from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
 from apipi.services.event_bus import EventBus
+from apipi.services.ingest import (
+    IngestBatcher,
+    _Reject,
+    classify_incoming,
+    flush_batch,
+)
 from apipi.services.worker_tokens import (
     WORKER_TOKEN_PREFIX,
     authenticate_token,
@@ -26,9 +32,9 @@ from apipi.worker.hub import (
 from apipi.worker.protocol import (
     UNSUPPORTED_PROTOCOL_REASON,
     WORKER_CLOSE_CODE,
-    UnknownMessageType,
+    CumulativeAck,
     UnsupportedProtocol,
-    parse_envelope,
+    WorkerEnvelope,
     parse_register,
 )
 
@@ -51,6 +57,63 @@ def _bearer(websocket: WebSocket) -> str | None:
 async def _reject(websocket: WebSocket, error: str, *, reason: str) -> None:
     await websocket.send_json({"ok": False, "error": error})
     await websocket.close(code=WORKER_CLOSE_CODE, reason=reason)
+
+
+def _classify(message: dict[str, Any]) -> tuple[str, WorkerEnvelope | None, int]:
+    try:
+        return classify_incoming(message)
+    except _Reject:
+        return "garbage", None, 0
+
+
+def _log_garbage(hub: WorkerHub, metrics: Any, message: dict[str, Any]) -> None:
+    hub.observe_protocol("envelope_rejected")
+    raw_session = message.get("session_id")
+    try:
+        session_id = uuid.UUID(str(raw_session)) if raw_session else None
+    except ValueError:
+        session_id = None
+    log.warning(
+        "worker envelope rejected",
+        extra={
+            "event": "worker.event.rejected",
+            "error_code": "invalid_envelope",
+            "session_id": str(session_id) if session_id is not None else None,
+        },
+    )
+    if metrics is not None:
+        metrics.observe_worker_protocol("envelope_rejected")
+
+
+async def _flush_envelopes(
+    store: Store,
+    event_hub: EventBus,
+    conn: Any,
+    batcher: IngestBatcher,
+    settings: Any,
+    metrics: Any,
+    websocket: WebSocket,
+) -> None:
+    queued = batcher.take()
+    if not queued:
+        return
+    outcome = await flush_batch(
+        store,
+        queued,
+        worker_id=conn.worker_id,
+        settings=settings,
+        metrics=metrics,
+    )
+    for session_id, last_seq in sorted(
+        outcome.acks.items(), key=lambda item: str(item[0])
+    ):
+        await websocket.send_json(
+            CumulativeAck(session_id=session_id, last_seq=last_seq).model_dump(
+                mode="json"
+            )
+        )
+    for session_id, body in outcome.wakes:
+        await event_hub.publish(session_id, body)
 
 
 @router.websocket("/internal/worker")
@@ -118,13 +181,45 @@ async def worker_socket(websocket: WebSocket) -> None:
         hub.observe_protocol("invalid_register")
         await _reject(websocket, "invalid register", reason="invalid_register")
         return
+    settings = websocket.app.state.settings
+    metrics = websocket.app.state.metrics
+    batcher = IngestBatcher(max_messages=settings.worker_ingest_batch_size)
+    window = settings.worker_ingest_batch_window.total_seconds()
     try:
         while True:
-            message = await websocket.receive_json()
+            timeout = batcher.poll_timeout(window)
+            try:
+                if timeout is None:
+                    message = await websocket.receive_json()
+                else:
+                    message = await asyncio.wait_for(
+                        websocket.receive_json(), timeout=timeout
+                    )
+            except TimeoutError:
+                message = None
+            if message is None or batcher.should_flush(window):
+                if len(batcher):
+                    await _flush_envelopes(
+                        store, event_hub, conn, batcher, settings, metrics, websocket
+                    )
+                if message is None:
+                    continue
             if not isinstance(message, dict):
                 continue
-            if message.get("v") == 2:
-                await _handle_envelope(hub, store, event_hub, conn, message)
+            kind, envelope, raw_size = _classify(message)
+            if kind == "envelope" and envelope is not None:
+                batcher.add(envelope, raw_size)
+                if batcher.should_flush(window):
+                    await _flush_envelopes(
+                        store, event_hub, conn, batcher, settings, metrics, websocket
+                    )
+                continue
+            if kind == "ephemeral" and envelope is not None:
+                await hub.handle_delta(store, event_hub, conn, envelope)
+                continue
+            if kind == "garbage":
+                _log_garbage(hub, metrics, message)
+                continue
                 continue
             msg_type = message.get("type")
             if msg_type not in WORKER_IN:
@@ -202,26 +297,3 @@ def _uuid(value: object) -> uuid.UUID | None:
         return uuid.UUID(value)
     except ValueError:
         return None
-
-
-async def _handle_envelope(
-    hub: WorkerHub,
-    store: Store,
-    event_hub: EventBus,
-    conn: Any,
-    message: dict[str, Any],
-) -> None:
-    """Route one v2 worker envelope.
-
-    Ephemeral deltas are validated and fanned out over the event
-    bus, so SSE clients on any replica see token streaming. Durable
-    envelopes are counted and ignored until the ingest step lands."""
-    try:
-        envelope = parse_envelope(message)
-    except (ValidationError, UnknownMessageType):
-        hub.observe_protocol("envelope.invalid")
-        return
-    if envelope.message_class() == "durable":
-        hub.observe_protocol("envelope.durable_deferred")
-        return
-    await hub.handle_delta(store, event_hub, conn, envelope)

@@ -953,6 +953,65 @@ def test_worker_accepts_defaults() -> None:
     assert resolved_worker_accepts(microvm_settings) == frozenset({"microvm"})
 
 
+def test_worker_outbox_settings_from_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_WORKER_OUTBOX_DIR", "/var/lib/apipi/outbox")
+    monkeypatch.setenv("APIPI_WORKER_OUTBOX_MAX_MESSAGES", "500")
+    monkeypatch.setenv("APIPI_WORKER_OUTBOX_MAX_BYTES", "8388608")
+    monkeypatch.setenv("APIPI_WORKER_INGEST_BATCH_SIZE", "25")
+    monkeypatch.setenv("APIPI_WORKER_INGEST_BATCH_WINDOW", "100ms")
+    settings = load_settings()
+    assert settings.worker_outbox_dir == "/var/lib/apipi/outbox"
+    assert settings.worker_outbox_max_messages == 500
+    assert settings.worker_outbox_max_bytes == 8388608
+    assert settings.worker_ingest_batch_size == 25
+    assert settings.worker_ingest_batch_window == timedelta(milliseconds=100)
+
+
+def test_worker_outbox_settings_from_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    for key in (
+        "APIPI_WORKER_OUTBOX_DIR",
+        "APIPI_WORKER_OUTBOX_MAX_MESSAGES",
+        "APIPI_WORKER_OUTBOX_MAX_BYTES",
+        "APIPI_WORKER_INGEST_BATCH_SIZE",
+        "APIPI_WORKER_INGEST_BATCH_WINDOW",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        "[worker]\n"
+        'outbox_dir = "/var/lib/apipi/outbox"\n'
+        "outbox_max_messages = 500\n"
+        "ingest_batch_size = 25\n"
+        'ingest_batch_window = "100ms"\n'
+    )
+    settings = load_settings()
+    assert settings.worker_outbox_dir == "/var/lib/apipi/outbox"
+    assert settings.worker_outbox_max_messages == 500
+    assert settings.worker_ingest_batch_size == 25
+    assert settings.worker_ingest_batch_window == timedelta(milliseconds=100)
+
+
+def test_worker_outbox_defaults() -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+    )
+    assert settings.worker_outbox_dir is None
+    assert settings.worker_outbox_max_messages == 10_000
+    assert settings.worker_outbox_max_bytes == 64 * 1024 * 1024
+    assert settings.worker_ingest_batch_size == 100
+    assert settings.worker_ingest_batch_window == timedelta(milliseconds=50)
+
+
 def test_worker_accepts_microvm_needs_microvm_run_mode() -> None:
     from apipi.config import ConfigError as CfgError
     from apipi.worker.accepts import require_worker_accepts

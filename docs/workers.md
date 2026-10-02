@@ -115,13 +115,17 @@ The API answers with `hello.reply`:
 | --- | --- |
 | `protocol` | Always `2`. |
 | `worker_id`, `generation` | The worker id and its generation. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
-| `sessions` | `{session_id: last_seq}`: the persisted sequence per running session. The worker replays everything after that seq. Sequence persistence is not part of this step: the API always sends `last_seq: 0` as an explicit placeholder until the ingest and replay step lands. |
+| `sessions` | `{session_id: last_seq}`: the persisted sequence per running session. The worker replays everything after that seq. `last_seq` is the `sessions.worker_seq` cursor that ingest advances with every batch, so a reconnect resumes exactly where the API persisted. |
 
 A first message that is not `register` is rejected with
 `register required`. A bad register is rejected with
 `invalid register`. Rejections are logged on the API and counted in
 `apipi_worker_protocol_total{event}` (`unsupported_protocol`,
-`invalid_register`, `unauthorized`, `revoked`, `token_bound`).
+`invalid_register`, `unauthorized`, `revoked`, `token_bound`). A
+durable envelope that fails ingest validation (not leased to this
+worker, wrong turn, oversize, unknown event) is dropped, logged as
+`worker.event.rejected`, and counted as `envelope_rejected`; the
+cumulative ack still moves past it so the worker does not resend it.
 
 ## Messages
 
@@ -141,8 +145,10 @@ Worker to API:
 The v2 envelope (`{v: 2, session_id, turn_id | null, seq, type,
 payload}`) and its message schemas are defined in
 `src/apipi/worker/protocol.py`, which the API and the worker share.
-Durable ingest, the outbox, replay, and the cumulative ack land in
-later steps; the schemas already describe that target.
+Durable envelopes are batched per connection (about 50ms or
+`APIPI_WORKER_INGEST_BATCH_SIZE` messages), applied in one
+transaction per batch, and acked after commit; the API then publishes
+an `EventBus` wake per stored event so SSE needs no polling.
 
 API to worker:
 
@@ -157,12 +163,27 @@ Message classes:
 
 | Class | Types | Delivery |
 | --- | --- | --- |
-| Durable | `item.added`, `item.done`, `turn.status`, `usage`, `artifact.completed`, `error`, `sandbox.status` | Kept in the worker outbox until the cumulative `ack{last_seq}`. Ingested idempotently. |
+| Durable | `item.added`, `item.done`, `turn.status`, `usage`, `event`, `session.status`, `artifact.completed`, `error`, `sandbox.status` | Kept in the worker outbox until the cumulative `ack{last_seq}`. Ingested idempotently. |
 | Ephemeral | `delta.text`, `delta.reasoning` | At-most-once, never persisted, never acked. The final item is the source of truth. |
 
-The outbox is bounded (10,000 messages). When it is full the worker
-pauses Pi output; if the turn cannot proceed it fails with
-`worker_outbox_full`. Envelopes are capped at 1 MiB.
+`item.added` carries the full item (the API creates the row; the
+runtime reports the added and done public events as `event`
+envelopes). `turn.status` carries the turn row transition (`started`
+creates the row, the rest close it). `usage` carries the turn usage
+record with the in-memory tool and MCP tallies. `event` carries any
+other public event with its data. `session.status` carries the
+session status change. `error` carries a worker-reported error.
+`artifact.completed` and `sandbox.status` are accepted on the wire
+but not applied yet: ingest rejects them (counted, and the worker
+keeps them buffered) until the steps that own them land.
+
+The outbox is bounded (`APIPI_WORKER_OUTBOX_MAX_MESSAGES`, default
+10,000 messages, and `APIPI_WORKER_OUTBOX_MAX_BYTES`, default 64
+MiB). When it is full the worker fails the turn with
+`worker_outbox_full` (a small emergency budget still reports that
+failure itself). Envelopes are capped at 1 MiB. A bounded disk spool
+(`APIPI_WORKER_OUTBOX_DIR`) keeps a write-through copy of buffered
+envelopes so they survive a worker restart.
 
 ## Live deltas
 
@@ -187,8 +208,7 @@ never fanned out.
 Rejections and drops are counted in
 `apipi_worker_protocol_total{event}` (`delta.accepted`,
 `delta.rejected`, `delta.dropped_done`, `delta.rate_limited`,
-`delta.oversize`, `delta.reasoning_dropped`, `envelope.invalid`,
-`envelope.durable_deferred`).
+`delta.oversize`, `delta.reasoning_dropped`, `envelope_rejected`).
 ## Command context
 
 `turn.start`, `turn.continue`, and `sandbox.boot` carry a `context`
@@ -229,9 +249,11 @@ after the lease TTL, and the turn is not moved to another worker.
 
 A reconnect may go to any replica. The worker sends its running
 sessions with their `last_seq` in `register`; the API answers with
-the persisted `last_seq` per session in `hello.reply` (always `0`
-until sequence persistence lands); the worker
-replays everything after that seq. Unacked commands are retransmitted
+the persisted `last_seq` per session in `hello.reply`; the worker
+replays everything after that seq. Duplicates are no-ops: the
+`worker_ingest` ledger claims each `(session_id, worker_seq)` inside
+the batch transaction, so replays apply exactly once. Unacked
+commands are retransmitted
 with the same `command.id`, so the worker must treat that id as
 idempotent and never run a turn twice.
 

@@ -19,6 +19,7 @@ from apipi.services.runtime import (
     request_cancel,
     run_turn,
 )
+from apipi.services.sink import DirectSink, OutboxSink, ResultSink
 from apipi.store.blobs import (
     ArtifactBlobs,
     ObjectStore,
@@ -41,6 +42,8 @@ log = logging.getLogger("apipi.worker")
 
 
 class LocalExecution:
+    _SINK_CACHE_LIMIT = 4096
+
     def __init__(
         self,
         settings: Settings,
@@ -54,6 +57,7 @@ class LocalExecution:
         objects: ObjectStore | None = None,
         metrics: Metrics | None = None,
         tracing: Tracing | None = None,
+        outbox: Any | None = None,
     ) -> None:
         self.settings = settings
         self.pool = pool
@@ -65,6 +69,8 @@ class LocalExecution:
         self.objects = objects
         self.metrics = metrics
         self.tracing = tracing
+        self.outbox = outbox
+        self._sinks: dict[tuple[uuid.UUID, uuid.UUID], ResultSink] = {}
         self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
         self._context_ttl: dict[str, tuple[float | None, float, str | None]] = {}
         if pool.on_kill is None:
@@ -103,6 +109,31 @@ class LocalExecution:
     def _forget_context(self, session_id: str) -> None:
         self._context_ttl.pop(session_id, None)
 
+    def sink_for(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> ResultSink:
+        """Per-session result sink; outbox-backed on a split worker."""
+        key = (tenant_id, session_id)
+        sink = self._sinks.get(key)
+        if sink is None:
+            if self.outbox is not None:
+                sink = OutboxSink(
+                    self.outbox,
+                    tenant_id,
+                    session_id,
+                    settings=self.settings,
+                    metrics=self.metrics,
+                    tracing=self.tracing,
+                )
+            else:
+                sink = DirectSink()
+            if len(self._sinks) >= self._SINK_CACHE_LIMIT:
+                self._sinks.pop(next(iter(self._sinks)))
+            self._sinks[key] = sink
+        return sink
+
+    def drop_sink(self, session_id: uuid.UUID) -> None:
+        for key in [key for key in self._sinks if key[1] == session_id]:
+            del self._sinks[key]
+
     def attach_store(self, store: Store) -> None:
         self.store = store
 
@@ -137,6 +168,7 @@ class LocalExecution:
         user_id: str | None = None,
         org_id: str | None = None,
         turn_context: dict[str, Any] | None = None,
+        sink: ResultSink | None = None,
     ) -> None:
         store = self.store
         assert store is not None
@@ -165,6 +197,7 @@ class LocalExecution:
                 objects=self.objects,
                 blobs=self.blobs,
                 turn_context=turn_context,
+                sink=sink if sink is not None else self.sink_for(tenant_id, session_id),
             )
         finally:
             self.refresh_context_seen(session_id)
@@ -186,6 +219,7 @@ class LocalExecution:
         user_id: str | None = None,
         org_id: str | None = None,
         turn_context: dict[str, Any] | None = None,
+        sink: ResultSink | None = None,
     ) -> None:
         store = self.store
         assert store is not None
@@ -215,6 +249,7 @@ class LocalExecution:
                 org_id=org_id,
                 blobs=self.blobs,
                 turn_context=turn_context,
+                sink=sink if sink is not None else self.sink_for(tenant_id, session_id),
             )
         finally:
             self.refresh_context_seen(session_id)
@@ -230,10 +265,18 @@ class LocalExecution:
     ) -> None:
         store = self.store
         assert store is not None
-        await prepare_for_new_turn(store, self.hub, self.harness, tenant_id, session_id)
+        await prepare_for_new_turn(
+            store,
+            self.hub,
+            self.harness,
+            tenant_id,
+            session_id,
+            sink=self.sink_for(tenant_id, session_id),
+        )
 
     async def teardown(self, session_id: uuid.UUID) -> None:
         self._forget_context(str(session_id))
+        self.drop_sink(session_id)
         await self.pool.kill(session_id)
 
     async def reap_loop(self) -> None:
@@ -405,6 +448,7 @@ class LocalExecution:
         from apipi.services.runtime import fail_environment, load_boot_kwargs
         from apipi.store.blobs import ObjectStoreError
 
+        sink = self.sink_for(tenant_id, session_id)
         try:
             try:
                 kwargs = await load_boot_kwargs(
@@ -420,7 +464,13 @@ class LocalExecution:
                 message = exc.message
                 async with store.session() as db:
                     await fail_environment(
-                        db, self.hub, tenant_id, session_id, message, code=code
+                        db,
+                        self.hub,
+                        tenant_id,
+                        session_id,
+                        message,
+                        code=code,
+                        sink=sink,
                     )
                 return
             except ObjectStoreError:
@@ -432,6 +482,7 @@ class LocalExecution:
                         session_id,
                         "Cannot read artifacts",
                         code="artifact_store",
+                        sink=sink,
                     )
                 return
             if kwargs is None:
@@ -441,7 +492,13 @@ class LocalExecution:
             except CapacityError as exc:
                 async with store.session() as db:
                     await fail_environment(
-                        db, self.hub, tenant_id, session_id, str(exc), code=exc.code
+                        db,
+                        self.hub,
+                        tenant_id,
+                        session_id,
+                        str(exc),
+                        code=exc.code,
+                        sink=sink,
                     )
             except Exception:
                 log.exception(
@@ -455,6 +512,7 @@ class LocalExecution:
                         session_id,
                         "Computer failed to start",
                         code="internal",
+                        sink=sink,
                     )
         finally:
             self.refresh_context_seen(session_id)
@@ -498,6 +556,7 @@ def local_execution(
     hub: EventBus | None = None,
     metrics: Metrics | None = None,
     tracing: Tracing | None = None,
+    outbox: Any | None = None,
 ) -> LocalExecution:
     pool = PiPool(settings, tracing=tracing, metrics=metrics)
     from apipi.services.lifecycle_export import attach_lifecycle
@@ -518,6 +577,7 @@ def local_execution(
         objects=object_store(settings),
         metrics=metrics,
         tracing=tracing,
+        outbox=outbox,
     )
 
 
