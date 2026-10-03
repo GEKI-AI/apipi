@@ -58,6 +58,24 @@ JSON object with `timestamp`, `level`, `logger`, `message`, and
 alert on also set `event` and `error_code`, plus `request_id`,
 `tenant_id`, `session_id`, `turn_id`, and `worker_id` when known.
 
+Every line a worker connection writes also carries `worker_id` and
+`connection_id`. The API creates the `connection_id` when it accepts a
+`register` and sends it to the worker in `hello.reply`, so you can join
+the API and worker lines of one socket with it. Lines also carry
+`lease_id`, `command_id`, `op`, and `request_id` where they apply, and
+commands carry `traceparent`.
+
+Normal traffic stays quiet. Info lines record one state change each:
+connect, hello, disconnect, reconnect, drain, and lease changes.
+Per-message lines are written only with `APIPI_LOG_LEVEL=debug`
+(`event=worker.message`). Warnings that can repeat, such as a late
+heartbeat or a rejected envelope, are written for the first
+occurrence and then at most once per minute per event and per
+connection (or per process for process-wide events). The later lines
+carry `count`, the number of occurrences since the last line. Logs never
+carry the command context, model or MCP keys, vault headers, presigned
+URLs, search queries, or event payloads.
+
 A typical shipper reads stderr and writes Loki, CloudWatch, or
 another store. Example shape (Vector):
 
@@ -90,8 +108,8 @@ No bearer. Network-restrict `/metrics` like any scrape endpoint.
 
 | Process | Scrape | What you get |
 | --- | --- | --- |
-| API (`apipi serve`) | `http://<api>:8000/metrics` | HTTP requests, errors, `apipi_workers` and `apipi_worker_leases` (labeled `run_mode`), `apipi_worker_assign_seconds`, worker lease health and ingest series (see [Worker leases and ingest](#worker-leases-and-ingest)) |
-| Worker | `http://<worker>:9091/metrics` | Turns, tokens, utilization, sandbox boot/destroy, host Pi RSS/PSS, cgroup guest RAM/CPU, optional vsock samples, `apipi_worker_heartbeat_gap_seconds` |
+| API (`apipi serve`) | `http://<api>:8000/metrics` | HTTP requests, errors, `apipi_workers` and `apipi_worker_leases` (labeled `run_mode`), `apipi_worker_assign_seconds`, worker lease health and ingest series, socket, command, presign, and search series (see [Worker leases and ingest](#worker-leases-and-ingest) and [Worker socket metrics](#worker-socket-metrics)) |
+| Worker | `http://<worker>:9091/metrics` | Turns, tokens, utilization, sandbox boot/destroy, host Pi RSS/PSS, cgroup guest RAM/CPU, optional vsock samples, `apipi_worker_heartbeat_gap_seconds`, connection, outbox, and command series (see [Worker metrics](#worker-metrics)) |
 
 Worker metric sets (same scrape, metrics on):
 
@@ -128,8 +146,8 @@ whether that works:
 | Series | Where | What it tells you |
 | --- | --- | --- |
 | `apipi_worker_heartbeat_gap_seconds` | API and worker | Histogram of the time between two heartbeats. On the API it is measured on receipt, so it includes the network. On the worker it is measured on the sending timer, so a high value there means the worker process was stalled. The gap should sit near the heartbeat interval. A gap above half the lease TTL also logs `worker.heartbeat.late`. |
-| `apipi_worker_lease_events_total{event}` | API | `renewed` counts renewal passes (a heartbeat, an activity renewal, or a reconnect), not leases. `released` counts leases cleared by a release or a session stop. `expired` counts leases the reaper cleared. |
-| `apipi_worker_ingest_total{type,result}` | API | Durable envelopes by type. `result` is `ok`, `duplicate`, or `rejected`. Duplicates are normal after a reconnect replay and when the worker resends envelopes whose ack is still in flight. A steady stream of duplicates with no reconnect means a worker is sending sequence numbers the API already holds. |
+| `apipi_worker_lease_events_total{event}` | API | `granted` counts leases handed to a worker with a command. `renewed` counts renewal passes (a heartbeat, an activity renewal, or a reconnect), not leases. `released` counts leases cleared by a release or a session stop. `expired` counts leases the reaper cleared. `orphaned` counts leases the worker did not report in an inventory. `revoked` counts leases the API told a worker to drop (the reaper, or an inventory or `hello` the lease does not match). `taken_over` counts leases that moved from an older socket of the same worker to a new one. |
+| `apipi_worker_ingest_total{type,result}` | API | Durable envelopes by type. `result` is `applied`, `duplicate`, `rejected`, or `transient_error`. `transient_error` is an envelope the API could not store because of a temporary database error and did not ack, so the worker resends it. It stays at zero until ingest retries those errors instead of dropping the socket. Duplicates are normal after a reconnect replay and when the worker resends envelopes whose ack is still in flight. A steady stream of duplicates with no reconnect means a worker is sending sequence numbers the API already holds. |
 | `apipi_worker_ingest_rejected_total{reason}` | API | Rejected envelopes by reason. `not_leased` means the worker sent results for a session it no longer holds, so those results were dropped. |
 
 Every lease expiry logs `worker.lease.expired` with
@@ -137,9 +155,68 @@ Every lease expiry logs `worker.lease.expired` with
 `last_heartbeat_age_seconds`. Compare them with the lease TTL to tell a
 dead worker from a stalled one.
 
+`apipi_worker_protocol_total{event}` stays. It is now only the counter
+of delta and rejected-envelope outcomes (`delta.accepted`,
+`delta.rejected`, `delta.dropped_done`, `delta.rate_limited`,
+`delta.oversize`, `delta.invalid`, `delta.reasoning_dropped`, and
+`envelope_rejected`). The register outcomes moved to
+`apipi_worker_connects_total{result}` and the message counts to
+`apipi_worker_messages_total`.
+
 Prometheus labels stay low-cardinality. `tenant` is allowed. Do not
 put `session_id` or `user_id` on series. Scrape node_exporter on the
 worker host if you need machine disk and NIC.
+
+## Worker socket metrics
+
+These series are exposed by the API (`apipi serve`). Each replica counts
+its own sockets, so sum over replicas. A series that this page says stays
+at zero is defined, and it is filled by a later change to that path.
+
+| Series | Type and labels | What it tells you |
+| --- | --- | --- |
+| `apipi_worker_connections` | gauge, `run_mode` | Open worker sockets on this replica. It matches `apipi_workers`. |
+| `apipi_worker_connects_total` | counter, `result` | Register outcomes. `ok`, or the reject reason: `unauthorized`, `revoked`, `invalid_register`, `unsupported_protocol`, `token_bound`, `register_timeout`, `closed`. |
+| `apipi_worker_disconnects_total` | counter, `reason` | Why a socket closed: `clean`, `error`, `takeover` (the same worker connected again), `revoked`, `protocol_violation`. `ping_timeout` and `write_timeout` are defined for the writer and keepalive work and stay at zero until then. |
+| `apipi_worker_messages_total`, `apipi_worker_message_bytes` | counter and histogram, `direction` (`in` or `out`), `type` | Messages and frame sizes by the fixed message or envelope type. Anything else is `unknown`. |
+| `apipi_worker_handle_seconds` | histogram, `type` | Time from receiving one message to the start of the next receive. One slow `type` that stalls the others is head-of-line blocking. A handler over 1 second also logs `worker.handler.slow`. |
+| `apipi_worker_ingest_batch_seconds`, `apipi_worker_ingest_batch_size` | histograms | Batch commit time and the number of envelopes per batch. |
+| `apipi_worker_commands_total` | counter, `op`, `result` | Command delivery: `sent`, `acked`, `retransmitted` (resent after a reconnect), `timeout` (no `lease.ack` within the wait), `failed` (the send raised). |
+| `apipi_worker_command_ack_seconds` | histogram, `op` | Time from sending a command to its `lease.ack`. |
+| `apipi_worker_commands_unacked` | gauge | Commands waiting for `lease.ack`. |
+| `apipi_worker_send_queue_depth` | gauge | Frames waiting in the per-connection writers. Defined for the writer task and zero until it exists. |
+| `apipi_worker_presign_total`, `apipi_worker_presign_seconds` | counter and histogram, `kind` (`artifact`, `pi_session`, `input_image`), `result` | Artifact presign outcomes (`ok`, `unchanged`, a quota code, or `store_error`) and handling time. |
+| `apipi_search_requests_total`, `apipi_search_seconds`, `apipi_search_inflight` | counter, histogram, gauge, `provider`, `result` | `web_search` outcomes (`ok`, the provider error code, or `search_denied`), provider call latency, and running calls. |
+| `apipi_event_bus_notify_errors_total` | counter | Failed `NOTIFY` publishes. The fallback poll covers the gap, but SSE clients on other replicas are slower. |
+| `apipi_background_loop_errors_total`, `apipi_background_loop_last_run_timestamp` | counter and gauge, `loop` | Errors a background loop caught and the Unix time of its last finished round. API loops: `lease_reaper`, `delta_flusher`, `usage_purge`, plus the tasks `lifecycle_heartbeat` and `lifecycle_sender`. |
+| `apipi_event_loop_lag_seconds` | histogram | How late the event loop wakes a one second sleep. High values mean something blocks the loop. |
+| `apipi_worker_info` | gauge, `worker_id`, `protocol`, `version`, `run_mode` | Always 1, one series per connected worker. Use it for fleet version views. This is the only series with `worker_id`. |
+
+## Worker metrics
+
+These series are exposed by the worker (`apipi worker`) on its
+`/metrics` port.
+
+| Series | Type and labels | What it tells you |
+| --- | --- | --- |
+| `apipi_worker_connected` | gauge | 1 while the socket is up and `hello` was received. |
+| `apipi_worker_reconnects_total` | counter, `reason` | Reconnect attempts: `closed`, `connect_error`, `error`. |
+| `apipi_worker_connect_seconds` | histogram | Dial plus handshake time. |
+| `apipi_worker_outbox_messages`, `apipi_worker_outbox_bytes` | gauges | Unacked envelopes and their size, sampled every second. |
+| `apipi_worker_outbox_oldest_seconds` | gauge | Age of the oldest unacked envelope. This is the main alert for a stuck API or socket. |
+| `apipi_worker_outbox_full_total` | counter | Turns failed with `worker_outbox_full`. |
+| `apipi_worker_ack_seconds` | histogram | Time from outbox append to the cumulative ack. |
+| `apipi_worker_replayed_total` | counter | Envelopes resent after a reconnect. |
+| `apipi_worker_spool_write_seconds`, `apipi_worker_spool_bytes` | histogram, gauge | Disk spool write cost and size, only with `APIPI_WORKER_OUTBOX_DIR`. |
+| `apipi_worker_commands_received_total` | counter, `op`, `result` | Command handling: `dispatched`, `duplicate` (a retransmit that was only acked), `rejected` (invalid or without a tenant), `failed`. |
+| `apipi_worker_command_seconds` | histogram, `op` | Dispatch time. For `turn.start` and `turn.continue` it includes the turn run. |
+| `apipi_worker_waiter_total` | counter, `kind` (`presign`, `search`), `result` (`ok`, `timeout`, `disconnected`) | Waits for a reply from the API. |
+| `apipi_worker_deltas_dropped_total` | counter, `reason` | Live deltas the worker did not send. Today every drop is `disconnected`. |
+| `apipi_worker_draining` | gauge | 1 while the worker drains. |
+| `apipi_background_loop_errors_total`, `apipi_background_loop_last_run_timestamp`, `apipi_event_loop_lag_seconds` | as on the API | Worker loops: `worker_observe`, `session_reaper`, `workspace_reaper`, `sandbox_seen`, `outbox_metrics`. |
+
+`apipi_worker_heartbeat_gap_seconds` is exposed by both processes, as
+described above.
 
 ## Traces
 
@@ -199,12 +276,23 @@ bill. See [usage](usage.md#session-lifecycle-export).
 | `event=worker.lease.expired`, `apipi_worker_lease_events_total{event="expired"}` | Worker died or heartbeat failed |
 | `event=worker.heartbeat.late`, or `apipi_worker_heartbeat_gap_seconds` p99 above half the lease TTL | A lease will expire soon: stalled worker or a bad network |
 | `apipi_worker_ingest_rejected_total{reason="not_leased"}` | Worker results were dropped after a lease ended |
+| `apipi_worker_outbox_oldest_seconds` above the lease TTL | A worker cannot get its results acked: API down, socket stuck, or ingest failing |
+| Rate of `apipi_worker_lease_events_total{event="expired"}` | Leases die on a live fleet |
+| Rate of `apipi_worker_disconnects_total` (not `clean`) and of `apipi_worker_reconnects_total` | Flapping sockets |
+| `apipi_worker_heartbeat_gap_seconds` p99 | Alert when it nears half the lease TTL |
+| `apipi_worker_handle_seconds` p99 by `type` | Head-of-line blocking in the receive loop |
+| `apipi_event_loop_lag_seconds` p99 | A blocked event loop on the API or a worker |
+| `time() - apipi_background_loop_last_run_timestamp` for `lease_reaper` and `delta_flusher` | A dead or hung background loop. Also alert on `apipi_background_loop_errors_total`. |
+| Rate of `apipi_worker_commands_total{result="timeout"}` and `result="retransmitted"` | Workers that do not ack commands |
+| `apipi_worker_ingest_total{result="transient_error"}` | The API cannot store worker results |
+| `apipi_search_requests_total{result!="ok"}` | Search provider errors or denials |
+| `apipi_event_bus_notify_errors_total` | `NOTIFY` failures |
 
 ## Cardinality
 
 | Signal | Identity |
 | --- | --- |
-| Prometheus | `tenant` ok. Not `user_id` or `session_id`. Guest series use `size` (`S` / `M` / `L`). Worker ingest series use the envelope `type` and a short `reason`, never a worker or session id. |
-| Logs and traces | `request_id`, `tenant_id`, `session_id`, `turn_id`, `worker_id` when known |
+| Prometheus | `tenant` ok. Not `user_id`, `session_id`, `lease_id`, or `request_id`. Guest series use `size` (`S` / `M` / `L`). Worker series use the fixed message `type`, `op`, `reason`, or `result`. `worker_id` is only a label of `apipi_worker_info`. |
+| Logs and traces | `request_id`, `tenant_id`, `session_id`, `turn_id`, `worker_id`, `connection_id`, `lease_id`, `command_id` when known |
 | Usage export | `tenant_id`, `user_id`, `key_id`, `agent_id`, `session_id`, `turn_id`, `request_id` |
 | Lifecycle export | Same identity as usage, plus image id, version, and digest. Not a Prometheus label. |

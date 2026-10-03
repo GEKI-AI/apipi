@@ -81,7 +81,7 @@ async def test_scrape_after_turn_has_series_without_prompt(
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none"},
-            "input": "hello",
+            "input": "private-prompt-text",
         },
     )
     assert created.status_code == 200
@@ -91,13 +91,13 @@ async def test_scrape_after_turn_has_series_without_prompt(
     scrape = await client.get("/metrics")
     assert scrape.status_code == 200
     body = scrape.text
-    assert "hello" not in body
+    assert "private-prompt-text" not in body
     assert "secret-prompt" not in body
     assert session_id not in body
     assert token not in body
     # Turn and token series are recorded where the turn runs.
     worker_body = worker_metrics.scrape().decode()
-    assert "hello" not in worker_body
+    assert "private-prompt-text" not in worker_body
     assert "secret-prompt" not in worker_body
     assert metric_line(
         worker_body, "apipi_turns_total", tenant=tenant, status="completed"

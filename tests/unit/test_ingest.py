@@ -689,7 +689,7 @@ async def test_ingest_counts_ok_duplicate_and_rejected(
     )
     body = metrics.scrape().decode()
     assert metric_line(
-        body, "apipi_worker_ingest_total", type="turn.status", result="ok"
+        body, "apipi_worker_ingest_total", type="turn.status", result="applied"
     ).endswith(" 2.0")
     assert metric_line(
         body, "apipi_worker_ingest_total", type="turn.status", result="duplicate"

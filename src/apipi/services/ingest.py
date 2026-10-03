@@ -617,6 +617,7 @@ async def _apply(
         size = raw_size
         sha256 = payload.get("sha256")
         replies = presign_replies if presign_replies is not None else []
+        presign_started = time.monotonic()
         try:
             blobs = _blobs_for(settings, objects)
             used = await blobs.used_bytes(tenant_id, row.key_id, session_id)
@@ -637,6 +638,12 @@ async def _apply(
             )
         except Exception as exc:
             code, message = _artifact_error(exc)
+            _count_presign(
+                metrics,
+                kind,
+                "store_error" if code in {"artifact_store", "ingest_error"} else code,
+                presign_started,
+            )
             replies.append(
                 ArtifactPresignReply(
                     session_id=session_id,
@@ -647,6 +654,12 @@ async def _apply(
                 ).to_wire()
             )
             raise _Reject(code) from exc
+        _count_presign(
+            metrics,
+            kind,
+            "unchanged" if issued.get("unchanged") is True else "ok",
+            presign_started,
+        )
         if issued.get("unchanged") is True:
             replies.append(
                 ArtifactPresignReply(
@@ -828,7 +841,7 @@ async def flush_batch(
             wakes_before = len(outcome.wakes)
             try:
                 if row is not None and envelope.type in LEASE_FREE_TYPES:
-                    _count_ingest(metrics, envelope.type, "ok")
+                    _count_ingest(metrics, envelope.type, "applied")
                     outcome.acks[session_id] = max(
                         outcome.acks.get(session_id, 0), envelope.seq
                     )
@@ -878,7 +891,7 @@ async def flush_batch(
                         )
                         if envelope.type == "session.stopped":
                             outcome.wipes.append((row.tenant_id, row.key_id, row.id))
-                    _count_ingest(metrics, envelope.type, "ok")
+                    _count_ingest(metrics, envelope.type, "applied")
                 except _Duplicate:
                     duplicates.setdefault(session_id, []).append(envelope.seq)
                     _count_ingest(metrics, envelope.type, "duplicate")
@@ -936,6 +949,11 @@ async def flush_batch(
             last_seq=max(seqs),
         )
     return outcome
+
+
+def _count_presign(metrics: Any, kind: str, result: str, started: float) -> None:
+    if metrics is not None:
+        metrics.observe_worker_presign(kind, result, time.monotonic() - started)
 
 
 def _count_ingest(metrics: Any, type: str, result: str) -> None:

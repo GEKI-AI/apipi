@@ -292,6 +292,8 @@ async def fail_outbox_full(
 ) -> None:
     """Fail a turn whose outbox is full, spending the emergency budget."""
 
+    if metrics is not None:
+        metrics.observe_worker_outbox_full()
     abort = hub.turn_abort(session_id)
     if abort is not None:
         abort.set()

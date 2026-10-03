@@ -20,6 +20,7 @@ from apipi.api.uploads import router as uploads_router
 from apipi.api.usage import router as usage_router
 from apipi.api.vaults import router as vaults_router
 from apipi.api.workers import router as workers_router
+from apipi.common.background import spawn_loop, start_event_loop_lag, watch_task
 from apipi.common.event_bus import EventBus
 from apipi.common.metrics import Metrics
 from apipi.common.otel import Tracing
@@ -63,14 +64,12 @@ from apipi.workerhub.hub import WorkerHub
 log = logging.getLogger("apipi")
 
 
-async def _purge_usage_loop(settings: Settings, store: Store) -> None:
-    while True:
-        await asyncio.sleep(3600)
-        if settings.usage_retention is None:
-            continue
-        cutoff = utc_now() - settings.usage_retention
-        async with store.session() as db:
-            await purge_turn_logs(db, cutoff)
+async def _purge_usage_once(settings: Settings, store: Store) -> None:
+    if settings.usage_retention is None:
+        return
+    cutoff = utc_now() - settings.usage_retention
+    async with store.session() as db:
+        await purge_turn_logs(db, cutoff)
 
 
 @dataclass(frozen=True)
@@ -123,7 +122,9 @@ class Gateway:
         self.skill_store = SkillService(store, objects, settings)
         self.uploads = UploadService(store, objects, settings)
         self.search_resolver = SearchResolver(settings)
-        self.search = SearchService(store, settings, self.search_resolver)
+        self.search = SearchService(
+            store, settings, self.search_resolver, metrics=metrics
+        )
         self.sessions = SessionService(
             settings=settings,
             store=store,
@@ -324,17 +325,29 @@ class Gateway:
         if emitter is not None:
             emitter.start()
         self._tasks = [
-            asyncio.create_task(_purge_usage_loop(self.settings, self.store)),
-            asyncio.create_task(self._expire_worker_leases()),
+            start_event_loop_lag(self.metrics),
+            spawn_loop(
+                "usage_purge",
+                lambda: _purge_usage_once(self.settings, self.store),
+                interval=3600,
+                metrics=self.metrics,
+            ),
+            spawn_loop(
+                "lease_reaper",
+                self._expire_worker_leases,
+                interval=1,
+                metrics=self.metrics,
+            ),
         ]
         if emitter is not None:
             from apipi.services.lifecycle_export import api_heartbeat_loop
 
-            self._tasks.append(
-                asyncio.create_task(
-                    api_heartbeat_loop(self.settings, emitter, self.workers, self.store)
-                )
+            heartbeat = asyncio.create_task(
+                api_heartbeat_loop(self.settings, emitter, self.workers, self.store),
+                name="lifecycle_heartbeat",
             )
+            watch_task(heartbeat, "lifecycle_heartbeat", metrics=self.metrics)
+            self._tasks.append(heartbeat)
 
     async def shutdown(self) -> None:
         for task in self._tasks:
@@ -352,9 +365,7 @@ class Gateway:
             await self.store.dispose()
 
     async def _expire_worker_leases(self) -> None:
-        while True:
-            await asyncio.sleep(1)
-            await self.workers.expire(self.store, self.event_hub)
+        await self.workers.expire(self.store, self.event_hub)
 
 
 def create_app(

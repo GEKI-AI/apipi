@@ -47,7 +47,9 @@ class DeltaRelay:
         *,
         window: float = DELTA_WINDOW,
         max_text: int = DELTA_MAX_TEXT,
+        metrics: Any | None = None,
     ) -> None:
+        self.metrics = metrics
         self._send = send
         self._window = window
         self._max_text = max_text
@@ -97,6 +99,7 @@ class DeltaRelay:
         except asyncio.CancelledError:
             raise
         except Exception:
+            self._note_dropped("disconnected")
             log.debug("delta relay flush failed; dropping batch")
 
     async def flush(self) -> None:
@@ -111,6 +114,11 @@ class DeltaRelay:
             for chunk in _split(joined, self._max_text):
                 await self._emit(session_id, turn_id, chunk, kind=kind)
 
+    def _note_dropped(self, reason: str) -> None:
+        self.dropped += 1
+        if self.metrics is not None:
+            self.metrics.observe_worker_delta_dropped(reason)
+
     async def _emit(
         self,
         session_id: uuid.UUID,
@@ -122,7 +130,7 @@ class DeltaRelay:
         send = self._send
         if send is None:
             log.debug("delta relay has no sender; dropping fragment")
-            self.dropped += 1
+            self._note_dropped("disconnected")
             return
         last = self._seq.get(session_id, 0) + 1
         self._seq[session_id] = last
@@ -139,7 +147,7 @@ class DeltaRelay:
             # At-most-once: a dead socket drops the batch. Never let
             # a send error escape into the turn via the flush task.
             log.debug("delta relay send failed; dropping fragment")
-            self.dropped += 1
+            self._note_dropped("disconnected")
 
 
 def _split(text: str, limit: int) -> list[str]:

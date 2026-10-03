@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import uuid
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from apipi.common.dirs import store_root
+from apipi.common.logutil import RateLimitedLog
 from apipi.common.objects import NS_ARTIFACTS, NS_FILES, local_object_path
 from apipi.common.store_check import SHARED_STORE_ERROR
 from apipi.config import ConfigError, Settings
@@ -27,6 +29,8 @@ from apipi.protocol import (
     ArtifactPresignPayload,
     ArtifactPresignReply,
 )
+
+_warnings = RateLimitedLog(logging.getLogger("apipi.worker"))
 
 
 def sha256_hex(data: bytes) -> str:
@@ -186,10 +190,24 @@ async def upload_via_presign(
             presign_payload,
             turn_id=turn_id,
         )
+        metrics = getattr(outbox, "metrics", None)
         try:
             reply_message = await asyncio.wait_for(asyncio.shield(future), timeout)
         except (TimeoutError, asyncio.CancelledError) as exc:
+            if isinstance(exc, TimeoutError):
+                if metrics is not None:
+                    metrics.observe_worker_waiter("presign", "timeout")
+                _warnings.warning(
+                    "presign reply timed out",
+                    event="worker.waiter.timeout",
+                    error_code="waiter_timeout",
+                    kind="presign",
+                    session_id=session_id,
+                    timeout_seconds=timeout,
+                )
             raise ConfigError("artifact upload timed out") from exc
+        if metrics is not None:
+            metrics.observe_worker_waiter("presign", "ok")
         reply = ArtifactPresignReply.model_validate(reply_message)
         if not reply.ok:
             code = reply.code or "artifact_store"

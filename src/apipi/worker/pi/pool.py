@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
+from apipi.common.background import run_loop
 from apipi.common.logutil import log_event
 from apipi.common.metrics import Metrics
 from apipi.common.otel import Tracing, start_span
@@ -726,9 +727,12 @@ class PiPool:
         ]
         base = min(seconds) if seconds else 15.0
         interval = min(1.0, max(0.02, base / 5))
-        while True:
-            await asyncio.sleep(interval)
-            await self.reap()
+        await run_loop(
+            "session_reaper",
+            self.reap,
+            interval=interval,
+            metrics=self.metrics,
+        )
 
     async def enforce_memory(self) -> None:
         limit = self.settings.pi_mem_mib

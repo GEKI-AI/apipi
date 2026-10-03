@@ -126,6 +126,7 @@ The first worker message must be `register` with `protocol: 2`:
 | `capabilities` | Free-form object, reserved for later steps. |
 | `accepts` | List of session kinds from `none`, `microvm`. What this worker runs. See [Placement](#placement). |
 | `running` | Sessions this worker still holds: `[{session_id, lease_id, last_seq}]`. `last_seq` continues from the API's value on reconnect. |
+| `version` | Optional. The ApiPi version of the worker. The API shows it in the `version` label of `apipi_worker_info`. |
 | `capacity`, `memory_mb`, `run_mode`, `arch`, `images` | Placement advertisement, as before. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB (default `capacity ×` guest `mem_mib`). `run_mode` is the process backend (`none`, `microvm`, or a custom class). `arch` is the worker machine. `images` lists `{id, version, digest, min_size}` for guest images on this host. A v2 worker that accepts `microvm` and omits `images` is treated as having `default` and `browser`, except on aarch64, which is treated as having `default` only. |
 
 The API answers with `hello.reply`:
@@ -134,6 +135,7 @@ The API answers with `hello.reply`:
 | --- | --- |
 | `protocol` | Always `2`. |
 | `worker_id`, `generation` | The worker id and its generation. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
+| `connection_id` | A short id the API gives to this socket. Both processes write it on every log line of the connection, so you can follow one socket across the API and worker logs. A worker that does not see it still runs. |
 | `lease_ttl_seconds` | The lease TTL the API enforces (`APIPI_WORKER_LEASE_TTL` on the API). The worker uses it to judge its own heartbeat gaps and ignores any local setting. |
 | `heartbeat_seconds` | How often the worker must send `heartbeat`: a third of the lease TTL, at most 10 seconds. The worker sends it on its own timer. A `hello` without a positive value for this field or for `lease_ttl_seconds` makes the worker stop with an error. |
 | `sessions` | `{session_id: last_seq}`: the persisted sequence per running session. The worker replays everything after that seq. `last_seq` is the `sessions.worker_seq` cursor that ingest advances with every batch, so a reconnect resumes exactly where the API persisted. |
@@ -144,7 +146,7 @@ The API answers with `hello.reply`:
 A first message that is not `register` is rejected with
 `register required`. A bad register is rejected with
 `invalid register`. Rejections are logged on the API and counted in
-`apipi_worker_protocol_total{event}` (`unsupported_protocol`,
+`apipi_worker_connects_total{result}` (`unsupported_protocol`,
 `invalid_register`, `unauthorized`, `revoked`, `token_bound`). A
 durable envelope that fails ingest validation (not leased to this
 worker, wrong turn, oversize, unknown event) is dropped, logged as
@@ -240,6 +242,17 @@ MiB). When it is full the worker fails the turn with
 failure itself). Envelopes are capped at 1 MiB. A bounded disk spool
 (`APIPI_WORKER_OUTBOX_DIR`) keeps a write-through copy of buffered
 envelopes so they survive a worker restart.
+
+## Monitoring
+
+Every worker connection has metrics on both sides and log lines that
+carry `worker_id` and `connection_id`. The series, the log events, and
+the suggested alerts are in [observability](observability.md#worker-socket-metrics)
+and in the event table of [usage](usage.md#logs). The most useful
+signals are `apipi_worker_outbox_oldest_seconds` on the worker,
+`apipi_worker_heartbeat_gap_seconds` and `apipi_worker_handle_seconds`
+on the API, and the `worker.disconnected` line, whose `reason` tells you
+why a socket closed.
 
 ## Code layout
 

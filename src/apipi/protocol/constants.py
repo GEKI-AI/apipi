@@ -71,3 +71,18 @@ MAX_COMMAND_BYTES = 256_000
 DELTA_RATE_LIMIT = 100
 DELTA_MAX_TEXT = 32_768
 SEEN_INTERVAL = timedelta(seconds=5)
+
+KNOWN_WIRE_TYPES = WORKER_IN | WORKER_OUT | WORKER_MESSAGE_TYPES
+
+
+def wire_type(message: object) -> str:
+    """The `type` of one socket message for a metric label, or `unknown`.
+
+    Only the fixed message and envelope types are returned, so a peer
+    cannot grow the label set.
+    """
+    if isinstance(message, dict):
+        kind = message.get("type")
+        if isinstance(kind, str) and kind in KNOWN_WIRE_TYPES:
+            return kind
+    return "unknown"

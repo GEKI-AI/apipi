@@ -9,8 +9,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from apipi.common.background import run_loop
 from apipi.common.errors import ApiError
 from apipi.common.event_bus import EventBus, InMemoryEventBus, request_cancel
+from apipi.common.logutil import RateLimitedLog
 from apipi.common.metrics import Metrics
 from apipi.common.otel import Tracing
 from apipi.config import Settings
@@ -87,6 +89,7 @@ class LocalExecution:
         self.search_waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
         self.search_sender: SearchSender | None = None
         self.search_timeout = SEARCH_TIMEOUT
+        self._warnings = RateLimitedLog(log)
         self._sinks: dict[tuple[uuid.UUID, uuid.UUID], ResultSink] = {}
         self.note_stopped: Callable[[uuid.UUID], Awaitable[None]] | None = None
         self.seen_hook: Callable[[list[uuid.UUID]], Awaitable[None]] | None = None
@@ -189,11 +192,29 @@ class LocalExecution:
                     "search_unavailable", "Web search is not available right now"
                 ) from exc
             try:
-                return await asyncio.wait_for(future, timeout=self.search_timeout)
+                reply = await asyncio.wait_for(future, timeout=self.search_timeout)
             except TimeoutError as exc:
+                self._note_waiter("search", "timeout", session_id=session_id)
                 raise SearchHookError("search_timeout", "Web search timed out") from exc
+            except SearchHookError:
+                self._note_waiter("search", "disconnected", session_id=session_id)
+                raise
+            self._note_waiter("search", "ok", session_id=session_id)
+            return reply
         finally:
             self.search_waiters.pop(request_id, None)
+
+    def _note_waiter(self, kind: str, result: str, *, session_id: str) -> None:
+        if self.metrics is not None:
+            self.metrics.observe_worker_waiter(kind, result)
+        if result == "timeout":
+            self._warnings.warning(
+                "worker request timed out",
+                event="worker.waiter.timeout",
+                error_code="waiter_timeout",
+                kind=kind,
+                session_id=session_id,
+            )
 
     def handle_search_reply(self, message: dict[str, Any]) -> None:
         try:
@@ -375,14 +396,16 @@ class LocalExecution:
             self.pool,
             ttl_overrides=self._context_ttl,
             on_wiped=on_wiped,
+            metrics=self.metrics,
         )
 
     async def observe_loop(self) -> None:
-        interval = 5.0
         sample = self.settings.guest_sample_interval
         sample_every = sample.total_seconds() if sample is not None else None
         last_sample = 0.0
-        while True:
+
+        async def observe_round() -> None:
+            nonlocal last_sample
             await self.pool.sweep_dead()
             await self.pool.enforce_memory()
             if self.metrics is not None:
@@ -393,7 +416,14 @@ class LocalExecution:
                 if sample_every is not None and now - last_sample >= sample_every:
                     await self._observe_guest_samples()
                     last_sample = now
-            await asyncio.sleep(interval)
+
+        await run_loop(
+            "worker_observe",
+            observe_round,
+            interval=5.0,
+            metrics=self.metrics,
+            immediate=True,
+        )
 
     def _observe_cgroup(self) -> None:
         metrics = self.metrics
@@ -490,15 +520,21 @@ class LocalExecution:
     async def sandbox_seen_loop(self) -> None:
         from apipi.protocol import SEEN_INTERVAL
 
-        while True:
-            await asyncio.sleep(SEEN_INTERVAL.total_seconds())
+        async def seen_round() -> None:
             seen = self.pool.sandbox_seen_ids()
             if self.seen_hook is None:
-                continue
+                return
             try:
                 await self.seen_hook(seen)
             except Exception:
                 log.exception("sandbox seen report failed")
+
+        await run_loop(
+            "sandbox_seen",
+            seen_round,
+            interval=SEEN_INTERVAL.total_seconds(),
+            metrics=self.metrics,
+        )
 
     async def _sandbox_transition(
         self, session_id: uuid.UUID, phase: str, fields: dict[str, Any]

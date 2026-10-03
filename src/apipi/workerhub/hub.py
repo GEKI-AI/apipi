@@ -13,7 +13,7 @@ from apipi.common.failures import (
     log_extra,
     session_error_data,
 )
-from apipi.common.logutil import log_event
+from apipi.common.logutil import RateLimitedLog, log_event
 from apipi.common.otel import (
     Tracing,
     start_span,
@@ -89,6 +89,8 @@ class WorkerHub:
         self.tracing = tracing
         self._conns: dict[uuid.UUID, WorkerConnection] = {}
         self._unacked: dict[uuid.UUID, dict[str, Any]] = {}
+        self._sent_at: dict[str, float] = {}
+        self._warnings = RateLimitedLog(log)
         self._delta_hits: dict[uuid.UUID, list[float]] = {}
         self._delta_leases: dict[uuid.UUID, DeltaLease] = {}
         self._inventory: dict[uuid.UUID, dict[uuid.UUID, uuid.UUID]] = {}
@@ -102,9 +104,47 @@ class WorkerHub:
         if self.metrics is not None:
             self.metrics.observe_worker_protocol(event)
 
+    def observe_connect(self, result: str) -> None:
+        if self.metrics is not None:
+            self.metrics.observe_worker_connect(result)
+
+    def observe_disconnect(self, reason: str) -> None:
+        if self.metrics is not None:
+            self.metrics.observe_worker_disconnect(reason)
+
     def observe_lease_event(self, event: str) -> None:
         if self.metrics is not None:
             self.metrics.observe_worker_lease_event(event)
+
+    def observe_command(self, op: str, result: str) -> None:
+        if self.metrics is not None:
+            self.metrics.observe_worker_command(op, result)
+
+    def _set_unacked(self, lease_id: uuid.UUID, wire: dict[str, Any]) -> None:
+        previous = self._unacked.get(lease_id)
+        if previous is not None and previous.get("id") != wire.get("id"):
+            self._sent_at.pop(str(previous.get("id")), None)
+        self._unacked[lease_id] = wire
+        self._observe_unacked()
+
+    def _drop_unacked(self, lease_id: uuid.UUID) -> dict[str, Any] | None:
+        pending = self._unacked.pop(lease_id, None)
+        if pending is not None:
+            self._sent_at.pop(str(pending.get("id")), None)
+            self._observe_unacked()
+        return pending
+
+    def _observe_unacked(self) -> None:
+        if self.metrics is not None:
+            self.metrics.set_worker_commands_unacked(len(self._unacked))
+
+    def _note_sent(self, wire: dict[str, Any]) -> None:
+        self._sent_at[str(wire.get("id"))] = time.monotonic()
+        self.observe_command(str(wire.get("op")), "sent")
+
+    def _note_send_failed(self, lease_id: uuid.UUID, wire: dict[str, Any]) -> None:
+        self._drop_unacked(lease_id)
+        self.observe_command(str(wire.get("op")), "failed")
 
     def get(self, worker_id: uuid.UUID) -> WorkerConnection | None:
         return self._conns.get(worker_id)
@@ -133,6 +173,19 @@ class WorkerHub:
             previous = self._conns.get(conn.worker_id)
             self._conns[conn.worker_id] = conn
         if previous is not None and previous is not conn:
+            previous.disconnect_reason = "takeover"
+            for lease_id in previous.leases:
+                self.observe_lease_event("taken_over")
+                log_event(
+                    log,
+                    logging.INFO,
+                    "worker lease taken over",
+                    event="worker.lease.taken_over",
+                    worker_id=conn.worker_id,
+                    lease_id=lease_id,
+                    reason="reconnect",
+                    previous_connection_id=previous.connection_id,
+                )
             await close_socket(previous.websocket)
         self._observe()
         return conn
@@ -204,6 +257,7 @@ class WorkerHub:
         self._metric_modes |= set(counts)
         self._metric_modes |= {"microvm", "none"}
         metrics.set_workers(counts, leases, modes=self._metric_modes)
+        metrics.set_worker_connections(counts, modes=self._metric_modes)
 
     def has_image(self, kind: str, image: str | None) -> bool:
         if image is None or kind != "microvm":
@@ -327,7 +381,7 @@ class WorkerHub:
         # Mark the command unacked before the grant commits, so an
         # inventory arriving between the grant and the send does not
         # orphan a lease whose command is still in flight.
-        self._unacked[lease_id] = wire
+        self._set_unacked(lease_id, wire)
         async with store.session() as db:
             row = await set_session_lease(
                 db,
@@ -338,7 +392,7 @@ class WorkerHub:
                 lease_until=until,
             )
             if row is None:
-                self._unacked.pop(lease_id, None)
+                self._drop_unacked(lease_id)
                 return None
             cursor = row.worker_seq
         if op in CURSOR_OPS:
@@ -349,6 +403,19 @@ class WorkerHub:
             if lease_id in self._unacked:
                 self._unacked[lease_id] = wire
         conn.leases.add(lease_id)
+        self.observe_lease_event("granted")
+        log_event(
+            log,
+            logging.INFO,
+            "worker lease granted",
+            event="worker.lease.granted",
+            tenant_id=tenant_id,
+            session_id=session_id,
+            worker_id=conn.worker_id,
+            lease_id=lease_id,
+            command_id=command_id,
+            op=op,
+        )
         conn.lease_mem[lease_id] = session_mem
         self._note_delta_lease(
             session_id,
@@ -357,10 +424,11 @@ class WorkerHub:
             tenant_id=tenant_id,
         )
         try:
-            await send_wire(conn.websocket, wire)
+            await send_wire(conn.websocket, wire, metrics=self.metrics)
         except Exception:
-            self._unacked.pop(lease_id, None)
+            self._note_send_failed(lease_id, wire)
             raise
+        self._note_sent(wire)
         metrics = self.metrics
         if metrics is not None:
             metrics.worker_assign.observe(time.monotonic() - started)
@@ -413,19 +481,26 @@ class WorkerHub:
             uuid.uuid4(), session_id, lease_id, op, body
         ).to_wire()
         _check_command_context(op, wire["payload"])
-        self._unacked[lease_id] = wire
+        self._set_unacked(lease_id, wire)
         try:
-            await send_wire(conn.websocket, wire)
+            await send_wire(conn.websocket, wire, metrics=self.metrics)
         except Exception:
-            self._unacked.pop(lease_id, None)
+            self._note_send_failed(lease_id, wire)
             raise
+        self._note_sent(wire)
         return wire
 
     async def ack(self, lease_id: uuid.UUID, command_id: str) -> bool:
         pending = self._unacked.get(lease_id)
         if pending is None or pending.get("id") != command_id:
             return False
-        self._unacked.pop(lease_id, None)
+        sent = self._sent_at.get(command_id)
+        self._drop_unacked(lease_id)
+        if self.metrics is not None and sent is not None:
+            self.metrics.observe_worker_command_ack(
+                str(pending.get("op")), time.monotonic() - sent
+            )
+        self.observe_command(str(pending.get("op")), "acked")
         return True
 
     async def wait_ack(
@@ -437,9 +512,16 @@ class WorkerHub:
             if pending is None or pending.get("id") != command_id:
                 return True
             await asyncio.sleep(0.05)
-        log.warning(
+        pending = self._unacked.get(lease_id)
+        op = str(pending.get("op")) if pending is not None else "unknown"
+        self.observe_command(op, "timeout")
+        self._warnings.warning(
             "worker command ack timed out",
-            extra={"lease_id": str(lease_id), "command_id": command_id},
+            event="worker.command.ack_timeout",
+            error_code="command_ack_timeout",
+            lease_id=str(lease_id),
+            command_id=command_id,
+            op=op,
         )
         return False
 
@@ -450,7 +532,7 @@ class WorkerHub:
         session_id: uuid.UUID,
         lease_id: uuid.UUID,
     ) -> None:
-        self._unacked.pop(lease_id, None)
+        self._drop_unacked(lease_id)
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
@@ -462,6 +544,17 @@ class WorkerHub:
             await clear_session_lease(db, tenant_id, session_id)
             self._forget_delta(session_id)
         self.observe_lease_event("released")
+        log_event(
+            log,
+            logging.INFO,
+            "worker lease released",
+            event="worker.lease.released",
+            tenant_id=tenant_id,
+            session_id=session_id,
+            worker_id=worker_id,
+            lease_id=lease_id,
+            reason="worker_release",
+        )
         if worker_id is not None:
             conn = self._conns.get(worker_id)
             if conn is not None:
@@ -519,14 +612,16 @@ class WorkerHub:
                 expired.append(row.id)
                 self._forget_delta(row.id)
                 if lease_id is not None:
-                    self._unacked.pop(lease_id, None)
+                    self._drop_unacked(lease_id)
                     if conn is not None:
                         conn.leases.discard(lease_id)
                         conn.lease_mem.pop(lease_id, None)
                         await send_message(
                             conn.websocket,
                             LeaseRevoke(session_id=row.id, lease_id=lease_id),
+                            metrics=self.metrics,
                         )
+                        self.observe_lease_event("revoked")
         self._observe()
         return expired
 
@@ -598,7 +693,18 @@ class WorkerHub:
         for lease_id in conn.leases:
             pending = self._unacked.get(lease_id)
             if pending is not None:
-                await send_wire(conn.websocket, pending)
+                await send_wire(conn.websocket, pending, metrics=self.metrics)
+                op = str(pending.get("op"))
+                self.observe_command(op, "retransmitted")
+                conn.warnings.warning(
+                    "worker command retransmitted",
+                    event="worker.command.retransmitted",
+                    error_code="command_retransmitted",
+                    worker_id=conn.worker_id,
+                    lease_id=lease_id,
+                    command_id=pending.get("id"),
+                    op=op,
+                )
 
     def _note_delta_lease(
         self,

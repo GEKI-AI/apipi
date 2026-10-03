@@ -83,8 +83,10 @@ async def reconcile_inventory(
                     tenant_id=row.tenant_id,
                     session_id=row.id,
                     worker_id=worker_id,
+                    lease_id=row.lease_id,
                     **log_extra(orphan),
                 )
+                hub.observe_lease_event("orphaned")
                 await persist_event(
                     db,
                     bus,
@@ -129,6 +131,19 @@ async def reconcile_inventory(
                 # its idle TTL. Answer the TTL so the normal
                 # reaper wipes it when the TTL runs out.
                 ttl[str(session_id)] = await _inventory_ttl(hub, db, row)
+    for entry in revoke:
+        if "lease_id" in entry:
+            hub.observe_lease_event("revoked")
+            log_event(
+                log,
+                logging.INFO,
+                "worker lease revoked",
+                event="worker.lease.revoked",
+                worker_id=worker_id,
+                session_id=entry["session_id"],
+                lease_id=entry["lease_id"],
+                reason="not_leased",
+            )
     hub._observe()
     return revoke, ttl
 

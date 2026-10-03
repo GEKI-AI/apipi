@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -8,8 +10,10 @@ from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
 from apipi.common.event_bus import EventBus
+from apipi.common.logutil import log_context, log_event
 from apipi.protocol import (
     INVALID_REGISTER_REASON,
+    PROTOCOL_VERSION,
     REGISTER_REQUIRED_REASON,
     REVOKED_REASON,
     SHARED_STORE_REASON,
@@ -35,6 +39,7 @@ from apipi.protocol import (
     WorkerEventMessage,
     parse_register,
     parse_worker_message,
+    wire_type,
 )
 from apipi.services.ingest import (
     IngestBatcher,
@@ -53,10 +58,12 @@ from apipi.store.repo import clear_worker_api_instance, get_session_by_lease
 from apipi.workerhub.heartbeat import heartbeat_worker
 from apipi.workerhub.hub import WorkerHub
 from apipi.workerhub.register import TokenBindingError, register_worker
+from apipi.workerhub.wire import send_frame
 
 log = logging.getLogger("apipi.worker")
 
 SEARCH_MAX_INFLIGHT = 32
+SLOW_HANDLER_SECONDS = 1.0
 
 router = APIRouter()
 
@@ -73,7 +80,11 @@ def _bearer(websocket: WebSocket) -> str | None:
 
 
 async def _reject(websocket: WebSocket, error: str, *, reason: str) -> None:
-    await websocket.send_json(RejectMessage(error=error).to_wire())
+    await send_frame(
+        websocket,
+        RejectMessage(error=error).to_wire(),
+        metrics=getattr(websocket.app.state, "metrics", None),
+    )
     await websocket.close(code=WORKER_CLOSE_CODE, reason=reason)
 
 
@@ -84,23 +95,25 @@ def _classify(message: dict[str, Any]) -> tuple[str, WorkerEnvelope | None, int]
         return "garbage", None, 0
 
 
-def _log_garbage(hub: WorkerHub, metrics: Any, message: dict[str, Any]) -> None:
+def _log_garbage(
+    hub: WorkerHub, conn: Any, metrics: Any, message: dict[str, Any]
+) -> None:
     hub.observe_protocol("envelope_rejected")
     raw_session = message.get("session_id")
     try:
         session_id = uuid.UUID(str(raw_session)) if raw_session else None
     except ValueError:
         session_id = None
-    log.warning(
+    conn.warnings.warning(
         "worker envelope rejected",
-        extra={
-            "event": "worker.event.rejected",
-            "error_code": "invalid_envelope",
-            "session_id": str(session_id) if session_id is not None else None,
-        },
+        event="worker.event.rejected",
+        error_code="invalid_envelope",
+        session_id=session_id,
     )
     if metrics is not None:
         metrics.observe_worker_protocol("envelope_rejected")
+        metrics.observe_worker_ingest("unknown", "rejected")
+        metrics.observe_worker_ingest_rejected("invalid_envelope")
 
 
 async def _answer_search(
@@ -127,7 +140,9 @@ async def _answer_search(
         return
     try:
         async with send_lock:
-            await websocket.send_json(reply)
+            await send_frame(
+                websocket, reply, metrics=getattr(websocket.app.state, "metrics", None)
+            )
     except Exception:
         log.warning(
             "search reply not sent",
@@ -167,6 +182,7 @@ async def _flush_envelopes(
     if not queued:
         return
     lifecycle = websocket.app.state.lifecycle
+    flush_started = time.monotonic()
     outcome = await flush_batch(
         store,
         queued,
@@ -176,18 +192,24 @@ async def _flush_envelopes(
         objects=objects,
         run_mode=conn.run_mode,
     )
+    if metrics is not None:
+        metrics.observe_worker_ingest_batch(
+            seconds=time.monotonic() - flush_started, size=len(queued)
+        )
     lock = send_lock if send_lock is not None else asyncio.Lock()
     await websocket.app.state.workers.renew_on_activity(store, conn)
     for session_id, last_seq in sorted(
         outcome.acks.items(), key=lambda item: str(item[0])
     ):
         async with lock:
-            await websocket.send_json(
-                CumulativeAck(session_id=session_id, last_seq=last_seq).to_wire()
+            await send_frame(
+                websocket,
+                CumulativeAck(session_id=session_id, last_seq=last_seq).to_wire(),
+                metrics=metrics,
             )
     for reply in outcome.presign_replies:
         async with lock:
-            await websocket.send_json(reply)
+            await send_frame(websocket, reply, metrics=metrics)
     for session_id, body in outcome.wakes:
         await event_hub.publish(session_id, body)
     if outcome.lifecycle and lifecycle is not None:
@@ -221,36 +243,41 @@ async def worker_socket(websocket: WebSocket) -> None:
     hub: WorkerHub = websocket.app.state.workers
     store: Store = websocket.app.state.store
     event_hub: EventBus = websocket.app.state.event_hub
+    metrics = websocket.app.state.metrics
     raw_token = _bearer(websocket)
     if raw_token is None or not raw_token.startswith(WORKER_TOKEN_PREFIX):
-        hub.observe_protocol("unauthorized")
+        hub.observe_connect("unauthorized")
         await _reject(websocket, "unauthorized", reason=UNAUTHORIZED_REASON)
         return
     token = await authenticate_token(store, raw_token)
     if token is None:
         if await is_revoked_secret(store, raw_token):
-            hub.observe_protocol("revoked")
+            hub.observe_connect("revoked")
             log.warning("worker token revoked", extra={"event": "worker.auth.revoked"})
             await _reject(websocket, "revoked", reason=REVOKED_REASON)
         else:
-            hub.observe_protocol("unauthorized")
+            hub.observe_connect("unauthorized")
             await _reject(websocket, "unauthorized", reason=UNAUTHORIZED_REASON)
         return
     try:
         raw: Any = await asyncio.wait_for(websocket.receive_json(), timeout=15)
     except TimeoutError:
+        hub.observe_connect("register_timeout")
         await websocket.close(code=WORKER_CLOSE_CODE)
         return
     except WebSocketDisconnect:
+        hub.observe_connect("closed")
         return
+    if metrics is not None:
+        metrics.observe_worker_message("in", wire_type(raw))
     if not isinstance(raw, dict) or raw.get("type") != "register":
-        hub.observe_protocol("invalid_register")
+        hub.observe_connect("invalid_register")
         await _reject(websocket, "register required", reason=REGISTER_REQUIRED_REASON)
         return
     try:
         register = parse_register(raw)
     except UnsupportedProtocol:
-        hub.observe_protocol("unsupported_protocol")
+        hub.observe_connect("unsupported_protocol")
         log.warning(
             "worker protocol rejected",
             extra={
@@ -263,13 +290,13 @@ async def worker_socket(websocket: WebSocket) -> None:
         )
         return
     except ValidationError:
-        hub.observe_protocol("invalid_register")
+        hub.observe_connect("invalid_register")
         await _reject(websocket, "invalid register", reason=INVALID_REGISTER_REASON)
         return
     try:
         conn = await register_worker(hub, store, websocket, register, token, event_hub)
     except TokenBindingError:
-        hub.observe_protocol("token_bound")
+        hub.observe_connect("token_bound")
         log.warning(
             "worker token bound to another worker",
             extra={"event": "worker.auth.bound"},
@@ -277,17 +304,68 @@ async def worker_socket(websocket: WebSocket) -> None:
         await _reject(websocket, "token_bound", reason=TOKEN_BOUND_REASON)
         return
     if conn is None:
-        hub.observe_protocol("invalid_register")
+        hub.observe_connect("invalid_register")
         await _reject(websocket, "invalid register", reason=INVALID_REGISTER_REASON)
         return
+    hub.observe_connect("ok")
+    with log_context(worker_id=str(conn.worker_id), connection_id=conn.connection_id):
+        await _serve_connection(websocket, hub, store, event_hub, conn)
+
+
+async def _serve_connection(
+    websocket: WebSocket,
+    hub: WorkerHub,
+    store: Store,
+    event_hub: EventBus,
+    conn: Any,
+) -> None:
     settings = websocket.app.state.settings
     metrics = websocket.app.state.metrics
+    opened = time.monotonic()
+    reason = "error"
+    info = (str(conn.worker_id), str(PROTOCOL_VERSION), conn.version, conn.run_mode)
+    if metrics is not None:
+        metrics.set_worker_info(
+            worker_id=info[0], protocol=info[1], version=info[2], run_mode=info[3]
+        )
+    log_event(
+        log,
+        logging.INFO,
+        "worker connected",
+        event="worker.connected",
+        run_mode=conn.run_mode,
+        capacity=conn.capacity,
+        version=conn.version,
+        generation=conn.generation,
+        leases=len(conn.leases),
+    )
     batcher = IngestBatcher(max_messages=settings.worker_ingest_batch_size)
     window = settings.worker_ingest_batch_window.total_seconds()
     send_lock = asyncio.Lock()
     search_tasks: set[asyncio.Task[None]] = set()
+    handling: tuple[str, float] | None = None
+
+    def finish_handling() -> None:
+        nonlocal handling
+        if handling is None:
+            return
+        kind_label, since = handling
+        handling = None
+        elapsed = time.monotonic() - since
+        if metrics is not None:
+            metrics.observe_worker_handle(kind_label, elapsed)
+        if elapsed > SLOW_HANDLER_SECONDS:
+            conn.warnings.warning(
+                "worker message handler slow",
+                event="worker.handler.slow",
+                error_code="handler_slow",
+                type=kind_label,
+                seconds=round(elapsed, 3),
+            )
+
     try:
         while True:
+            finish_handling()
             timeout = batcher.poll_timeout(window)
             try:
                 if timeout is None:
@@ -298,6 +376,21 @@ async def worker_socket(websocket: WebSocket) -> None:
                     )
             except TimeoutError:
                 message = None
+            if message is not None:
+                type_label = wire_type(message)
+                handling = (type_label, time.monotonic())
+                if metrics is not None or log.isEnabledFor(logging.DEBUG):
+                    size = len(json.dumps(message, separators=(",", ":")))
+                    if metrics is not None:
+                        metrics.observe_worker_message("in", type_label, size)
+                    log.debug(
+                        "worker message in",
+                        extra={
+                            "event": "worker.message",
+                            "type": type_label,
+                            "size": size,
+                        },
+                    )
             if message is None or batcher.should_flush(window):
                 if len(batcher):
                     await _flush_envelopes(
@@ -335,7 +428,7 @@ async def worker_socket(websocket: WebSocket) -> None:
                 await hub.handle_delta(store, event_hub, conn, envelope)
                 continue
             if kind == "garbage":
-                _log_garbage(hub, metrics, message)
+                _log_garbage(hub, conn, metrics, message)
                 continue
             msg_type = message.get("type")
             if msg_type not in WORKER_IN:
@@ -348,7 +441,7 @@ async def worker_socket(websocket: WebSocket) -> None:
                     )
                     if busy is not None:
                         async with send_lock:
-                            await websocket.send_json(busy)
+                            await send_frame(websocket, busy, metrics=metrics)
                     continue
                 task = asyncio.create_task(
                     _answer_search(websocket, send_lock, search, conn, message)
@@ -374,8 +467,11 @@ async def worker_socket(websocket: WebSocket) -> None:
                             "worker_id": str(conn.worker_id),
                         },
                     )
-                    await websocket.send_json(
-                        RejectMessage(error=SHARED_STORE_REASON).to_wire()
+                    reason = "protocol_violation"
+                    await send_frame(
+                        websocket,
+                        RejectMessage(error=SHARED_STORE_REASON).to_wire(),
+                        metrics=metrics,
                     )
                     await websocket.close(
                         code=WORKER_CLOSE_CODE, reason=SHARED_STORE_REASON
@@ -395,7 +491,6 @@ async def worker_socket(websocket: WebSocket) -> None:
                 revoke, ttl = await hub.reconcile_inventory(
                     store, event_hub, conn.worker_id, reported, unleased
                 )
-                hub.observe_protocol("inventory")
                 reply = InventoryReply(
                     revoke=[RevokeEntry.model_validate(entry) for entry in revoke],
                     ttl={
@@ -404,7 +499,7 @@ async def worker_socket(websocket: WebSocket) -> None:
                     },
                 )
                 async with send_lock:
-                    await websocket.send_json(reply.to_wire())
+                    await send_frame(websocket, reply.to_wire(), metrics=metrics)
                 continue
             if isinstance(parsed, SandboxSeenMessage):
                 owned = await hub.owned_sessions(store, conn, parsed.session_ids)
@@ -412,13 +507,12 @@ async def worker_socket(websocket: WebSocket) -> None:
                     from apipi.services.sandbox_status import touch_seen
 
                     await touch_seen(store, owned)
-                hub.observe_protocol("sandbox.seen")
                 continue
             if isinstance(parsed, HeartbeatMessage):
                 if conn.token_id is not None and await token_revoked(
                     store, conn.token_id
                 ):
-                    hub.observe_protocol("revoked")
+                    reason = "revoked"
                     log.warning(
                         "worker token revoked",
                         extra={
@@ -469,15 +563,34 @@ async def worker_socket(websocket: WebSocket) -> None:
                     event_type=parsed.event_type,
                     data=parsed.data,
                 )
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        reason = "clean" if exc.code in (1000, 1001) else "error"
     finally:
+        finish_handling()
         pending = list(search_tasks)
         for task in pending:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        reason = conn.disconnect_reason or reason
+        unacked = sum(1 for lease_id in conn.leases if lease_id in hub._unacked)
+        leases = len(conn.leases)
         await hub.detach(conn.worker_id, conn)
+        hub.observe_disconnect(reason)
+        if metrics is not None:
+            metrics.clear_worker_info(
+                worker_id=info[0], protocol=info[1], version=info[2], run_mode=info[3]
+            )
+        log_event(
+            log,
+            logging.INFO,
+            "worker disconnected",
+            event="worker.disconnected",
+            reason=reason,
+            duration_s=round(time.monotonic() - opened, 3),
+            leases=leases,
+            unacked_commands=unacked,
+        )
         async with store.session() as db:
             await clear_worker_api_instance(
                 db, conn.worker_id, instance_id=hub.settings.instance_id

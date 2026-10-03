@@ -169,8 +169,11 @@ API and worker processes write the same JSON line shape on stderr
 (`timestamp`, `level`, `logger`, `message`, `service`). Error and
 warning lines that operators should alert on also set `event` and
 `error_code`, plus `request_id`, `tenant_id`, `session_id`, `turn_id`,
-and `worker_id` when those ids are known. Prompt and completion bodies
-are never logged.
+and `worker_id` when those ids are known. Lines of a worker connection
+also carry `connection_id`. Prompt and completion bodies, command
+contexts, keys, presigned URLs, and search queries are never logged.
+Warnings that repeat are written once, then at most once per minute with
+a `count` of the occurrences since the last line.
 
 | `event` | Level | When |
 | --- | --- | --- |
@@ -180,7 +183,7 @@ are never logged.
 | `worker.command.failed` | warning or error | A worker command raised. Caller errors are warning. Internal faults are error. Fields include `session_id`, `tenant_id`, and `request_id`. Turn commands also emit a session failure event unless the session is already `failed`. |
 | `worker.assign.failed` | warning | No worker capacity (`capacity` or `capacity_tenant`). |
 | `worker.lease.expired` | error | A worker lease TTL elapsed. `error_code` is `worker_lease_expired`. Also carries `lease_ttl_seconds`, `last_renewal_age_seconds` (time since the lease was last renewed), `last_heartbeat_age_seconds` (time since the last heartbeat on the connected socket, absent when the worker is not connected), and `worker_connected`. |
-| `worker.heartbeat.late` | warning | The gap between two heartbeats passed half the lease TTL. `source` is `api` (measured on receipt, so it includes the network) or `worker` (measured on the sending timer). Carries `gap_seconds`, `lease_ttl_seconds`, and `worker_id` on the API side. |
+| `worker.heartbeat.late` | warning | Rate limited. The gap between two heartbeats passed half the lease TTL. `source` is `api` (measured on receipt, so it includes the network) or `worker` (measured on the sending timer). Carries `gap_seconds`, `lease_ttl_seconds`, and `worker_id` on the API side. |
 | `worker.event.rejected` | warning | A durable worker envelope was rejected by ingest. `error_code` is the reason (`not_leased`, `turn_mismatch`, and so on). The worker is still acked past it. |
 | `worker.ingest.duplicate` | info | A batch contained envelopes whose sequence numbers were already ingested. One line per session and batch, with `count`, `first_seq`, and `last_seq`. Normal after a reconnect replay. |
 | `worker.release.unflushed` | warning | The worker waited for the API to ack its buffered envelopes before a `lease.release` or the `session.stop` ack, and gave up after `RELEASE_FLUSH_TIMEOUT` (10 seconds). The release went out anyway. |
@@ -188,6 +191,28 @@ are never logged.
 | `worker.lease_ttl.ignored` | warning | `APIPI_WORKER_LEASE_TTL` is set on a worker. The API sets the TTL, so the worker ignores it. |
 | `search.usage_failed` | error | The API could not store the usage of a search after three tries. The model still gets the results. Carries the provider, the key source, and the counts, so the numbers can be added by hand. |
 | `search.denied` | warning | An agent has the `web_search` tool but search is not allowed for the session, so the tool was not loaded for the turn, or a `search.request` arrived for such a session. Carries no query text. The turn does not fail. |
+| `worker.connected` | info | The API accepted a worker register. Carries `worker_id`, `connection_id`, `run_mode`, `version`, and the number of leases it reattached. |
+| `worker.hello.sent` | info | The API sent `hello.reply`. Carries `connection_id`, the number of running sessions, and the number of revokes. |
+| `worker.hello.received` | info | The worker received `hello.reply`. Carries `connection_id`, the lease TTL, the heartbeat interval, and the connect time. |
+| `worker.disconnected` | info | A worker socket closed. On the API it carries `reason` (`clean`, `error`, `takeover`, `revoked`, `protocol_violation`), `duration_s`, `leases`, and `unacked_commands`. On the worker it carries `duration_s`, `unacked_envelopes`, and `deltas_dropped`. Look at `reason` when many workers disconnect together. |
+| `worker.connection.lost` | warning | The worker lost its socket or could not connect. `error_code` is the reconnect reason (`closed`, `connect_error`, `error`). Rate limited. |
+| `worker.reconnecting` | info | The worker will reconnect. Carries `reason`, `attempt`, and `delay_s`. |
+| `worker.drain.started`, `worker.drain.finished` | info, warning | The worker started or finished draining. `finished` is a warning with `error_code` `drain_timeout` when sessions were still live at the drain timeout. |
+| `worker.spool.recovered` | info | The worker reloaded its disk outbox at start. Carries the number of sessions, envelopes, and bytes. |
+| `worker.replay` | info | The worker resends unacked envelopes after a reconnect. Carries `envelopes` and `sessions`. |
+| `worker.command` | info | The worker accepted a command. Carries `op`, `command_id`, `lease_id`, `request_id`, `traceparent`, and a summary of the context (counts and ids, never keys or text). |
+| `worker.lease.granted`, `worker.lease.released`, `worker.lease.revoked`, `worker.lease.taken_over` | info | A lease changed. Carries `lease_id`, `session_id`, `worker_id`, and `reason` where it applies. `worker.lease.expired` and `worker.lease.orphaned` are the error lines for the other two changes. |
+| `worker.command.ack_timeout` | warning | The worker did not ack a command in time. Carries `command_id`, `lease_id`, and `op`. Check the worker connection and its event loop. Rate limited. |
+| `worker.command.retransmitted` | warning | The API resent an unacked command after a worker reconnected. Rate limited. |
+| `worker.handler.slow` | warning | The API took more than 1 second to handle one worker message. Carries `type` and `seconds`. Other messages on that socket waited. Rate limited. |
+| `worker.outbox.high`, `worker.outbox.full` | warning | The worker outbox is above 80 percent of its message or byte bound, or an append failed because it is full. The API is not acking fast enough or is down. Rate limited. |
+| `worker.waiter.timeout` | warning | The worker waited too long for a presign or search reply. Carries `kind`. Rate limited. |
+| `worker.message.invalid` | warning | The worker received a message it could not parse. Carries `type`. Rate limited. |
+| `worker.delta.oversize`, `worker.delta.rate_limited`, `worker.delta.rejected` | warning | The API dropped a live delta. Rate limited, so a line stands for `count` drops. |
+| `background.loop.error` | warning | A background loop caught an error and went on. Carries `loop` and `error`. Alert on `apipi_background_loop_errors_total` as well. Rate limited per loop. |
+| `background.task.failed` | error | A background task ended with an exception and no longer runs. Restart the process. |
+| `event_bus.notify.failed` | warning | A Postgres `NOTIFY` publish failed. SSE on other replicas falls back to polling. Rate limited. |
+| `worker.message` | debug | One socket message, with `type` and `size`. Only with `APIPI_LOG_LEVEL=debug`. |
 | `usage.export.dropped` | warning | Usage HTTPS export or sink dropped the event. |
 | `payload.export.dropped` | warning | Payload HTTPS export or sink dropped the event. |
 
