@@ -9,6 +9,16 @@ only the sessions it is currently running, not the whole database.
 
 The public HTTP API is unchanged by this decision.
 
+The code keeps the two sides of the socket apart. Every message that
+crosses the socket is a pydantic model in the `apipi.protocol`
+package, which imports only pydantic and the standard library. The API
+side lives in `apipi.workerhub` and the worker side in `apipi.worker`.
+Neither imports the other, and what both need lives in `apipi.common`.
+The model key travels only in `context.model.api_key` of a command, so
+the typed and redacted context is the one place that holds it. A test
+enforces the boundary, and a worker process never loads SQLAlchemy,
+asyncpg, FastAPI, or the store.
+
 ## Transport
 
 The worker dials one outbound WebSocket to `/internal/worker` per API
