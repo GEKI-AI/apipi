@@ -370,9 +370,10 @@ class Gateway:
             self._tasks.append(heartbeat)
 
     async def shutdown(self) -> None:
-        for task in self._tasks:
+        tasks, self._tasks = self._tasks, []
+        for task in tasks:
             task.cancel()
-        self._tasks = []
+        await asyncio.gather(*tasks, return_exceptions=True)
         await self.execution.close()
         if self.lifecycle is not None:
             await self.lifecycle.close()

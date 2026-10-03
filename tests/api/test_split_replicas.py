@@ -197,6 +197,13 @@ async def _forward_rows(store: Store) -> list[WorkerForward]:
         return list(await db.scalars(select(WorkerForward)))
 
 
+async def _no_forward_rows(store: Store) -> None:
+    async def empty() -> bool:
+        return await _forward_rows(store) == []
+
+    await _until(empty)
+
+
 async def test_turn_start_is_forwarded_without_the_body_on_the_bus(
     replicas: Replicas,
 ) -> None:
@@ -211,7 +218,7 @@ async def test_turn_start_is_forwarded_without_the_body_on_the_bus(
     assert replicas.hub_b._conns == {}
     sizes = [size for _target, _message_body, size in replicas.network.sent]
     assert sizes and max(sizes) < 400
-    assert await _forward_rows(replicas.store) == []
+    await _no_forward_rows(replicas.store)
     items = await replicas.client_b.get(
         f"/v1/agents/sessions/{session_id}/items", headers=_auth()
     )
@@ -310,7 +317,7 @@ async def test_session_stop_is_forwarded_and_waits(replicas: Replicas) -> None:
     assert ("command", "session.stop") in replicas.calls
     assert lease_id not in replicas.hub_a._conns[worker_id].leases
     assert session_id not in replicas.worker.session_leases
-    assert await _forward_rows(replicas.store) == []
+    await _no_forward_rows(replicas.store)
     gone = await replicas.client_b.get(
         f"/v1/agents/sessions/{session_id}", headers=_auth()
     )
@@ -378,7 +385,7 @@ async def test_cancel_that_cannot_reach_the_worker_is_an_error(
     )
     assert cancelled.status_code == 504, cancelled.text
     assert cancelled.json()["error"]["code"] == "forward_timeout"
-    assert await _forward_rows(replicas.store) == []
+    await _no_forward_rows(replicas.store)
     replicas.network.dropped.clear()
     replica_harness.hold = False
     task.cancel()
