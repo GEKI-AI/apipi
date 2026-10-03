@@ -185,6 +185,41 @@ class WorkerRow(Base):
         DateTime(timezone=True), default=utc_now, nullable=False
     )
     api_instance_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    accepts: Mapped[list[Any] | None] = mapped_column(JSONType, nullable=True)
+    images: Mapped[list[Any] | None] = mapped_column(JSONType, nullable=True)
+    arch: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    draining: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
+
+class WorkerForward(Base):
+    __tablename__ = "worker_forwards"
+    __table_args__ = (
+        Index("ix_worker_forwards_target_status", "target", "status"),
+        Index("ix_worker_forwards_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    op: Mapped[str] = mapped_column(String(32), nullable=False)
+    wait: Mapped[str] = mapped_column(String(16), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    worker_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    target: Mapped[str] = mapped_column(String(128), nullable=False)
+    origin: Mapped[str] = mapped_column(String(128), nullable=False)
+    body: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    message: Mapped[str | None] = mapped_column(String, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
 
 
 class WorkerToken(Base):

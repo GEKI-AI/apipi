@@ -409,6 +409,114 @@ Every pool connection is shared by worker sockets, ingest, and HTTP.
 `docs/production.md` gives the sizing rule: about two connections per
 worker socket plus the concurrent requests.
 
+## Routing commands across API replicas
+
+A worker holds one socket, to one replica. Every other replica must
+still be able to start a turn on it, cancel, stop, boot, and revoke a
+lease, and must see its capacity when it places a session. The worker
+wire does not change: forwarding is internal to the API replicas. The
+decisions, and why:
+
+* **Forward over the `EventBus`, with a small database mailbox.** A
+  command body can hold the turn text and images, up to 262,144
+  bytes, and `NOTIFY` carries at most 8000. The requesting replica
+  therefore inserts one row into `worker_forwards` (the request, never
+  the context) and sends a tiny `forward` message with only the row id
+  to the replica that holds the socket. The row is the durable part, so
+  a lost notification is recovered by a fallback poll
+  (`APIPI_EVENT_BUS_FALLBACK_POLL`) on the receiving side.
+* **One channel per replica.** Every API process has an instance id
+  (`APIPI_INSTANCE_ID` or the host name, plus a random suffix, so a
+  restart is a new instance). `workers.api_instance_id` holds it. A
+  replica listens on its own channel only. Two message kinds exist:
+  `forward` goes to the replica that holds the socket and
+  `forward_result` goes back to the replica that asked. Both carry the
+  id and a status, never a body. `InMemoryEventBus` delivers them in
+  process, which is only ever one replica; `PostgresEventBus` uses
+  `LISTEN` and `pg_notify` through the same publish lock as every other
+  message.
+* **The owning replica builds the context.** It reads the session, the
+  agent, the vault, and the object store itself, so no vault header,
+  presigned URL, or file reference is ever stored in the mailbox or
+  sent over `NOTIFY`. The same holds for the model key: the request
+  bearer is never written to Postgres (constitution rule 5), so it is
+  not forwarded. A forwarded turn carries `OPENAI_API_KEY_OVERWRITE`
+  when the operator set it, and no key otherwise. A worker that has no
+  key of its own then uses the key its running Pi already holds, and
+  fails with `upstream_unauthorized` when Pi has to start again. The
+  requesting replica logs `worker.forward.model_key_dropped` once per
+  minute in that case, and `docs/production.md` tells multi-replica
+  operators to set the overwrite key.
+* **The result is the same as a local send.** A forward asks for one
+  wait level: `sent` (the frame is in the writer of the worker's
+  connection), `ack` (the worker sent `lease.ack`), `stopped` (a
+  `session.stop` ack and then the durable `session.stopped`, or the
+  15 second stop timeout, exactly like a local stop), or `none` (the
+  reaper's revoke, which does not wait). The owner advances the row
+  through `claimed`, `sent`, `acked`, and `done`, or `failed` with an
+  error `code`, a message, and an HTTP status. The requesting replica
+  wakes on `forward_result` and rereads the row every second as
+  well. An owner error (`unsupported_op`, `capacity`,
+  `image_unavailable`, `payload_too_large`) reaches the client as the
+  same `ApiError` a local send would raise. The ack and stop waits,
+  and `note_stopped`, therefore stay in the process that holds the
+  socket and ingests `session.stopped`; only the outcome travels.
+* **Forwards are idempotent.** The row id is the command id. The
+  owner claims a row with a conditional `UPDATE` from `pending` to
+  `claimed`, so a duplicate notification or poll does nothing. A
+  command is enqueued once under its id, and a repeated send is
+  absorbed by the worker, which already de-duplicates by command id.
+  Commands then follow the same queue, retransmit timer, and lease TTL
+  expiry as local ones, on the owner.
+* **Staleness.** A worker row is live on another replica when
+  `api_instance_id` is set and `last_seen` is newer than the lease
+  TTL. Heartbeats arrive every third of the TTL, so that is about two
+  missed heartbeats. A stale row means the replica is gone: the command
+  fails at once with `503` `worker_unreachable`, and placement skips the
+  worker. The worker reconnects to a live replica, and the lease is
+  taken over as before. An owner that stays silent for 10 seconds
+  after the row was written (a crash inside the staleness window)
+  gives `504` `forward_timeout`. A clean detach clears the instance,
+  and a command then behaves as it does today for a worker that is
+  not connected.
+* **Placement sees the fleet.** The `workers` rows now also hold
+  `accepts`, the image ids, `arch`, and `draining`, written on
+  register and on every heartbeat next to `capacity`, `memory_mb`, and
+  `last_seen`. Lease counts and memory come from the leased session
+  rows, which are exact. Placement joins the local connections, which
+  are authoritative, with the live rows of other replicas, and uses the
+  same ordering (most free RAM, then fewer leases). Capacity, images,
+  and drain state of a remote worker are at most one heartbeat old
+  (at most 10 seconds). The owner checks capacity again when it grants
+  the lease and answers `capacity` when the worker filled up in
+  between, so a stale read can cost a retry but never an overcommit.
+  `acquire` on a remote worker is forwarded whole, so the lease grant,
+  the first send, and the delta bookkeeping all happen on the owner.
+* **Release, revoke, and the reaper.** Whoever clears a lease row also
+  tells the owner to drop the lease from its connection and queue
+  (`revoke` without a frame), and the reaper asks it to send
+  `lease.revoke` as well. Delete (`session.stop`, then release) runs
+  from any replica.
+* **A cancel that cannot reach the worker is an error.** `cancel`
+  returns `503` `worker_unreachable` (or `504` `forward_timeout`) when
+  a lease exists and the command was not delivered. A session with no
+  lease has nothing to cancel and answers as before. Delete is the
+  exception: when `session.stop` cannot be delivered, it logs
+  `worker.stop.undelivered`, clears the lease, and deletes the session,
+  and the guest is dropped at the worker's next inventory.
+* **Single replica.** `InMemoryEventBus`, which SQLite uses, switches
+  forwarding and fleet placement off. Several processes need
+  Postgres, which gives `PostgresEventBus`.
+
+The cost of a forward is one insert, one claim, one to three status
+updates, and one delete on a small table, plus two notifications. The
+rejected alternatives are a worker that dials every replica (it
+multiplies sockets, leases, and inventories and needs replica
+discovery), a sticky load balancer for `/internal/worker` (it does not
+solve placement, and a replica restart moves the workers anyway),
+carrying the command in `NOTIFY` (the size limit), and splitting a
+body over several notifications (it is not durable and not ordered).
+
 ## Auth
 
 Workers authenticate with per-worker bearer tokens. Every secret

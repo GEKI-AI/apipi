@@ -61,7 +61,7 @@ class RemoteExecution:
         session_mem_mib: int | None = None,
     ) -> str | None:
         del session_id, tenant_id, session_mem_mib
-        if self.workers.live() == 0:
+        if self.workers.live() == 0 and not self.workers.forwarding():
             return "capacity"
         return None
 
@@ -306,12 +306,17 @@ class RemoteExecution:
             status_code=429,
         )
 
-    async def cancel(self, session_id: uuid.UUID, *, status: str) -> bool:
+    async def cancel(
+        self, session_id: uuid.UUID, *, status: str, strict: bool = False
+    ) -> bool:
         """Cancel a running turn; True when a live worker accepted it.
 
-        False means no connected worker holds the session lease (e.g.
-        the worker restarted), so the caller must not wait for worker
-        events that will never arrive.
+        The command goes to the worker from any replica. False means no
+        connected worker holds the session lease (e.g. the worker
+        restarted), so the caller must not wait for worker events that
+        will never arrive. With `strict`, a lease that is still live but
+        whose worker cannot be reached is an error (`503`
+        `worker_unreachable`), so a client never gets a silent success.
         """
         abort = request_cancel(self.hub, session_id, status=status)
         if abort is not None:
@@ -333,6 +338,15 @@ class RemoteExecution:
             # turn never aborts.
             payload=TurnCancelCommandPayload(tenant_id=row.tenant_id),
         )
+        if command is None and strict and lease_live(row.lease_until):
+            raise ApiError(
+                "api_error",
+                "The worker running this turn is not reachable, so the cancel "
+                "was not delivered",
+                code="worker_unreachable",
+                status_code=503,
+                session_id=str(session_id),
+            )
         return command is not None
 
     async def prepare_for_new_turn(
@@ -403,22 +417,91 @@ class RemoteExecution:
             return
         stopped = self.workers.expect_stopped(session_id)
         try:
-            command = await self.workers.command(
-                store,
-                row.tenant_id,
-                session_id,
-                op="session.stop",
-                payload=SessionStopCommandPayload(tenant_id=row.tenant_id),
+            try:
+                command = await self.workers.command(
+                    store,
+                    row.tenant_id,
+                    session_id,
+                    op="session.stop",
+                    payload=SessionStopCommandPayload(tenant_id=row.tenant_id),
+                )
+            except ApiError as exc:
+                if exc.code not in ("worker_unreachable", "forward_timeout"):
+                    raise
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "session.stop not delivered; releasing the lease",
+                    event="worker.stop.undelivered",
+                    error_code=exc.code,
+                    session_id=session_id,
+                    lease_id=row.lease_id,
+                )
+                command = None
+            await self._finish_stop(
+                row.worker_id, row.lease_id, session_id, command, stopped
             )
-            if command is not None:
-                acked = await self.workers.wait_ack(row.lease_id, str(command["id"]))
-                if acked and FEATURE_SESSION_STOPPED in self.workers.features_of(
-                    row.worker_id
-                ):
-                    await self._wait_stopped(session_id, row.lease_id, stopped)
         finally:
             self.workers.forget_stopped(session_id)
         await self.workers.release(store, row.tenant_id, session_id, row.lease_id)
+
+    async def _finish_stop(
+        self,
+        worker_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        session_id: uuid.UUID,
+        command: dict[str, Any] | None,
+        stopped: asyncio.Event,
+    ) -> None:
+        if command is None or command.get("done"):
+            return
+        acked = await self.workers.wait_ack(lease_id, str(command["id"]))
+        if acked and FEATURE_SESSION_STOPPED in self.workers.features_of(worker_id):
+            await self._wait_stopped(session_id, lease_id, stopped)
+
+    async def stop_local(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        worker_id: uuid.UUID,
+        *,
+        command_id: uuid.UUID,
+    ) -> None:
+        """Stop a session whose worker socket is on this replica.
+
+        Another replica asked for it. The wait for the ack and for the
+        durable `session.stopped` happens here, where the socket and the
+        ingest of that envelope are.
+        """
+        store = self.store
+        assert store is not None
+        async with store.session() as db:
+            row = await get_session_by_id(db, session_id)
+        if row is None or row.lease_id is None:
+            return
+        stopped = self.workers.expect_stopped(session_id)
+        try:
+            command = await self.workers.command(
+                store,
+                tenant_id,
+                session_id,
+                op="session.stop",
+                payload=SessionStopCommandPayload(tenant_id=tenant_id),
+                command_id=command_id,
+                local_only=True,
+            )
+            if command is None:
+                raise ApiError(
+                    "api_error",
+                    "The worker is not connected to this API replica",
+                    code="worker_unreachable",
+                    status_code=503,
+                )
+            await self._finish_stop(
+                worker_id, row.lease_id, session_id, command, stopped
+            )
+        finally:
+            self.workers.forget_stopped(session_id)
 
     async def _wait_stopped(
         self, session_id: uuid.UUID, lease_id: uuid.UUID, stopped: asyncio.Event

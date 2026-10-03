@@ -1,13 +1,14 @@
 import asyncio
 import logging
+import socket
 import time
 import uuid
 from collections.abc import Collection, Sequence
 from datetime import UTC
-from typing import Any
+from typing import Any, cast
 
 from apipi.common.errors import ApiError
-from apipi.common.event_bus import EventBus
+from apipi.common.event_bus import EventBus, InstanceBus
 from apipi.common.failures import (
     failure_for,
     log_extra,
@@ -43,12 +44,14 @@ from apipi.store.repo import (
     extend_worker_leases,
     get_session,
     get_session_by_lease,
+    get_worker,
     list_expired_leases,
     list_worker_leases,
     renew_session_leases,
     set_session_lease,
 )
 from apipi.workerhub import deltas as delta_gate
+from apipi.workerhub import fleet
 from apipi.workerhub import inventory as inventory_gate
 from apipi.workerhub.command_queue import (
     CommandQueue,
@@ -63,6 +66,7 @@ from apipi.workerhub.commands import (
 )
 from apipi.workerhub.connection import WorkerConnection, claimed_leases
 from apipi.workerhub.deltas import DeltaLease
+from apipi.workerhub.forward import RESULT_POLL, Forwarder, forward_body, unreachable
 
 log = logging.getLogger("apipi.worker")
 
@@ -105,9 +109,99 @@ class WorkerHub:
         self._inventory: dict[uuid.UUID, dict[uuid.UUID, uuid.UUID]] = {}
         self._metric_modes: set[str] = set()
         self._lock = asyncio.Lock()
+        name = settings.instance_id or socket.gethostname()
+        self.instance_id = f"{name}-{uuid.uuid4().hex[:8]}"
+        self.forwarder: Forwarder | None = None
 
     def live(self) -> int:
         return len(self._conns)
+
+    def forwarding(self) -> bool:
+        """True when commands and placement reach workers on other replicas."""
+        return self.forwarder is not None
+
+    async def start_forwarding(
+        self,
+        store: Store,
+        bus: EventBus,
+        *,
+        context_factory: Any | None = None,
+        stop_local: Any | None = None,
+    ) -> None:
+        """Serve forwards from other replicas and send ours, if the bus can."""
+        if not getattr(bus, "forwards", False):
+            return
+        forwarder = Forwarder(
+            self,
+            store,
+            cast(InstanceBus, bus),
+            context_factory=context_factory,
+            stop_local=stop_local,
+            poll_interval=min(
+                max(self.settings.event_bus_fallback_poll.total_seconds(), 0.01),
+                RESULT_POLL,
+            ),
+        )
+        await forwarder.start()
+        self.forwarder = forwarder
+
+    async def stop_forwarding(self) -> None:
+        forwarder, self.forwarder = self.forwarder, None
+        if forwarder is not None:
+            await forwarder.close()
+
+    async def poll_forwards(self) -> None:
+        if self.forwarder is not None:
+            await self.forwarder.poll()
+
+    async def _remote_instance(
+        self, store: Store, worker_id: uuid.UUID, *, strict: bool = True
+    ) -> str | None:
+        """The replica holding the worker's socket, when it is another live one.
+
+        None means there is nobody to forward to: no socket anywhere, or
+        the socket is on this replica. A replica that stopped heart-
+        beating for the lease TTL is gone, and strict callers fail fast.
+        """
+        if self.forwarder is None:
+            return None
+        async with store.session() as db:
+            row = await get_worker(db, worker_id)
+        if row is None or not row.api_instance_id:
+            return None
+        if row.api_instance_id == self.instance_id:
+            return None
+        if not fleet.is_fresh(row.last_seen, self.settings):
+            if not strict:
+                return None
+            self._forward_failed("replica_stale")
+            self._warnings.warning(
+                "worker socket is on a replica that is gone",
+                event="worker.forward.replica_stale",
+                error_code="worker_unreachable",
+                worker_id=worker_id,
+                instance=row.api_instance_id,
+            )
+            raise unreachable(
+                f"The API replica {row.api_instance_id} holding the worker "
+                "stopped heartbeating"
+            )
+        return row.api_instance_id
+
+    def _forward_failed(self, reason: str) -> None:
+        if self.metrics is not None:
+            self.metrics.observe_worker_forward_failure(reason)
+
+    def _note_dropped_model_key(self, payload: Any) -> None:
+        context = getattr(payload, "context", None)
+        model = context.get("model") if isinstance(context, dict) else None
+        key = model.get("api_key") if isinstance(model, dict) else None
+        if key and key != self.settings.model_api_key_overwrite:
+            self._warnings.warning(
+                "request model key is not forwarded to another replica",
+                event="worker.forward.model_key_dropped",
+                error_code="model_key_dropped",
+            )
 
     def observe_protocol(self, event: str) -> None:
         if self.metrics is not None:
@@ -308,12 +402,16 @@ class WorkerHub:
         metrics.set_workers(counts, leases, modes=self._metric_modes)
         metrics.set_worker_connections(counts, modes=self._metric_modes)
 
+    def _session_mem(self, session_mem_mib: int | None) -> int:
+        return (
+            session_mem_mib
+            if session_mem_mib is not None
+            else self.settings.microvm_mem_mib
+        )
+
     def has_image(self, kind: str, image: str | None) -> bool:
-        if image is None or kind != "microvm":
-            return True
-        return any(
-            kind in conn.accepts and image in conn.images
-            for conn in self._conns.values()
+        return fleet.has_image(
+            fleet.local_candidates(self._conns, self._session_mem(None)), kind, image
         )
 
     def pick(
@@ -323,32 +421,14 @@ class WorkerHub:
         kind: str,
         image: str | None = None,
     ) -> WorkerConnection | None:
-        required = kind
-        session_mem = (
-            session_mem_mib
-            if session_mem_mib is not None
-            else self.settings.microvm_mem_mib
+        session_mem = self._session_mem(session_mem_mib)
+        chosen = fleet.choose(
+            fleet.local_candidates(self._conns, session_mem),
+            kind=kind,
+            session_mem=session_mem,
+            image=image,
         )
-        ready = []
-        for conn in self._conns.values():
-            if required not in conn.accepts:
-                continue
-            if image is not None and required == "microvm" and image not in conn.images:
-                continue
-            if conn.draining:
-                continue
-            if len(conn.leases) + 1 > conn.capacity:
-                continue
-            used = sum(conn.lease_mem.get(lease, session_mem) for lease in conn.leases)
-            if used + session_mem > conn.memory_mb:
-                continue
-            ready.append((conn, used))
-        if not ready:
-            return None
-        ready.sort(
-            key=lambda item: (-(item[0].memory_mb - item[1]), len(item[0].leases))
-        )
-        return ready[0][0]
+        return chosen.conn if chosen is not None else None
 
     async def acquire(
         self,
@@ -358,7 +438,15 @@ class WorkerHub:
         *,
         op: str,
         payload: BaseCommandPayload | dict[str, Any] | None = None,
+        command_id: uuid.UUID | None = None,
+        pin_worker: uuid.UUID | None = None,
     ) -> dict[str, Any] | None:
+        """Grant a lease on the best worker in the fleet and send the first command.
+
+        `pin_worker` and `command_id` are set by the replica that
+        holds a forwarded request: it only considers that worker and
+        keeps the id the requesting replica chose.
+        """
         if op not in COMMAND_OPS:
             raise ValueError(op)
         started = time.monotonic()
@@ -376,6 +464,8 @@ class WorkerHub:
                 op=op,
                 payload=payload,
                 started=started,
+                command_id=command_id,
+                pin_worker=pin_worker,
             )
 
     async def _acquire(
@@ -387,6 +477,8 @@ class WorkerHub:
         op: str,
         payload: BaseCommandPayload | dict[str, Any] | None,
         started: float,
+        command_id: uuid.UUID | None = None,
+        pin_worker: uuid.UUID | None = None,
     ) -> dict[str, Any] | None:
         async with store.session() as db:
             session = await get_session(db, tenant_id, session_id)
@@ -397,17 +489,34 @@ class WorkerHub:
             self.settings, sandbox_size_of(session.environment)
         )
         image = session_image(session.environment) if required == "microvm" else None
-        kind_live = any(required in conn.accepts for conn in self._conns.values())
-        if image is not None and kind_live and not self.has_image(required, image):
+        if pin_worker is None:
+            conns = self._conns
+        else:
+            conns = {
+                key: value for key, value in self._conns.items() if key == pin_worker
+            }
+        candidates = fleet.local_candidates(conns, session_mem)
+        if pin_worker is None and self.forwarder is not None:
+            candidates += await fleet.remote_candidates(
+                store, self.settings, self.instance_id
+            )
+        kind_live = any(required in item.accepts for item in candidates)
+        if (
+            image is not None
+            and kind_live
+            and not fleet.has_image(candidates, required, image)
+        ):
             raise ApiError(
                 "api_error",
-                image_unavailable_message(self, image),
+                image_unavailable_message(fleet.image_arches(candidates, image), image),
                 code="image_unavailable",
                 status_code=503,
                 session_id=str(session_id),
             )
-        conn = self.pick(session_mem, kind=required, image=image)
-        if conn is None:
+        chosen = fleet.choose(
+            candidates, kind=required, session_mem=session_mem, image=image
+        )
+        if chosen is None:
             request_id = _request_id(payload)
             log_event(
                 log,
@@ -420,8 +529,19 @@ class WorkerHub:
                 request_id=request_id,
             )
             return None
+        if chosen.conn is None:
+            return await self._acquire_remote(
+                chosen,
+                tenant_id,
+                session_id,
+                op=op,
+                payload=payload,
+                command_id=command_id,
+                started=started,
+            )
+        conn = chosen.conn
         lease_id = uuid.uuid4()
-        command_id = uuid.uuid4()
+        command_id = command_id or uuid.uuid4()
         until = utc_now() + self.settings.worker_lease_ttl
         body = command_payload(op, payload, run_mode=required, image=image)
         command = WorkerCommand.build(command_id, session_id, lease_id, op, body)
@@ -483,6 +603,57 @@ class WorkerHub:
         self._observe()
         return wire
 
+    async def _acquire_remote(
+        self,
+        chosen: fleet.Candidate,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        op: str,
+        payload: BaseCommandPayload | dict[str, Any] | None,
+        command_id: uuid.UUID | None,
+        started: float,
+    ) -> dict[str, Any] | None:
+        forwarder = self.forwarder
+        assert forwarder is not None and chosen.instance is not None
+        self._note_dropped_model_key(payload)
+        forward_id = command_id or uuid.uuid4()
+        try:
+            await forwarder.call(
+                chosen.instance,
+                action="acquire",
+                op=op,
+                tenant_id=tenant_id,
+                session_id=session_id,
+                worker_id=chosen.worker_id,
+                body=forward_body(op, payload),
+                wait="sent",
+                forward_id=forward_id,
+            )
+        except ApiError as exc:
+            if exc.code == "capacity":
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "worker assign failed",
+                    event="worker.assign.failed",
+                    error_code="capacity",
+                    tenant_id=tenant_id,
+                    session_id=session_id,
+                    worker_id=chosen.worker_id,
+                    forwarded=True,
+                )
+                return None
+            raise
+        if self.metrics is not None:
+            self.metrics.worker_assign.observe(time.monotonic() - started)
+        return {
+            "id": str(forward_id),
+            "op": op,
+            "session_id": str(session_id),
+            "forwarded": True,
+        }
+
     async def command(
         self,
         store: Store,
@@ -491,7 +662,17 @@ class WorkerHub:
         *,
         op: str,
         payload: BaseCommandPayload | dict[str, Any] | None = None,
+        command_id: uuid.UUID | None = None,
+        local_only: bool = False,
     ) -> dict[str, Any] | None:
+        """Send one command on the session's lease, on this replica or another.
+
+        None means no connected worker holds the lease. A worker whose
+        socket is on another replica gets the command forwarded and the
+        caller sees the same result, or the `ApiError` of the failure. A
+        forwarded `session.stop` returns once the stop is finished
+        (`done`).
+        """
         if op not in COMMAND_OPS:
             raise ValueError(op)
         async with store.session() as db:
@@ -504,7 +685,21 @@ class WorkerHub:
             required = placement_for(environment=row.environment)
         conn = self._conns.get(worker_id)
         if conn is None or lease_id not in conn.leases:
-            return None
+            if local_only or conn is not None:
+                return None
+            target = await self._remote_instance(store, worker_id)
+            if target is None:
+                return None
+            return await self._forward_command(
+                target,
+                tenant_id,
+                session_id,
+                worker_id,
+                lease_id,
+                op=op,
+                payload=payload,
+                command_id=command_id,
+            )
         self._note_delta_lease(
             session_id,
             worker_id=worker_id,
@@ -515,9 +710,13 @@ class WorkerHub:
         if required == "microvm" and row is not None:
             follow_image = session_image(row.environment)
             if follow_image not in conn.images:
+                arches = fleet.image_arches(
+                    fleet.local_candidates(self._conns, self._session_mem(None)),
+                    follow_image,
+                )
                 raise ApiError(
                     "api_error",
-                    image_unavailable_message(self, follow_image),
+                    image_unavailable_message(arches, follow_image),
                     code="image_unavailable",
                     status_code=503,
                     session_id=str(session_id),
@@ -526,7 +725,7 @@ class WorkerHub:
             op, payload, run_mode=required, image=follow_image, cursor=cursor
         )
         wire = WorkerCommand.build(
-            uuid.uuid4(), session_id, lease_id, op, body
+            command_id or uuid.uuid4(), session_id, lease_id, op, body
         ).to_wire()
         _check_command_context(op, wire)
         entry = self._enqueue(wire, conn)
@@ -537,6 +736,42 @@ class WorkerHub:
             raise
         self._note_sent(entry)
         return wire
+
+    async def _forward_command(
+        self,
+        target: str,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        worker_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        *,
+        op: str,
+        payload: BaseCommandPayload | dict[str, Any] | None,
+        command_id: uuid.UUID | None,
+    ) -> dict[str, Any]:
+        forwarder = self.forwarder
+        assert forwarder is not None
+        self._note_dropped_model_key(payload)
+        stopping = op == "session.stop"
+        forward_id = await forwarder.call(
+            target,
+            action="command",
+            op=op,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            worker_id=worker_id,
+            body=forward_body(op, payload),
+            wait="stopped" if stopping else "sent",
+            forward_id=command_id,
+        )
+        return {
+            "id": str(forward_id),
+            "op": op,
+            "session_id": str(session_id),
+            "lease_id": str(lease_id),
+            "forwarded": True,
+            "done": stopping,
+        }
 
     async def ack(self, lease_id: uuid.UUID, command_id: str) -> bool:
         entry = self.commands.ack(lease_id, command_id)
@@ -622,7 +857,84 @@ class WorkerHub:
             if conn is not None:
                 conn.leases.discard(lease_id)
                 conn.lease_mem.pop(lease_id, None)
+            else:
+                await self._revoke_remote(
+                    store, session_id, worker_id, lease_id, tenant_id, send=False
+                )
         self._observe()
+
+    async def _revoke_remote(
+        self,
+        store: Store,
+        session_id: uuid.UUID,
+        worker_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        *,
+        send: bool,
+    ) -> bool:
+        """Tell the replica holding the worker's socket that a lease ended.
+
+        It drops the lease from its connection and queue and, with
+        `send`, sends `lease.revoke`. Nothing waits for the answer, and a
+        failure is logged: the worker's next inventory settles it.
+        """
+        forwarder = self.forwarder
+        if forwarder is None:
+            return False
+        try:
+            target = await self._remote_instance(store, worker_id, strict=False)
+            if target is None:
+                return False
+            await asyncio.wait_for(
+                forwarder.call(
+                    target,
+                    action="revoke",
+                    op="lease.revoke",
+                    tenant_id=tenant_id,
+                    session_id=session_id,
+                    worker_id=worker_id,
+                    body={"lease_id": str(lease_id), "send": send},
+                    wait="none",
+                ),
+                timeout=REVOKE_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._warnings.warning(
+                "lease end not forwarded",
+                event="worker.lease.revoke_failed",
+                error_code="revoke_failed",
+                worker_id=worker_id,
+                lease_id=lease_id,
+                error=type(exc).__name__,
+            )
+            self.observe_protocol("revoke_failed")
+            return False
+        return True
+
+    async def end_lease_local(
+        self,
+        session_id: uuid.UUID,
+        worker_id: uuid.UUID,
+        lease_id: uuid.UUID,
+        *,
+        send: bool,
+    ) -> None:
+        """Drop a lease from this replica's view and optionally revoke it."""
+        self._drop_lease_commands(lease_id)
+        self._forget_delta(session_id)
+        conn = self._conns.get(worker_id)
+        if conn is None:
+            return
+        conn.leases.discard(lease_id)
+        conn.lease_mem.pop(lease_id, None)
+        self._observe()
+        if send:
+            await self._send_revoke(
+                conn, LeaseRevoke(session_id=session_id, lease_id=lease_id)
+            )
 
     async def expire(self, store: Store, hub: EventBus) -> list[uuid.UUID]:
         """Clear expired leases, then tell the connected workers.
@@ -662,6 +974,7 @@ class WorkerHub:
         lease_failure = failure_for("worker_lease_expired", "Worker lease expired")
         expired: list[uuid.UUID] = []
         revokes: list[tuple[WorkerConnection, LeaseRevoke]] = []
+        remote: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]] = []
         for session_id, tenant_id, worker_id, lease_id, lease_until in cleared:
             since_renewal = None
             if lease_until is not None:
@@ -699,10 +1012,18 @@ class WorkerHub:
                     revokes.append(
                         (conn, LeaseRevoke(session_id=session_id, lease_id=lease_id))
                     )
+                elif worker_id is not None:
+                    remote.append((session_id, tenant_id, worker_id, lease_id))
         self._observe()
-        if revokes:
+        if revokes or remote:
             await asyncio.gather(
-                *(self._send_revoke(conn, revoke) for conn, revoke in revokes)
+                *(self._send_revoke(conn, revoke) for conn, revoke in revokes),
+                *(
+                    self._revoke_remote(
+                        store, session_id, worker_id, lease_id, tenant_id, send=True
+                    )
+                    for session_id, tenant_id, worker_id, lease_id in remote
+                ),
             )
         return expired
 

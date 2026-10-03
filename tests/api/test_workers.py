@@ -259,7 +259,8 @@ async def test_worker_register_records_api_instance_id(
     async with store.session() as db:
         row = await get_worker(db, worker_id)
         assert row is not None
-        assert row.api_instance_id == "node-a"
+        assert row.api_instance_id is not None
+        assert row.api_instance_id.startswith("node-a-")
     await worker.close()
     async with store.session() as db:
         row = await get_worker(db, worker_id)

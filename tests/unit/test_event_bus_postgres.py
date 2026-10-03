@@ -279,3 +279,23 @@ async def test_postgres_sse_across_replicas_without_polling() -> None:
         await replica_b.close()
         await store_a.dispose()
         await store_b.dispose()
+
+
+async def test_postgres_instance_messages_reach_only_that_instance() -> None:
+    replica_a = _bus()
+    replica_b = _bus()
+    await replica_a.start()
+    await replica_b.start()
+    try:
+        got_a: list[dict[str, object]] = []
+        got_b: list[dict[str, object]] = []
+        await replica_a.listen_instance("node-a", got_a.append)
+        await replica_b.listen_instance("node-b", got_b.append)
+        await replica_a.send_instance("node-b", {"kind": "forward", "id": "x"})
+        await _wait_for(lambda: bool(got_b))
+        await asyncio.sleep(0.2)
+        assert got_b == [{"kind": "forward", "id": "x"}]
+        assert got_a == []
+    finally:
+        await replica_a.close()
+        await replica_b.close()

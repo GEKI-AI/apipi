@@ -304,7 +304,8 @@ async def test_reconnect_keeps_the_api_instance_id(
     async with store.session() as db:
         row = await get_worker(db, worker_id)
     assert row is not None
-    assert row.api_instance_id == "api-1"
+    assert row.api_instance_id is not None
+    assert row.api_instance_id.startswith("api-1-")
     conn = app.state.workers.get(worker_id)
     assert conn is not None
     assert second.hello is not None

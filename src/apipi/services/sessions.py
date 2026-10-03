@@ -401,6 +401,31 @@ class SessionService:
             search=self.search,
         )
 
+    async def forward_context(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        key_id: str | None,
+        user_id: str | None,
+        org_id: str | None,
+    ) -> dict[str, Any]:
+        """The command context for a turn another replica forwarded to this one.
+
+        The request bearer never leaves the replica that took the request,
+        so the model key is the operator key, if one is set.
+        """
+        servers = await self._mcp_servers(tenant_id, session_id)
+        return await self._turn_context(
+            tenant_id,
+            session_id,
+            servers,
+            api_key=self.settings.model_api_key_overwrite or None,
+            key_id=key_id,
+            user_id=user_id,
+            org_id=org_id,
+        )
+
     def _require_capacity(
         self,
         session_id: uuid.UUID,
@@ -1128,7 +1153,7 @@ class SessionService:
                         not_found()
                     return session_body(row)
         if action == "cancel":
-            await self.execution.cancel(session_id, status=cancel_status)
+            await self.execution.cancel(session_id, status=cancel_status, strict=True)
         elif action == "tool":
             if turn_id is None or call_id is None or success is None:
                 raise ApiError(

@@ -61,7 +61,9 @@ load balancer. A worker already registered.
 ```
 
 The API does not spawn Pi. It sends `turn.start` (or `turn.continue` /
-`turn.cancel`) on the worker socket. Each command carries a `context`
+`turn.cancel`) on the worker socket. When that socket is on another API
+replica, the replica that took the request hands the command to the one
+that holds the socket, which sends it ([forwarding](workers.md#commands-across-api-replicas)). Each command carries a `context`
 object that the API builds just in time: the session environment and
 identity, the agent definition, the effective idle TTL, the HTTP MCP
 servers with vault headers applied, the model key, and references (never

@@ -96,13 +96,21 @@ async def register_worker(
             worker_id = current.worker_id
         elif current.worker_id != worker_id:
             raise TokenBindingError(current.worker_id)
+    accepts = accepts_for_register(register)
+    images = images_for_register(register, run_mode)
     async with store.session() as db:
         row = await upsert_worker(
             db,
             worker_id,
             capacity=capacity,
             memory_mb=memory_mb,
-            api_instance_id=hub.settings.instance_id,
+            api_instance_id=hub.instance_id,
+            fleet={
+                "accepts": sorted(accepts),
+                "images": sorted(images),
+                "arch": register.arch or None,
+                "draining": False,
+            },
         )
     conn = WorkerConnection(
         worker_id=row.id,
@@ -112,9 +120,9 @@ async def register_worker(
         memory_mb=row.memory_mb,
         run_mode=run_mode,
         token_id=token.id,
-        images=images_for_register(register, run_mode),
+        images=images,
         arch=register.arch,
-        accepts=accepts_for_register(register),
+        accepts=accepts,
         version=register.version or "unknown",
         features=peer_features(register.features),
     )

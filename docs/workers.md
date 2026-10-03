@@ -917,14 +917,95 @@ clears ownership, emits `agent.session.error` with code
 still connected. It does not assign the session to another worker in
 this version.
 
-`workers.api_instance_id` is the `APIPI_INSTANCE_ID` of the API process
-that currently holds that worker's WebSocket. Register and heartbeat
-write it. Detach clears it only if it still matches this process. If
-a turn needs that worker but this process has no socket, the API
-returns `429` with code `capacity` and names that instance. There is
-no cross-API command forwarding. Point each worker at the API that
-will dispatch its turns, or stick `/internal/worker` to one API. SSE
-and session create stay store-backed on any replica.
+`workers.api_instance_id` is the instance id of the API process that
+currently holds that worker's WebSocket. Register and heartbeat write
+it. Detach clears it only if it still matches this process. A request
+can land on any replica: if the worker's socket is on another one, the
+command is forwarded to it, as the next section describes. SSE and
+session create stay store-backed on any replica.
+
+## Commands across API replicas
+
+A worker holds its socket on one replica, but a request can reach any
+replica. You do not have to point each worker at one API or stick
+`/internal/worker` to one API. `turn.start`, `turn.continue`,
+`turn.cancel`, `session.stop`, `sandbox.boot`, and `lease.revoke` all
+work from any replica, and so do placement and delete. The design is in
+[ADR 0015](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0015-worker-protocol-v2.md#routing-commands-across-api-replicas).
+
+Every API process has an instance id: `APIPI_INSTANCE_ID` (or the host
+name) plus a random suffix, so a restarted process is a new instance.
+When the replica that took the request has no socket for the worker,
+it does this:
+
+1. It stores one row in `worker_forwards`: the command and its
+   arguments, without the turn context, and the id of the replica that
+   holds the socket. The row id is the command id.
+2. It sends that replica a small `forward` message with the row id,
+   over the event bus. On Postgres this is `NOTIFY` on a channel of its
+   own for that replica. The body never travels on the bus, because a
+   command can be up to 262,144 bytes and `NOTIFY` carries 8000.
+3. The replica that holds the socket claims the row, builds the turn
+   context itself from the database, the vault, and the object store,
+   and sends the command through its own writer and queue. From there it
+   is an ordinary command: it is retransmitted, acked, and expires with
+   the lease like a local one.
+4. It writes the outcome to the row and sends a `forward_result`
+   message back. The requesting replica returns the same result a local
+   send gives: sent, acked (for the callers that wait for an ack), or
+   an error. A `session.stop` returns after the worker reported
+   `session.stopped`, the same as a local stop.
+5. The requesting replica deletes the row.
+
+The row holds the text, images, and tool output of the turn until the
+command is sent, and never the context, the vault headers, or the model
+key. It is deleted as soon as the result is read. A row that a crashed
+replica leaves behind is purged after 10 minutes.
+
+A lost notification does not lose the command. The row is durable, the
+requesting replica sends the notification again while it waits, and
+every replica also reads its pending rows every
+`APIPI_EVENT_BUS_FALLBACK_POLL` (3 seconds by default). A row is claimed
+with a conditional update, so a repeated notification or poll sends the
+command once, and the command id is the same on every retry.
+
+The model key is the one value that is not forwarded. The key of the
+request is the caller's bearer, and the gateway never writes the bearer
+to Postgres. A forwarded turn therefore carries `OPENAI_API_KEY_OVERWRITE`
+if the operator set it, and no key otherwise. A worker that was given no
+key falls back to its own `OPENAI_API_KEY_OVERWRITE`, and its running Pi
+keeps the key it started with. In a deployment with several replicas and
+no operator key, a Pi that has to start again on a forwarded turn fails
+with `upstream_unauthorized`. The API logs `worker.forward.model_key_dropped`
+the first time it forwards such a turn, then at most once a minute. Set
+`OPENAI_API_KEY_OVERWRITE` on the API when you run several replicas.
+
+What it costs: for each forwarded command, one insert, one claim, one
+status update, and one delete on a small table, plus two notifications.
+Local sends are unchanged. The first byte of a forwarded turn is
+about one notification and a few queries later than a local one.
+
+How it fails:
+
+| Case | Result |
+| --- | --- |
+| The replica holding the socket stopped heartbeating (its worker's `last_seen` is older than `APIPI_WORKER_LEASE_TTL`) | At once: `503` `worker_unreachable`. The worker reconnects to another replica and the lease is taken over as usual. |
+| The replica is slow or gone inside that window and never claims the row | After 10 seconds: `504` `forward_timeout`. |
+| The worker disconnected from that replica meanwhile | `503` `worker_unreachable`. |
+| The replica rejected the command (`capacity`, `unsupported_op`, `image_unavailable`, `payload_too_large`) | The same error and status a local send gives. |
+
+`turn.cancel` is never a silent success. If the session holds a live
+lease and the cancel could not be delivered, the request fails with
+`503` `worker_unreachable` or `504` `forward_timeout`. A session with no
+lease has nothing to cancel and the request answers as before. Delete
+sends `session.stop` the same way; when that cannot be delivered the API
+logs `worker.stop.undelivered`, clears the lease, and deletes the
+session, and the worker drops the guest at its next inventory.
+
+Forwarding needs the Postgres event bus. `InMemoryEventBus` (the default
+on SQLite) keeps messages in one process, so forwarding and fleet
+placement are off, and a second API process on the same database is not
+supported. See [production](production.md#several-api-replicas).
 
 ## Placement
 
@@ -934,6 +1015,27 @@ and session create stay store-backed on any replica.
 connected worker whose accepts set contains that kind, using the
 existing least-loaded logic (most free RAM, then fewer leases).
 There is no fallback to another kind.
+
+### Placement across replicas
+
+Placement looks at every connected worker in the fleet, not only the
+ones whose socket is on the replica that took the request. It reads the
+workers on its own replica from their connections. It reads the others
+from the `workers` table: every register and heartbeat writes the
+worker's `capacity`, `memory_mb`, `accepts`, image ids, `arch`, and
+drain flag next to `last_seen`, and the leases and their memory come
+from the leased session rows. Only workers heard from within
+`APIPI_WORKER_LEASE_TTL` count. The ordering is the same (most free RAM,
+then fewer leases).
+
+The data about a worker on another replica is at most one heartbeat old
+(at most 10 seconds, a third of the lease TTL), so a worker that just
+filled up or started draining can still be picked. The replica that
+holds its socket then checks capacity again when it grants the lease,
+and answers `capacity` if there is no room, so a stale read never
+overcommits a worker. The lease grant and the first command are
+forwarded as one request, so the grant, the send, and the bookkeeping
+happen on the replica that holds the socket.
 
 `APIPI_WORKER_ACCEPTS` (`[worker].accepts`) is a comma list from
 `none`, `microvm`. One code path covers three layouts:

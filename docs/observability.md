@@ -192,6 +192,9 @@ at zero is defined, and it is filled by a later change to that path.
 | `apipi_worker_commands_total` | counter, `op`, `result` | Command delivery: `sent`, `acked`, `retransmitted` (resent after a reconnect, or on the 5 second timer), `timeout` (no `lease.ack` within the wait of the caller), `expired` (no `lease.ack` within the lease TTL, so the lease was cleared and the turn failed with `worker_command_timeout`), `failed` (the send raised). |
 | `apipi_worker_command_ack_seconds` | histogram, `op` | Time from sending a command to its `lease.ack`. |
 | `apipi_worker_commands_unacked` | gauge | Commands waiting for `lease.ack`. |
+| `apipi_worker_forwards_total` | counter, `op`, `result` | Commands this replica forwarded to the replica that holds the worker socket. `result` is `ok` (the wait the caller asked for was reached), `failed` (an error came back), `timeout` (the other replica did not answer in time), or `queued` (the reaper's revoke, which does not wait). See [commands across API replicas](workers.md#commands-across-api-replicas). |
+| `apipi_worker_forward_seconds` | histogram, `op` | Time from storing a forward to its result, as the requesting replica sees it. A `session.stop` includes the wait for `session.stopped`. |
+| `apipi_worker_forward_failures_total` | counter, `reason` | Why a forward failed: `replica_stale` (the replica stopped heartbeating, failed at once), `not_connected` (the worker left that replica), `timeout`, `ack_timeout`, `rejected` (the other replica refused: capacity, image, size), or `error`. |
 | `apipi_worker_send_queue_depth` | gauge | Frames waiting in the per-connection writers of this replica, summed over all sockets. It should stay near zero. A value that stays high means a worker reads slower than the API sends. At 1024 frames on one socket, or 10 seconds on one frame, that socket closes with `write_timeout`. |
 | `apipi_worker_presign_total`, `apipi_worker_presign_seconds` | counter and histogram, `kind` (`artifact`, `pi_session`, `input_image`), `result` | Artifact presign outcomes (`ok`, `unchanged`, a quota code, or `store_error`) and handling time. |
 | `apipi_search_requests_total`, `apipi_search_seconds`, `apipi_search_inflight` | counter, histogram, gauge, `provider`, `result` | `web_search` outcomes (`ok`, the provider error code, or `search_denied`), provider call latency, and running calls. |
@@ -301,6 +304,7 @@ bill. See [usage](usage.md#session-lifecycle-export).
 | `apipi_worker_ingest_total{result="transient_error"}` | The API cannot store worker results |
 | `apipi_search_requests_total{result!="ok"}` | Search provider errors or denials |
 | `apipi_event_bus_notify_errors_total` | `NOTIFY` failures |
+| Rate of `apipi_worker_forward_failures_total` by `reason` | `replica_stale` means a replica died with workers attached. `timeout` means a replica is slow or its listener is down. Also alert on a high `apipi_worker_forward_seconds` p99. |
 
 ## Cardinality
 

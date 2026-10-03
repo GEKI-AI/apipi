@@ -14,12 +14,16 @@ Message kinds:
   notification is recovered by the fallback poll.
 * ``live`` (delta batch): ephemeral deltas, never stored. At-most-once;
   the final item is the source of truth.
+* ``forward`` and ``forward_result`` (a mailbox row id and a status):
+  sent to one replica on its own channel, see ``workerhub/forward.py``.
+  The body of a forwarded command never travels here.
 * A full stored-event body (it carries ``seq``) is delivered to
   subscribers in the publishing process directly, with no extra read.
 """
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import time
@@ -32,6 +36,7 @@ from apipi.common.background import run_loop
 from apipi.common.event_bus import (
     EventBus,
     InMemoryEventBus,
+    InstanceHandler,
     LocalFanout,
     is_wake,
     message_seq,
@@ -43,6 +48,7 @@ from apipi.config import ConfigError, Settings, is_sqlite_url, postgres_url
 log = logging.getLogger("apipi")
 
 EVENT_CHANNEL = "apipi_events"
+INSTANCE_CHANNEL_PREFIX = "apipi_fwd_"
 NOTIFY_LIMIT = 8000
 NOTIFY_TIMEOUT = 5.0
 LIVE_HEADROOM = 256
@@ -50,6 +56,12 @@ _CONNECT_BACKOFF = 5.0
 LIVE_WINDOW = 0.04
 _RECONNECT_BACKOFF = (0.5, 1.0, 2.0, 5.0)
 _QUEUE_SAMPLE_INTERVAL = 30.0
+
+
+def instance_channel(instance_id: str) -> str:
+    """The NOTIFY channel of one replica. Channel names stop at 63 bytes."""
+    digest = hashlib.sha256(instance_id.encode("utf-8")).hexdigest()[:24]
+    return f"{INSTANCE_CHANNEL_PREFIX}{digest}"
 
 
 def split_notify_batches(
@@ -89,7 +101,12 @@ class PostgresEventBus(LocalFanout):
     from an after-commit hook), the ``LISTEN`` connection is dedicated
     and outside the SQLAlchemy pool, and the fallback poll covers the
     gap while a dropped listener reconnects.
+
+    Messages for one replica (`send_instance`) use a channel of their own
+    per instance, so a replica only wakes for what is addressed to it.
     """
+
+    forwards = True
 
     def __init__(self, dsn: str, *, metrics: Any | None = None) -> None:
         super().__init__()
@@ -187,7 +204,62 @@ class PostgresEventBus(LocalFanout):
     def _note_remote_failure(self) -> None:
         self._connect_not_before = time.monotonic() + _CONNECT_BACKOFF
 
-    async def _notify(self, payload: dict[str, Any]) -> None:
+    async def listen_instance(self, instance_id: str, handler: InstanceHandler) -> None:
+        self._instances[instance_id] = handler
+        conn = self._listen
+        if conn is not None and not conn.is_closed():
+            await conn.add_listener(
+                instance_channel(instance_id), self._on_instance_notify
+            )
+
+    async def unlisten_instance(self, instance_id: str) -> None:
+        self._instances.pop(instance_id, None)
+        conn = self._listen
+        if conn is not None and not conn.is_closed():
+            with contextlib.suppress(Exception):
+                await conn.remove_listener(
+                    instance_channel(instance_id), self._on_instance_notify
+                )
+
+    async def send_instance(self, instance_id: str, message: dict[str, Any]) -> None:
+        if not self._running:
+            try:
+                await self.start()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._note_notify_error(exc)
+                self._note_remote_failure()
+                return
+        try:
+            await self._notify(message, channel=instance_channel(instance_id))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._note_notify_error(exc)
+            self._note_remote_failure()
+
+    def _on_instance_notify(
+        self,
+        _conn: asyncpg.Connection,
+        _pid: int,
+        channel: str,
+        payload: str,
+    ) -> None:
+        try:
+            message = json.loads(payload)
+        except (ValueError, TypeError):
+            log.warning("event bus dropped malformed payload")
+            return
+        if not isinstance(message, dict):
+            return
+        for instance_id, handler in list(self._instances.items()):
+            if instance_channel(instance_id) == channel:
+                handler(message)
+
+    async def _notify(
+        self, payload: dict[str, Any], *, channel: str = EVENT_CHANNEL
+    ) -> None:
         if time.monotonic() < self._connect_not_before:
             return
         raw = json.dumps(payload, separators=(",", ":"))
@@ -202,7 +274,7 @@ class PostgresEventBus(LocalFanout):
             conn = await self._ensure_publish()
             try:
                 await asyncio.wait_for(
-                    conn.execute("SELECT pg_notify($1, $2)", EVENT_CHANNEL, raw),
+                    conn.execute("SELECT pg_notify($1, $2)", channel, raw),
                     timeout=NOTIFY_TIMEOUT,
                 )
             except BaseException:
@@ -232,6 +304,10 @@ class PostgresEventBus(LocalFanout):
             return
         conn = await asyncpg.connect(dsn=self._dsn, timeout=5)
         await conn.add_listener(EVENT_CHANNEL, self._on_notify)
+        for instance_id in self._instances:
+            await conn.add_listener(
+                instance_channel(instance_id), self._on_instance_notify
+            )
         self._listen = conn
 
     def _on_notify(

@@ -3,9 +3,12 @@
 import asyncio
 import time
 import uuid
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from apipi.common.errors import ApiError
+
+InstanceHandler = Callable[[dict[str, Any]], None]
 
 
 def wake_message(session_id: uuid.UUID, seq: int) -> dict[str, Any]:
@@ -25,6 +28,16 @@ def live_event_body(
         "session_id": str(session_id),
         "data": data if data is not None else {},
     }
+
+
+def forward_message(forward_id: uuid.UUID, *, origin: str) -> dict[str, Any]:
+    """Ask the replica that holds a worker socket to process one mailbox row."""
+    return {"kind": "forward", "id": str(forward_id), "origin": origin}
+
+
+def forward_result_message(forward_id: uuid.UUID, status: str) -> dict[str, Any]:
+    """Tell the replica that asked that a mailbox row changed status."""
+    return {"kind": "forward_result", "id": str(forward_id), "status": status}
 
 
 def is_wake(message: dict[str, Any]) -> bool:
@@ -60,10 +73,31 @@ class EventBus(Protocol):
     async def close(self) -> None: ...
 
 
+class InstanceBus(EventBus, Protocol):
+    """An event bus that can also address one API replica."""
+
+    forwards: bool
+    """True when other replicas can be reached with `send_instance`."""
+
+    async def listen_instance(self, instance_id: str, handler: InstanceHandler) -> None:
+        """Receive the messages `send_instance` addresses to this instance."""
+        ...
+
+    async def unlisten_instance(self, instance_id: str) -> None: ...
+
+    async def send_instance(self, instance_id: str, message: dict[str, Any]) -> None:
+        """Send one small message to one replica. Never raises for delivery
+        failures; the receiver also polls the durable mailbox."""
+        ...
+
+
 class LocalFanout:
+    forwards = False
+
     def __init__(self) -> None:
         self._subs: dict[uuid.UUID, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._abort: dict[uuid.UUID, asyncio.Event] = {}
+        self._instances: dict[str, InstanceHandler] = {}
 
     def watch_turn(self, session_id: uuid.UUID) -> asyncio.Event:
         ev = asyncio.Event()
@@ -102,6 +136,17 @@ class InMemoryEventBus(LocalFanout):
 
     async def publish(self, session_id: uuid.UUID, message: dict[str, Any]) -> None:
         self._dispatch(session_id, message)
+
+    async def listen_instance(self, instance_id: str, handler: InstanceHandler) -> None:
+        self._instances[instance_id] = handler
+
+    async def unlisten_instance(self, instance_id: str) -> None:
+        self._instances.pop(instance_id, None)
+
+    async def send_instance(self, instance_id: str, message: dict[str, Any]) -> None:
+        handler = self._instances.get(instance_id)
+        if handler is not None:
+            handler(message)
 
     async def start(self) -> None:
         return None

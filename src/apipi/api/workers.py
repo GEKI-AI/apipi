@@ -197,7 +197,7 @@ async def _serve_connection(
             try:
                 async with store.session() as db:
                     await clear_worker_api_instance(
-                        db, conn.worker_id, instance_id=hub.settings.instance_id
+                        db, conn.worker_id, instance_id=hub.instance_id
                     )
             except Exception:
                 log.warning(

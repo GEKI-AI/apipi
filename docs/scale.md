@@ -47,13 +47,12 @@ The balancer can use least-conn (or round robin) for `/v1`. Workers
 advertise a session cap and a RAM budget. Placement prefers free RAM
 and will not oversubscribe either. A turn that cannot lease a worker
 returns `429` with code `capacity`. Worker
-WebSockets are local to one API process. `workers.api_instance_id`
-records that process (`APIPI_INSTANCE_ID`). Stick `/internal/worker`
-to one API, or have each worker dial the API that will send it
-commands. If a replica has the lease in Postgres but no socket, the
-turn fails with `429` `capacity` and names the instance that holds the
-socket. Session create, follow-up REST, and SSE still work on any
-replica.
+WebSockets are local to one API process, and `workers.api_instance_id`
+records that process. A request on any replica reaches the worker: the
+replica forwards the command to the one that holds the socket, and
+placement sees the workers of every replica. You need no sticky routing
+for `/internal/worker`. Forwarding needs Postgres. See
+[commands across API replicas](workers.md#commands-across-api-replicas).
 
 For a single host in development, `apipi dev` starts one API and one
 worker as two child processes. It is not a scaling topology.

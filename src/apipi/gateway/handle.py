@@ -321,6 +321,12 @@ class Gateway:
             log.warning(VAULT_MASTER_KEY_UNSET)
         self.execution.attach_store(self.store)
         await self.event_hub.start()
+        await self.workers.start_forwarding(
+            self.store,
+            self.event_hub,
+            context_factory=self.sessions.forward_context,
+            stop_local=self.execution.stop_local,
+        )
         emitter = self.lifecycle
         if emitter is not None:
             emitter.start()
@@ -336,6 +342,14 @@ class Gateway:
                 "lease_reaper",
                 self._expire_worker_leases,
                 interval=1,
+                metrics=self.metrics,
+            ),
+            spawn_loop(
+                "worker_forwards",
+                self.workers.poll_forwards,
+                interval=max(
+                    self.settings.event_bus_fallback_poll.total_seconds(), 0.05
+                ),
                 metrics=self.metrics,
             ),
             spawn_loop(
@@ -363,6 +377,7 @@ class Gateway:
         if self.lifecycle is not None:
             await self.lifecycle.close()
         await self.sessions.cancel_turns()
+        await self.workers.stop_forwarding()
         await self.search.aclose()
         await self.event_hub.close()
         if isinstance(self.tracing, Tracing):
