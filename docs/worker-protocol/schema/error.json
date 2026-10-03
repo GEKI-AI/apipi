@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "API to worker. The error object, sent just before a close.\n\n`error` is a short text for a person. `code` is the machine value\nand equals the reason of the WebSocket close that follows it.",
+  "properties": {
+    "code": {
+      "title": "Code",
+      "type": "string"
+    },
+    "error": {
+      "title": "Error",
+      "type": "string"
+    },
+    "ok": {
+      "const": false,
+      "default": false,
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "type": {
+      "const": "error",
+      "default": "error",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "code",
+    "error",
+    "ok",
+    "type"
+  ],
+  "title": "error message",
+  "type": "object"
+}

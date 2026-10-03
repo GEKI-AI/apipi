@@ -34,7 +34,6 @@ from apipi.protocol import (
     StoreProof,
     TtlEntry,
     WorkerEnvelope,
-    WorkerEventMessage,
     collect_unknown_fields,
     parse_worker_message,
     wire_bytes,
@@ -137,8 +136,8 @@ class ConnectionServer:
     lane. Control messages (`heartbeat`, `lease.ack`, `lease.release`,
     `inventory`, `sandbox.seen`, `store.proof`) have their own lane, so
     slow ingest, presign, or artifact work never delays them. Durable
-    envelopes and legacy events share one ingest lane that keeps their
-    order. Live deltas have a third lane that drops when it is full.
+    envelopes have an ingest lane that keeps their order. Live deltas
+    have a third lane that drops when it is full.
     Every write goes through the connection's writer. A failure while
     handling one message is logged and counted and the socket stays
     open. The socket closes on a protocol violation, a revoked token, a
@@ -329,9 +328,8 @@ class ConnectionServer:
         if msg_type == "search.request":
             await self._start_search(message)
             return
-        ordered = isinstance(parsed, WorkerEventMessage) or (
-            isinstance(parsed, LeaseRelease)
-            and bool(self._unflushed.get(parsed.session_id))
+        ordered = isinstance(parsed, LeaseRelease) and bool(
+            self._unflushed.get(parsed.session_id)
         )
         if ordered:
             await self._put(self._ingest, _Control(type_label, parsed))
@@ -469,7 +467,11 @@ class ConnectionServer:
                     },
                 )
                 with contextlib.suppress(Exception):
-                    await conn.send(RejectMessage(error=SHARED_STORE_REASON).to_wire())
+                    await conn.send(
+                        RejectMessage(
+                            error=SHARED_STORE_REASON, code=SHARED_STORE_REASON
+                        ).to_wire()
+                    )
                 conn.request_close(
                     "protocol_violation",
                     code=WORKER_CLOSE_CODE,
@@ -588,17 +590,6 @@ class ConnectionServer:
     async def _handle_ordered(self, parsed: BaseModel) -> None:
         if isinstance(parsed, LeaseRelease):
             await self._handle(parsed)
-            return
-        if isinstance(parsed, WorkerEventMessage):
-            if parsed.lease_id not in self.conn.leases:
-                return
-            await self.hub.handle_event(
-                self.store,
-                self.event_hub,
-                lease_id=parsed.lease_id,
-                event_type=parsed.event_type,
-                data=parsed.data,
-            )
 
     async def _flush(self, batcher: IngestBatcher) -> None:
         queued = batcher.take()

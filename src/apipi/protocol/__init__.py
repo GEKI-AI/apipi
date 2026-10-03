@@ -3,8 +3,9 @@
 This package holds the wire contract and imports only pydantic and the
 standard library. The API (`apipi.workerhub`) and the worker
 (`apipi.worker`) build and parse every socket message through these
-models, so a shape can only change here. See
-`specs/decisions/0015-worker-protocol-v2.md` and `docs/workers.md`.
+models, so a shape can only change here. The normative description
+is `docs/worker-protocol.md`; the JSON Schema generated from these
+models is in `docs/worker-protocol/schema/` (`protocol.schema`).
 """
 
 from apipi.protocol.base import (
@@ -49,6 +50,7 @@ from apipi.protocol.constants import (
     OUTBOX_BOUND,
     PROTOCOL_VERSION,
     REGISTER_REQUIRED_REASON,
+    REGISTER_TIMEOUT_REASON,
     REVOKED_REASON,
     SEEN_INTERVAL,
     SHARED_STORE_REASON,
@@ -95,7 +97,6 @@ from apipi.protocol.control import (
     RevokeEntry,
     SandboxSeenMessage,
     TtlEntry,
-    WorkerEventMessage,
     WorkerImageInfo,
 )
 from apipi.protocol.envelope import (
@@ -172,6 +173,7 @@ __all__ = [
     "PROTOCOL_VERSION",
     "PUBLIC_EVENT_TYPES",
     "REGISTER_REQUIRED_REASON",
+    "REGISTER_TIMEOUT_REASON",
     "REVOKED_REASON",
     "SEEN_INTERVAL",
     "SHARED_STORE_REASON",
@@ -247,7 +249,6 @@ __all__ = [
     "WorkerCommand",
     "WorkerEnvelope",
     "WorkerErrorPayload",
-    "WorkerEventMessage",
     "WorkerEventPayload",
     "WorkerImageInfo",
     "WorkspaceReapedPayload",

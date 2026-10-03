@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apipi.common.dirs import store_root
 from apipi.common.errors import ObjectStoreError
 from apipi.common.objects import NS_ARTIFACTS, NS_FILES, Namespace, local_object_path
+from apipi.common.timefmt import utc_ts
 from apipi.config import DiskLimitError, Settings
 from apipi.store.blobs import (
     ArtifactBlobs,
@@ -398,7 +399,7 @@ async def issue_artifact_presign(
         "path": relative_path,
         "url": url,
         "headers": headers,
-        "expires_at": expires_at.isoformat(),
+        "expires_at": utc_ts(expires_at),
     }
 
 

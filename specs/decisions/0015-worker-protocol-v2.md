@@ -9,6 +9,9 @@ only the sessions it is currently running, not the whole database.
 
 The public HTTP API is unchanged by this decision.
 
+This record keeps the decision and its reasons. The wire contract is in
+[the worker protocol specification](https://github.com/GEKI-AI/apipi/blob/main/docs/worker-protocol.md).
+
 The code keeps the two sides of the socket apart. Every message that
 crosses the socket is a pydantic model in the `apipi.protocol`
 package, which imports only pydantic and the standard library. The API
@@ -21,12 +24,13 @@ asyncpg, FastAPI, or the store.
 
 ## Transport
 
-The worker dials one outbound WebSocket to `/internal/worker` per API
-replica it serves. The API pushes `command` messages; the worker sends
-envelopes back. There is no queue system (Celery, Temporal). The
-follow-up fan-out from the API to SSE clients uses Postgres
-`LISTEN/NOTIFY` behind an `EventBus` interface (a later step), which
-leaves room for NATS or Redis without touching the worker wire.
+The worker dials one outbound WebSocket to `/internal/worker`. It dials
+one URL, so it holds one socket, and a reconnect may land on any API
+replica. The API pushes `command` messages; the worker sends envelopes
+back. There is no queue system (Celery, Temporal). The follow-up
+fan-out from the API to SSE clients uses Postgres `LISTEN/NOTIFY`
+behind an `EventBus` interface, which leaves room for NATS or Redis
+without touching the worker wire.
 
 A WebSocket was chosen because the API must push commands and lease
 revocations to a specific worker, and the worker must stream results
@@ -40,42 +44,71 @@ Every worker to API message after the handshake is
 `{v: 2, session_id, turn_id | null, seq, type, payload}`. `seq` is
 monotonic per session and assigned by the worker. It continues from
 the API's `last_seq` on a new lease or reconnect: a reconnect gets the
-cursor in `hello.reply`, and a new lease gets it in the command that
-starts the work (see Sequence on a new lease).
+cursor in `hello`, and a new lease gets it in the command that starts
+the work (see Sequence on a new lease). The first durable `seq` of a
+session is 1.
 
-Message classes:
+The wire contract, with every message, field, and type, is in
+[the worker protocol specification](https://github.com/GEKI-AI/apipi/blob/main/docs/worker-protocol.md).
+This record keeps the decisions about the two message classes:
 
-* **Durable** (`item.added`, `item.done`, `turn.status`, `usage`,
-  `artifact.completed`, `error`, `sandbox.status`): the worker keeps an
-  outbox until it gets a cumulative `ack{session_id, last_seq}`. The
-  API ingests idempotently (`UNIQUE(session_id, seq)`, a savepoint per
-  envelope), in batches, and acks after commit. The
-  final item is the source of truth, never the deltas.
+* **Durable** (14 envelope types): the worker keeps an outbox until it
+  gets a cumulative `ack{session_id, last_seq}`. The API ingests
+  idempotently: it claims a ledger row (`worker_ingest`, unique on
+  `(session_id, worker_seq)`) inside a savepoint per envelope and treats
+  a conflict as a duplicate. It ingests in batches and acks after
+  commit. The final item is the source of truth, never the deltas.
 * **Ephemeral** (`delta.text`, `delta.reasoning`): at-most-once, never
-  persisted, never acked. Deltas are coalesced before fan-out.
+  persisted, never acked. Deltas are coalesced before fan-out. They
+  carry their own per-session `seq` counter, which the API never checks.
 
-API to worker: `command{command_id, session_id, op, lease_id,
-payload}` (idempotent by `command_id`, on the wire as `id`),
-cumulative `ack{session_id, last_seq}`, `lease.revoke`, and
-`hello.reply{protocol: 2, lease_ttl_seconds, heartbeat_seconds,
-sessions: {id: last_seq}}`.
+API to worker: `command{id, session_id, op, lease_id, payload}`
+(idempotent by `id`), cumulative `ack{session_id, last_seq}`,
+`lease.revoke`, and `hello`.
 
 ## Handshake and version
 
-The first worker message must be
-`register{protocol: 2, worker_id, capabilities, accepts?, running:
-[{session_id, lease_id, last_seq}]}`. `accepts` is an optional list of
-session kinds and is reserved for placement work; it carries no
-behavior yet. The API rejects anything other than `protocol: 2` with
-close code 1008 and reason `unsupported_protocol`, logs the rejection,
-and counts it in `apipi_worker_protocol_total`. A hard cut is
-accepted: old workers cannot connect, and there is no fallback.
+The first worker message must be `register` with `protocol: 2`, the
+sessions the worker still runs, and the session kinds it accepts. The
+API rejects anything other than `protocol: 2` with close code 1008 and
+reason `unsupported_protocol`, logs the rejection, and counts it in
+`apipi_worker_protocol_total`. A hard cut is accepted: old workers
+cannot connect, and there is no fallback.
 
-The API replies with its persisted `last_seq` per running session
-(`0` until sequence persistence lands). The worker replays everything
-after that seq. Sequence persistence is not part of this step: until
-the ingest and replay step lands, the API always sends `last_seq: 0`
-as an explicit placeholder. Nothing may rely on the value yet.
+`accepts` is a list of session kinds (`none`, `microvm`) and drives
+placement: a session is assigned only to a worker whose accepts set
+contains the kind that the session needs.
+
+The API answers with `hello`, which carries the persisted `last_seq` per
+running session. The cursors are persisted (`sessions.worker_seq`,
+advanced by every ingest batch), so the worker replays exactly what the
+API does not hold yet.
+
+## Messages added after the first version
+
+The first version had the envelope stream, commands, and the lease
+messages. These messages were added later, each for one reason:
+
+* **`search.request` and `search.reply`.** The search provider key lives
+  only on the API, so the worker asks the API. It is a synchronous
+  request keyed by `request_id`: not durable, not in the outbox, and
+  never replayed, because a lost search is a tool error and not a turn
+  failure.
+* **`artifact.presign`, `artifact.presign.reply`, and
+  `artifact.completed`.** The worker holds no object-store credentials.
+  The API issues a presigned PUT URL (S3) or a store-root relative path
+  (filesystem store), and the worker reports the finished upload. The
+  reply is stored with the upload slot, so a replay of the envelope gets
+  the same reply.
+* **`inventory` and `inventory.reply`.** The worker reports its live set
+  so the API can reconcile leases, and the reply carries revokes and
+  reaper TTLs. This gives the worker a reaper without a database.
+* **`sandbox.seen`.** The worker reports the live sandbox ids, and the
+  API applies the `touch_seen` update. It replaces the worker writing
+  `touch_seen` itself, which needed a database connection.
+* **`store.proof`.** The filesystem store needs the API and the worker
+  to share one root. The API writes a marker file and a nonce, and the
+  worker proves it can read them.
 
 ## Leases, sequence, and release
 
@@ -87,7 +120,7 @@ own task on a monotonic timer, not when the socket has been quiet. The
 API acks every ingest batch, so a busy turn keeps the socket from ever
 being quiet, and a quiet-socket heartbeat starved until the lease
 expired. The inventory and the drain check run on timers too. The API
-owns the numbers: `hello.reply` carries `lease_ttl_seconds` and
+owns the numbers: `hello` carries `lease_ttl_seconds` and
 `heartbeat_seconds` (a third of the TTL, at most 10 seconds), and the
 worker uses them. A worker-side `APIPI_WORKER_LEASE_TTL` has no effect
 and logs a warning, so the two sides cannot disagree. As defense in
@@ -126,7 +159,7 @@ the receive loop would block the acks it waits for.
 * Losing the socket does not abort a turn. A session is orphaned only
   after the lease TTL, and the turn is not moved to another worker:
   the guest and workspace were on the expired host.
-* A reconnect may go to any replica. It replays after `hello.reply`.
+* A reconnect may go to any replica. It replays after `hello`.
 * The outbox is bounded (`OUTBOX_BOUND`, 10,000 messages, and a byte
   bound). One session may use at most half of each bound. When a bound
   is hit the turn fails with `worker_outbox_full`. The worker does not
@@ -134,10 +167,12 @@ the receive loop would block the acks it waits for.
   from the outbox into the Pi RPC reader, and a turn that cannot report
   its results is better failed with a clear code than stalled.
 * Messages are capped at `MAX_MESSAGE_BYTES` (1,048,576 bytes), and the
-  API rate limits worker messages per session. The worker checks the
-  size before it buffers an envelope and fails the turn with
-  `worker_message_too_large`. Oversize or over-rate messages that still
-  reach the API are rejected and counted.
+  API rate limits only `delta.*` envelopes (100 per second per session,
+  with a text cap of 32 KiB). Every other message is only size capped.
+  The worker checks the size before it buffers an envelope and fails the
+  turn with `worker_message_too_large`. Oversize messages and
+  over-rate deltas that still reach the API are rejected or dropped and
+  counted.
 
 ## Worker robustness
 
@@ -156,13 +191,15 @@ teardown of its session. The cheap local part of a revoke (forgetting
 the lease and the dedupe entries) still happens at once.
 
 **Liveness.** The worker pings every 5 seconds and closes after 10
-seconds without a pong, and it waits 15 seconds for `hello.reply`. A
+seconds without a pong, and it waits 15 seconds for `hello`. A
 half-open socket is then noticed within 15 seconds, half of the default
-30 second lease TTL. A first frame that is not a usable `hello.reply`
+30 second lease TTL. A first frame that is not a usable `hello`
 leads to a reconnect, except for an explicit rejection (`unauthorized`,
-`revoked`, `unsupported_protocol`, `token_bound`, `register required`,
-`invalid register`, `shared_store_required`), which stops the process
-with a clear message because retrying cannot help.
+`revoked`, `unsupported_protocol`, `token_bound`, `register_required`,
+`invalid_register`, `shared_store_required`), which stops the process
+with a clear message because retrying cannot help. A rejection with
+`register_timeout` is retryable: the API sends it when no first message
+arrives within 15 seconds.
 
 **Reconnect.** Exponential backoff with full jitter: a random delay up
 to 0.5 seconds, doubling to a cap of 10 seconds, reset after a
@@ -206,7 +243,7 @@ raised is never acked as a duplicate. The worker tracks a lease only
 for a command it accepted. A rejected `turn.start` releases its lease
 after its failure is acked, and a `turn.cancel` for a session the
 worker does not hold creates none. A lease the worker lets go while no
-socket is open is released after the next `hello.reply`, so the claim
+socket is open is released after the next `hello`, so the claim
 in `register` never drops a lease the API still holds. That was the one
 worker side cause found for a spurious `worker_orphaned` after a
 reconnect; the API side of the reconcile is unchanged here.
@@ -327,9 +364,9 @@ The decisions, and why:
   A frame that takes more than 10 seconds, or a full queue, closes the
   connection with the reason `write_timeout`. Forwarding commands
   between replicas builds on this path.
-* **`hello.reply` is the first frame of the writer, and a connection is
+* **`hello` is the first frame of the writer, and a connection is
   pickable only after it is queued.** Register restores leases and
-  reconciles the inventory first, then queues `hello.reply`, then makes
+  reconciles the inventory first, then queues `hello`, then makes
   the connection visible to placement, commands, and the reaper.
 * **Slow store work runs before the row lock and off the event loop.**
   Presign and `artifact.completed` read and hash the object (in chunks,
@@ -400,6 +437,7 @@ again. The shared `APIPI_WORKER_TOKEN` is removed with no fallback.
 * Revocation is checked at register and on every heartbeat. A revoked
   token closes live sockets and new registers are rejected.
 
-Transport security (TLS for non-loopback API URLs, optional mTLS)
-lands with the final step of the epic. Tokens are bearer secrets until
-then: keep the API URL on a trusted network or behind TLS.
+Transport security has landed: the worker requires TLS for a
+non-loopback API URL and supports optional mTLS. Tokens are bearer
+secrets, so the socket is encrypted outside local development. See
+`docs/workers.md` (Transport security).

@@ -14,9 +14,13 @@ from apipi.protocol.control import (
     LeaseRelease,
     LeaseRevoke,
     SandboxSeenMessage,
-    WorkerEventMessage,
 )
-from apipi.protocol.handshake import HelloReply, RegisterMessage, StoreProof
+from apipi.protocol.handshake import (
+    HelloReply,
+    RegisterMessage,
+    RejectMessage,
+    StoreProof,
+)
 from apipi.protocol.replies import (
     ArtifactPresignReply,
     CumulativeAck,
@@ -29,7 +33,6 @@ WORKER_MESSAGE_MODELS: dict[str, type[ControlMessage]] = {
     "heartbeat": HeartbeatMessage,
     "lease.ack": LeaseAck,
     "lease.release": LeaseRelease,
-    "event": WorkerEventMessage,
     "store.proof": StoreProof,
     "inventory": InventoryMessage,
     "sandbox.seen": SandboxSeenMessage,
@@ -38,6 +41,7 @@ WORKER_MESSAGE_MODELS: dict[str, type[ControlMessage]] = {
 
 API_MESSAGE_MODELS: dict[str, type[ControlMessage]] = {
     "hello": HelloReply,
+    "error": RejectMessage,
     "command": WorkerCommand,
     "ack": CumulativeAck,
     "artifact.presign.reply": ArtifactPresignReply,

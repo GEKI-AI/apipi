@@ -20,7 +20,6 @@ from apipi.protocol import (
     UnsupportedProtocol,
     WorkerCommand,
     WorkerEnvelope,
-    WorkerEventMessage,
     parse_envelope,
     parse_register,
 )
@@ -39,7 +38,7 @@ def test_worker_protocol_commands() -> None:
     assert "register" in WORKER_IN
     assert "heartbeat" in WORKER_IN
     assert "lease.ack" in WORKER_IN
-    assert "event" in WORKER_IN
+    assert "event" not in WORKER_IN
 
 
 def test_worker_ws_url() -> None:
@@ -300,15 +299,6 @@ def test_register_and_hello_reply_round_trip() -> None:
     assert reply.lease_ttl_seconds == 30
     assert reply.heartbeat_seconds == 10
     assert HelloReply.model_validate(reply.model_dump(mode="json")) == reply
-    event = WorkerEventMessage.model_validate(
-        {
-            "type": "event",
-            "lease_id": str(uuid.uuid4()),
-            "event_type": "agent.session.error",
-            "data": {"message": "x"},
-        }
-    )
-    assert event.event_type == "agent.session.error"
 
 
 def test_to_wire_writes_what_the_sender_set() -> None:

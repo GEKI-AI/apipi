@@ -1,0 +1,192 @@
+{
+  "$defs": {
+    "RunningSession": {
+      "properties": {
+        "last_seq": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Last Seq",
+          "type": "integer"
+        },
+        "lease_id": {
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "session_id": {
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lease_id",
+        "session_id"
+      ],
+      "title": "RunningSession",
+      "type": "object"
+    },
+    "WorkerImageInfo": {
+      "description": "One sandbox image a worker can start.",
+      "properties": {
+        "digest": {
+          "default": "",
+          "title": "Digest",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "min_size": {
+          "default": "S",
+          "title": "Min Size",
+          "type": "string"
+        },
+        "version": {
+          "default": "",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "WorkerImageInfo",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "accepts": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Accepts"
+    },
+    "arch": {
+      "default": "",
+      "title": "Arch",
+      "type": "string"
+    },
+    "capabilities": {
+      "additionalProperties": true,
+      "title": "Capabilities",
+      "type": "object"
+    },
+    "capacity": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Capacity",
+      "type": "integer"
+    },
+    "features": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Features"
+    },
+    "id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Id"
+    },
+    "images": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/WorkerImageInfo"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Images"
+    },
+    "memory_mb": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Memory Mb"
+    },
+    "protocol": {
+      "title": "Protocol",
+      "type": "integer"
+    },
+    "run_mode": {
+      "title": "Run Mode",
+      "type": "string"
+    },
+    "running": {
+      "items": {
+        "$ref": "#/$defs/RunningSession"
+      },
+      "title": "Running",
+      "type": "array"
+    },
+    "type": {
+      "const": "register",
+      "default": "register",
+      "title": "Type",
+      "type": "string"
+    },
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Version"
+    }
+  },
+  "required": [
+    "protocol",
+    "run_mode",
+    "type"
+  ],
+  "title": "register message",
+  "type": "object"
+}

@@ -1,7 +1,9 @@
 # Sandbox workers
 
 This page is the operator reference for worker protocol v2: auth,
-messages, leases, drain, and which process needs KVM. Why workers
+messages, leases, drain, and which process needs KVM. The normative
+message-by-message contract is
+[the worker protocol specification](worker-protocol.md). Why workers
 exist and how a turn moves is in [Workers](worker-concepts.md). The
 architecture choice is in
 [ADR 0015](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0015-worker-protocol-v2.md).
@@ -130,10 +132,11 @@ The first worker message must be `register` with `protocol: 2`:
 | `features` | Optional list of the protocol features the worker supports (see [Features and compatibility](#features-and-compatibility)). A register without `features` is a baseline worker. |
 | `capacity`, `memory_mb`, `run_mode`, `arch`, `images` | Placement advertisement, as before. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB (default `capacity ×` guest `mem_mib`). `run_mode` is the process backend (`none`, `microvm`, or a custom class). `arch` is the worker machine. `images` lists `{id, version, digest, min_size}` for guest images on this host. A v2 worker that accepts `microvm` and omits `images` is treated as having `default` and `browser`, except on aarch64, which is treated as having `default` only. |
 
-The API answers with `hello.reply`:
+The API answers with a `hello` frame:
 
 | Field | What |
 | --- | --- |
+| `ok` | Always `true`. |
 | `protocol` | Always `2`. |
 | `worker_id`, `generation` | The worker id and its generation. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
 | `connection_id` | A short id the API gives to this socket. Both processes write it on every log line of the connection, so you can follow one socket across the API and worker logs. A worker that does not see it still runs. |
@@ -145,9 +148,16 @@ The API answers with `hello.reply`:
 | `ttl` | `{session_id: {idle_ttl_seconds, env_type, idle_since_epoch}}`: the effective reaper TTL plus the idle baseline per reported session, so a restarted worker learns idle TTLs without reading the database. |
 | `features` | The protocol features the API supports (see [Features and compatibility](#features-and-compatibility)). A `hello` without `features` comes from a baseline API. |
 
-A first message that is not `register` is rejected with
-`register required`. A bad register is rejected with
-`invalid register`. Rejections are logged on the API and counted in
+A rejection is an object `{"type": "error", "ok": false, "error":
+"<short text>", "code": "<close reason>"}`, sent before the socket
+closes. `code` equals the WebSocket close reason. A first message that
+is not `register` is rejected with the text `register required` and
+the code `register_required`. A bad register is rejected with the text
+`invalid register` and the code `invalid_register`. If no first
+message arrives within 15 seconds, the API sends the reject with the
+code `register_timeout` and closes the socket with code `1008` and
+reason `register_timeout`. The worker treats `register_timeout` as
+retryable. Rejections are logged on the API and counted in
 `apipi_worker_connects_total{result}` (`unsupported_protocol`,
 `invalid_register`, `unauthorized`, `revoked`, `token_bound`). A
 durable envelope that fails ingest validation (not leased to this
@@ -170,13 +180,16 @@ Worker to API:
 | `store.proof` | `marker`, `nonce` | Proof the worker sees the shared store root (filesystem store only). The worker reads the `hello` `store_check` marker file and echoes its nonce. A wrong proof closes the socket with `shared_store_required`. |
 | `inventory` | `sessions: [{session_id, lease_id, last_seq}]` | The worker live set, sent on hello (as `running`) and every 60s after, from a timer of its own. Drives reconciliation and the lifecycle heartbeat (see [Inventory](#inventory)). |
 | `sandbox.seen` | `session_ids` | Live sandbox ids, about every 5s. The API applies the same `touch_seen` update the worker used to write itself; ids not leased to this connection are ignored. |
-| `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |
 | `search.request` | `request_id`, `session_id`, `turn_id`, `query`, `max_results` (nullable) | One `web_search` call from the Pi tool, forwarded by the session broker. A synchronous request, not an envelope. See [Search requests](#search-requests). |
 | envelope (`v: 2`) | `session_id`, `turn_id`, `seq`, `type`, `payload` | Ephemeral deltas (`delta.text`, `delta.reasoning`; see [Live deltas](#live-deltas)) and durable envelopes below. Artifact and file bytes never travel here, only ids, paths, sizes, and checksums. |
 
 The v2 envelope (`{v: 2, session_id, turn_id | null, seq, type,
 payload}`) and its message schemas are defined in the
 `src/apipi/protocol/` package, which the API and the worker share.
+The normative contract is [the worker protocol
+specification](worker-protocol.md), with JSON Schema under
+`docs/worker-protocol/schema/` and golden transcripts under
+`tests/fixtures/worker-protocol/`.
 Every message on the socket, in both directions, is built from one of
 those models and parsed through one (see [Code layout](#code-layout)).
 Durable envelopes are batched per connection (about 50ms or
@@ -190,11 +203,11 @@ API to worker:
 | --- | --- | --- |
 | `hello` | `ok`, `protocol`, `worker_id`, `generation`, `connection_id`, `lease_ttl_seconds`, `heartbeat_seconds`, `sessions`, `store_check`, `revoke`, `ttl`, `features` | Register succeeded. `store_check` is present only for the filesystem store. |
 | `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. `turn.start`, `turn.continue`, and `sandbox.boot` carry `payload.last_seq`, the session sequence cursor (see [Sequence on a new lease](#sequence-on-a-new-lease)). |
-| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
+| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. `expires_at` is an RFC 3339 UTC time with `Z` and milliseconds, for example `2026-01-02T03:04:05.678Z`. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
 | `search.reply` | `session_id`, `request_id`, `ok`, `results`, `code`, `message` | Answer to one `search.request`. `results` is a list of `title`, `url`, `snippet`, and `published_date` (nullable), the same for every provider. On failure `ok` is false, `code` is one of `search_denied`, `search_unavailable`, `search_timeout`, `search_failed`, or `invalid_request`, and `message` is a short text that is safe to show the model. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
-| `inventory.reply` | `revoke: [lease.revoke]`, `ttl: {session_id: {...}}` | Answer to `inventory` (and part of `hello.reply`): sessions to tear down plus reaper TTLs. A revoke entry for an on-disk workspace the worker holds no lease for has no `lease_id`. |
-| error object | `ok: false`, `error` | Auth or register failed, then the socket closes. |
+| `inventory.reply` | `revoke: [lease.revoke]`, `ttl: {session_id: {...}}` | Answer to `inventory` (and part of `hello`): sessions to tear down plus reaper TTLs. A revoke entry for an on-disk workspace the worker holds no lease for has no `lease_id`. |
+| `error` | `ok: false`, `error`, `code` | Auth or register failed, then the socket closes. `code` equals the close reason (see [Handshake](#handshake)). |
 
 Message classes:
 
@@ -282,7 +295,7 @@ skipped when the file is read again.
 
 On start the worker reads the spool, logs one `worker.spool.recovered`
 line (sessions, envelopes, bytes, and skipped lines), and sends the
-envelopes after the next `hello.reply`. After a restart the worker no
+envelopes after the next `hello`. After a restart the worker no
 longer holds the leases, so the API may have orphaned them already.
 The API then rejects the envelopes as `not_leased`, acks past them,
 and the worker drops them. The spool exists so results are not lost
@@ -385,6 +398,8 @@ reconnect and export skip deltas. After a reconnect the record of
 finished turns starts empty, so a straggling delta for a turn that
 finished before the reconnect can be published once more; it is
 ephemeral and the final item replaces it.
+Delta envelopes carry their own per-session `seq` counter, which the
+API never checks. The durable `seq` starts at 1.
 Per-session delta state is dropped when the lease ends or the
 connection closes. `delta.reasoning` envelopes are accepted but
 never fanned out.
@@ -432,10 +447,12 @@ Losing the socket does not abort a turn. A session is orphaned only
 after the lease TTL, and the turn is not moved to another worker.
 
 After the socket comes back, the worker adopts the cursors in
-`hello.reply` and sends every envelope that is still unacked once
+`hello` and sends every envelope that is still unacked once
 (see [Messages](#messages)). Commands the API sent but the worker did
-not ack are sent again by the API, and the worker's dedupe tells such
-a retransmit from a new command. A command that failed in dispatch is
+not ack are sent again by the API when the worker reconnects and every
+5 seconds while it is connected, never after the lease ended (see
+[Commands](#commands)). The worker's dedupe tells such a retransmit
+from a new command. A command that failed in dispatch is
 not recorded as done, so its retransmit runs again.
 
 ## Commands
@@ -591,14 +608,15 @@ harvest behind them all run as tasks, so heartbeats, acks, presign
 replies, and pongs keep flowing while they wait for a reply. Commands
 and teardowns for the same session still run in order.
 
-The worker waits at most 15 seconds for `hello.reply` after it sends
+The worker waits at most 15 seconds for `hello` after it sends
 `register`. If the API accepted the socket but does not answer, the
 worker closes it and reconnects (`hello_timeout`). A first frame that
-is not a usable `hello.reply` also leads to a reconnect. Only an
-explicit rejection stops the process with a clear message:
+is not a usable `hello` also leads to a reconnect, and so does the
+rejection `register_timeout`. Only another explicit rejection stops
+the process with a clear message:
 `unauthorized`, `revoked`, `unsupported_protocol`, `token_bound`,
-`register required`, `invalid register`, and `shared_store_required`.
-A `hello.reply` without positive `heartbeat_seconds` and
+`register_required`, `invalid_register`, and `shared_store_required`.
+A `hello` without positive `heartbeat_seconds` and
 `lease_ttl_seconds` also stops the worker.
 
 After a lost connection the worker waits a random time before it
@@ -625,7 +643,7 @@ the worker does not hold does not create a lease.
 
 When the worker lets a lease go while no socket is open (an idle Pi
 exits, for example), it remembers the release and sends `lease.release`
-after the next `hello.reply`, once the API acked the envelopes of that
+after the next `hello`, once the API acked the envelopes of that
 session. Without that the claim in the next `register` would be missing
 a lease the API still holds, and the API would orphan an idle session.
 Every background task of the worker has a done callback that logs an
@@ -682,14 +700,15 @@ in a thread too.
 
 A reconnect may go to any replica. The worker sends its running
 sessions with their `last_seq` in `register`; the API answers with
-the persisted `last_seq` per session in `hello.reply`; the worker
+the persisted `last_seq` per session in `hello`; the worker
 replays everything after that seq. The reconnect also renews the
 reattached leases, so running turns stay alive and the lease moves
 to the new replica. Duplicates are no-ops: the
 `worker_ingest` ledger claims each `(session_id, worker_seq)` inside
 the batch transaction, so replays apply exactly once. Unacked
-commands are retransmitted
-with the same `command.id`, and the worker keeps recent ids per
+commands are retransmitted when the worker reconnects and every 5
+seconds while it is connected, with the same command `id`, and the
+worker keeps recent ids per
 session for its whole lifetime (not per connection, so a replay after
 a reconnect is still recognised): a retransmit is acked again but
 never dispatched twice, so
@@ -751,7 +770,7 @@ without a lease and without a ledger row.
 ## Heartbeats and lease renewal
 
 A lease expires `APIPI_WORKER_LEASE_TTL` after its last renewal. The
-worker sends `heartbeat` every `heartbeat_seconds` (from `hello.reply`)
+worker sends `heartbeat` every `heartbeat_seconds` (from `hello`)
 on a timer that does not depend on the socket being quiet, and the
 API renews every lease of that worker on each heartbeat. As defense in
 depth the API also renews a worker's leases when the worker acks a
@@ -803,7 +822,7 @@ so slow work on one kind of message never delays the others.
 | Receive loop | Reads a frame, parses it, and hands it to one of the lanes below. It does no database or store work. |
 | Writer | The only place that writes to the socket. Every frame goes through its bounded queue of 1024 frames: replies, acks, commands from HTTP requests, and `lease.revoke` from the reaper. A frame that is not written within 10 seconds, or a full queue, closes the connection with the reason `write_timeout`. |
 | Control lane | Handles `heartbeat`, `lease.ack`, `lease.release`, `inventory`, `sandbox.seen`, and `store.proof` in order. Ingest, presign, and artifact checks never wait in front of it, so heartbeats keep the leases alive while a large artifact is verified. |
-| Ingest lane | Applies durable envelopes in batches and handles the legacy `event` message, in order. Presign and `artifact.completed` read the object store before the batch transaction opens. A `lease.release` for a session with envelopes still waiting goes through this lane, so it never overtakes them. |
+| Ingest lane | Applies durable envelopes in batches, in order. Presign and `artifact.completed` read the object store before the batch transaction opens. A `lease.release` for a session with envelopes still waiting goes through this lane, so it never overtakes them. |
 | Delta lane | Validates and publishes live deltas. When 1024 deltas wait, further deltas are dropped and counted as `delta.queue_full`. |
 | Search tasks | One task per `search.request`, at most 32 at a time. |
 
@@ -811,7 +830,7 @@ If the ingest lane is full (2048 messages), the receive loop waits for
 it, which also delays the control lane. This only happens when a
 worker sends faster than the API can store.
 
-The API sends nothing to a worker before `hello.reply`. The reply is
+The API sends nothing to a worker before `hello`. The `hello` frame is
 the first frame in the writer queue, and the connection becomes
 visible to placement, commands, and the reaper only after that, so no
 command, revoke, or ack can reach a worker that has not seen its

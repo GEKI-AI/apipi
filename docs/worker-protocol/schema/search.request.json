@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Worker to API. One `web_search` call, a synchronous request.\n\nIt is not an envelope: it never enters the outbox, has no `seq`, and\nis never acked or replayed. The worker waits for the matching\n`search.reply` with a timeout. A dropped socket fails the waiter and\nthe model gets a tool error. It carries no provider name and no key.",
+  "properties": {
+    "max_results": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Results"
+    },
+    "query": {
+      "title": "Query",
+      "type": "string"
+    },
+    "request_id": {
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "session_id": {
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "turn_id": {
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Turn Id",
+      "type": "string"
+    },
+    "type": {
+      "const": "search.request",
+      "default": "search.request",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "query",
+    "request_id",
+    "session_id",
+    "turn_id",
+    "type"
+  ],
+  "title": "search.request message",
+  "type": "object"
+}

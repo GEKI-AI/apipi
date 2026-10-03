@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Worker to API. Periodic live sandbox ids; idempotent like touch_seen.",
+  "properties": {
+    "session_ids": {
+      "items": {
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "type": "string"
+      },
+      "title": "Session Ids",
+      "type": "array"
+    },
+    "type": {
+      "const": "sandbox.seen",
+      "default": "sandbox.seen",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "title": "sandbox.seen message",
+  "type": "object"
+}

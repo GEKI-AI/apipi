@@ -28,7 +28,6 @@ from apipi.protocol import (
     COMMAND_OPS,
     CURSOR_OPS,
     OP_FEATURES,
-    PUBLIC_EVENT_TYPES,
     BaseCommandPayload,
     LeaseRevoke,
     RunningSession,
@@ -962,28 +961,3 @@ class WorkerHub:
     ) -> None:
         """Feed the delta gate with events ingest just stored."""
         delta_gate.note_stored_events(self, session_id, bodies)
-
-    async def handle_event(
-        self,
-        store: Store,
-        hub: EventBus,
-        *,
-        lease_id: uuid.UUID,
-        event_type: str,
-        data: dict[str, Any] | None,
-    ) -> bool:
-        if event_type not in PUBLIC_EVENT_TYPES:
-            return False
-        async with store.session() as db:
-            row = await get_session_by_lease(db, lease_id)
-            if row is None:
-                return False
-            await persist_event(
-                db,
-                hub,
-                row.tenant_id,
-                row.id,
-                type=event_type,
-                data=data,
-            )
-        return True

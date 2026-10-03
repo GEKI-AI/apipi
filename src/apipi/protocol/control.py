@@ -1,9 +1,8 @@
 """Control messages that keep a worker connection alive and consistent.
 
 Worker to API: `heartbeat`, `lease.ack`, `lease.release`, `inventory`,
-`sandbox.seen`, and the legacy `event`. API to worker: `lease.revoke`
-and `inventory.reply`. None of these are envelopes: they have no `seq`
-and never enter the outbox.
+and `sandbox.seen`. API to worker: `lease.revoke` and `inventory.reply`.
+None of these are envelopes: they have no `seq` and never enter the outbox.
 """
 
 import uuid
@@ -151,12 +150,3 @@ class HeartbeatMessage(ControlMessage):
     @classmethod
     def _valid_images(cls, value: Any) -> Any:
         return keep_valid_images(value)
-
-
-class WorkerEventMessage(ControlMessage):
-    """Legacy worker to API event (replaced by `WorkerEnvelope`)."""
-
-    type: Literal["event"] = "event"
-    lease_id: uuid.UUID
-    event_type: str
-    data: dict[str, Any] | None = None

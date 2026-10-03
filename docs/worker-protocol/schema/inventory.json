@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "InventoryEntry": {
+      "description": "One session the worker reports.\n\nA missing `lease_id` reports an on-disk workspace the worker holds\nno lease for: the API answers with a reaper TTL while the session\nis leased and a revoke (which wipes the dir) once it is free.",
+      "properties": {
+        "last_seq": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Last Seq",
+          "type": "integer"
+        },
+        "lease_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lease Id"
+        },
+        "session_id": {
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "InventoryEntry",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Worker to API. Periodic live-set report; also drives reconcile.",
+  "properties": {
+    "sessions": {
+      "items": {
+        "$ref": "#/$defs/InventoryEntry"
+      },
+      "title": "Sessions",
+      "type": "array"
+    },
+    "type": {
+      "const": "inventory",
+      "default": "inventory",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "title": "inventory message",
+  "type": "object"
+}

@@ -5,6 +5,8 @@ from typing import Any
 from fastapi import FastAPI
 from starlette.types import Message
 
+from tests.support import wire_schema
+
 
 class AsgiWebsocket:
     def __init__(
@@ -43,6 +45,9 @@ class AsgiWebsocket:
             return await self._incoming.get()
 
         async def send(message: Message) -> None:
+            text = message.get("text")
+            if message["type"] == "websocket.send" and isinstance(text, str):
+                wire_schema.record(wire_schema.API_TO_WORKER, text)
             await self._outgoing.put(message)
 
         self._task = asyncio.create_task(self.app(scope, receive, send))

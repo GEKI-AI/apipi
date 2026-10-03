@@ -11,6 +11,7 @@ UNSUPPORTED_PROTOCOL_REASON = "unsupported_protocol"
 UNAUTHORIZED_REASON = "unauthorized"
 REVOKED_REASON = "revoked"
 REGISTER_REQUIRED_REASON = "register_required"
+REGISTER_TIMEOUT_REASON = "register_timeout"
 INVALID_REGISTER_REASON = "invalid_register"
 TOKEN_BOUND_REASON = "token_bound"
 SHARED_STORE_REASON = "shared_store_required"
@@ -42,7 +43,6 @@ WORKER_IN = frozenset(
         "heartbeat",
         "lease.ack",
         "lease.release",
-        "event",
         "store.proof",
         "inventory",
         "sandbox.seen",

@@ -87,6 +87,7 @@ nav:
       - Auth: auth.md
       - Environments: environments.md
       - Sandbox workers: workers.md
+      - Worker protocol: worker-protocol.md
       - Tools and skills: tools.md
       - Usage: usage.md
       - How it works: architecture.md

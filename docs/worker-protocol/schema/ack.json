@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "API to worker. Cumulative ack: everything up to `last_seq` is persisted.",
+  "properties": {
+    "last_seq": {
+      "minimum": 0,
+      "title": "Last Seq",
+      "type": "integer"
+    },
+    "session_id": {
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "title": "Session Id",
+      "type": "string"
+    },
+    "type": {
+      "const": "ack",
+      "default": "ack",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "last_seq",
+    "session_id",
+    "type"
+  ],
+  "title": "ack message",
+  "type": "object"
+}

@@ -1,0 +1,10 @@
+{"fixture": "revoke", "format": 1, "title": "The API revokes a lease and the worker drops the session", "description": "The lease of a session expires on the API. The API clears it and sends lease.revoke to the worker."}
+{"step": "connect"}
+{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "store_check": "<store_check>", "revoke": [], "ttl": {}, "features": ["lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "worker", "frame": {"type": "store.proof", "marker": "<var:marker>", "nonce": "<var:nonce>"}}
+{"step": "action", "for": "api", "name": "create_session"}
+{"step": "action", "for": "api", "name": "lease_session"}
+{"step": "action", "for": "api", "name": "expire_lease"}
+{"from": "api", "frame": {"type": "lease.revoke", "session_id": "<uuid:session>", "lease_id": "<uuid:lease>"}}
+{"step": "check", "for": "api", "name": "lease_cleared"}
