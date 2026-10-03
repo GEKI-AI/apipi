@@ -644,3 +644,117 @@ def test_batcher_full_and_window() -> None:
     assert batcher.should_flush(0.05) is True
     assert len(batcher.take()) == 2
     assert len(batcher) == 0
+
+
+async def _flush_with_metrics(
+    store: Store,
+    worker_id: uuid.UUID,
+    envelopes: list[WorkerEnvelope],
+    metrics: Any,
+    settings: Any = None,
+):
+    batcher = IngestBatcher()
+    for envelope in envelopes:
+        batcher.add(envelope, 128)
+    return await flush_batch(
+        store,
+        batcher.take(),
+        worker_id=worker_id,
+        settings=settings,
+        metrics=metrics,
+    )
+
+
+async def test_ingest_counts_ok_duplicate_and_rejected(
+    store: Store, settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    from tests.support.prom import metric_line
+
+    from apipi.gateway.metrics import Metrics
+
+    metrics = Metrics()
+    worker_id = uuid.uuid4()
+    _tenant, session_id, _lease = await _leased(store, worker_id)
+    flow = _turn_flow(session_id, uuid.uuid4())
+    await _flush_with_metrics(store, worker_id, flow, metrics, settings)
+    with caplog.at_level("INFO", logger="apipi.worker"):
+        await _flush_with_metrics(store, worker_id, flow[:3], metrics, settings)
+    stranger = uuid.uuid4()
+    await _flush_with_metrics(
+        store,
+        stranger,
+        [_envelope(session_id, 14, "session.status", {"status": "idle"})],
+        metrics,
+        settings,
+    )
+    body = metrics.scrape().decode()
+    assert metric_line(
+        body, "apipi_worker_ingest_total", type="turn.status", result="ok"
+    ).endswith(" 2.0")
+    assert metric_line(
+        body, "apipi_worker_ingest_total", type="turn.status", result="duplicate"
+    ).endswith(" 1.0")
+    assert metric_line(
+        body, "apipi_worker_ingest_total", type="session.status", result="duplicate"
+    ).endswith(" 1.0")
+    assert metric_line(
+        body, "apipi_worker_ingest_total", type="session.status", result="rejected"
+    ).endswith(" 1.0")
+    assert metric_line(
+        body, "apipi_worker_ingest_rejected_total", reason="not_leased"
+    ).endswith(" 1.0")
+    duplicates = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "worker.ingest.duplicate"
+    ]
+    assert len(duplicates) == 1
+    fields = duplicates[0].__dict__
+    assert (fields["count"], fields["first_seq"], fields["last_seq"]) == (3, 1, 3)
+
+
+async def test_rejected_envelopes_of_a_stale_worker_do_not_move_the_cursor(
+    store: Store, settings
+) -> None:
+    owner = uuid.uuid4()
+    _tenant, session_id, _lease = await _leased(store, owner)
+    await _flush(
+        store,
+        owner,
+        [_envelope(session_id, 1, "session.status", {"status": "idle"})],
+        settings,
+    )
+    stale = uuid.uuid4()
+    outcome = await _flush(
+        store,
+        stale,
+        [_envelope(session_id, 50, "session.status", {"status": "idle"})],
+        settings,
+    )
+    assert outcome.acks == {session_id: 50}
+    assert await last_seq_for(store, owner, session_id) == 1
+
+
+async def test_workspace_reaped_is_acked_after_the_lease_ended(
+    store: Store, settings
+) -> None:
+    from sqlalchemy import select
+
+    from apipi.store.models import WorkerIngest
+    from apipi.store.repo import clear_session_lease
+
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    async with store.session() as db:
+        await clear_session_lease(db, tenant_id, session_id)
+    outcome = await _flush(
+        store,
+        worker_id,
+        [_envelope(session_id, 7, "workspace.reaped", {"reason": "idle"})],
+        settings,
+    )
+    assert outcome.acks == {session_id: 7}
+    assert outcome.rejected == []
+    async with store.session() as db:
+        rows = (await db.scalars(select(WorkerIngest))).all()
+    assert rows == []

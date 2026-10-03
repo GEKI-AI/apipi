@@ -134,6 +134,8 @@ The API answers with `hello.reply`:
 | --- | --- |
 | `protocol` | Always `2`. |
 | `worker_id`, `generation` | The worker id and its generation. Reconnect bumps `generation` so a split brain cannot keep both sockets. |
+| `lease_ttl_seconds` | The lease TTL the API enforces (`APIPI_WORKER_LEASE_TTL` on the API). The worker uses it to judge its own heartbeat gaps and ignores any local setting. |
+| `heartbeat_seconds` | How often the worker must send `heartbeat`: a third of the lease TTL, at most 10 seconds. The worker sends it on its own timer. A `hello` without a positive value for this field or for `lease_ttl_seconds` makes the worker stop with an error. |
 | `sessions` | `{session_id: last_seq}`: the persisted sequence per running session. The worker replays everything after that seq. `last_seq` is the `sessions.worker_seq` cursor that ingest advances with every batch, so a reconnect resumes exactly where the API persisted. |
 | `store_check` | Only with `APIPI_ARTIFACT_STORE=local`: `{marker, nonce}`. The API writes `marker` into the shared store root containing `nonce`; the worker must read it back and answer with `store.proof`. Without the same filesystem the register is rejected with `filesystem store requires a shared path`. |
 | `revoke` | Sessions the worker claimed that hold no matching lease here (`[{session_id, lease_id}]`, each sent as `lease.revoke`). The worker tears those guests down. |
@@ -158,11 +160,11 @@ Worker to API:
 | `type` | Fields | What |
 | --- | --- | --- |
 | `register` | See [Handshake](#handshake) | Create or reconnect the worker. |
-| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `accepts` (optional), `arch` (optional), `drain` (optional bool), `images` (optional list) | Refresh `last_seen`. May update caps, advertised `run_mode` and accepts set, architecture, drain posture, and the image list. |
+| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `accepts` (optional), `arch` (optional), `drain` (optional bool), `images` (optional list) | Refresh `last_seen` and renew every lease of the worker. Sent every `heartbeat_seconds` from a timer of its own, so a busy socket does not delay it. May update caps, advertised `run_mode` and accepts set, architecture, drain posture, and the image list. |
 | `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
-| `lease.release` | `session_id`, `lease_id` | Worker dropped the session. |
+| `lease.release` | `session_id`, `lease_id` | Worker dropped the session. The worker sends it only after the API acked every envelope the worker buffered for that session (see [Release order](#release-order)). |
 | `store.proof` | `marker`, `nonce` | Proof the worker sees the shared store root (filesystem store only). The worker reads the `hello` `store_check` marker file and echoes its nonce. A wrong proof closes the socket with `shared_store_required`. |
-| `inventory` | `sessions: [{session_id, lease_id, last_seq}]` | The worker live set, sent on hello (as `running`) and about every 60s after. Drives reconciliation and the lifecycle heartbeat (see [Inventory](#inventory)). |
+| `inventory` | `sessions: [{session_id, lease_id, last_seq}]` | The worker live set, sent on hello (as `running`) and every 60s after, from a timer of its own. Drives reconciliation and the lifecycle heartbeat (see [Inventory](#inventory)). |
 | `sandbox.seen` | `session_ids` | Live sandbox ids, about every 5s. The API applies the same `touch_seen` update the worker used to write itself; ids not leased to this connection are ignored. |
 | `event` | `lease_id`, `event_type`, `data` | Persist a public session event. The worker must hold that lease. Unknown event types are ignored. |
 | `search.request` | `request_id`, `session_id`, `turn_id`, `query`, `max_results` (nullable) | One `web_search` call from the Pi tool, forwarded by the session broker. A synchronous request, not an envelope. See [Search requests](#search-requests). |
@@ -180,8 +182,8 @@ API to worker:
 
 | `type` | Fields | What |
 | --- | --- | --- |
-| `hello` | `ok`, `protocol`, `worker_id`, `generation`, `sessions`, `store_check` | Register succeeded. `store_check` is present only for the filesystem store. |
-| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. |
+| `hello` | `ok`, `protocol`, `worker_id`, `generation`, `lease_ttl_seconds`, `heartbeat_seconds`, `sessions`, `store_check` | Register succeeded. `store_check` is present only for the filesystem store. |
+| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. `turn.start`, `turn.continue`, and `sandbox.boot` carry `payload.last_seq`, the session sequence cursor (see [Sequence on a new lease](#sequence-on-a-new-lease)). |
 | `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
 | `search.reply` | `session_id`, `request_id`, `ok`, `results`, `code`, `message` | Answer to one `search.request`. `results` is a list of `title`, `url`, `snippet`, and `published_date` (nullable), the same for every provider. On failure `ok` is false, `code` is one of `search_denied`, `search_unavailable`, `search_timeout`, `search_failed`, or `invalid_request`, and `message` is a short text that is safe to show the model. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
@@ -398,9 +400,72 @@ never dispatched twice, so
 a duplicate `turn.start` cannot start a second turn. Ids are forgotten
 when the session is torn down, stopped, or revoked.
 
+## Sequence on a new lease
+
+The sequence number of a session is one counter for the life of the
+session, not one per lease. The API ledger holds each `(session_id,
+seq)` once and never clears it, so a worker that restarted a session
+at seq 1 would have its whole turn skipped as duplicates. To prevent
+that, every `turn.start`, `turn.continue`, and `sandbox.boot` carries
+`payload.last_seq`, the `sessions.worker_seq` cursor read after the
+lease was granted. The worker calls `set_base` on its outbox with that
+value before it dispatches the command, so the next envelope is
+`last_seq + 1`. The call never moves the counter backwards and drops
+buffered envelopes the API already holds, so it is safe on a worker
+that kept the buffer of an earlier lease. A command without a valid
+`last_seq` is dispatched anyway and logged as
+`worker.command.cursor_missing`.
+
+Only the worker that holds the session's lease can move the cursor.
+Envelopes from a worker that no longer holds the lease are rejected
+and acked, but they do not advance `sessions.worker_seq`, so they
+cannot make the next lease holder skip its own envelopes.
+
+## Release order
+
+Envelopes and control messages share one socket, but the outbox pump
+and the control messages are separate writers, so a `lease.release`
+could overtake envelopes still waiting in the outbox. The API clears
+the lease when it handles the release, and ingest rejects envelopes of
+a session without a lease as `not_leased`. That lost the `lifecycle.stop` billing
+envelope, the final `sandbox.status`, harvested `artifact.completed`
+envelopes, and `session.stopped`.
+
+The worker therefore sends `lease.release` only after the API acked
+every envelope the worker had buffered for the session when the
+release started. The same rule holds for the `lease.ack` of a
+`session.stop` command: it follows the ack of `session.stopped`. The
+wait has a limit (`RELEASE_FLUSH_TIMEOUT`, 10 seconds). When it runs
+out, for example because the socket is down, the worker releases
+anyway and logs `worker.release.unflushed`. The API also ingests the
+batch it still holds before it handles a `lease.release`, so envelopes
+that arrived before the release are never rejected because of it.
+
+`workspace.reaped` is sent after an idle wipe, which is after the
+lease ended, so it can never be ordered before the release. It changes
+nothing on the API, so the API acks it for any existing session
+without a lease and without a ledger row.
+
+## Heartbeats and lease renewal
+
+A lease expires `APIPI_WORKER_LEASE_TTL` after its last renewal. The
+worker sends `heartbeat` every `heartbeat_seconds` (from `hello.reply`)
+on a timer that does not depend on the socket being quiet, and the
+API renews every lease of that worker on each heartbeat. As defense in
+depth the API also renews a worker's leases when the worker acks a
+command or when a durable batch from it is committed, at most once per
+heartbeat interval. The worker sends the inventory and runs its drain
+check on their own timers as well. A worker that has
+`APIPI_WORKER_LEASE_TTL` set ignores it and logs
+`worker.lease_ttl.ignored`.
+
+`apipi_worker_heartbeat_gap_seconds` records the gap between two
+heartbeats on both sides, and a gap above half the lease TTL logs
+`worker.heartbeat.late`. See [observability](observability.md#worker-leases-and-ingest).
+
 ## Inventory
 
-On hello and about every 60s after, the worker reports its live set
+On hello and every 60s after, the worker reports its live set
 as `inventory{sessions: [{session_id, lease_id, last_seq}]}`. The API
 compares it with the lease rows for that worker. Sessions leased
 here but not reported are orphaned: the API records
@@ -432,7 +497,7 @@ A lease is durable on the session row (`worker_id`, `lease_id`,
 `lease_until`) and owned entirely by the API. Grant is a single
 conditional `UPDATE`: it only
 succeeds when there is no live lease. The replica holding the socket
-renews the lease on heartbeat. On reconnect the new replica takes the
+renews the lease on heartbeat (and on command acks and committed ingest batches, see [Heartbeats and lease renewal](#heartbeats-and-lease-renewal)). On reconnect the new replica takes the
 lease over: register already points `workers.api_instance_id` at it,
 and `restore_leases` renews exactly the leases the worker still
 reports with a conditional `UPDATE` matching `worker_id` and
@@ -555,7 +620,9 @@ RAM. Session count is only a filter and a tie-break.
 
 Session delete sends `session.stop` to the worker that holds the
 lease. The worker kills that guest and deletes host files it owns,
-then acknowledges. The API drops the lease only after that
+then acknowledges once the API has acked everything the worker buffered
+for the session, including `session.stopped` (see [Release
+order](#release-order)). The API drops the lease only after that
 acknowledgement. A delete does not wait for idle TTL.
 
 `SIGTERM` or `SIGINT` on `apipi worker` sends that drain heartbeat,
@@ -574,7 +641,7 @@ When `lease_until` passes, the lease is cleared and the session gets
 `worker_lease_expired`. The turn is not moved to another worker: the
 guest and workspace were on the expired host. Start a new turn after
 that error. Heartbeats extend `lease_until` so a live worker does not
-expire mid-turn.
+expire mid-turn, even when its socket is busy with envelopes.
 
 Host Pi (`none`) is a child of the worker. A graceful stop
 runs pool teardown. A `kill -9` of the worker leaves those children.

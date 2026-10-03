@@ -148,6 +148,8 @@ class HelloReply(WireModel):
     protocol: Literal[2] = 2
     worker_id: uuid.UUID
     generation: int
+    lease_ttl_seconds: float = Field(gt=0)
+    heartbeat_seconds: float = Field(gt=0)
     sessions: dict[uuid.UUID, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
     store_check: StoreCheck | None = None
     revoke: list[dict[str, Any]] = Field(default_factory=list)

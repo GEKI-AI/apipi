@@ -327,7 +327,6 @@ async def test_split_mode_deltas_and_http_mcp(
             draining=asyncio.Event(),
             drain_deadline=None,
             wait=60.0,
-            heartbeat=1.0,
             emitter=None,
             dedupe=CommandDedupe(),
         )

@@ -108,6 +108,17 @@ DELTA_TERMINAL_TYPES = frozenset(
 )
 _DELTA_DONE_CAP = 256
 DELTA_LEASE_REFRESH = 30.0
+CURSOR_OPS = frozenset({"turn.start", "turn.continue", "sandbox.boot"})
+INVENTORY_INTERVAL = 60.0
+RELEASE_FLUSH_TIMEOUT = 10.0
+MAX_HEARTBEAT_SECONDS = 10.0
+MIN_HEARTBEAT_SECONDS = 0.05
+
+
+def heartbeat_interval(settings: Settings) -> float:
+    """The heartbeat interval the API tells every worker: a third of the TTL."""
+    ttl = settings.worker_lease_ttl.total_seconds()
+    return min(MAX_HEARTBEAT_SECONDS, max(ttl / 3, MIN_HEARTBEAT_SECONDS))
 
 
 def _done_turns_in(events: list[Any]) -> set[str]:
@@ -173,6 +184,9 @@ class WorkerConnection:
     images: dict[str, WorkerImage] = field(default_factory=dict)
     accepts: frozenset[str] = frozenset({"none"})
     store_proof: tuple[str, str] | None = None
+    connected_at: float = field(default_factory=time.monotonic)
+    last_heartbeat: float | None = None
+    last_renewed: float = field(default_factory=time.monotonic)
 
 
 class WorkerHub:
@@ -201,8 +215,31 @@ class WorkerHub:
         if self.metrics is not None:
             self.metrics.observe_worker_protocol(event)
 
+    def observe_lease_event(self, event: str) -> None:
+        if self.metrics is not None:
+            self.metrics.observe_worker_lease_event(event)
+
     def get(self, worker_id: uuid.UUID) -> WorkerConnection | None:
         return self._conns.get(worker_id)
+
+    async def renew_on_activity(self, store: Store, conn: WorkerConnection) -> None:
+        """Renew the worker's leases when it showed life without a heartbeat.
+
+        Called after a committed ingest batch and on `lease.ack`. At most
+        one renewal per heartbeat interval, so a busy socket costs one
+        extra UPDATE per interval, not one per envelope.
+        """
+        now = time.monotonic()
+        if now - conn.last_renewed < heartbeat_interval(self.settings):
+            return
+        conn.last_renewed = now
+        async with store.session() as db:
+            await extend_worker_leases(
+                db,
+                conn.worker_id,
+                lease_until=utc_now() + self.settings.worker_lease_ttl,
+            )
+        self.observe_lease_event("renewed")
 
     async def attach(self, conn: WorkerConnection) -> WorkerConnection | None:
         async with self._lock:
@@ -462,6 +499,9 @@ class WorkerHub:
             if row is None:
                 self._unacked.pop(lease_id, None)
                 return None
+            cursor = row.worker_seq
+        if op in CURSOR_OPS:
+            command["payload"]["last_seq"] = cursor
         conn.leases.add(lease_id)
         conn.lease_mem[lease_id] = session_mem
         self._note_delta_lease(
@@ -498,6 +538,7 @@ class WorkerHub:
                 return None
             worker_id = row.worker_id
             lease_id = row.lease_id
+            cursor = row.worker_seq
             required = placement_for(environment=row.environment)
         conn = self._conns.get(worker_id)
         if conn is None or lease_id not in conn.leases:
@@ -530,6 +571,8 @@ class WorkerHub:
                 _payload_with_run_mode(payload, required), follow_image
             ),
         }
+        if op in CURSOR_OPS:
+            command["payload"]["last_seq"] = cursor
         _check_command_context(op, command["payload"])
         self._unacked[lease_id] = command
         try:
@@ -579,6 +622,7 @@ class WorkerHub:
             worker_id = row.worker_id
             await clear_session_lease(db, tenant_id, session_id)
             self._forget_delta(session_id)
+        self.observe_lease_event("released")
         if worker_id is not None:
             conn = self._conns.get(worker_id)
             if conn is not None:
@@ -593,10 +637,23 @@ class WorkerHub:
             for row in rows:
                 lease_id = row.lease_id
                 worker_id = row.worker_id
+                lease_until = row.lease_until
                 await clear_session_lease(db, row.tenant_id, row.id)
                 lease_failure = failure_for(
                     "worker_lease_expired", "Worker lease expired"
                 )
+                ttl = self.settings.worker_lease_ttl.total_seconds()
+                since_renewal = None
+                if lease_until is not None:
+                    if lease_until.tzinfo is None:
+                        lease_until = lease_until.replace(tzinfo=UTC)
+                    since_renewal = round(
+                        (utc_now() - lease_until).total_seconds() + ttl, 3
+                    )
+                conn = self._conns.get(worker_id) if worker_id is not None else None
+                heartbeat_age = None
+                if conn is not None and conn.last_heartbeat is not None:
+                    heartbeat_age = round(time.monotonic() - conn.last_heartbeat, 3)
                 log_event(
                     log,
                     logging.ERROR,
@@ -605,8 +662,13 @@ class WorkerHub:
                     tenant_id=row.tenant_id,
                     session_id=row.id,
                     worker_id=worker_id,
+                    lease_ttl_seconds=ttl,
+                    last_renewal_age_seconds=since_renewal,
+                    last_heartbeat_age_seconds=heartbeat_age,
+                    worker_connected=conn is not None,
                     **log_extra(lease_failure),
                 )
+                self.observe_lease_event("expired")
                 await persist_event(
                     db,
                     hub,
@@ -619,7 +681,6 @@ class WorkerHub:
                 self._forget_delta(row.id)
                 if lease_id is not None:
                     self._unacked.pop(lease_id, None)
-                    conn = self._conns.get(worker_id) if worker_id is not None else None
                     if conn is not None:
                         conn.leases.discard(lease_id)
                         conn.lease_mem.pop(lease_id, None)
@@ -704,6 +765,8 @@ class WorkerHub:
                     lease_ids=renewed,
                     lease_until=utc_now() + self.settings.worker_lease_ttl,
                 )
+            conn.last_renewed = time.monotonic()
+            self.observe_lease_event("renewed")
         return sessions
 
     async def reconcile_inventory(
@@ -1249,6 +1312,8 @@ async def register_worker(
         HelloReply(
             worker_id=conn.worker_id,
             generation=conn.generation,
+            lease_ttl_seconds=hub.settings.worker_lease_ttl.total_seconds(),
+            heartbeat_seconds=heartbeat_interval(hub.settings),
             sessions=sessions,
             store_check=store_check,
             revoke=[{**entry, "type": "lease.revoke"} for entry in revoke],
@@ -1326,6 +1391,30 @@ def images_for_register(
     return found
 
 
+def observe_heartbeat(hub: WorkerHub, conn: WorkerConnection) -> None:
+    """Record the gap since the previous heartbeat and warn when it is late."""
+    now = time.monotonic()
+    previous = (
+        conn.last_heartbeat if conn.last_heartbeat is not None else (conn.connected_at)
+    )
+    gap = now - previous
+    conn.last_heartbeat = now
+    if hub.metrics is not None:
+        hub.metrics.observe_worker_heartbeat_gap(gap)
+    ttl = hub.settings.worker_lease_ttl.total_seconds()
+    if gap > ttl / 2:
+        log_event(
+            log,
+            logging.WARNING,
+            "worker heartbeat late",
+            event="worker.heartbeat.late",
+            worker_id=conn.worker_id,
+            source="api",
+            gap_seconds=round(gap, 3),
+            lease_ttl_seconds=ttl,
+        )
+
+
 async def heartbeat_worker(
     hub: WorkerHub, store: Store, conn: WorkerConnection, message: dict[str, Any]
 ) -> None:
@@ -1342,6 +1431,7 @@ async def heartbeat_worker(
         parsed_mode = _run_mode(message.get("run_mode"))
         if parsed_mode is None:
             return
+    observe_heartbeat(hub, conn)
     async with store.session() as db:
         await touch_worker(
             db,
@@ -1355,6 +1445,8 @@ async def heartbeat_worker(
             conn.worker_id,
             lease_until=utc_now() + hub.settings.worker_lease_ttl,
         )
+    conn.last_renewed = time.monotonic()
+    hub.observe_lease_event("renewed")
     if parsed_capacity is not None:
         conn.capacity = parsed_capacity
     if parsed_memory is not None:
@@ -1905,7 +1997,11 @@ async def run_worker(
     base = url or settings.api_url or "http://127.0.0.1:8000"
     ws_url = require_worker_tls(base)
     check_worker_mtls_files(settings)
-    heartbeat = min(10.0, max(1.0, settings.worker_lease_ttl.total_seconds() / 2))
+    if "worker_lease_ttl" in settings.model_fields_set:
+        log.warning(
+            "worker ignores APIPI_WORKER_LEASE_TTL; the API sets the lease TTL",
+            extra={"event": "worker.lease_ttl.ignored"},
+        )
     metrics, tracing = worker_observability(settings)
     # A split worker holds no database and no object-store credentials.
     # Turn context arrives in commands, live deltas go over the socket
@@ -1997,7 +2093,6 @@ async def run_worker(
                         draining,
                         drain_deadline,
                         wait,
-                        heartbeat,
                         emitter,
                         dedupe,
                     )
@@ -2315,6 +2410,56 @@ def _unleased_session_dirs(
     return found
 
 
+def _hello_seconds(hello: dict[str, Any], key: str) -> float:
+    value = hello.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ConfigError(f"worker register failed: hello has no valid {key}")
+    return float(value)
+
+
+def _adopt_cursor(outbox: "Outbox", message: dict[str, Any]) -> None:
+    """Continue the session sequence from the cursor the API put in a command."""
+    if message.get("op") not in CURSOR_OPS:
+        return
+    payload = message.get("payload")
+    raw = payload.get("last_seq") if isinstance(payload, dict) else None
+    try:
+        session_id = uuid.UUID(str(message.get("session_id")))
+    except (ValueError, TypeError):
+        return
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        log_event(
+            log,
+            logging.WARNING,
+            "worker command has no sequence cursor",
+            event="worker.command.cursor_missing",
+            session_id=session_id,
+            op=message.get("op"),
+        )
+        return
+    outbox.set_base(session_id, raw)
+
+
+async def _outbox_flushed(
+    outbox: "Outbox",
+    session_id: uuid.UUID,
+    *,
+    timeout: float,
+    active: Any,
+) -> bool:
+    """Wait until the API acked everything buffered for the session so far."""
+    target = outbox.high_water(session_id)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while outbox.acked_seq(session_id) < target:
+        if not active():
+            return True
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(0.01)
+    return True
+
+
 async def _serve_connection(
     settings: Settings,
     execution: Any,
@@ -2327,7 +2472,6 @@ async def _serve_connection(
     draining: asyncio.Event,
     drain_deadline: float | None,
     wait: float,
-    heartbeat: float,
     emitter: Any,
     dedupe: CommandDedupe,
 ) -> tuple[str, float | None]:
@@ -2336,11 +2480,16 @@ async def _serve_connection(
     `dedupe` is worker-lifetime (owned by `run_worker`): reconnects
     replay unacked commands with the same `command_id`, so only a
     dedupe that survives the socket suppresses the second dispatch.
+
+    Heartbeats, the inventory, and the drain check run on their own
+    timers, so a socket that never goes quiet cannot starve them. The
+    heartbeat interval and the lease TTL come from the API in `hello`.
     """
     from apipi.worker.accepts import resolved_worker_accepts
     from apipi.worker.protocol import PROTOCOL_VERSION
 
     send_lock = asyncio.Lock()
+    metrics = getattr(execution, "metrics", None)
 
     async def send_json(payload: dict[str, Any]) -> None:
         async with send_lock:
@@ -2365,6 +2514,8 @@ async def _serve_connection(
     if not isinstance(hello, dict) or not hello.get("ok"):
         error = hello.get("error") if isinstance(hello, dict) else "unauthorized"
         raise ConfigError(f"worker register failed: {error}")
+    heartbeat = _hello_seconds(hello, "heartbeat_seconds")
+    lease_ttl = _hello_seconds(hello, "lease_ttl_seconds")
     proof = answer_store_check(settings, hello if isinstance(hello, dict) else {})
     if proof is not None:
         await send_json(proof)
@@ -2375,14 +2526,42 @@ async def _serve_connection(
         extra={
             "worker_id": hello.get("worker_id"),
             "sessions": hello_sessions,
+            "lease_ttl_seconds": lease_ttl,
+            "heartbeat_seconds": heartbeat,
         },
     )
+    stopping: set[uuid.UUID] = set()
+
+    async def flush_outbox(session_id: uuid.UUID, lease_id: str, action: str) -> None:
+        flushed = await _outbox_flushed(
+            outbox,
+            session_id,
+            timeout=RELEASE_FLUSH_TIMEOUT,
+            active=lambda: session_leases.get(session_id) == lease_id,
+        )
+        if not flushed:
+            log_event(
+                log,
+                logging.WARNING,
+                "worker outbox not acked before release",
+                event="worker.release.unflushed",
+                session_id=session_id,
+                action=action,
+                acked_seq=outbox.acked_seq(session_id),
+                high_water=outbox.high_water(session_id),
+            )
 
     async def release_lease(session_id: uuid.UUID) -> None:
         relay.forget(session_id)
-        lease_id = session_leases.pop(session_id, None)
+        if session_id in stopping:
+            return
+        lease_id = session_leases.get(session_id)
         if lease_id is None:
             return
+        await flush_outbox(session_id, lease_id, "lease.release")
+        if session_leases.get(session_id) != lease_id:
+            return
+        session_leases.pop(session_id, None)
         try:
             await send_json(
                 {
@@ -2447,39 +2626,85 @@ async def _serve_connection(
             }
         )
 
-    last_inventory = time.monotonic()
-
     async def send_heartbeat() -> None:
         await send_json(worker_heartbeat(settings, drain=draining.is_set()))
-        nonlocal last_inventory
-        if time.monotonic() - last_inventory >= 60.0:
-            await send_inventory()
-            last_inventory = time.monotonic()
 
-    try:
+    async def heartbeat_loop() -> None:
+        last = time.monotonic()
         while True:
-            if draining.is_set() and drain_deadline is None:
-                drain_deadline = time.monotonic() + wait
-                log.info("worker drain")
-                await send_heartbeat()
-                await execution.pool.kill_unheld(reason="drain")
-                if drain_idle(execution.pool.live(), command_tasks):
-                    return "drained", drain_deadline
-            recv_timeout = 0.5 if draining.is_set() else heartbeat
-            try:
-                incoming = await asyncio.wait_for(sock.recv(), timeout=recv_timeout)
-            except TimeoutError:
-                await send_heartbeat()
-                if draining.is_set():
-                    await execution.pool.kill_unheld(reason="drain")
-                    if drain_idle(execution.pool.live(), command_tasks):
-                        return "drained", drain_deadline
-                    if (
-                        drain_deadline is not None
-                        and time.monotonic() >= drain_deadline
-                    ):
-                        return "drain_timeout", drain_deadline
-                continue
+            await asyncio.sleep(heartbeat)
+            now = time.monotonic()
+            gap = now - last
+            last = now
+            if metrics is not None:
+                metrics.observe_worker_heartbeat_gap(gap)
+            if gap > lease_ttl / 2:
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "worker heartbeat late",
+                    event="worker.heartbeat.late",
+                    source="worker",
+                    gap_seconds=round(gap, 3),
+                    lease_ttl_seconds=lease_ttl,
+                )
+            await send_heartbeat()
+
+    async def inventory_loop() -> None:
+        while True:
+            await asyncio.sleep(INVENTORY_INTERVAL)
+            await send_inventory()
+
+    async def drain_loop() -> tuple[str, float | None]:
+        nonlocal drain_deadline
+        await draining.wait()
+        if drain_deadline is None:
+            drain_deadline = time.monotonic() + wait
+            log.info("worker drain")
+            await send_heartbeat()
+        while True:
+            await execution.pool.kill_unheld(reason="drain")
+            if drain_idle(execution.pool.live(), command_tasks):
+                return "drained", drain_deadline
+            if time.monotonic() >= drain_deadline:
+                return "drain_timeout", drain_deadline
+            await asyncio.sleep(0.5)
+
+    def ack_command(message: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "lease.ack",
+            "id": message.get("id"),
+            "lease_id": message.get("lease_id"),
+        }
+
+    async def stop_session_command(
+        message: dict[str, Any], stop_session: uuid.UUID | None
+    ) -> None:
+        raw_lease = message.get("lease_id")
+        if stop_session is not None:
+            stopping.add(stop_session)
+        try:
+            await dispatch_command(execution, message)
+            if stop_session is not None:
+                dedupe.forget(stop_session)
+                if isinstance(raw_lease, str):
+                    await flush_outbox(stop_session, raw_lease, "session.stop")
+                if session_leases.get(stop_session) == raw_lease:
+                    session_leases.pop(stop_session, None)
+        except Exception:
+            log.exception(
+                "worker session stop failed",
+                extra={"session_id": str(message.get("session_id"))},
+            )
+            return
+        finally:
+            if stop_session is not None:
+                stopping.discard(stop_session)
+        await send_json(ack_command(message))
+
+    async def receive_loop() -> None:
+        while True:
+            incoming = await sock.recv()
             text = incoming if isinstance(incoming, str) else incoming.decode()
             message = json.loads(text)
             if not isinstance(message, dict):
@@ -2522,6 +2747,7 @@ async def _serve_connection(
                 raw_session = message.get("session_id")
                 if isinstance(raw_lease, str) and isinstance(raw_session, str):
                     session_leases[uuid.UUID(raw_session)] = raw_lease
+                _adopt_cursor(outbox, message)
             if message.get("type") == "command" and message.get("op") == "session.stop":
                 command_id = message.get("id")
                 try:
@@ -2533,24 +2759,13 @@ async def _serve_connection(
                     and isinstance(command_id, str)
                     and dedupe.duplicate(stop_session, command_id)
                 ):
-                    await send_json(
-                        {
-                            "type": "lease.ack",
-                            "id": message.get("id"),
-                            "lease_id": message.get("lease_id"),
-                        }
-                    )
+                    await send_json(ack_command(message))
                     continue
-                await dispatch_command(execution, message)
-                if stop_session is not None:
-                    dedupe.forget(stop_session)
-                await send_json(
-                    {
-                        "type": "lease.ack",
-                        "id": message.get("id"),
-                        "lease_id": message.get("lease_id"),
-                    }
-                )
+                task = asyncio.create_task(stop_session_command(message, stop_session))
+                command_tasks.add(task)
+                task.add_done_callback(command_tasks.discard)
+                tasks.add(task)
+                task.add_done_callback(tasks.discard)
                 continue
             if message.get("type") == "lease.revoke":
                 revoked = message.get("session_id")
@@ -2581,21 +2796,9 @@ async def _serve_connection(
                     and isinstance(command_id, str)
                     and dedupe.duplicate(command_session, command_id)
                 ):
-                    await send_json(
-                        {
-                            "type": "lease.ack",
-                            "id": message.get("id"),
-                            "lease_id": message.get("lease_id"),
-                        }
-                    )
+                    await send_json(ack_command(message))
                     continue
-                await send_json(
-                    {
-                        "type": "lease.ack",
-                        "id": message.get("id"),
-                        "lease_id": message.get("lease_id"),
-                    }
-                )
+                await send_json(ack_command(message))
                 log.info(
                     "worker command",
                     extra={
@@ -2609,7 +2812,28 @@ async def _serve_connection(
                 task.add_done_callback(command_tasks.discard)
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
+
+    runners = {
+        "recv": asyncio.create_task(receive_loop()),
+        "heartbeat": asyncio.create_task(heartbeat_loop()),
+        "inventory": asyncio.create_task(inventory_loop()),
+        "drain": asyncio.create_task(drain_loop()),
+    }
+    try:
+        done, _pending = await asyncio.wait(
+            runners.values(), return_when=asyncio.FIRST_COMPLETED
+        )
+        if runners["drain"] in done:
+            return runners["drain"].result()
+        for task in done:
+            task.result()
+        raise RuntimeError("worker connection loop ended")
     finally:
+        for task in runners.values():
+            task.cancel()
+        for task in runners.values():
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         if getattr(execution, "seen_hook", None) is report_seen:
             execution.seen_hook = None
         if getattr(execution, "search_sender", None) is send_json:

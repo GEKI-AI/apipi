@@ -90,8 +90,8 @@ No bearer. Network-restrict `/metrics` like any scrape endpoint.
 
 | Process | Scrape | What you get |
 | --- | --- | --- |
-| API (`apipi serve`) | `http://<api>:8000/metrics` | HTTP requests, errors, `apipi_workers` and `apipi_worker_leases` (labeled `run_mode`), `apipi_worker_assign_seconds` |
-| Worker | `http://<worker>:9091/metrics` | Turns, tokens, utilization, sandbox boot/destroy, host Pi RSS/PSS, cgroup guest RAM/CPU, optional vsock samples |
+| API (`apipi serve`) | `http://<api>:8000/metrics` | HTTP requests, errors, `apipi_workers` and `apipi_worker_leases` (labeled `run_mode`), `apipi_worker_assign_seconds`, worker lease health and ingest series (see [Worker leases and ingest](#worker-leases-and-ingest)) |
+| Worker | `http://<worker>:9091/metrics` | Turns, tokens, utilization, sandbox boot/destroy, host Pi RSS/PSS, cgroup guest RAM/CPU, optional vsock samples, `apipi_worker_heartbeat_gap_seconds` |
 
 Worker metric sets (same scrape, metrics on):
 
@@ -114,6 +114,28 @@ Guest resource layers:
 | A. Host / cgroup | Jailer cgroup memory and CPU | On when worker metrics are on | Read on the host. No guest code. |
 | B. Guest sample | MemAvailable, load, workspace disk | Off | Tiny JSON over vsock. Set `APIPI_GUEST_SAMPLE_INTERVAL`. |
 | C. In-guest Prometheus | node_exporter on TAP | Out of scope | Not lightweight. Attack surface. |
+
+## Worker leases and ingest
+
+A worker lease only stays alive while the API sees the worker. The
+worker sends a heartbeat on its own timer, every `heartbeat_seconds`
+from `hello.reply` (a third of `APIPI_WORKER_LEASE_TTL`, at most 10
+seconds), whether or not the socket is busy. The API also renews the
+leases of a worker that acks a command or has a durable batch
+committed, at most once per heartbeat interval. These series show
+whether that works:
+
+| Series | Where | What it tells you |
+| --- | --- | --- |
+| `apipi_worker_heartbeat_gap_seconds` | API and worker | Histogram of the time between two heartbeats. On the API it is measured on receipt, so it includes the network. On the worker it is measured on the sending timer, so a high value there means the worker process was stalled. The gap should sit near the heartbeat interval. A gap above half the lease TTL also logs `worker.heartbeat.late`. |
+| `apipi_worker_lease_events_total{event}` | API | `renewed` counts renewal passes (a heartbeat, an activity renewal, or a reconnect), not leases. `released` counts leases cleared by a release or a session stop. `expired` counts leases the reaper cleared. |
+| `apipi_worker_ingest_total{type,result}` | API | Durable envelopes by type. `result` is `ok`, `duplicate`, or `rejected`. Duplicates are normal after a reconnect replay and when the worker resends envelopes whose ack is still in flight. A steady stream of duplicates with no reconnect means a worker is sending sequence numbers the API already holds. |
+| `apipi_worker_ingest_rejected_total{reason}` | API | Rejected envelopes by reason. `not_leased` means the worker sent results for a session it no longer holds, so those results were dropped. |
+
+Every lease expiry logs `worker.lease.expired` with
+`last_renewal_age_seconds` and, when the worker is still connected,
+`last_heartbeat_age_seconds`. Compare them with the lease TTL to tell a
+dead worker from a stalled one.
 
 Prometheus labels stay low-cardinality. `tenant` is allowed. Do not
 put `session_id` or `user_id` on series. Scrape node_exporter on the
@@ -174,13 +196,15 @@ bill. See [usage](usage.md#session-lifecycle-export).
 | `apipi_worker_assign_seconds` p95 | Lease wait |
 | `apipi_usage_export_total{result="drop"}` | Warehouse gaps |
 | `apipi_lifecycle_export_total{result="overflow"}` | Lifecycle queue full; live intervals may be missing |
-| `event=worker.lease.expired` | Worker died or heartbeat failed |
+| `event=worker.lease.expired`, `apipi_worker_lease_events_total{event="expired"}` | Worker died or heartbeat failed |
+| `event=worker.heartbeat.late`, or `apipi_worker_heartbeat_gap_seconds` p99 above half the lease TTL | A lease will expire soon: stalled worker or a bad network |
+| `apipi_worker_ingest_rejected_total{reason="not_leased"}` | Worker results were dropped after a lease ended |
 
 ## Cardinality
 
 | Signal | Identity |
 | --- | --- |
-| Prometheus | `tenant` ok. Not `user_id` or `session_id`. Guest series use `size` (`S` / `M` / `L`). |
+| Prometheus | `tenant` ok. Not `user_id` or `session_id`. Guest series use `size` (`S` / `M` / `L`). Worker ingest series use the envelope `type` and a short `reason`, never a worker or session id. |
 | Logs and traces | `request_id`, `tenant_id`, `session_id`, `turn_id`, `worker_id` when known |
 | Usage export | `tenant_id`, `user_id`, `key_id`, `agent_id`, `session_id`, `turn_id`, `request_id` |
 | Lifecycle export | Same identity as usage, plus image id, version, and digest. Not a Prometheus label. |
