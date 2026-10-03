@@ -452,7 +452,7 @@ async def test_first_inventory_follows_the_outbox_drain_not_the_full_interval(
 ) -> None:
     monkeypatch.setattr("apipi.worker.client.FIRST_INVENTORY_DELAY", 0.05)
     sock = _BusySock({**HELLO_BASE, "worker_id": str(uuid.uuid4())})
-    task, outbox, *_rest = await _start(settings, _Execution(), sock)
+    task, *_rest = await _start(settings, _Execution(), sock)
     try:
         await _wait_for(lambda: len(_sent_types(sock, "inventory")) >= 1)
         assert len(_sent_types(sock, "inventory")) == 1
