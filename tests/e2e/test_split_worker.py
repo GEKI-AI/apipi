@@ -17,10 +17,10 @@ from typing import Any
 import pytest
 
 from apipi.config import Settings
+from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, flush_batch
 from apipi.store.engine import Store
 from apipi.worker.artifact_upload import handle_presign_reply
-from apipi.worker.protocol import WorkerEnvelope
 
 pytestmark = pytest.mark.e2e
 

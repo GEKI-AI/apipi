@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 
 from apipi.config import Settings
+from apipi.protocol import DELTA_MAX_TEXT, WorkerEnvelope
 from apipi.services.event_bus import InMemoryEventBus
 from apipi.services.runtime import live_event_body
 from apipi.store.engine import Store
@@ -18,8 +19,7 @@ from apipi.store.repo import (
     set_session_lease,
 )
 from apipi.worker.deltas import DeltaRelay, LiveRedirectBus, relay_rate_allowed
-from apipi.worker.hub import DELTA_MAX_TEXT, WorkerConnection, WorkerHub
-from apipi.worker.protocol import WorkerEnvelope
+from apipi.worker.hub import WorkerConnection, WorkerHub
 
 
 def _envelope(

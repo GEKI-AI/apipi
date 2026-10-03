@@ -5,15 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from apipi.config import Settings
-from apipi.store.blobs import (
-    NS_FILES,
-    ObjectStoreError,
-    file_object_id,
-    local_object_path,
-)
-from apipi.worker.pi.dirs import sessions_root, store_root
-from apipi.worker.pi.pool import PiPool
-from apipi.worker.turn_context import (
+from apipi.protocol import (
     MAX_COMMAND_BYTES,
     CommandTooLarge,
     ContextBytes,
@@ -23,6 +15,14 @@ from apipi.worker.turn_context import (
     redact_context,
     summarize_context,
 )
+from apipi.store.blobs import (
+    NS_FILES,
+    ObjectStoreError,
+    file_object_id,
+    local_object_path,
+)
+from apipi.worker.pi.dirs import sessions_root, store_root
+from apipi.worker.pi.pool import PiPool
 
 
 def _context(**overrides: object) -> dict:

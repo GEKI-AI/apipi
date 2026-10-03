@@ -25,15 +25,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.gateway.logutil import log_event
-from apipi.store.engine import Store
-from apipi.store.models import SessionRow, Turn, WorkerIngest, utc_now
-from apipi.worker.protocol import (
+from apipi.protocol import (
     EPHEMERAL_MESSAGE_TYPES,
     MAX_MESSAGE_BYTES,
     UnknownMessageType,
     WorkerEnvelope,
     parse_envelope,
 )
+from apipi.store.engine import Store
+from apipi.store.models import SessionRow, Turn, WorkerIngest, utc_now
 
 log = logging.getLogger("apipi.worker")
 

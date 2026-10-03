@@ -1,4 +1,4 @@
-"""Turn context carried in worker commands (protocol v2, step 5/8).
+"""The command context.
 
 `turn.start`, `turn.continue` and `sandbox.boot` carry a `context`
 object built by the API. The worker holds it in memory only and never
@@ -13,11 +13,10 @@ import json
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-COMMAND_CONTEXT_OPS = frozenset({"turn.start", "turn.continue", "sandbox.boot"})
-
-MAX_COMMAND_BYTES = 256_000
+from apipi.protocol.base import ContextPart
+from apipi.protocol.constants import COMMAND_CONTEXT_OPS, MAX_COMMAND_BYTES
 
 
 class CommandTooLarge(ValueError):
@@ -28,25 +27,19 @@ class ContextBytes(ValueError):
     pass
 
 
-class ContextModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ContextModel(ContextPart):
     base_url: str | None = None
     api_key: str | None = None
 
 
-class ContextMcpServer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ContextMcpServer(ContextPart):
     server_label: str
     server_url: str
     headers: dict[str, str] = Field(default_factory=dict)
     allowed_tools: list[str] = Field(default_factory=list)
 
 
-class ContextFileRef(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ContextFileRef(ContextPart):
     path: str
     object_id: str
     url: str | None = None
@@ -55,27 +48,21 @@ class ContextFileRef(BaseModel):
     content_type: str | None = None
 
 
-class ContextSkillRef(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ContextSkillRef(ContextPart):
     skill_id: str
     object_id: str
     url: str | None = None
     local_path: str | None = None
 
 
-class ContextPiSession(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ContextPiSession(ContextPart):
     present: bool = False
     object_id: str | None = None
     url: str | None = None
     local_path: str | None = None
 
 
-class ContextSession(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ContextSession(ContextPart):
     environment: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     required_actions: list[Any] = Field(default_factory=list)
@@ -87,9 +74,7 @@ class ContextSession(BaseModel):
     idle_ttl_seconds: float | None = None
 
 
-class ContextAgent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ContextAgent(ContextPart):
     model: str | None = None
     instructions: str | None = None
     function_tools: list[dict[str, Any]] = Field(default_factory=list)
@@ -100,9 +85,7 @@ class ContextAgent(BaseModel):
     web_search: bool = False
 
 
-class TurnContext(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class TurnContext(ContextPart):
     session: ContextSession
     agent: ContextAgent = Field(default_factory=ContextAgent)
     model: ContextModel = Field(default_factory=ContextModel)

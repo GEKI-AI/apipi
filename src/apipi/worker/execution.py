@@ -12,6 +12,7 @@ from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics
 from apipi.gateway.otel import Tracing, inject_traceparent
+from apipi.protocol import SearchRequest
 from apipi.services.event_bus import EventBus, InMemoryEventBus, is_wake
 from apipi.services.runtime import (
     continue_turn,
@@ -35,7 +36,6 @@ from apipi.worker.pi.broker import SearchHookError
 from apipi.worker.pi.harness import PiHarness
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
-from apipi.worker.protocol import SearchRequest
 
 log = logging.getLogger("apipi.worker")
 

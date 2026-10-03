@@ -89,7 +89,7 @@ async def _make_session(
 
 
 def _queued(envelopes: list[dict[str, Any]]) -> list[Any]:
-    from apipi.worker.protocol import parse_envelope
+    from apipi.protocol import parse_envelope
 
     batcher = IngestBatcher()
     for envelope in envelopes:

@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from apipi.config import Settings
+from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, flush_batch, last_seq_for
 from apipi.services.runtime import _write_turn_log
 from apipi.services.usage import usage_event
@@ -24,7 +25,6 @@ from apipi.store.repo import (
     usage_day,
     usage_totals,
 )
-from apipi.worker.protocol import WorkerEnvelope
 
 
 async def _leased(

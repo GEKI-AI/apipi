@@ -32,6 +32,21 @@ from apipi.gateway.otel import (
     detach_traceparent,
     start_span,
 )
+from apipi.protocol import (
+    COMMAND_CONTEXT_OPS,
+    COMMAND_OPS,
+    CURSOR_OPS,
+    DELTA_MAX_TEXT,
+    DELTA_RATE_LIMIT,
+    CommandTooLarge,
+    ContextBytes,
+    HelloReply,
+    RegisterMessage,
+    WorkerEnvelope,
+    check_command_size,
+    parse_turn_context,
+    summarize_context,
+)
 from apipi.services.event_bus import EventBus
 from apipi.services.failures import (
     failure_for,
@@ -68,36 +83,7 @@ from apipi.worker.deltas import DeltaRelay, LiveRedirectBus, relay_rate_allowed
 from apipi.worker.outbox import Outbox
 from apipi.worker.pi.sandbox import mem_mib_for_size, sandbox_size_of
 from apipi.worker.placement import placement_for, worker_accepts
-from apipi.worker.protocol import (
-    COMMAND_OPS,
-    HelloReply,
-    RegisterMessage,
-    WorkerEnvelope,
-)
-from apipi.worker.turn_context import (
-    COMMAND_CONTEXT_OPS,
-    CommandTooLarge,
-    ContextBytes,
-    check_command_size,
-    parse_turn_context,
-    summarize_context,
-)
 
-WORKER_IN = frozenset(
-    {
-        "register",
-        "heartbeat",
-        "lease.ack",
-        "lease.release",
-        "event",
-        "store.proof",
-        "inventory",
-        "sandbox.seen",
-        "search.request",
-    }
-)
-DELTA_RATE_LIMIT = 100
-DELTA_MAX_TEXT = 32_768
 DELTA_DONE_TYPE = "agent.session.turn.output_text.done"
 DELTA_TERMINAL_TYPES = frozenset(
     {
@@ -108,7 +94,6 @@ DELTA_TERMINAL_TYPES = frozenset(
 )
 _DELTA_DONE_CAP = 256
 DELTA_LEASE_REFRESH = 30.0
-CURSOR_OPS = frozenset({"turn.start", "turn.continue", "sandbox.boot"})
 INVENTORY_INTERVAL = 60.0
 RELEASE_FLUSH_TIMEOUT = 10.0
 MAX_HEARTBEAT_SECONDS = 10.0
@@ -718,7 +703,7 @@ class WorkerHub:
         cursor is `sessions.worker_seq` so the worker replays exactly
         what ingest has not persisted.
         """
-        from apipi.worker.protocol import RunningSession
+        from apipi.protocol import RunningSession
 
         async with store.session() as db:
             rows = await list_worker_leases(db, conn.worker_id)
@@ -1318,7 +1303,7 @@ async def register_worker(
             store_check=store_check,
             revoke=[{**entry, "type": "lease.revoke"} for entry in revoke],
             ttl={uuid.UUID(key): value for key, value in ttl.items()},
-        ).model_dump(mode="json"),
+        ).to_wire(),
     )
     await hub.resend_pending(conn)
     return conn
@@ -1326,7 +1311,7 @@ async def register_worker(
 
 def _reported_leases(running: list[Any] | None) -> dict[uuid.UUID, uuid.UUID]:
     """The register live set as session_id to lease_id."""
-    from apipi.worker.protocol import RunningSession
+    from apipi.protocol import RunningSession
 
     reported: dict[uuid.UUID, uuid.UUID] = {}
     for entry in running or []:
@@ -1372,23 +1357,10 @@ def images_for_register(
     accepts = accepts_for_register(register)
     if register.images is None:
         return _legacy_images(register.arch or None) if "microvm" in accepts else {}
-    found: dict[str, WorkerImage] = {}
-    for item in register.images:
-        if not isinstance(item, dict):
-            continue
-        image_id = item.get("id")
-        if not isinstance(image_id, str) or not image_id:
-            continue
-        version = item.get("version")
-        digest = item.get("digest")
-        min_size = item.get("min_size")
-        found[image_id] = WorkerImage(
-            image_id,
-            version if isinstance(version, str) else "",
-            digest if isinstance(digest, str) else "",
-            min_size if isinstance(min_size, str) else "S",
-        )
-    return found
+    return {
+        item.id: WorkerImage(item.id, item.version, item.digest, item.min_size)
+        for item in register.images
+    }
 
 
 def observe_heartbeat(hub: WorkerHub, conn: WorkerConnection) -> None:
@@ -2485,8 +2457,8 @@ async def _serve_connection(
     timers, so a socket that never goes quiet cannot starve them. The
     heartbeat interval and the lease TTL come from the API in `hello`.
     """
+    from apipi.protocol import PROTOCOL_VERSION
     from apipi.worker.accepts import resolved_worker_accepts
-    from apipi.worker.protocol import PROTOCOL_VERSION
 
     send_lock = asyncio.Lock()
     metrics = getattr(execution, "metrics", None)

@@ -9,7 +9,7 @@ the object before writing artifact, file, or Pi session rows.
 
 Bytes never travel over the worker socket: both messages carry only
 ids, paths, sizes, and checksums. The 1 MiB durable envelope cap in
-`apipi.worker.protocol` enforces that alongside these schemas.
+`apipi.protocol` enforces that alongside these schemas.
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ The builder runs on the API, where the database, the vault and the
 object store are available. It resolves everything the worker needs
 for one turn (session, agent, effective idle TTL, files, skills, the
 Pi session blob, HTTP MCP servers and the model key) into a plain
-dict that validates as `apipi.worker.turn_context.TurnContext`.
+dict that validates as `apipi.protocol.TurnContext`.
 
 File bytes never enter the context. With ``APIPI_ARTIFACT_STORE=s3``
 each file, skill and Pi session blob becomes a presigned GET URL with
@@ -24,6 +24,7 @@ from apipi.config import Settings
 from apipi.env.setup import file_id_refs_from, skill_refs_from
 from apipi.gateway.auth import not_found
 from apipi.gateway.logutil import log_event
+from apipi.protocol import TurnContext
 from apipi.services.agents import definition_for_session
 from apipi.services.search import SearchResolver, web_search_tool
 from apipi.store.blobs import (
@@ -43,7 +44,6 @@ from apipi.store.engine import Store
 from apipi.store.repo import get_file, get_session, get_skill
 from apipi.worker.pi.dirs import store_root
 from apipi.worker.pi.idle import resolve_idle_ttl
-from apipi.worker.turn_context import TurnContext
 
 PRESIGN_TTL = timedelta(minutes=15)
 

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from apipi.config import Settings
 from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
+from apipi.protocol import SearchReply, SearchRequest, SearchResultItem
 from apipi.services.search_providers import (
     KeySource,
     SearchHit,
@@ -23,7 +24,6 @@ from apipi.services.search_providers import (
 from apipi.store.engine import Store
 from apipi.store.models import Event
 from apipi.store.repo import get_agent, get_session_by_id, record_search_usage
-from apipi.worker.protocol import SearchReply, SearchRequest, SearchResultItem
 
 log = logging.getLogger("apipi.search")
 

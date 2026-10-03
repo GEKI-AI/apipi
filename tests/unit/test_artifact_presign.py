@@ -9,6 +9,11 @@ import pytest
 from tests.unit.test_blobs import FakeS3
 
 from apipi.config import ConfigError, Settings
+from apipi.protocol import (
+    MAX_MESSAGE_BYTES,
+    PAYLOAD_MODELS,
+    parse_envelope,
+)
 from apipi.services.ingest import IngestBatcher, flush_batch
 from apipi.services.worker_artifacts import (
     SHARED_STORE_ERROR,
@@ -39,11 +44,6 @@ from apipi.worker.artifact_upload import (
 )
 from apipi.worker.hub import answer_store_check
 from apipi.worker.pi.dirs import store_root
-from apipi.worker.protocol import (
-    MAX_MESSAGE_BYTES,
-    PAYLOAD_MODELS,
-    parse_envelope,
-)
 
 
 class _ListableFakeS3(FakeS3):
@@ -209,7 +209,7 @@ def _presign_payload(request_id: uuid.UUID, size: int = 5) -> dict:
 
 
 def _envelope(session_id, seq, type, payload):
-    from apipi.worker.protocol import WorkerEnvelope
+    from apipi.protocol import WorkerEnvelope
 
     return WorkerEnvelope.model_validate(
         {

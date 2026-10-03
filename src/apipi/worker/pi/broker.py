@@ -17,7 +17,7 @@ from starlette.routing import Route
 from apipi.config import Settings
 from apipi.mcp.guard import McpConnectError, check_mcp_url, split_allow_hosts
 from apipi.mcp.http import McpHttpServer
-from apipi.worker.protocol import SearchResultItem
+from apipi.protocol import SearchResultItem
 
 log = logging.getLogger("apipi.worker.pi")
 

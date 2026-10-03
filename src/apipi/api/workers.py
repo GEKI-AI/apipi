@@ -7,6 +7,16 @@ from fastapi import APIRouter, WebSocket
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
+from apipi.protocol import (
+    UNSUPPORTED_PROTOCOL_REASON,
+    WORKER_CLOSE_CODE,
+    WORKER_IN,
+    CumulativeAck,
+    SearchReply,
+    UnsupportedProtocol,
+    WorkerEnvelope,
+    parse_register,
+)
 from apipi.services.event_bus import EventBus
 from apipi.services.ingest import (
     IngestBatcher,
@@ -23,20 +33,10 @@ from apipi.services.worker_tokens import (
 from apipi.store.engine import Store
 from apipi.store.repo import clear_worker_api_instance, get_session_by_lease
 from apipi.worker.hub import (
-    WORKER_IN,
     TokenBindingError,
     WorkerHub,
     heartbeat_worker,
     register_worker,
-)
-from apipi.worker.protocol import (
-    UNSUPPORTED_PROTOCOL_REASON,
-    WORKER_CLOSE_CODE,
-    CumulativeAck,
-    SearchReply,
-    UnsupportedProtocol,
-    WorkerEnvelope,
-    parse_register,
 )
 
 log = logging.getLogger("apipi.worker")

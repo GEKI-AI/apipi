@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 from apipi.config import Settings
+from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, IngestOutcome, flush_batch
 from apipi.services.runtime import EventHub, Harness, run_turn
 from apipi.services.sink import OutboxSink
@@ -18,7 +19,6 @@ from apipi.store.repo import (
     set_session_lease,
 )
 from apipi.worker.outbox import Outbox
-from apipi.worker.protocol import WorkerEnvelope
 
 
 async def new_session(

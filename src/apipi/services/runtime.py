@@ -18,6 +18,11 @@ from apipi.gateway.errors import ApiError
 from apipi.gateway.logutil import log_event
 from apipi.gateway.metrics import Metrics, observe_turn
 from apipi.gateway.otel import Tracing, set_span, start_span
+from apipi.protocol import (
+    ContextBytes,
+    TurnContext,
+    parse_turn_context,
+)
 from apipi.services.agents import definition_for_session
 from apipi.services.event_bus import EventBus, InMemoryEventBus
 from apipi.services.failures import (
@@ -90,11 +95,6 @@ from apipi.worker.pi.settings_json import (
     resolve_codemode,
     resolve_system_prompt,
     resolve_thinking,
-)
-from apipi.worker.turn_context import (
-    ContextBytes,
-    TurnContext,
-    parse_turn_context,
 )
 
 log = logging.getLogger("apipi")

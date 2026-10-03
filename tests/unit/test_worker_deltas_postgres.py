@@ -18,12 +18,12 @@ from typing import Any, cast
 import pytest
 
 from apipi.config import Settings
+from apipi.protocol import WorkerEnvelope
 from apipi.services.event_bus import PostgresEventBus
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import create_session, create_tenant, set_session_lease
 from apipi.worker.hub import WorkerConnection, WorkerHub
-from apipi.worker.protocol import WorkerEnvelope
 
 PG_URL = os.environ.get("APIPI_TEST_DATABASE_URL")
 

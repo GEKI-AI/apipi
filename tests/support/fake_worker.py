@@ -2,7 +2,7 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from apipi.worker.protocol import PROTOCOL_VERSION
+from apipi.protocol import PROTOCOL_VERSION
 from tests.support.fake_runner import AsgiWebsocket
 
 

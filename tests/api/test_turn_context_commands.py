@@ -15,6 +15,7 @@ from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.errors import ApiError
 from apipi.gateway.tokens import hash_token
+from apipi.protocol import check_command_size, redact_context
 from apipi.services import runtime
 from apipi.services.runtime import FakeHarness
 from apipi.services.turn_context import build_turn_context
@@ -23,7 +24,6 @@ from apipi.store.engine import Store
 from apipi.store.repo import get_session
 from apipi.worker.hub import _check_command_context
 from apipi.worker.pi.dirs import pi_session_file, store_root
-from apipi.worker.turn_context import check_command_size, redact_context
 
 pytest_plugins = ["tests.support.mcp_http_server"]
 

@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, flush_batch, last_seq_for
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -15,7 +16,6 @@ from apipi.store.repo import (
     list_turns,
     set_session_lease,
 )
-from apipi.worker.protocol import WorkerEnvelope
 
 
 async def _leased(

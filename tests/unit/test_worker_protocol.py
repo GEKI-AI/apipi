@@ -3,12 +3,13 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
-from apipi.worker.hub import COMMAND_OPS, WORKER_IN, worker_ws_url
-from apipi.worker.protocol import (
+from apipi.protocol import (
+    COMMAND_OPS,
     PAYLOAD_MODELS,
     PROTOCOL_VERSION,
     UNSUPPORTED_PROTOCOL_REASON,
     WORKER_CLOSE_CODE,
+    WORKER_IN,
     WORKER_MESSAGE_TYPES,
     CumulativeAck,
     HelloReply,
@@ -23,6 +24,7 @@ from apipi.worker.protocol import (
     parse_envelope,
     parse_register,
 )
+from apipi.worker.hub import worker_ws_url
 
 
 def test_worker_protocol_commands() -> None:
