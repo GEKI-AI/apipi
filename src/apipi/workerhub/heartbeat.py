@@ -84,28 +84,67 @@ def observe_heartbeat(hub: WorkerHub, conn: WorkerConnection) -> None:
         )
 
 
+def parse_heartbeat(
+    hub: WorkerHub, conn: WorkerConnection, message: dict[str, Any]
+) -> HeartbeatMessage:
+    """Parse a heartbeat; an invalid optional field is dropped, not fatal.
+
+    A heartbeat renews the worker's leases, so one bad `capacity`,
+    `memory_mb`, `run_mode`, or `images` entry must not cost the lease.
+    Each invalid field is logged and ignored.
+    """
+    try:
+        return HeartbeatMessage.model_validate(message)
+    except ValidationError as exc:
+        invalid = {
+            str(error["loc"][0]) for error in exc.errors() if error.get("loc")
+        } - {"type"}
+        hub.observe_protocol("heartbeat.field_ignored")
+        conn.warnings.warning(
+            "worker heartbeat field ignored",
+            event="worker.heartbeat.field_ignored",
+            error_code="heartbeat_field_invalid",
+            worker_id=conn.worker_id,
+            fields=sorted(invalid),
+        )
+        cleaned = {key: value for key, value in message.items() if key not in invalid}
+        return HeartbeatMessage.model_validate(cleaned)
+
+
 async def heartbeat_worker(
     hub: WorkerHub, store: Store, conn: WorkerConnection, heartbeat: HeartbeatMessage
-) -> None:
+) -> bool:
+    """Record one heartbeat and extend the leases; False for a superseded connection."""
     fields = heartbeat.model_fields_set
     parsed_mode = None
     if "run_mode" in fields:
         parsed_mode = _run_mode(heartbeat.run_mode)
         if parsed_mode is None:
-            return
+            hub.observe_protocol("heartbeat.field_ignored")
+            conn.warnings.warning(
+                "worker heartbeat field ignored",
+                event="worker.heartbeat.field_ignored",
+                error_code="heartbeat_field_invalid",
+                worker_id=conn.worker_id,
+                fields=["run_mode"],
+            )
     observe_heartbeat(hub, conn)
     async with store.session() as db:
-        await touch_worker(
+        touched = await touch_worker(
             db,
             conn.worker_id,
             capacity=heartbeat.capacity,
             memory_mb=heartbeat.memory_mb,
             api_instance_id=hub.settings.instance_id,
+            generation=conn.generation,
         )
+        if touched is not None and touched.generation != conn.generation:
+            return False
         await extend_worker_leases(
             db,
             conn.worker_id,
             lease_until=utc_now() + hub.settings.worker_lease_ttl,
+            generation=conn.generation if touched is not None else None,
         )
     conn.last_renewed = time.monotonic()
     hub.observe_lease_event("renewed")
@@ -136,3 +175,4 @@ async def heartbeat_worker(
     elif heartbeat.drain is False:
         conn.draining = False
         hub._observe()
+    return True

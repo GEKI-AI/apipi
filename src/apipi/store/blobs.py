@@ -1,10 +1,11 @@
 import asyncio
+import hashlib
 import logging
 import os
 import pwd
 import shutil
 import uuid
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, NoReturn, Protocol
@@ -125,6 +126,28 @@ def _give_to_operator(root: Path, path: Path) -> None:
         current = parent
 
 
+HASH_CHUNK = 1024 * 1024
+
+
+def hash_stream(read: Callable[[int], bytes]) -> tuple[int, str]:
+    """Read to the end in chunks; return the byte count and the SHA-256 hex digest."""
+    digest = hashlib.sha256()
+    size = 0
+    while True:
+        chunk = read(HASH_CHUNK)
+        if not chunk:
+            return size, digest.hexdigest()
+        digest.update(chunk)
+        size += len(chunk)
+
+
+def _hash_file(path: Path) -> tuple[int, str] | None:
+    if not path.is_file():
+        return None
+    with path.open("rb") as handle:
+        return hash_stream(handle.read)
+
+
 class ObjectStore(Protocol):
     async def put(
         self,
@@ -181,6 +204,29 @@ class ArtifactBlobs(Protocol):
     ) -> int: ...
 
 
+def _read_file(path: Path) -> bytes | None:
+    if not path.is_file():
+        return None
+    return path.read_bytes()
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.is_file():
+        path.unlink()
+
+
+def _dir_size(path: Path) -> int:
+    if not path.is_dir():
+        return 0
+    total = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            total += item.stat().st_size
+    return total
+
+
 class LocalStore:
     def __init__(self, settings: Settings) -> None:
         self._root = store_root(settings)
@@ -207,9 +253,12 @@ class LocalStore:
 
     async def get(self, namespace: Namespace, object_id: str) -> bytes | None:
         path = self._path(namespace, object_id)
-        if not path.is_file():
-            return None
-        return path.read_bytes()
+        return await asyncio.to_thread(_read_file, path)
+
+    async def digest(
+        self, namespace: Namespace, object_id: str
+    ) -> tuple[int, str] | None:
+        return await asyncio.to_thread(_hash_file, self._path(namespace, object_id))
 
     async def delete(self, namespace: Namespace, object_id: str) -> None:
         path = self._path(namespace, object_id)
@@ -217,21 +266,10 @@ class LocalStore:
             path.unlink()
 
     async def delete_prefix(self, namespace: Namespace, prefix: str) -> None:
-        path = self._dir(namespace, prefix)
-        if path.is_dir():
-            shutil.rmtree(path)
-        elif path.is_file():
-            path.unlink()
+        await asyncio.to_thread(_remove_path, self._dir(namespace, prefix))
 
     async def used_bytes(self, namespace: Namespace, prefix: str) -> int:
-        path = self._dir(namespace, prefix)
-        if not path.is_dir():
-            return 0
-        total = 0
-        for item in path.rglob("*"):
-            if item.is_file():
-                total += item.stat().st_size
-        return total
+        return await asyncio.to_thread(_dir_size, self._dir(namespace, prefix))
 
 
 class MemoryStore:
@@ -262,6 +300,14 @@ class MemoryStore:
 
     async def get(self, namespace: Namespace, object_id: str) -> bytes | None:
         return self.objects.get(self._key(namespace, object_id))
+
+    async def digest(
+        self, namespace: Namespace, object_id: str
+    ) -> tuple[int, str] | None:
+        data = self.objects.get(self._key(namespace, object_id))
+        if data is None:
+            return None
+        return len(data), hashlib.sha256(data).hexdigest()
 
     async def delete(self, namespace: Namespace, object_id: str) -> None:
         self.objects.pop(self._key(namespace, object_id), None)
@@ -334,6 +380,27 @@ class S3Store:
         except Exception as exc:
             self._fail(exc, operation="get", key=key, bucket=bucket)
         return data if isinstance(data, bytes) else None
+
+    async def digest(
+        self, namespace: Namespace, object_id: str
+    ) -> tuple[int, str] | None:
+        """Size and SHA-256 of one object, hashed in chunks off the event loop."""
+        key = self._key(namespace, object_id)
+        try:
+            response = await asyncio.to_thread(
+                self._client.get_object, Bucket=self._bucket, Key=key
+            )
+        except Exception as exc:
+            if _s3_missing(exc):
+                return None
+            self._fail(exc, operation="get", key=key)
+        read = getattr(response.get("Body"), "read", None)
+        if read is None:
+            return None
+        try:
+            return await asyncio.to_thread(hash_stream, read)
+        except Exception as exc:
+            self._fail(exc, operation="get", key=key)
 
     async def head(
         self, namespace: Namespace, object_id: str
@@ -494,6 +561,10 @@ class S3Store:
                 return total
 
 
+def _hash_bytes(data: bytes) -> tuple[int, str]:
+    return len(data), hashlib.sha256(data).hexdigest()
+
+
 class ArtifactAdapter:
     def __init__(self, store: ObjectStore) -> None:
         self._store = store
@@ -525,6 +596,22 @@ class ArtifactAdapter:
         return await self._store.get(
             NS_ARTIFACTS, blob_key(tenant_id, key_id, session_id, artifact_id)
         )
+
+    async def digest(
+        self,
+        tenant_id: uuid.UUID,
+        key_id: str,
+        session_id: uuid.UUID,
+        artifact_id: uuid.UUID,
+    ) -> tuple[int, str] | None:
+        key = blob_key(tenant_id, key_id, session_id, artifact_id)
+        digest = getattr(self._store, "digest", None)
+        if digest is not None:
+            return await digest(NS_ARTIFACTS, key)
+        data = await self._store.get(NS_ARTIFACTS, key)
+        if data is None:
+            return None
+        return await asyncio.to_thread(_hash_bytes, data)
 
     async def delete(
         self,

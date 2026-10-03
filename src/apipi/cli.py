@@ -59,6 +59,7 @@ from apipi.worker.pi.microvm import (
 )
 from apipi.worker.pi.model_host import probe_model_host
 from apipi.worker.pi.probe import probe_run_mode
+from apipi.workerhub.serve import WS_MAX_SIZE
 
 log = logging.getLogger("apipi")
 
@@ -408,6 +409,7 @@ def serve(
         port=port,
         log_level=settings.log_level,
         access_log=False,
+        ws_max_size=WS_MAX_SIZE,
         log_config=uvicorn_log_config(
             level=settings.log_level, format=settings.log_format
         ),

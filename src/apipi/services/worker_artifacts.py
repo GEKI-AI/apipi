@@ -14,6 +14,7 @@ ids, paths, sizes, and checksums. The 1 MiB durable envelope cap in
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import uuid
 from datetime import timedelta
@@ -31,9 +32,11 @@ from apipi.store.blobs import (
     blob_key,
     blob_prefix,
     file_object_id,
+    hash_stream,
     object_store,
 )
-from apipi.store.models import SessionRow, utc_now
+from apipi.store.engine import Store
+from apipi.store.models import ArtifactUploadRow, SessionRow, utc_now
 from apipi.store.repo import (
     create_artifact,
     create_artifact_upload,
@@ -163,6 +166,52 @@ async def check_quota(
         raise DiskLimitError("Artifact store too large", code="artifact_too_large")
 
 
+def presign_name(kind: str, filename: str | None) -> str:
+    return (filename or "").strip() or (
+        "pi-session.jsonl" if kind == "pi_session" else "artifact"
+    )
+
+
+async def _digest_blob(
+    blobs: ArtifactBlobs,
+    tenant_id: uuid.UUID,
+    key_id: str,
+    session_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+) -> str | None:
+    digest = getattr(blobs, "digest", None)
+    if digest is not None:
+        found = await digest(tenant_id, key_id, session_id, artifact_id)
+        return found[1] if found is not None else None
+    data = await blobs.get(tenant_id, key_id, session_id, artifact_id)
+    if data is None:
+        return None
+    return await asyncio.to_thread(sha256_hex, data)
+
+
+async def latest_artifact_matches(
+    existing: list[Any],
+    blobs: ArtifactBlobs,
+    tenant_id: uuid.UUID,
+    key_id: str,
+    session_id: uuid.UUID,
+    path: str,
+    digest: str,
+) -> bool:
+    """True when the latest artifact at `path` already holds `digest`.
+
+    `existing` is the session's artifact list. The stored bytes are
+    hashed in chunks off the event loop."""
+    for artifact in reversed(existing):
+        if artifact.path != path:
+            continue
+        actual = await _digest_blob(
+            blobs, tenant_id, artifact.key_id or key_id, session_id, artifact.id
+        )
+        return actual is not None and actual == digest.lower()
+    return False
+
+
 async def _latest_artifact_matches(
     db: AsyncSession,
     blobs: ArtifactBlobs,
@@ -172,20 +221,44 @@ async def _latest_artifact_matches(
     path: str,
     digest: str,
 ) -> bool:
-    """True when the latest artifact at `path` already holds `digest`."""
-    existing = await list_artifacts(db, tenant_id, session_id)
-    if not existing:
-        return False
-    for artifact in reversed(existing):
-        if artifact.path != path:
-            continue
-        data = await blobs.get(
-            tenant_id, artifact.key_id or key_id, session_id, artifact.id
+    existing = await list_artifacts(db, tenant_id, session_id) or []
+    return await latest_artifact_matches(
+        existing, blobs, tenant_id, key_id, session_id, path, digest
+    )
+
+
+async def precheck_presign(
+    store: Store,
+    blobs: ArtifactBlobs,
+    row: SessionRow,
+    *,
+    kind: str,
+    filename: str | None,
+    sha256: str | None,
+) -> tuple[int, bool | None]:
+    """The object-store reads of one presign, done before any row lock.
+
+    Returns the bytes the session already stores and, for a plain
+    artifact with a digest, whether the latest stored bytes at that
+    path already match it. No database transaction is open while the
+    store is read."""
+    kind = check_artifact_kind(kind)
+    digest = check_sha256(sha256)
+    used = await blobs.used_bytes(row.tenant_id, row.key_id, row.id)
+    unchanged: bool | None = None
+    if kind == "artifact" and digest is not None:
+        async with store.session() as db:
+            existing = await list_artifacts(db, row.tenant_id, row.id) or []
+        unchanged = await latest_artifact_matches(
+            existing,
+            blobs,
+            row.tenant_id,
+            row.key_id,
+            row.id,
+            presign_name(kind, filename),
+            digest,
         )
-        if data is None:
-            return False
-        return sha256_hex(data) == digest.lower()
-    return False
+    return used, unchanged
 
 
 async def issue_artifact_presign(
@@ -203,24 +276,26 @@ async def issue_artifact_presign(
     used_bytes: int,
     objects: ObjectStore | None = None,
     blobs: ArtifactBlobs | None = None,
+    unchanged: bool | None = None,
 ) -> dict[str, Any]:
-    """Reserve one upload slot; S3 also mints the presigned PUT URL."""
+    """Reserve one upload slot; S3 also mints the presigned PUT URL.
+
+    `unchanged` is the answer of `precheck_presign` when the caller read
+    the store before taking the row lock; without it the check runs here.
+    """
     kind = check_artifact_kind(kind)
     digest = check_sha256(sha256)
     row = await get_session(db, tenant_id, session_id)
     if row is None:
         raise _store_error("unknown session", operation="presign")
-    name = (filename or "").strip() or (
-        "pi-session.jsonl" if kind == "pi_session" else "artifact"
-    )
-    if (
-        kind == "artifact"
-        and digest is not None
-        and blobs is not None
-        and await _latest_artifact_matches(
+    name = presign_name(kind, filename)
+    if unchanged is None and (
+        kind == "artifact" and digest is not None and blobs is not None
+    ):
+        unchanged = await _latest_artifact_matches(
             db, blobs, tenant_id, row.key_id, session_id, name, digest
         )
-    ):
+    if unchanged:
         # Skip files whose latest stored bytes already match; answer
         # `unchanged` so the worker skips the PUT and no upload slot is
         # reserved. This check runs before quota so unchanged files never
@@ -313,51 +388,88 @@ async def _read_s3_object(
     return await get(namespace, object_id)
 
 
-async def complete_artifact_upload(
-    db: AsyncSession,
+async def _digest_object(
+    backend: Any, namespace: Namespace, object_id: str
+) -> tuple[int, str] | None:
+    digest = getattr(backend, "digest", None)
+    if digest is not None:
+        return await digest(namespace, object_id)
+    data = await _read_s3_object(backend, namespace, object_id)
+    if data is None:
+        return None
+    return len(data), await asyncio.to_thread(sha256_hex, data)
+
+
+def _upload_target(
+    upload: ArtifactUploadRow, tenant_id: uuid.UUID, session_id: uuid.UUID, key_id: str
+) -> tuple[Namespace, str, str | None]:
+    if upload.kind == "input_image":
+        file_id = f"file-{upload.artifact_id.hex}"
+        return NS_FILES, file_object_id(tenant_id, file_id), file_id
+    object_id = session_object_id(tenant_id, key_id, session_id, upload.artifact_id)
+    check_session_prefix(object_id, session_prefix(tenant_id, key_id, session_id))
+    return NS_ARTIFACTS, object_id, None
+
+
+def _check_local_object(
+    settings: Settings,
+    namespace: Namespace,
+    object_id: str,
+    path: str | None,
+) -> tuple[int, str]:
+    """Check a filesystem upload and hash it in chunks. Runs in a thread."""
+    if path is None:
+        raise _store_error(
+            "filesystem upload needs a session-relative path",
+            operation="complete",
+        )
+    relative = check_completed_path(path)
+    root = store_root(settings)
+    expected_rel = local_object_path(root, namespace, object_id).relative_to(root)
+    if relative != str(expected_rel):
+        raise _store_error(
+            "artifact path is outside the session prefix",
+            operation="complete",
+            key=path,
+        )
+    candidate = (root / relative).resolve()
+    resolved_root = root.resolve()
+    if candidate != resolved_root and resolved_root not in candidate.parents:
+        raise _store_error(
+            "artifact path escapes the store root",
+            operation="complete",
+            key=path,
+        )
+    if not candidate.is_file():
+        raise _store_error("uploaded file is missing", operation="complete", key=path)
+    with candidate.open("rb") as handle:
+        return hash_stream(handle.read)
+
+
+async def verify_upload_object(
     settings: Settings,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
+    upload: ArtifactUploadRow,
     *,
-    upload_id: uuid.UUID,
     size: int | None,
     sha256: str | None,
-    path: str | None = None,
-    name: str | None = None,
-    turn_id: uuid.UUID | None = None,
+    path: str | None,
     key_id: str,
     objects: ObjectStore | None = None,
-) -> dict[str, Any]:
-    """Verify one upload and record its rows. Rejects foreign ids/paths."""
-    from apipi.store.repo import create_file
+) -> int:
+    """Check the uploaded object against the declared size and checksum.
 
-    upload = await get_artifact_upload(db, tenant_id, upload_id)
-    if upload is None or upload.session_id != session_id:
-        raise _store_error(
-            "unknown upload for this session",
-            operation="complete",
-            key=str(upload_id),
-        )
-    if upload.status == "complete":
-        result: dict[str, Any] = {
-            "upload_id": str(upload.id),
-            "artifact_id": str(upload.artifact_id),
-        }
-        if upload.kind == "input_image":
-            result["file_id"] = f"file-{upload.artifact_id.hex}"
-        return result
-    if utc_now() > _aware(upload.expires_at):
-        raise _store_error("upload URL expired", operation="complete")
+    This is every object-store or filesystem read of an upload: S3
+    `HEAD`, a chunked hash, or a filesystem hash in a thread. It touches
+    no database row, so the caller runs it before taking a row lock.
+    Returns the verified size.
+    """
     digest = check_sha256(sha256)
-    if upload.kind == "input_image":
-        file_id = f"file-{upload.artifact_id.hex}"
-        object_id: str = file_object_id(tenant_id, file_id)
-        namespace: Namespace = NS_FILES
-    else:
-        file_id = None
-        object_id = session_object_id(tenant_id, key_id, session_id, upload.artifact_id)
-        namespace = NS_ARTIFACTS
-        check_session_prefix(object_id, session_prefix(tenant_id, key_id, session_id))
+    namespace, object_id, _file_id = _upload_target(
+        upload, tenant_id, session_id, key_id
+    )
+    expected = digest if digest is not None else upload.sha256
     if settings.artifact_store == "s3":
         if path is not None:
             raise _store_error(
@@ -387,58 +499,90 @@ async def complete_artifact_upload(
             raise _store_error(
                 "upload size mismatch", operation="complete", key=object_id
             )
-        if digest is not None or upload.sha256 is not None:
-            data = await _read_s3_object(backend, namespace, object_id)
-            if data is None:
+        if expected is not None:
+            found = await _digest_object(backend, namespace, object_id)
+            if found is None:
                 raise _store_error(
                     "Object is missing; PUT the presigned URL first",
                     operation="complete",
                     key=object_id,
                 )
-            actual_digest = sha256_hex(data)
-            expected = digest if digest is not None else upload.sha256
-            if expected is not None and actual_digest != expected.lower():
+            actual_size, actual_digest = found
+            if actual_digest != expected.lower():
                 raise _store_error(
                     "upload checksum mismatch", operation="complete", key=object_id
                 )
-            actual_size = len(data)
+        return actual_size
+    actual_size, actual_digest = await asyncio.to_thread(
+        _check_local_object, settings, namespace, object_id, path
+    )
+    if size is not None and size != actual_size:
+        raise _store_error("upload size mismatch", operation="complete", key=path or "")
+    if expected is not None and actual_digest != expected.lower():
+        raise _store_error(
+            "upload checksum mismatch", operation="complete", key=path or ""
+        )
+    return actual_size
+
+
+async def complete_artifact_upload(
+    db: AsyncSession,
+    settings: Settings,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    upload_id: uuid.UUID,
+    size: int | None,
+    sha256: str | None,
+    path: str | None = None,
+    name: str | None = None,
+    turn_id: uuid.UUID | None = None,
+    key_id: str,
+    objects: ObjectStore | None = None,
+    verified_size: int | None = None,
+) -> dict[str, Any]:
+    """Verify one upload and record its rows. Rejects foreign ids/paths.
+
+    `verified_size` is the result of `verify_upload_object` when the
+    caller already checked the object outside the row lock; without it
+    the check runs here."""
+    from apipi.store.repo import create_file
+
+    upload = await get_artifact_upload(db, tenant_id, upload_id)
+    if upload is None or upload.session_id != session_id:
+        raise _store_error(
+            "unknown upload for this session",
+            operation="complete",
+            key=str(upload_id),
+        )
+    if upload.status == "complete":
+        result: dict[str, Any] = {
+            "upload_id": str(upload.id),
+            "artifact_id": str(upload.artifact_id),
+        }
+        if upload.kind == "input_image":
+            result["file_id"] = f"file-{upload.artifact_id.hex}"
+        return result
+    if utc_now() > _aware(upload.expires_at):
+        raise _store_error("upload URL expired", operation="complete")
+    _namespace, _object_id, file_id = _upload_target(
+        upload, tenant_id, session_id, key_id
+    )
+    if verified_size is None:
+        actual_size = await verify_upload_object(
+            settings,
+            tenant_id,
+            session_id,
+            upload,
+            size=size,
+            sha256=sha256,
+            path=path,
+            key_id=key_id,
+            objects=objects,
+        )
     else:
-        if path is None:
-            raise _store_error(
-                "filesystem upload needs a session-relative path",
-                operation="complete",
-            )
-        relative = check_completed_path(path)
-        root = store_root(settings)
-        expected_rel = local_object_path(root, namespace, object_id).relative_to(root)
-        if relative != str(expected_rel):
-            raise _store_error(
-                "artifact path is outside the session prefix",
-                operation="complete",
-                key=path,
-            )
-        candidate = (root / relative).resolve()
-        resolved_root = root.resolve()
-        if candidate != resolved_root and resolved_root not in candidate.parents:
-            raise _store_error(
-                "artifact path escapes the store root",
-                operation="complete",
-                key=path,
-            )
-        if not candidate.is_file():
-            raise _store_error(
-                "uploaded file is missing", operation="complete", key=path
-            )
-        data = candidate.read_bytes()
-        actual_size = len(data)
-        if size is not None and size != actual_size:
-            raise _store_error("upload size mismatch", operation="complete", key=path)
-        actual_digest = sha256_hex(data)
-        expected = digest if digest is not None else upload.sha256
-        if expected is not None and actual_digest != expected.lower():
-            raise _store_error(
-                "upload checksum mismatch", operation="complete", key=path
-            )
+        check_sha256(sha256)
+        actual_size = verified_size
     if upload.kind == "pi_session":
         row = await get_session(db, tenant_id, session_id)
         if row is None:

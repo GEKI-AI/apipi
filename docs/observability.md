@@ -155,11 +155,19 @@ Every lease expiry logs `worker.lease.expired` with
 `last_heartbeat_age_seconds`. Compare them with the lease TTL to tell a
 dead worker from a stalled one.
 
-`apipi_worker_protocol_total{event}` stays. It is now only the counter
-of delta and rejected-envelope outcomes (`delta.accepted`,
+`apipi_worker_protocol_total{event}` stays. It counts delta and
+rejected-envelope outcomes (`delta.accepted`,
 `delta.rejected`, `delta.dropped_done`, `delta.rate_limited`,
 `delta.oversize`, `delta.invalid`, `delta.reasoning_dropped`, and
-`envelope_rejected`). The register outcomes moved to
+`envelope_rejected`) and the API paths that skip, retry, or drop work
+on a worker socket: `frame_invalid` (a binary or non-JSON
+frame), `message_invalid` (a known message type with invalid fields),
+`message_failed` (a handler raised and the socket stayed open),
+`message_retried`, `heartbeat.field_ignored`, `delta.queue_full`,
+`lane.backpressure` (a full lane made the socket wait), `ingest.retried`,
+`ingest.failed` (the batch failed after retries and the socket closed),
+`superseded` (a heartbeat from an older generation), and
+`revoke_failed` (the reaper could not send `lease.revoke`). The register outcomes moved to
 `apipi_worker_connects_total{result}` and the message counts to
 `apipi_worker_messages_total`.
 
@@ -177,17 +185,17 @@ at zero is defined, and it is filled by a later change to that path.
 | --- | --- | --- |
 | `apipi_worker_connections` | gauge, `run_mode` | Open worker sockets on this replica. It matches `apipi_workers`. |
 | `apipi_worker_connects_total` | counter, `result` | Register outcomes. `ok`, or the reject reason: `unauthorized`, `revoked`, `invalid_register`, `unsupported_protocol`, `token_bound`, `register_timeout`, `closed`. |
-| `apipi_worker_disconnects_total` | counter, `reason` | Why a socket closed: `clean`, `error`, `takeover` (the same worker connected again), `revoked`, `protocol_violation`. `ping_timeout` and `write_timeout` are defined for the writer and keepalive work and stay at zero until then. |
+| `apipi_worker_disconnects_total` | counter, `reason` | Why a socket closed: `clean`, `error`, `ping_timeout` (the server's keepalive got no answer), `write_timeout` (a frame was not written in 10 seconds or the writer queue was full), `takeover` (the same worker connected again, or a heartbeat came from an older generation), `revoked`, `protocol_violation`, `ingest_failed`. See [what closes a connection](workers.md#what-closes-a-connection-and-what-does-not). |
 | `apipi_worker_messages_total`, `apipi_worker_message_bytes` | counter and histogram, `direction` (`in` or `out`), `type` | Messages and frame sizes by the fixed message or envelope type. Anything else is `unknown`. |
-| `apipi_worker_handle_seconds` | histogram, `type` | Time from receiving one message to the start of the next receive. One slow `type` that stalls the others is head-of-line blocking. A handler over 1 second also logs `worker.handler.slow`. |
+| `apipi_worker_handle_seconds` | histogram, `type` | Time to handle one message in its own lane: the control lane for `heartbeat`, `lease.ack`, `lease.release`, `inventory`, and `sandbox.seen`, the ingest lane for envelopes (measured per batch, so every envelope type in a batch gets the batch time), and the delta lane for deltas. A slow `type` only delays the messages in its own lane. A handler over 1 second also logs `worker.handler.slow`. |
 | `apipi_worker_ingest_batch_seconds`, `apipi_worker_ingest_batch_size` | histograms | Batch commit time and the number of envelopes per batch. |
 | `apipi_worker_commands_total` | counter, `op`, `result` | Command delivery: `sent`, `acked`, `retransmitted` (resent after a reconnect), `timeout` (no `lease.ack` within the wait), `failed` (the send raised). |
 | `apipi_worker_command_ack_seconds` | histogram, `op` | Time from sending a command to its `lease.ack`. |
 | `apipi_worker_commands_unacked` | gauge | Commands waiting for `lease.ack`. |
-| `apipi_worker_send_queue_depth` | gauge | Frames waiting in the per-connection writers. Defined for the writer task and zero until it exists. |
+| `apipi_worker_send_queue_depth` | gauge | Frames waiting in the per-connection writers of this replica, summed over all sockets. It should stay near zero. A value that stays high means a worker reads slower than the API sends. At 1024 frames on one socket, or 10 seconds on one frame, that socket closes with `write_timeout`. |
 | `apipi_worker_presign_total`, `apipi_worker_presign_seconds` | counter and histogram, `kind` (`artifact`, `pi_session`, `input_image`), `result` | Artifact presign outcomes (`ok`, `unchanged`, a quota code, or `store_error`) and handling time. |
 | `apipi_search_requests_total`, `apipi_search_seconds`, `apipi_search_inflight` | counter, histogram, gauge, `provider`, `result` | `web_search` outcomes (`ok`, the provider error code, or `search_denied`), provider call latency, and running calls. |
-| `apipi_event_bus_notify_errors_total` | counter | Failed `NOTIFY` publishes. The fallback poll covers the gap, but SSE clients on other replicas are slower. |
+| `apipi_event_bus_notify_errors_total` | counter | Failed `NOTIFY` publishes, whatever the error (a closed connection, a timeout, or an unexpected exception). Publishes are serialized on one connection, which is dropped and reopened after an error. The fallback poll covers the gap, but SSE clients on other replicas are slower. |
 | `apipi_background_loop_errors_total`, `apipi_background_loop_last_run_timestamp` | counter and gauge, `loop` | Errors a background loop caught and the Unix time of its last finished round. API loops: `lease_reaper`, `delta_flusher`, `usage_purge`, plus the tasks `lifecycle_heartbeat` and `lifecycle_sender`. |
 | `apipi_event_loop_lag_seconds` | histogram | How late the event loop wakes a one second sleep. High values mean something blocks the loop. |
 | `apipi_worker_info` | gauge, `worker_id`, `protocol`, `version`, `run_mode` | Always 1, one series per connected worker. Use it for fleet version views. This is the only series with `worker_id`. |
@@ -280,7 +288,9 @@ bill. See [usage](usage.md#session-lifecycle-export).
 | Rate of `apipi_worker_lease_events_total{event="expired"}` | Leases die on a live fleet |
 | Rate of `apipi_worker_disconnects_total` (not `clean`) and of `apipi_worker_reconnects_total` | Flapping sockets |
 | `apipi_worker_heartbeat_gap_seconds` p99 | Alert when it nears half the lease TTL |
-| `apipi_worker_handle_seconds` p99 by `type` | Head-of-line blocking in the receive loop |
+| `apipi_worker_handle_seconds` p99 by `type` | A slow lane. Alert on `heartbeat` and `lease.ack` first: their lane must stay fast. |
+| `apipi_worker_send_queue_depth` above 0 for minutes, or `apipi_worker_disconnects_total{reason="write_timeout"}` | A worker that does not read its socket |
+| Rate of `apipi_worker_protocol_total{event="message_failed"}` and `{event="ingest.failed"}` | Database trouble that the socket survived, or did not |
 | `apipi_event_loop_lag_seconds` p99 | A blocked event loop on the API or a worker |
 | `apipi_worker_connected` equal to 0 for longer than the lease TTL, or rate of `apipi_worker_reconnects_total` by `reason` (`ping_timeout`, `hello_timeout`) | A worker cannot reach the API, a half-open network path, or an API that accepts sockets and does not answer |
 | `apipi_worker_waiter_total{result="timeout"}` or `result="disconnected"` | A presign or search reply never arrived; artifacts of a turn may be missing |

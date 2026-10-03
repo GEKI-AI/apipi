@@ -178,6 +178,50 @@ code `capacity_tenant`.
 A session still costs a Pi guest on this host. Hosted workspace disk is
 elsewhere and is not capped here.
 
+## Database pool
+
+Every API replica has one SQLAlchemy connection pool. Worker sockets,
+ingest, the lease reaper, and HTTP requests all draw from it. The pool
+holds `APIPI_DB_POOL_SIZE` connections (default 5), may open 10 more
+as overflow, and a task that finds the pool empty waits up to 30
+seconds. The default lease TTL is also 30 seconds, so a pool that is
+exhausted for that long can make a heartbeat late enough to expire
+leases. Size the pool so that it is never empty.
+
+Each connected worker uses up to two connections at the same time on
+the replica that holds its socket: one for the control lane (heartbeat,
+acks, release, inventory) and one for the ingest lane (a batch
+transaction). Live deltas, presign, and artifact checks read the
+database only briefly, and the object-store reads of presign and
+`artifact.completed` run with no connection held. The lease reaper and
+the background loops use about two more. Every in-flight HTTP request
+that touches the database uses one.
+
+```
+peak connections per replica ≈ 2 × worker sockets on the replica
+                               + concurrent database requests
+                               + 2
+APIPI_DB_POOL_SIZE + 10 ≥ peak connections per replica
+```
+
+For example, a replica that holds 20 worker sockets and serves up to 30
+concurrent requests peaks near 72 connections, so set
+`APIPI_DB_POOL_SIZE=64` or more. Watch `apipi_event_loop_lag_seconds`
+and `apipi_worker_handle_seconds` on the API: a pool that is too small
+shows up as handler times near the 30 second wait.
+
+Postgres must have room for every replica at once:
+
+```
+replicas × (APIPI_DB_POOL_SIZE + 10) + 2 × replicas + migrations and operators
+  ≤ max_connections
+```
+
+The two extra connections per replica are the dedicated `LISTEN` and
+`NOTIFY` connections of the event bus, which are outside the pool. If
+that sum does not fit, raise `max_connections` on Postgres or run fewer
+workers per replica.
+
 ## Overprovision
 
 | Resource | Overprovision? | Why |
@@ -226,7 +270,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_IDLE_TTL` | Kill idle Pi for `none` (default 15 minutes) and free a live slot. Hosted computers use sandbox TTL. |
 | `APIPI_SANDBOX_TTL_OPENAI_HOSTED` | Stop hosted Pi and delete the workspace (default 1 hour). |
 | `APIPI_TURN_TIMEOUT` | Cancel a stuck turn (default 10 minutes). |
-| `APIPI_DB_POOL_SIZE` | Postgres connections from this process (default 5). |
+| `APIPI_DB_POOL_SIZE` | Postgres connections from this process (default 5, plus 10 overflow). See [Database pool](#database-pool) for how to size it with workers. |
 | `APIPI_MAX_REQUEST_BYTES` | HTTP body cap (`413` `payload_too_large`). |
 | `APIPI_MAX_WORKSPACE_BYTES` / `APIPI_MAX_ARTIFACT_BYTES` | Directory and published-artifact caps. |
 | `APIPI_ARTIFACT_STORE` | `local` or `s3`. Production uses `s3` so workers hold no store credentials. `local` defaults to `.apipi/store` on a single host. With several hosts, the API and every worker must share one `APIPI_LOCAL_STORE_DIR`. |

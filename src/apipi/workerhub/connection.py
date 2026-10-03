@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 import uuid
@@ -10,6 +11,7 @@ from starlette.websockets import WebSocket
 
 from apipi.common.logutil import RateLimitedLog
 from apipi.protocol import RunningSession
+from apipi.workerhub.writer import ConnectionWriter
 
 
 @dataclass
@@ -45,6 +47,32 @@ class WorkerConnection:
     warnings: RateLimitedLog = field(
         default_factory=lambda: RateLimitedLog(logging.getLogger("apipi.worker"))
     )
+    closing: asyncio.Event = field(default_factory=asyncio.Event)
+    close_code: int = 1000
+    close_text: str | None = None
+    writer: ConnectionWriter = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.writer = ConnectionWriter(self)
+
+    async def send(self, payload: dict[str, Any]) -> None:
+        """Send one frame through this connection's writer and wait for it."""
+        await self.writer.send(payload)
+
+    def request_close(
+        self,
+        reason: str,
+        *,
+        code: int | None = None,
+        text: str | None = None,
+    ) -> None:
+        """Ask the serving task to close this socket. The first reason wins."""
+        if self.disconnect_reason is None:
+            self.disconnect_reason = reason
+            if code is not None:
+                self.close_code = code
+            self.close_text = text
+        self.closing.set()
 
 
 def claimed_leases(

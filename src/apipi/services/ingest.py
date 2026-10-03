@@ -13,6 +13,7 @@ on `sessions.worker_seq` and is reported in `hello.reply`, so a
 reconnect replays exactly what is missing.
 """
 
+import asyncio
 import logging
 import time
 import uuid
@@ -80,6 +81,19 @@ class LifecycleIntent:
     cause: str = "spawn"
     reason: str = "stop"
     live_ms: int = 0
+
+
+@dataclass
+class Precheck:
+    """Object-store reads of one envelope, done before the row lock.
+
+    `error` is the store failure to raise when the envelope applies, so
+    it is answered like any other presign or completion failure."""
+
+    used_bytes: int | None = None
+    unchanged: bool | None = None
+    verified_size: int | None = None
+    error: Exception | None = None
 
 
 @dataclass
@@ -396,6 +410,7 @@ async def _apply(
     objects: Any | None = None,
     intents: list[LifecycleIntent],
     run_mode: str | None = None,
+    precheck: Precheck | None = None,
 ) -> None:
     from apipi.common.failures import failure_from_dict
     from apipi.common.usage import usage_from
@@ -619,8 +634,13 @@ async def _apply(
         replies = presign_replies if presign_replies is not None else []
         presign_started = time.monotonic()
         try:
+            if precheck is not None and precheck.error is not None:
+                raise precheck.error
             blobs = _blobs_for(settings, objects)
-            used = await blobs.used_bytes(tenant_id, row.key_id, session_id)
+            if precheck is not None and precheck.used_bytes is not None:
+                used = precheck.used_bytes
+            else:
+                used = await blobs.used_bytes(tenant_id, row.key_id, session_id)
             issued = await issue_artifact_presign(
                 db,
                 settings,
@@ -635,6 +655,7 @@ async def _apply(
                 used_bytes=used,
                 objects=objects if objects is not None else _object_store(settings),
                 blobs=blobs,
+                unchanged=precheck.unchanged if precheck is not None else None,
             )
         except Exception as exc:
             code, message = _artifact_error(exc)
@@ -709,6 +730,8 @@ async def _apply(
         except ValueError as exc:
             raise _Reject(INVALID_ENVELOPE) from exc
         try:
+            if precheck is not None and precheck.error is not None:
+                raise precheck.error
             await complete_artifact_upload(
                 db,
                 settings,
@@ -722,6 +745,7 @@ async def _apply(
                 turn_id=turn_id,
                 key_id=row.key_id,
                 objects=objects if objects is not None else _object_store2(settings),
+                verified_size=precheck.verified_size if precheck is not None else None,
             )
         except Exception as exc:
             code, _message = _artifact_error(exc)
@@ -809,6 +833,123 @@ def _blobs_for(settings: Any, objects: Any | None) -> Any:
         return MemoryBlobs()
 
 
+async def precheck_batch(
+    store: Store,
+    queued: list[QueuedEnvelope],
+    *,
+    worker_id: uuid.UUID,
+    settings: Any,
+    objects: Any | None,
+) -> dict[tuple[uuid.UUID, int], Precheck]:
+    """Do the slow object-store work of a batch before its transaction.
+
+    `artifact.presign` lists and reads the store, and `artifact.completed`
+    verifies and hashes the uploaded object. Neither may hold the
+    session row lock or a database connection, so both run here, from a
+    short read-only look at the session and upload rows. A failure is
+    kept in the `Precheck` and raised when the envelope applies. Only
+    sessions leased to this worker are looked at.
+    """
+    from apipi.services.worker_artifacts import (
+        precheck_presign,
+        verify_upload_object,
+    )
+    from apipi.store.repo import get_artifact_upload, get_sessions_by_ids
+
+    wanted = [
+        item
+        for item in queued
+        if item.envelope.type in {"artifact.presign", "artifact.completed"}
+    ]
+    results: dict[tuple[uuid.UUID, int], Precheck] = {}
+    if not wanted:
+        return results
+    async with store.session() as db:
+        rows = await get_sessions_by_ids(
+            db, {item.envelope.session_id for item in wanted}
+        )
+        uploads: dict[uuid.UUID, Any] = {}
+        for item in wanted:
+            envelope = item.envelope
+            raw = envelope.payload.get("upload_id")
+            row = rows.get(envelope.session_id)
+            if envelope.type != "artifact.completed" or row is None:
+                continue
+            try:
+                upload_id = uuid.UUID(str(raw))
+            except ValueError:
+                continue
+            uploads[upload_id] = await get_artifact_upload(db, row.tenant_id, upload_id)
+    for item in wanted:
+        envelope = item.envelope
+        row = rows.get(envelope.session_id)
+        if (
+            row is None
+            or row.worker_id != worker_id
+            or row.lease_id is None
+            or item.raw_size > MAX_MESSAGE_BYTES
+        ):
+            continue
+        payload = envelope.payload
+        key = (envelope.session_id, envelope.seq)
+        try:
+            if envelope.type == "artifact.presign":
+                raw_size = payload.get("size")
+                if not isinstance(raw_size, int) or raw_size < 1:
+                    continue
+                kind = str(payload.get("kind") or "artifact")
+                filename = payload.get("filename")
+                sha256 = payload.get("sha256")
+                used, unchanged = await precheck_presign(
+                    store,
+                    _blobs_for(settings, objects),
+                    row,
+                    kind=kind,
+                    filename=filename if isinstance(filename, str) else None,
+                    sha256=sha256 if isinstance(sha256, str) else None,
+                )
+                results[key] = Precheck(used_bytes=used, unchanged=unchanged)
+                continue
+            try:
+                upload_id = uuid.UUID(str(payload.get("upload_id")))
+            except ValueError:
+                continue
+            upload = uploads.get(upload_id)
+            if (
+                upload is None
+                or upload.session_id != envelope.session_id
+                or upload.status == "complete"
+            ):
+                continue
+            raw_size = payload.get("size")
+            raw_path = payload.get("path")
+            sha256 = payload.get("sha256")
+            results[key] = Precheck(
+                verified_size=await verify_upload_object(
+                    settings,
+                    row.tenant_id,
+                    envelope.session_id,
+                    upload,
+                    size=raw_size if isinstance(raw_size, int) else None,
+                    sha256=sha256 if isinstance(sha256, str) else None,
+                    path=raw_path if isinstance(raw_path, str) else None,
+                    key_id=row.key_id,
+                    objects=objects if objects is not None else _store_for(settings),
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            results[key] = Precheck(error=exc)
+    return results
+
+
+def _store_for(settings: Any) -> Any:
+    from apipi.store.blobs import object_store
+
+    return object_store(settings)
+
+
 async def flush_batch(
     store: Store,
     queued: list[QueuedEnvelope],
@@ -823,6 +964,9 @@ async def flush_batch(
     outcome = IngestOutcome()
     if not queued:
         return outcome
+    prechecks = await precheck_batch(
+        store, queued, worker_id=worker_id, settings=settings, objects=objects
+    )
     turn_cache = _TurnCache()
     duplicates: dict[uuid.UUID, list[int]] = {}
     async with store.session() as db:
@@ -888,6 +1032,7 @@ async def flush_batch(
                             objects=objects,
                             intents=outcome.lifecycle,
                             run_mode=run_mode,
+                            precheck=prechecks.get((session_id, envelope.seq)),
                         )
                         if envelope.type == "session.stopped":
                             outcome.wipes.append((row.tenant_id, row.key_id, row.id))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -14,10 +15,7 @@ from apipi.protocol import (
     WorkerEnvelope,
 )
 from apipi.store.engine import Store
-from apipi.store.repo import (
-    get_session_by_id,
-    list_events,
-)
+from apipi.store.repo import get_session_by_id
 from apipi.workerhub.connection import WorkerConnection
 
 if TYPE_CHECKING:
@@ -37,22 +35,20 @@ _DELTA_DONE_CAP = 256
 DELTA_LEASE_REFRESH = 30.0
 
 
-def _done_turns_in(events: list[Any]) -> set[str]:
-    """Collect turn ids whose final text already committed.
+def _done_turn_of(body: dict[str, Any]) -> str | None:
+    """The turn id whose final text or end this stored event marks, if any.
 
-    A delta for one of these turns is stale: the final item is the
-    source of truth, so the delta is dropped."""
-    done: set[str] = set()
-    for event in events:
-        data = event.data
-        if not isinstance(data, dict):
-            continue
-        turn_id = data.get("turn_id")
-        if not isinstance(turn_id, str) or not turn_id:
-            continue
-        if event.type == DELTA_DONE_TYPE or event.type in DELTA_TERMINAL_TYPES:
-            done.add(turn_id)
-    return done
+    A delta for such a turn is stale: the final item is the source of
+    truth, so the delta is dropped."""
+    if body.get("type") != DELTA_DONE_TYPE and body.get("type") not in (
+        DELTA_TERMINAL_TYPES
+    ):
+        return None
+    data = body.get("data")
+    if not isinstance(data, dict):
+        return None
+    turn_id = data.get("turn_id")
+    return turn_id if isinstance(turn_id, str) and turn_id else None
 
 
 @dataclass
@@ -60,15 +56,13 @@ class DeltaLease:
     """In-memory fast path for delta validation.
 
     The replica holding the socket already knows which lease each
-    session holds, so most deltas skip the lease-row read. ``last_seq``
-    is the newest stored event seq seen so far; the drop-after-done
-    check only reads events after it. ``done`` caches turns already
-    known done, so those deltas need no read at all."""
+    session holds, so most deltas skip the lease-row read. ``done``
+    holds the turns whose final text or end this connection's ingest
+    stored, so the drop-after-done check never reads the database."""
 
     worker_id: uuid.UUID
     lease_id: uuid.UUID
     tenant_id: uuid.UUID
-    last_seq: int = 0
     done: set[str] = field(default_factory=set)
     refreshed: float = field(default_factory=time.monotonic)
 
@@ -126,10 +120,10 @@ async def handle_delta(
     are dropped when the turn already committed its final text.
     The lease check reads from the socket's in-memory lease
     state and only falls back to the lease row when that state
-    cannot answer; the drop-after-done check only reads events
-    stored after the last check, and cached done turns need no
-    read at all. Accepted deltas are published as ``live`` bus
-    messages and are never written to the store. Returns whether
+    cannot answer; the drop-after-done check uses the turns ingest
+    stored on this connection and never reads events. Accepted
+    deltas are published as ``live`` bus messages and are never
+    written to the store. Returns whether
     a delta was published."""
     if envelope.type == "delta.reasoning":
         hub.observe_protocol("delta.reasoning_dropped")
@@ -191,11 +185,6 @@ async def handle_delta(
     if turn_id is not None and str(turn_id) in known.done:
         hub.observe_protocol("delta.dropped_done")
         return False
-    if turn_id is not None and await _note_done_turns(
-        hub, store, known, envelope.session_id, turn_id
-    ):
-        hub.observe_protocol("delta.dropped_done")
-        return False
     await bus.publish(
         envelope.session_id,
         live_event_body(
@@ -229,30 +218,17 @@ async def _refresh_delta_lease(
     )
 
 
-async def _note_done_turns(
-    hub: WorkerHub,
-    store: Store,
-    known: DeltaLease,
-    session_id: uuid.UUID,
-    turn_id: uuid.UUID,
-) -> bool:
-    """Record newly committed final turns; say whether this one is done.
-
-    Only events stored after the last check are read, so the
-    per-delta cost stays bounded no matter how long the session
-    history grows."""
-    async with store.session() as db:
-        events = await list_events(
-            db,
-            known.tenant_id,
-            session_id,
-            after_seq=known.last_seq or None,
-        )
-    for event in events:
-        if event.seq > known.last_seq:
-            known.last_seq = event.seq
-    for done_turn in _done_turns_in(events):
+def note_stored_events(
+    hub: WorkerHub, session_id: uuid.UUID, bodies: Iterable[dict[str, Any]]
+) -> None:
+    """Remember the turns whose final text or end ingest just stored."""
+    known = hub._delta_leases.get(session_id)
+    if known is None:
+        return
+    for body in bodies:
+        turn_id = _done_turn_of(body)
+        if turn_id is None:
+            continue
         if len(known.done) >= _DELTA_DONE_CAP:
             known.done.clear()
-        known.done.add(done_turn)
-    return str(turn_id) in known.done
+        known.done.add(turn_id)

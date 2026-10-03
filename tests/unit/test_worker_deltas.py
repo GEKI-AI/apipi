@@ -288,20 +288,30 @@ async def test_handle_delta_rejects_unleased_session(
     assert "worker delta for unleased session" in caplog.text
 
 
+async def _noted(
+    hub: WorkerHub, tenant_id: uuid.UUID, session_id: uuid.UUID, worker_id, lease_id
+) -> None:
+    hub._note_delta_lease(
+        session_id, worker_id=worker_id, lease_id=lease_id, tenant_id=tenant_id
+    )
+
+
 async def test_handle_delta_drops_after_done(settings: Settings, store: Store) -> None:
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
     tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
     turn_id = uuid.uuid4()
-    async with store.session() as db:
-        await append_event(
-            db,
-            tenant_id,
-            session_id,
-            type="agent.session.turn.output_text.done",
-            data={"text": "hello", "turn_id": str(turn_id)},
-        )
+    await _noted(hub, tenant_id, session_id, worker_id, lease_id)
+    hub.note_stored_events(
+        session_id,
+        [
+            {
+                "type": "agent.session.turn.output_text.done",
+                "data": {"text": "hello", "turn_id": str(turn_id)},
+            }
+        ],
+    )
     queue = bus.subscribe(session_id)
     try:
         published = await hub.handle_delta(
@@ -325,14 +335,16 @@ async def test_handle_delta_drops_after_terminal_turn(
     worker_id = uuid.uuid4()
     tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
     turn_id = uuid.uuid4()
-    async with store.session() as db:
-        await append_event(
-            db,
-            tenant_id,
-            session_id,
-            type="agent.session.turn.completed",
-            data={"turn_id": str(turn_id)},
-        )
+    await _noted(hub, tenant_id, session_id, worker_id, lease_id)
+    hub.note_stored_events(
+        session_id,
+        [
+            {
+                "type": "agent.session.turn.completed",
+                "data": {"turn_id": str(turn_id)},
+            }
+        ],
+    )
     queue = bus.subscribe(session_id)
     try:
         published = await hub.handle_delta(
@@ -355,14 +367,16 @@ async def test_handle_delta_keeps_deltas_for_other_turns(
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
     tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
-    async with store.session() as db:
-        await append_event(
-            db,
-            tenant_id,
-            session_id,
-            type="agent.session.turn.output_text.done",
-            data={"text": "old", "turn_id": str(uuid.uuid4())},
-        )
+    await _noted(hub, tenant_id, session_id, worker_id, lease_id)
+    hub.note_stored_events(
+        session_id,
+        [
+            {
+                "type": "agent.session.turn.output_text.done",
+                "data": {"text": "old", "turn_id": str(uuid.uuid4())},
+            }
+        ],
+    )
     queue = bus.subscribe(session_id)
     try:
         published = await hub.handle_delta(
@@ -472,26 +486,24 @@ async def test_handle_delta_counts_protocol_events(
     assert 'event="delta.rejected"' in body
 
 
-async def test_handle_delta_reads_only_new_events_after_baseline(
+async def test_handle_delta_reads_no_events(
     settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import apipi.workerhub.deltas as hub_module
+    import apipi.store.repo as repo
 
-    real = hub_module.list_events
-    calls: list[int | None] = []
+    calls = 0
+    real = repo.list_events
 
-    async def counting(
-        db: Any, tenant_id: uuid.UUID, session_id: uuid.UUID, **kwargs: Any
-    ) -> Any:
-        calls.append(kwargs.get("after_seq"))
-        return await real(db, tenant_id, session_id, **kwargs)
+    async def counting(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return await real(*args, **kwargs)
 
-    monkeypatch.setattr(hub_module, "list_events", counting)
+    monkeypatch.setattr(repo, "list_events", counting)
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
     tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
-    turn_id = uuid.uuid4()
     async with store.session() as db:
         for _ in range(30):
             await append_event(
@@ -502,59 +514,50 @@ async def test_handle_delta_reads_only_new_events_after_baseline(
                 data={"text": "old", "turn_id": str(uuid.uuid4())},
             )
     conn = _conn(worker_id, lease_id)
+    turn_id = uuid.uuid4()
     for seq in range(1, 6):
         assert await hub.handle_delta(
             store, bus, conn, _envelope(session_id, turn_id, "x", seq=seq)
         )
-    assert len(calls) == 5
-    assert calls[0] is None
-    assert calls[1:] == [30, 30, 30, 30]
+    assert calls == 0
 
 
-async def test_handle_delta_done_cache_needs_no_read(
-    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+async def test_handle_delta_uses_no_query_once_leased(
+    settings: Settings, store: Store
 ) -> None:
-    import apipi.workerhub.deltas as hub_module
-
-    real = hub_module.list_events
-    calls = 0
-
-    async def counting(
-        db: Any, tenant_id: uuid.UUID, session_id: uuid.UUID, **kwargs: Any
-    ) -> Any:
-        nonlocal calls
-        calls += 1
-        return await real(db, tenant_id, session_id, **kwargs)
-
-    monkeypatch.setattr(hub_module, "list_events", counting)
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
     tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    await _noted(hub, tenant_id, session_id, worker_id, lease_id)
     turn_id = uuid.uuid4()
     conn = _conn(worker_id, lease_id)
-    assert await hub.handle_delta(store, bus, conn, _envelope(session_id, turn_id, "x"))
-    async with store.session() as db:
-        await append_event(
-            db,
-            tenant_id,
-            session_id,
-            type="agent.session.turn.output_text.done",
-            data={"text": "full", "turn_id": str(turn_id)},
-        )
-    assert (
-        await hub.handle_delta(
-            store, bus, conn, _envelope(session_id, turn_id, "late", seq=2)
-        )
-        is False
+
+    class NoStore:
+        def session(self) -> Any:
+            raise AssertionError("a delta must not read the database")
+
+    assert await hub.handle_delta(
+        cast(Any, NoStore()), bus, conn, _envelope(session_id, turn_id, "x")
+    )
+    hub.note_stored_events(
+        session_id,
+        [
+            {
+                "type": "agent.session.turn.output_text.done",
+                "data": {"text": "full", "turn_id": str(turn_id)},
+            }
+        ],
     )
     assert (
         await hub.handle_delta(
-            store, bus, conn, _envelope(session_id, turn_id, "later", seq=3)
+            cast(Any, NoStore()),
+            bus,
+            conn,
+            _envelope(session_id, turn_id, "late", seq=2),
         )
         is False
     )
-    assert calls == 2
 
 
 async def test_delta_state_dropped_on_release_and_detach(

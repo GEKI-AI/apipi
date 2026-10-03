@@ -16,9 +16,12 @@ from apipi.common.logutil import log_event
 from apipi.services.session_events import persist_event
 from apipi.store.engine import Store
 from apipi.store.repo import (
+    agent_idle_ttls,
     clear_session_lease,
+    get_sessions_by_ids,
     list_worker_leases,
 )
+from apipi.workerhub.connection import WorkerConnection
 
 if TYPE_CHECKING:
     from apipi.workerhub.hub import WorkerHub
@@ -33,6 +36,8 @@ async def reconcile_inventory(
     worker_id: uuid.UUID,
     reported: dict[uuid.UUID, uuid.UUID],
     unleased: Collection[uuid.UUID] = (),
+    *,
+    conn: WorkerConnection | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, dict[str, Any]]]:
     """Compare the worker live set against the lease rows.
 
@@ -54,6 +59,9 @@ async def reconcile_inventory(
     """
     revoke: list[dict[str, str]] = []
     ttl: dict[str, dict[str, Any]] = {}
+    ttl_rows: dict[str, Any] = {}
+    if conn is None:
+        conn = hub._conns.get(worker_id)
     hub.note_inventory(worker_id, reported)
     async with store.session() as db:
         rows = await list_worker_leases(db, worker_id)
@@ -97,12 +105,11 @@ async def reconcile_inventory(
                 )
                 await clear_session_lease(db, row.tenant_id, row.id)
                 hub._forget_delta(session_id)
-                conn = hub._conns.get(worker_id)
                 if conn is not None and row.lease_id is not None:
                     conn.leases.discard(row.lease_id)
                     conn.lease_mem.pop(row.lease_id, None)
                 continue
-            ttl[str(session_id)] = await _inventory_ttl(hub, db, row)
+            ttl_rows[str(session_id)] = row
         for session_id, lease_id in reported.items():
             row = leased.get(session_id)
             if row is None:
@@ -112,14 +119,18 @@ async def reconcile_inventory(
                         "lease_id": str(lease_id),
                     }
                 )
-        for session_id in unleased:
-            if session_id in reported or str(session_id) in ttl:
+        pending = [
+            session_id
+            for session_id in dict.fromkeys(unleased)
+            if session_id not in reported
+            and str(session_id) not in ttl_rows
+            and session_id not in leased
+        ]
+        found = await get_sessions_by_ids(db, pending)
+        for session_id in dict.fromkeys(unleased):
+            if session_id in reported or str(session_id) in ttl_rows:
                 continue
-            row = leased.get(session_id)
-            if row is None:
-                from apipi.store.repo import get_session_by_id
-
-                row = await get_session_by_id(db, session_id)
+            row = leased.get(session_id) or found.get(session_id)
             if row is None:
                 # No session row anymore (a stopped session is
                 # deleted): the directory is garbage, tell the
@@ -130,7 +141,14 @@ async def reconcile_inventory(
                 # the Pi stopped, while the workspace stays until
                 # its idle TTL. Answer the TTL so the normal
                 # reaper wipes it when the TTL runs out.
-                ttl[str(session_id)] = await _inventory_ttl(hub, db, row)
+                ttl_rows[str(session_id)] = row
+        agent_ttl = await agent_idle_ttls(
+            db, {row.agent_id for row in ttl_rows.values() if row.agent_id is not None}
+        )
+        for key, row in ttl_rows.items():
+            ttl[key] = _inventory_ttl(
+                hub, row, agent_ttl.get((row.tenant_id, row.agent_id))
+            )
     for entry in revoke:
         if "lease_id" in entry:
             hub.observe_lease_event("revoked")
@@ -148,7 +166,7 @@ async def reconcile_inventory(
     return revoke, ttl
 
 
-async def _inventory_ttl(hub: WorkerHub, db: Any, row: Any) -> dict[str, Any]:
+def _inventory_ttl(hub: WorkerHub, row: Any, agent_idle: str | None) -> dict[str, Any]:
     """The effective reaper TTL answer for one session row.
 
     `idle_since_epoch` is the row's last touch, so the worker
@@ -160,13 +178,6 @@ async def _inventory_ttl(hub: WorkerHub, db: Any, row: Any) -> dict[str, Any]:
 
     environment = row.environment if isinstance(row.environment, dict) else {}
     env_type = environment.get("type")
-    agent_idle = None
-    if row.agent_id is not None:
-        from apipi.store.repo import get_agent
-
-        agent = await get_agent(db, row.tenant_id, row.agent_id)
-        if agent is not None:
-            agent_idle = agent.idle_ttl
     meta = row.metadata_json if isinstance(row.metadata_json, dict) else {}
     resolved = resolve_idle_ttl(
         hub.settings,

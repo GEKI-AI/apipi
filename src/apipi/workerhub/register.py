@@ -22,7 +22,6 @@ from apipi.store.repo import (
 )
 from apipi.workerhub.connection import WorkerConnection, WorkerImage, claimed_leases
 from apipi.workerhub.hub import WorkerHub, heartbeat_interval
-from apipi.workerhub.wire import send_message
 
 log = logging.getLogger("apipi.worker")
 
@@ -116,48 +115,54 @@ async def register_worker(
         accepts=accepts_for_register(register),
         version=register.version or "unknown",
     )
-    await hub.attach(conn)
-    sessions = await hub.restore_leases(conn, store, register.running)
-    store_check = _store_check_for(hub.settings)
-    if store_check is not None:
-        conn.store_proof = (store_check.marker, store_check.nonce)
-    reported = claimed_leases(register.running)
-    if event_hub is not None:
-        revoke, ttl = await hub.reconcile_inventory(
-            store, event_hub, conn.worker_id, reported
+    conn.writer.bind(hub.metrics, hub.observe_send_queue)
+    conn.writer.start()
+    try:
+        sessions = await hub.restore_leases(conn, store, register.running)
+        store_check = _store_check_for(hub.settings)
+        if store_check is not None:
+            conn.store_proof = (store_check.marker, store_check.nonce)
+        reported = claimed_leases(register.running)
+        if event_hub is not None:
+            revoke, ttl = await hub.reconcile_inventory(
+                store, event_hub, conn.worker_id, reported, conn=conn
+            )
+        else:
+            hub.note_inventory(conn.worker_id, reported)
+            revoke, ttl = [], {}
+        hello_sent = conn.writer.submit(
+            HelloReply(
+                worker_id=conn.worker_id,
+                generation=conn.generation,
+                connection_id=conn.connection_id,
+                lease_ttl_seconds=hub.settings.worker_lease_ttl.total_seconds(),
+                heartbeat_seconds=heartbeat_interval(hub.settings),
+                sessions=sessions,
+                store_check=store_check,
+                revoke=[RevokeEntry.model_validate(entry) for entry in revoke],
+                ttl={
+                    uuid.UUID(key): TtlEntry.model_validate(value)
+                    for key, value in ttl.items()
+                },
+            ).to_wire()
         )
-    else:
-        hub.note_inventory(conn.worker_id, reported)
-        revoke, ttl = [], {}
-    await send_message(
-        websocket,
-        HelloReply(
+        log_event(
+            log,
+            logging.INFO,
+            "worker hello sent",
+            event="worker.hello.sent",
             worker_id=conn.worker_id,
-            generation=conn.generation,
             connection_id=conn.connection_id,
-            lease_ttl_seconds=hub.settings.worker_lease_ttl.total_seconds(),
-            heartbeat_seconds=heartbeat_interval(hub.settings),
-            sessions=sessions,
-            store_check=store_check,
-            revoke=[RevokeEntry.model_validate(entry) for entry in revoke],
-            ttl={
-                uuid.UUID(key): TtlEntry.model_validate(value)
-                for key, value in ttl.items()
-            },
-        ),
-        metrics=hub.metrics,
-    )
-    log_event(
-        log,
-        logging.INFO,
-        "worker hello sent",
-        event="worker.hello.sent",
-        worker_id=conn.worker_id,
-        connection_id=conn.connection_id,
-        sessions=len(sessions),
-        revoked=len(revoke),
-    )
-    await hub.resend_pending(conn)
+            sessions=len(sessions),
+            revoked=len(revoke),
+        )
+        await hub.resend_pending(conn)
+        await hub.attach(conn)
+        await hello_sent
+    except BaseException:
+        await hub.detach(conn.worker_id, conn)
+        await conn.writer.stop()
+        raise
     return conn
 
 

@@ -216,6 +216,73 @@ and byte bounds, so a noisy session or an outage fails its own turn and
 not every turn on the worker. The emergency budget for the failure
 itself still applies.
 
+## Serving a socket on the API
+
+The API replica that holds a worker socket serves it with separate
+tasks, so no kind of work delays the messages that keep leases alive.
+The decisions, and why:
+
+* **The receive loop only parses and dispatches.** A control lane
+  handles `heartbeat`, `lease.ack`, `lease.release`, `inventory`,
+  `sandbox.seen`, and `store.proof`. An ingest lane applies durable
+  envelopes in order. A delta lane publishes live deltas and drops them
+  when it is full, because a delta is at-most-once anyway. The ingest
+  lane has a bounded queue and makes the socket wait when it is full,
+  because dropping a durable envelope would lose data. A
+  `lease.release` for a session with envelopes still queued goes
+  through the ingest lane so it cannot overtake them.
+* **One writer task per connection.** Every send goes through its
+  bounded queue of 1024 frames: replies and acks, commands from HTTP
+  requests, and `lease.revoke` from the reaper. This makes the order
+  of frames on one socket defined and leaves one place for a timeout.
+  A frame that takes more than 10 seconds, or a full queue, closes the
+  connection with the reason `write_timeout`. Forwarding commands
+  between replicas builds on this path.
+* **`hello.reply` is the first frame of the writer, and a connection is
+  pickable only after it is queued.** Register restores leases and
+  reconciles the inventory first, then queues `hello.reply`, then makes
+  the connection visible to placement, commands, and the reaper.
+* **Slow store work runs before the row lock and off the event loop.**
+  Presign and `artifact.completed` read and hash the object (in chunks,
+  in a thread) before the ingest transaction opens, so the session row
+  lock and a database connection are never held across store calls. A
+  store failure is kept and answered when the envelope applies, exactly
+  as before.
+* **The delta gate needs no database read.** Ingest records the turns
+  whose final text or end it stored, in memory. The cost is that after a
+  reconnect the record starts empty, so one straggling delta of a
+  finished turn may be published. The final item replaces it.
+* **An error on one message does not close the socket.** It is logged,
+  counted, and retried where the sender does not retry (`lease.release`,
+  and an ingest batch, three attempts each). Heartbeats, inventories,
+  seen reports, and deltas are periodic or ephemeral, so the next one
+  is the retry. Only these close a socket: a protocol violation, a
+  revoked token, a superseded generation or a takeover, a write
+  timeout, an ingest batch that still fails (so the worker reconnects
+  and replays), and the peer going away. Binary and invalid JSON frames
+  are skipped and counted, not treated as violations, because a single
+  bad frame does not make the stream unsafe and closing would drop
+  every other session of the worker.
+* **`generation` is checked.** Every register bumps it. A heartbeat
+  from a connection with an older generation renews nothing and the
+  connection is closed with the reason `takeover`, so an old socket on
+  another replica cannot keep leases alive for a worker that moved.
+  Detach clears `api_instance_id` only when the detaching connection is
+  still the current one on that replica.
+* **The lease reaper commits first.** It clears rows and stores the
+  error events in one transaction, and only then logs, updates memory,
+  and sends `lease.revoke` through the writer with a 5 second timeout. A
+  failed round is logged and counted and the loop runs again.
+* **The frame limit is 4 MiB.** The API sets uvicorn's `ws_max_size` to
+  4 MiB, a few times the 1 MiB envelope cap, which stays an
+  application check that rejects and acks past.
+* **A heartbeat with an invalid optional field keeps the lease.** The
+  field is ignored and logged, and the lease is extended.
+
+Every pool connection is shared by worker sockets, ingest, and HTTP.
+`docs/production.md` gives the sizing rule: about two connections per
+worker socket plus the concurrent requests.
+
 ## Auth
 
 Workers authenticate with per-worker bearer tokens. Every secret
