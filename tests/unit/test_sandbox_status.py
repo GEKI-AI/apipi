@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
+from apipi.common.event_bus import EventHub
 from apipi.config import CapacityError, Settings
-from apipi.services.runtime import EventHub
 from apipi.services.sandbox_status import (
     STALE_AFTER,
     eager_boot_enabled,
@@ -311,7 +311,7 @@ async def test_capacity_failure_reports_environment_failed(
     async def fake_spawn(*_args: object, **_kwargs: Any) -> _Proc:
         raise CapacityError("Too many live sessions", code="capacity")
 
-    monkeypatch.setattr("apipi.services.runtime.load_boot_kwargs", fake_kwargs)
+    monkeypatch.setattr("apipi.worker.runtime.load_boot_kwargs", fake_kwargs)
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
     settings = _settings()
     outbox = Outbox()
@@ -342,7 +342,7 @@ async def test_capacity_failure_reports_environment_failed(
 
 
 async def test_api_fail_environment_marks_sandbox_failed(store: Store) -> None:
-    from apipi.services.runtime import fail_environment
+    from apipi.services.turn_state import fail_environment
 
     tenant_id, session_id = await _hosted(store)
     async with store.session() as db:

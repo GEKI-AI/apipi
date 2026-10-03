@@ -5,9 +5,9 @@ from typing import cast
 
 import pytest
 
+from apipi.common.errors import ApiError
+from apipi.common.idle import normalize_idle_ttl, resolve_idle_ttl
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError
-from apipi.worker.pi.idle import normalize_idle_ttl, resolve_idle_ttl
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 

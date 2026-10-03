@@ -15,92 +15,39 @@ API and the worker must see the same filesystem.
 """
 
 import logging
-from collections.abc import Mapping
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
-from apipi.config import Settings
-from apipi.env.setup import file_id_refs_from, skill_refs_from
-from apipi.gateway.auth import not_found
-from apipi.gateway.logutil import log_event
-from apipi.protocol import TurnContext
-from apipi.services.agents import definition_for_session
-from apipi.services.search import SearchResolver, web_search_tool
-from apipi.store.blobs import (
+from apipi.common.dirs import store_root
+from apipi.common.errors import store_error
+from apipi.common.idle import resolve_idle_ttl
+from apipi.common.logutil import log_event
+from apipi.common.objects import (
     NS_ARTIFACTS,
     NS_FILES,
     NS_SKILLS,
     Namespace,
+    local_object_path,
+)
+from apipi.config import Settings
+from apipi.env.setup import file_id_refs_from, skill_refs_from
+from apipi.gateway.auth import not_found
+from apipi.protocol import TurnContext
+from apipi.services.agents import definition_for_session
+from apipi.services.search import SearchResolver, web_search_tool
+from apipi.store.blobs import (
     ObjectStore,
-    ObjectStoreError,
     blob_key,
     file_object_id,
-    local_object_path,
     object_store,
     skill_object_id,
 )
 from apipi.store.engine import Store
 from apipi.store.repo import get_file, get_session, get_skill
-from apipi.worker.pi.dirs import store_root
-from apipi.worker.pi.idle import resolve_idle_ttl
 
 PRESIGN_TTL = timedelta(minutes=15)
 
 log = logging.getLogger("apipi.search")
-
-
-def _store_error(message: str, *, operation: str, key: str = "") -> ObjectStoreError:
-    return ObjectStoreError(
-        message, operation=operation, bucket="", key=key, code="artifact_store"
-    )
-
-
-def local_ref_path(settings: Settings, local_path: str) -> Path:
-    """Resolve a context relative path inside the shared store root."""
-    root = store_root(settings).resolve()
-    candidate = (root / local_path).resolve()
-    if candidate != root and root not in candidate.parents:
-        raise _store_error(
-            "context path escapes the store root",
-            operation="get",
-            key=local_path,
-        )
-    return candidate
-
-
-async def fetch_ref_bytes(ref: Mapping[str, Any], settings: Settings) -> bytes:
-    """Fetch one context file/skill/blob reference without DB access."""
-    url = ref.get("url")
-    if isinstance(url, str) and url:
-        import httpx
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url)
-        except Exception as exc:
-            raise _store_error(
-                f"cannot fetch turn context ref: {exc}", operation="get"
-            ) from exc
-        if response.status_code != 200:
-            raise _store_error(
-                f"cannot fetch turn context ref: HTTP {response.status_code}",
-                operation="get",
-                key=url,
-            )
-        return response.content
-    local_path = ref.get("local_path")
-    if isinstance(local_path, str) and local_path:
-        path = local_ref_path(settings, local_path)
-        try:
-            return path.read_bytes()
-        except OSError as exc:
-            raise _store_error(
-                f"cannot read turn context ref: {exc}",
-                operation="get",
-                key=local_path,
-            ) from exc
-    raise _store_error("turn context ref has no url or local_path", operation="get")
 
 
 def _store_ref(
@@ -114,7 +61,7 @@ def _store_ref(
         backend = objects if objects is not None else object_store(settings)
         presign = getattr(backend, "presign", None)
         if presign is None:
-            raise _store_error(
+            raise store_error(
                 "object store cannot presign GET URLs",
                 operation="presign",
                 key=object_id,
@@ -142,12 +89,14 @@ async def build_turn_context(
     search: SearchResolver | None = None,
 ) -> dict[str, Any]:
     """Resolve one turn's context from the database and the object store."""
-    from apipi.services.runtime import (
-        _effective_builtin_tools,
-        _effective_codemode,
-        _function_tools,
+    from apipi.common.pi_metadata import (
+        effective_builtin_tools,
+        effective_codemode,
+        resolve_thinking,
     )
-    from apipi.worker.pi.settings_json import resolve_thinking
+    from apipi.common.pi_metadata import (
+        function_tools as pick_function_tools,
+    )
 
     async with store.session() as db:
         row = await get_session(db, tenant_id, session_id)
@@ -169,7 +118,7 @@ async def build_turn_context(
                 raw_tools = definition.get("tools")
                 raw = raw_tools if isinstance(raw_tools, list) else []
                 effective_tools = raw
-                function_tools = _function_tools(raw)
+                function_tools = pick_function_tools(raw)
                 raw_model = definition.get("model")
                 model = raw_model if isinstance(raw_model, str) else model
                 raw_instructions = definition.get("instructions")
@@ -202,7 +151,7 @@ async def build_turn_context(
                     tenant_id=str(tenant_id),
                     reason="resolver",
                 )
-        builtin_tools = _effective_builtin_tools(
+        builtin_tools = effective_builtin_tools(
             environment, session_metadata, agent_metadata
         )
         thinking = resolve_thinking(settings, session_metadata, agent_metadata)
@@ -279,7 +228,7 @@ async def build_turn_context(
                 "function_tools": function_tools,
                 "metadata": agent_metadata,
                 "builtin_tools": builtin_tools,
-                "codemode": _effective_codemode(
+                "codemode": effective_codemode(
                     builtin_tools, session_metadata, agent_metadata
                 ),
                 "thinking": thinking,
@@ -299,50 +248,6 @@ async def build_turn_context(
     return TurnContext.model_validate(context).model_dump()
 
 
-async def materialize_workspace_files(
-    files: list[Any], settings: Settings | None
-) -> list[tuple[str, bytes]]:
-    """Fetch workspace file bytes for context references without DB access."""
-    if not files or settings is None:
-        return []
-    materialized: list[tuple[str, bytes]] = []
-    for ref in files:
-        if not isinstance(ref, Mapping):
-            continue
-        path = ref.get("path")
-        if not isinstance(path, str):
-            continue
-        materialized.append((path, await fetch_ref_bytes(ref, settings)))
-    return materialized
-
-
-async def materialize_skill_zips(
-    skills: list[Any], settings: Settings | None
-) -> list[bytes]:
-    """Fetch skill zip bytes for context references without DB access."""
-    if not skills or settings is None:
-        return []
-    zips: list[bytes] = []
-    for ref in skills:
-        if not isinstance(ref, Mapping):
-            continue
-        zips.append(await fetch_ref_bytes(ref, settings))
-    return zips
-
-
-async def fetch_pi_session_bytes(
-    pi_session: Mapping[str, Any] | None, settings: Settings | None
-) -> bytes | None:
-    """Fetch the cold-restore Pi session blob without DB access."""
-    if not isinstance(pi_session, Mapping) or not pi_session.get("present"):
-        return None
-    if settings is None:
-        raise _store_error(
-            "cannot restore the Pi session without settings", operation="get"
-        )
-    return await fetch_ref_bytes(pi_session, settings)
-
-
 def _serialize_mcp_server(server: Any) -> dict[str, Any]:
     """Serialize one resolved HTTP MCP server for the command context."""
     headers = getattr(server, "headers", {})
@@ -353,35 +258,3 @@ def _serialize_mcp_server(server: Any) -> dict[str, Any]:
         "headers": dict(headers) if isinstance(headers, dict) else {},
         "allowed_tools": [str(item) for item in allowed],
     }
-
-
-def mcp_servers_from_context(context: Mapping[str, Any]) -> list[Any]:
-    """Rebuild McpHttpServer objects from a parsed turn context."""
-    from apipi.mcp.http import McpHttpServer
-
-    raw = context.get("mcp")
-    servers: list[Any] = []
-    if not isinstance(raw, list):
-        return servers
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        label = item.get("server_label")
-        url = item.get("server_url")
-        if not isinstance(label, str) or not isinstance(url, str):
-            continue
-        headers = item.get("headers")
-        allowed = item.get("allowed_tools")
-        servers.append(
-            McpHttpServer(
-                server_label=label,
-                server_url=url,
-                headers=dict(headers) if isinstance(headers, dict) else {},
-                allowed_tools=(
-                    tuple(i for i in allowed if isinstance(i, str))
-                    if isinstance(allowed, list)
-                    else ()
-                ),
-            )
-        )
-    return servers

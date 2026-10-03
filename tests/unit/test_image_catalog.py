@@ -2,6 +2,13 @@ from pathlib import Path
 
 import pytest
 
+from apipi.common.images import (
+    dump_index,
+    dump_manifest,
+    load_index,
+    load_manifest,
+    sha256_bytes,
+)
 from apipi.config import ConfigError, Settings
 from apipi.worker.pi.image_catalog import (
     checksum_lines,
@@ -14,13 +21,6 @@ from apipi.worker.pi.image_catalog import (
 )
 from apipi.worker.pi.image_ops import package_image, publish_images
 from apipi.worker.pi.image_store import open_image_store
-from apipi.worker.pi.images import (
-    dump_index,
-    dump_manifest,
-    load_index,
-    load_manifest,
-    sha256_bytes,
-)
 from apipi.worker.pi.version import (
     PINNED_NODE_SHA256_AARCH64,
     PINNED_NODE_SHA256_X86_64,
@@ -97,7 +97,7 @@ def _store(stamp: dict[str, str], image_id: str = "default") -> dict[str, bytes]
         }
     )
     text = dump_manifest(manifest).encode()
-    from apipi.worker.pi.images import ImageIndex, ImageIndexEntry, KernelIndexEntry
+    from apipi.common.images import ImageIndex, ImageIndexEntry, KernelIndexEntry
 
     index = ImageIndex(
         schema_version=2,

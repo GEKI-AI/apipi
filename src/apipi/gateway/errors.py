@@ -6,29 +6,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from apipi.gateway.logutil import log_event
+from apipi.common.errors import ApiError
+from apipi.common.logutil import log_event
 
 log = logging.getLogger("apipi")
-
-
-class ApiError(Exception):
-    def __init__(
-        self,
-        type: str,
-        message: str,
-        *,
-        code: str = "",
-        status_code: int = 400,
-        session_id: str | None = None,
-        extra: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.type = type
-        self.message = message
-        self.code = code
-        self.status_code = status_code
-        self.session_id = session_id
-        self.extra = extra or {}
 
 
 _ERROR_EXTRA = (
@@ -102,7 +83,7 @@ def _tenant_id(request: Request) -> object:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    from apipi.store.blobs import ObjectStoreError
+    from apipi.common.errors import ObjectStoreError
 
     @app.exception_handler(ApiError)
     async def api_error(request: Request, exc: ApiError) -> JSONResponse:

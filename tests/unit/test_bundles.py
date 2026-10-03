@@ -4,7 +4,7 @@ import zipfile
 
 import pytest
 
-from apipi.gateway.errors import ApiError
+from apipi.common.errors import ApiError
 from apipi.services.bundles import read_bundle
 
 

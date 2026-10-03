@@ -20,6 +20,12 @@ from pathlib import Path
 from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
+from apipi.common.dirs import (
+    PI_SESSION_REL,
+    pi_session_file,
+    xdg_data_home,
+)
+from apipi.common.logutil import log_event
 from apipi.config import ConfigError, Settings
 from apipi.env.setup import (
     SetupError,
@@ -27,9 +33,7 @@ from apipi.env.setup import (
     workspace_egress_hosts,
     workspace_network_policy,
 )
-from apipi.gateway.logutil import log_event
 from apipi.mcp.http import McpHttpServer
-from apipi.worker.pi.dirs import PI_SESSION_REL, pi_session_file
 from apipi.worker.pi.extension import (
     APIPI_EXTENSION_REL,
     MCP_EXTENSION_REL,
@@ -142,30 +146,6 @@ def kvm_available() -> bool:
     return os.access("/dev/kvm", os.R_OK | os.W_OK)
 
 
-def operator_home() -> Path:
-    sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user and os.geteuid() == 0:
-        try:
-            return Path(pwd.getpwnam(sudo_user).pw_dir)
-        except KeyError:
-            pass
-    return Path.home()
-
-
-def xdg_cache_home() -> Path:
-    raw = os.environ.get("XDG_CACHE_HOME")
-    if raw:
-        return Path(raw)
-    return operator_home() / ".cache"
-
-
-def xdg_data_home() -> Path:
-    raw = os.environ.get("XDG_DATA_HOME")
-    if raw:
-        return Path(raw)
-    return operator_home() / ".local" / "share"
-
-
 def firecracker_bin_dirs() -> list[Path]:
     dirs = [xdg_data_home() / "apipi" / "firecracker"]
     sudo_user = os.environ.get("SUDO_USER")
@@ -241,8 +221,8 @@ def _resolve_override_file(configured: str | None, name: str) -> str | None:
 
 
 def _images_dir_file(settings: Settings, image_id: str) -> Path | None:
+    from apipi.common.images import read_current
     from apipi.worker.pi.image_pull import configured_images_dir
-    from apipi.worker.pi.images import read_current
 
     root = configured_images_dir(settings)
     version = read_current(root, image_id)
@@ -253,8 +233,8 @@ def _images_dir_file(settings: Settings, image_id: str) -> Path | None:
 
 
 def kernel_for_image(settings: Settings, image_id: str) -> Path | None:
+    from apipi.common.images import local_kernel_path, read_current
     from apipi.worker.pi.image_pull import configured_images_dir
-    from apipi.worker.pi.images import local_kernel_path, read_current
 
     root = configured_images_dir(settings)
     version = read_current(root, image_id)
@@ -279,8 +259,8 @@ def kernel_for_image(settings: Settings, image_id: str) -> Path | None:
 
 
 def _images_dir_kernel(settings: Settings) -> Path | None:
+    from apipi.common.images import local_kernel_path
     from apipi.worker.pi.image_pull import configured_images_dir
-    from apipi.worker.pi.images import local_kernel_path
 
     path = local_kernel_path(configured_images_dir(settings), os.uname().machine)
     return path if path.is_file() else None
@@ -302,8 +282,8 @@ def resolve_spawn_image(
     settings: Settings, image: str | None, rootfs: str
 ) -> ResolvedImage:
     selected = image if image is not None else settings.sandbox_default_image
+    from apipi.common.images import read_current
     from apipi.worker.pi.image_pull import configured_images_dir
-    from apipi.worker.pi.images import read_current
 
     root = configured_images_dir(settings)
     version = read_current(root, selected)
@@ -407,7 +387,7 @@ def require_microvm(settings: Settings | None) -> None:
 
 
 async def probe_microvm(settings: Settings) -> None:
-    from apipi.worker.pi.sandbox import image_for_size
+    from apipi.common.sandbox import image_for_size
 
     size = settings.sandbox_default_size
     proc = await spawn_microvm_pi(
@@ -427,7 +407,7 @@ async def probe_microvm(settings: Settings) -> None:
 def guest_vcpus(
     settings: Settings, mem_mib: int | None, image: str | None = None
 ) -> int:
-    from apipi.worker.pi.sandbox import min_vcpus_for_image, size_for_mem
+    from apipi.common.sandbox import min_vcpus_for_image, size_for_mem
 
     guest_mem = mem_mib if mem_mib is not None else settings.microvm_mem_mib
     base = settings.sandbox_vcpus(size_for_mem(settings, guest_mem))

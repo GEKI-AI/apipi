@@ -6,10 +6,10 @@ from typing import Any, cast
 
 import pytest
 
+from apipi.common.event_bus import InMemoryEventBus, live_event_body
+from apipi.common.ratelimit import relay_rate_allowed
 from apipi.config import Settings
 from apipi.protocol import DELTA_MAX_TEXT, WorkerEnvelope
-from apipi.services.event_bus import InMemoryEventBus
-from apipi.services.runtime import live_event_body
 from apipi.store.engine import Store
 from apipi.store.repo import (
     append_event,
@@ -18,8 +18,9 @@ from apipi.store.repo import (
     create_tenant,
     set_session_lease,
 )
-from apipi.worker.deltas import DeltaRelay, LiveRedirectBus, relay_rate_allowed
-from apipi.worker.hub import WorkerConnection, WorkerHub
+from apipi.worker.deltas import DeltaRelay, LiveRedirectBus
+from apipi.workerhub.connection import WorkerConnection
+from apipi.workerhub.hub import WorkerHub
 
 
 def _envelope(
@@ -438,7 +439,7 @@ async def test_handle_delta_rate_limits(settings: Settings, store: Store) -> Non
 async def test_handle_delta_counts_protocol_events(
     settings: Settings, store: Store
 ) -> None:
-    from apipi.gateway.metrics import Metrics
+    from apipi.common.metrics import Metrics
 
     metered = Settings(
         database_url=settings.database_url,
@@ -474,7 +475,7 @@ async def test_handle_delta_counts_protocol_events(
 async def test_handle_delta_reads_only_new_events_after_baseline(
     settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import apipi.worker.hub as hub_module
+    import apipi.workerhub.deltas as hub_module
 
     real = hub_module.list_events
     calls: list[int | None] = []
@@ -513,7 +514,7 @@ async def test_handle_delta_reads_only_new_events_after_baseline(
 async def test_handle_delta_done_cache_needs_no_read(
     settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import apipi.worker.hub as hub_module
+    import apipi.workerhub.deltas as hub_module
 
     real = hub_module.list_events
     calls = 0

@@ -7,8 +7,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from apipi.common.s3 import make_s3_client
 from apipi.config import ConfigError, Settings
-from apipi.store.blobs import make_s3_client
 
 S3_MISSING = "s3 image source requires boto3 (uv sync --extra s3)"
 

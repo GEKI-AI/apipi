@@ -295,7 +295,7 @@ async def test_lifecycle_identity_comes_from_row(store: Store, settings) -> None
 
 async def test_reporter_start_validates_strictly() -> None:
     from apipi.protocol import LifecycleStartPayload
-    from apipi.services.lifecycle_export import OutboxLifecycleReporter
+    from apipi.worker.lifecycle import OutboxLifecycleReporter
     from apipi.worker.outbox import Outbox
 
     outbox = Outbox()

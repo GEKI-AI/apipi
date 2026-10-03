@@ -24,7 +24,7 @@ from apipi.protocol import (
     parse_envelope,
     parse_register,
 )
-from apipi.worker.hub import worker_ws_url
+from apipi.worker.client import worker_ws_url
 
 
 def test_worker_protocol_commands() -> None:

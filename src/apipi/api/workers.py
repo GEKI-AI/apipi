@@ -7,6 +7,7 @@ from fastapi import APIRouter, WebSocket
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
+from apipi.common.event_bus import EventBus
 from apipi.protocol import (
     UNSUPPORTED_PROTOCOL_REASON,
     WORKER_CLOSE_CODE,
@@ -17,7 +18,6 @@ from apipi.protocol import (
     WorkerEnvelope,
     parse_register,
 )
-from apipi.services.event_bus import EventBus
 from apipi.services.ingest import (
     IngestBatcher,
     _Reject,
@@ -32,12 +32,9 @@ from apipi.services.worker_tokens import (
 )
 from apipi.store.engine import Store
 from apipi.store.repo import clear_worker_api_instance, get_session_by_lease
-from apipi.worker.hub import (
-    TokenBindingError,
-    WorkerHub,
-    heartbeat_worker,
-    register_worker,
-)
+from apipi.workerhub.heartbeat import heartbeat_worker
+from apipi.workerhub.hub import WorkerHub
+from apipi.workerhub.register import TokenBindingError, register_worker
 
 log = logging.getLogger("apipi.worker")
 
@@ -184,7 +181,7 @@ async def _flush_envelopes(
                 intent.fields["run_mode"] = conn.run_mode
         emit_lifecycle_intents(lifecycle, outcome.lifecycle)
     if outcome.wipes:
-        from apipi.worker.pi.artifacts import wipe_artifact_store
+        from apipi.services.worker_artifacts import wipe_artifact_store
 
         blobs = websocket.app.state.blobs
         for tenant_id, key_id, session_id in outcome.wipes:
@@ -369,7 +366,7 @@ async def worker_socket(websocket: WebSocket) -> None:
             if msg_type not in WORKER_IN:
                 continue
             if msg_type == "store.proof":
-                from apipi.worker.hub import verify_store_proof
+                from apipi.workerhub.register import verify_store_proof
 
                 marker = message.get("marker")
                 nonce = message.get("nonce")

@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 from httpx import AsyncClient
 
-from apipi.services.runtime import FAKE_USAGE
+from apipi.worker.fake_harness import FAKE_USAGE
 
 _TOKEN_KEYS = (
     "prompt_tokens",

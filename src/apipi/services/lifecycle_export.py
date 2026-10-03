@@ -11,9 +11,10 @@ from typing import Any, cast
 
 import httpx
 
+from apipi.common.logutil import log_event
+from apipi.common.metrics import Metrics
+from apipi.common.timefmt import utc_ts
 from apipi.config import Settings
-from apipi.gateway.logutil import log_event
-from apipi.gateway.metrics import Metrics
 from apipi.services.usage_export import EventSink, load_custom_sinks
 
 log = logging.getLogger("apipi")
@@ -21,16 +22,6 @@ log = logging.getLogger("apipi")
 SCHEMA_VERSION = 1
 _WARN_EVERY = 30.0
 _RETRYABLE = frozenset({408, 429})
-
-
-def utc_ts(moment: datetime | None = None) -> str:
-    now = moment or datetime.now(UTC)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=UTC)
-    text = now.astimezone(UTC).isoformat(timespec="milliseconds")
-    if text.endswith("+00:00"):
-        return text[:-6] + "Z"
-    return text
 
 
 def parse_ts(value: str) -> datetime:
@@ -383,128 +374,6 @@ def _interval_s(seconds: float) -> int | float:
     if seconds == int(seconds):
         return int(seconds)
     return seconds
-
-
-LIFECYCLE_WORKER_ENV_PREFIX = "APIPI_LIFECYCLE_"
-
-
-def worker_lifecycle_ignored() -> list[str]:
-    """Lifecycle settings set on a worker; the API owns export now."""
-    import os
-
-    return sorted(
-        name for name in os.environ if name.startswith(LIFECYCLE_WORKER_ENV_PREFIX)
-    )
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, uuid.UUID):
-        return str(value)
-    if isinstance(value, datetime):
-        return utc_ts(value)
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
-
-
-class OutboxLifecycleReporter(LifecycleEmitter):
-    """Report pool lifecycle over the worker socket instead of exporting.
-
-    The split worker holds no export URL or token: session live
-    start/stop go out as durable v2 envelopes through the outbox, so
-    they survive disconnects and replay after reconnect. The API
-    persists and exports them. Heartbeats need no envelope; the
-    periodic inventory live set is what the API derives them from.
-
-    It subclasses `LifecycleEmitter` only for the pool slot; the HTTP
-    sender is never started and every export method is overridden.
-    """
-
-    heartbeat_s: float | None = None
-
-    def __init__(self, outbox: Any, worker_id: str | None = None) -> None:
-        self.outbox = outbox
-        self.worker_id = worker_id
-        self.active = True
-        self.metrics = None
-        self._queue = None
-
-    def set_worker_id(self, worker_id: str | None) -> None:
-        self.worker_id = worker_id or None
-
-    def emit_start(self, fields: dict[str, Any], *, cause: str) -> int | None:
-        raw_session = fields.get("session_id")
-        try:
-            session_id = (
-                raw_session
-                if isinstance(raw_session, uuid.UUID)
-                else uuid.UUID(str(raw_session))
-            )
-        except (ValueError, TypeError):
-            return None
-        # Only the envelope payload keys travel: identity comes from the
-        # session row on the API, and anything else would fail the
-        # strict payload validation there.
-        payload = {"cause": cause}
-        for key in (
-            "environment_type",
-            "sandbox_size",
-            "sandbox_image",
-            "image_version",
-            "image_digest",
-            "run_mode",
-            "started_at",
-        ):
-            payload[key] = _jsonable(fields.get(key))
-        try:
-            envelope = self.outbox.append(session_id, "lifecycle.start", payload)
-        except Exception:
-            return None
-        return int(envelope.get("seq") or 0) or None
-
-    def emit_stop(
-        self, fields: dict[str, Any], *, reason: str, live_ms: int
-    ) -> int | None:
-        raw_session = fields.get("session_id")
-        try:
-            session_id = (
-                raw_session
-                if isinstance(raw_session, uuid.UUID)
-                else uuid.UUID(str(raw_session))
-            )
-        except (ValueError, TypeError):
-            return None
-        payload: dict[str, Any] = {
-            "reason": reason,
-            "live_ms": max(live_ms, 0),
-            "started_at": _jsonable(fields.get("started_at")),
-        }
-        start_seq = fields.get("start_seq")
-        if isinstance(start_seq, int) and start_seq >= 1:
-            payload["start_seq"] = start_seq
-        try:
-            envelope = self.outbox.append(session_id, "lifecycle.stop", payload)
-        except Exception:
-            return None
-        return int(envelope.get("seq") or 0) or None
-
-    def emit_heartbeat(self, entries: list[dict[str, Any]]) -> int | None:
-        del entries
-        return None
-
-    def start(self) -> None:
-        return None
-
-    async def flush(self, timeout: float | None = None) -> None:
-        del timeout
-        return None
-
-    async def close(self) -> None:
-        return None
 
 
 def create_lifecycle(

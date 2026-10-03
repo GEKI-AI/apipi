@@ -1,5 +1,7 @@
 """Protocol constants: version, close codes, message type sets, limits."""
 
+from datetime import timedelta
+
 PROTOCOL_VERSION = 2
 
 WORKER_CLOSE_CODE = 1008
@@ -68,3 +70,4 @@ MAX_MESSAGE_BYTES = 1_000_000
 MAX_COMMAND_BYTES = 256_000
 DELTA_RATE_LIMIT = 100
 DELTA_MAX_TEXT = 32_768
+SEEN_INTERVAL = timedelta(seconds=5)

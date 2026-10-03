@@ -1,9 +1,5 @@
-from apipi.services.runtime import (
-    FAKE_USAGE,
-    LIVE_EVENT_TYPES,
-    PUBLIC_EVENT_TYPES,
-    FakeHarness,
-)
+from apipi.protocol import LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES
+from apipi.worker.fake_harness import FAKE_USAGE, FakeHarness
 
 
 def test_fake_harness_is_determined() -> None:

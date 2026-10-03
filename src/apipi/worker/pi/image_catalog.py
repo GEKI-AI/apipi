@@ -5,8 +5,8 @@ import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 
+from apipi.common.images import ImageIndex, ImageManifest, sha256_bytes
 from apipi.config import ConfigError, Settings
-from apipi.worker.pi.images import ImageIndex, ImageManifest, sha256_bytes
 
 log = logging.getLogger("apipi.worker.pi")
 
@@ -86,9 +86,9 @@ def warn_signer_override(
 
 
 def current_image_stamp(image_id: str) -> dict[str, str]:
+    from apipi.common.image_recipes import images_root
+    from apipi.common.images import image_version, recipe_sha256, sha256_file
     from apipi.worker.pi.image_ops import guest_sh_path
-    from apipi.worker.pi.images import image_version, recipe_sha256, sha256_file
-    from apipi.worker.pi.install import images_root
     from apipi.worker.pi.version import (
         PINNED_AGENT_BROWSER,
         PINNED_CHROME_HEADLESS_SHELL,
@@ -146,7 +146,7 @@ def republish_store(
     commit: str,
 ) -> dict[str, bytes]:
     from apipi import __version__
-    from apipi.worker.pi.images import dump_index, load_index, load_manifest
+    from apipi.common.images import dump_index, load_index, load_manifest
 
     index = load_index(files["index.json"])
     manifests: dict[tuple[str, str], ImageManifest] = {
@@ -229,8 +229,8 @@ def mirror_store(
     signer_identity: str | None = None,
     signer_issuer: str | None = None,
 ) -> list[str]:
+    from apipi.common.images import load_index, sha256_bytes
     from apipi.worker.pi.image_store import open_image_store
-    from apipi.worker.pi.images import load_index, sha256_bytes
 
     src_uri, resolved = _from_uri(source, version)
     if dest.startswith("https://"):
@@ -266,7 +266,7 @@ def mirror_store(
         names.append(item.manifest)
     for kernel in index.kernels:
         names.append(kernel.path)
-    from apipi.worker.pi.images import load_manifest
+    from apipi.common.images import load_manifest
 
     for item in index.images:
         manifest = load_manifest(src.get(item.manifest))
@@ -314,14 +314,14 @@ def verify_store(
     signer_identity: str | None = None,
     signer_issuer: str | None = None,
 ) -> None:
-    from apipi.worker.pi.image_pull import configured_images_dir
-    from apipi.worker.pi.image_store import open_image_store
-    from apipi.worker.pi.images import (
+    from apipi.common.images import (
         load_index,
         load_manifest,
         sha256_bytes,
         sha256_file,
     )
+    from apipi.worker.pi.image_pull import configured_images_dir
+    from apipi.worker.pi.image_store import open_image_store
 
     if local:
         root = configured_images_dir(settings)

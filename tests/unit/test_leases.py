@@ -3,9 +3,9 @@ from datetime import UTC, timedelta
 
 import pytest
 
+from apipi.common.errors import ApiError
+from apipi.common.event_bus import EventHub
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError
-from apipi.services.runtime import EventHub
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import (
@@ -17,7 +17,7 @@ from apipi.store.repo import (
     set_session_lease,
     upsert_worker,
 )
-from apipi.worker.execution import RemoteExecution
+from apipi.workerhub.execution import RemoteExecution
 
 
 async def test_set_session_lease_is_conditional(store: Store) -> None:

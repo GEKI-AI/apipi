@@ -6,11 +6,11 @@ from httpx import AsyncClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from tests.support.split_worker import api_settings_for, split_client_for
 
+from apipi.common.otel import Tracing
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.otel import Tracing
-from apipi.services.runtime import FAKE_USAGE, FakeHarness
 from apipi.store.engine import Store
+from apipi.worker.fake_harness import FAKE_USAGE, FakeHarness
 
 
 def _auth(token: str) -> dict[str, str]:

@@ -8,25 +8,30 @@ from typing import cast
 import asyncpg
 import pytest
 
-from apipi.config import ConfigError, Settings
-from apipi.gateway.metrics import Metrics
-from apipi.services.event_bus import (
+from apipi.common.event_bus import (
+    EventHub,
     InMemoryEventBus,
-    PostgresEventBus,
-    create_event_bus,
     is_wake,
     message_seq,
-    resolve_event_bus_name,
-    split_notify_batches,
     wake_message,
 )
-from apipi.services.runtime import EventHub, FakeHarness, persist_event
+from apipi.common.metrics import Metrics
+from apipi.config import ConfigError, Settings
+from apipi.services.event_bus import (
+    PostgresEventBus,
+    create_event_bus,
+    resolve_event_bus_name,
+    split_notify_batches,
+)
+from apipi.services.session_events import persist_event
 from apipi.services.sessions import iter_session_events
 from apipi.store import events as store_events
 from apipi.store.engine import Store
 from apipi.store.repo import create_session, create_tenant
-from apipi.worker.execution import RemoteExecution, local_execution
+from apipi.worker.execution import local_execution
+from apipi.worker.fake_harness import FakeHarness
 from apipi.worker.outbox import Outbox
+from apipi.workerhub.execution import RemoteExecution
 
 
 def test_event_hub_is_the_memory_bus() -> None:

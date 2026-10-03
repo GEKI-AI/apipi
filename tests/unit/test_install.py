@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from apipi.cli import main
+from apipi.common.image_recipes import read_image_env, recipe_ids
 from apipi.config import ConfigError, Settings
 from apipi.worker.pi import install as pi_install
 from apipi.worker.pi.install import (
@@ -17,8 +18,6 @@ from apipi.worker.pi.install import (
     install_pi,
     npm_install_args,
     pi_install_prefix,
-    read_image_env,
-    recipe_ids,
     require_recipe,
     resolve_install_targets,
     rootfs_build_args,

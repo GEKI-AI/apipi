@@ -6,8 +6,8 @@ from typing import Any, cast
 import pytest
 from tests.support.worker_turn import ingest_outbox, new_session, run_worker_turn
 
-from apipi.config import Settings
-from apipi.services.failures import (
+from apipi.common.event_bus import EventHub
+from apipi.common.failures import (
     FIXTURE_PI,
     Failure,
     classify_host_message,
@@ -16,14 +16,8 @@ from apipi.services.failures import (
     log_level_for_code,
     pi_payload,
 )
-from apipi.services.runtime import (
-    EventHub,
-    FakeHarness,
-    _cancel_turn,
-    _fail_turn,
-    fail_stale_in_progress,
-)
-from apipi.services.sink import OutboxSink
+from apipi.config import Settings
+from apipi.services.turn_state import fail_stale_in_progress
 from apipi.store.engine import Store
 from apipi.store.repo import (
     create_session,
@@ -32,9 +26,13 @@ from apipi.store.repo import (
     get_turn_log,
     list_events,
 )
+from apipi.worker.fake_harness import FakeHarness
 from apipi.worker.outbox import Outbox
 from apipi.worker.pi.harness import PiHarness
 from apipi.worker.pi.version import PINNED_PI
+from apipi.worker.sink import OutboxSink
+from apipi.worker.turn_end import cancel_turn as _cancel_turn
+from apipi.worker.turn_end import fail_turn as _fail_turn
 
 
 def test_fixtures_match_pinned_pi() -> None:

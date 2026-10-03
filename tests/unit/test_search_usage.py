@@ -4,11 +4,11 @@ from typing import Any
 
 import pytest
 
+from apipi.common.usage import usage_event
 from apipi.config import Settings
 from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, flush_batch, last_seq_for
-from apipi.services.runtime import _write_turn_log
-from apipi.services.usage import usage_event
+from apipi.services.turn_log import _write_turn_log
 from apipi.store.engine import Store
 from apipi.store.errors import NotFoundError
 from apipi.store.models import utc_now
@@ -311,7 +311,7 @@ async def test_write_turn_log_emits_search_in_export_event(
     await _search(store, tenant_id, session_id, turn_id, calls=2, units=3)
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "apipi.services.runtime.export_usage",
+        "apipi.services.turn_log.export_usage",
         lambda _settings, _metrics, event: seen.append(event),
     )
     async with store.session() as db:

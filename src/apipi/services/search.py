@@ -8,9 +8,9 @@ import httpx
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from apipi.common.errors import ApiError
+from apipi.common.logutil import log_event
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError
-from apipi.gateway.logutil import log_event
 from apipi.protocol import SearchReply, SearchRequest, SearchResultItem
 from apipi.services.search_providers import (
     KeySource,

@@ -1,8 +1,8 @@
 from datetime import timedelta
 from typing import Any
 
+from apipi.common.errors import ApiError
 from apipi.config import Settings, parse_optional_ttl, parse_ttl
-from apipi.gateway.errors import ApiError
 
 IDLE_TTL_KEY = "apipi.idle_ttl"
 IDLE_TTL_HELP = "idle_ttl must be like 15m or 0"

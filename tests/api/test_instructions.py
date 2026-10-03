@@ -3,8 +3,8 @@ from pathlib import Path
 from tests.support.split_worker import split_client_for
 
 from apipi.config import Settings
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
+from apipi.worker.fake_harness import FakeHarness
 from apipi.worker.pi.platform_prompt import compose_instructions
 
 

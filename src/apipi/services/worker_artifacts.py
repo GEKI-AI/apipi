@@ -15,26 +15,22 @@ ids, paths, sizes, and checksums. The 1 MiB durable envelope cap in
 from __future__ import annotations
 
 import hashlib
-import secrets
 import uuid
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apipi.config import ConfigError, DiskLimitError, Settings
+from apipi.common.dirs import store_root
+from apipi.common.errors import ObjectStoreError
+from apipi.common.objects import NS_ARTIFACTS, NS_FILES, Namespace, local_object_path
+from apipi.config import DiskLimitError, Settings
 from apipi.store.blobs import (
-    NS_ARTIFACTS,
-    NS_FILES,
     ArtifactBlobs,
-    Namespace,
     ObjectStore,
-    ObjectStoreError,
     blob_key,
     blob_prefix,
     file_object_id,
-    local_object_path,
     object_store,
 )
 from apipi.store.models import SessionRow, utc_now
@@ -45,14 +41,8 @@ from apipi.store.repo import (
     get_session,
     list_artifacts,
 )
-from apipi.worker.pi.dirs import store_root
 
 ARTIFACT_KINDS = frozenset({"artifact", "pi_session", "input_image"})
-
-SHARED_STORE_ERROR = (
-    "filesystem store requires a shared path: mount the same "
-    "APIPI_LOCAL_STORE_DIR on the API and every worker"
-)
 
 PRESIGN_TTL = timedelta(minutes=15)
 
@@ -138,7 +128,7 @@ def _quota_for_kind(settings: Settings, kind: str, declared: int) -> None:
         raise DiskLimitError("Artifact is empty", code="artifact_store")
     if kind == "input_image":
         if declared > int(settings.max_file_bytes):
-            from apipi.gateway.errors import ApiError
+            from apipi.common.errors import ApiError
 
             raise ApiError(
                 "invalid_request",
@@ -503,34 +493,14 @@ def _aware(value: Any) -> Any:
 # --- Shared store root proof -------------------------------------------------
 
 
-def write_store_check(root: Path) -> tuple[str, str]:
-    """Write a nonce marker file; the worker must read it back."""
-    nonce = secrets.token_hex(16)
-    marker = f".apipi-store-check-{nonce}"
-    path = root / marker
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(nonce, encoding="utf-8")
-    return marker, nonce
-
-
-def read_store_check(root: Path, marker: str, nonce: str) -> bool:
-    """True when `marker` under `root` contains exactly `nonce`."""
-    name = (marker or "").strip().strip("/")
-    if not name or "/" in name or name in {".", ".."}:
-        return False
-    if not name.startswith(".apipi-store-check-"):
-        return False
-    try:
-        text = (root / name).read_text(encoding="utf-8").strip()
-    except OSError:
-        return False
-    return bool(nonce) and text == nonce
-
-
-def verify_store_proof(root: Path, marker: str, nonce: str) -> None:
-    if not read_store_check(root, marker, nonce):
-        raise ConfigError(SHARED_STORE_ERROR)
-
-
 def shared_store_required(settings: Settings) -> bool:
     return settings.artifact_store == "local"
+
+
+async def wipe_artifact_store(
+    blobs: ArtifactBlobs,
+    tenant_id: uuid.UUID,
+    key_id: str,
+    session_id: uuid.UUID,
+) -> None:
+    await blobs.delete_session(tenant_id, key_id, session_id)

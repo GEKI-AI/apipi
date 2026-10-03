@@ -11,12 +11,12 @@ from pydantic import ValidationError
 
 from apipi.config import Settings
 from apipi.protocol import ContextAgent, SearchResultItem, parse_turn_context
+from apipi.worker.client import run_worker, worker_outbox
 from apipi.worker.execution import (
     LocalExecution,
     context_web_search,
     local_execution,
 )
-from apipi.worker.hub import run_worker, worker_outbox
 from apipi.worker.outbox import Outbox
 from apipi.worker.pi.broker import (
     SNIPPET_LIMIT,
@@ -765,8 +765,8 @@ async def test_run_worker_routes_search_request_reply_and_fails_on_disconnect(
     monkeypatch.setattr(
         "apipi.worker.execution.worker_observability", lambda _s: (None, None)
     )
-    monkeypatch.setattr("apipi.worker.hub._install_drain_signals", lambda _e: None)
-    monkeypatch.setattr("apipi.worker.hub.asyncio.sleep", _fast_sleep)
+    monkeypatch.setattr("apipi.worker.client._install_drain_signals", lambda _e: None)
+    monkeypatch.setattr("apipi.worker.client.asyncio.sleep", _fast_sleep)
     sockets: list[_Sock] = []
     connect = _Connect(sockets)
 

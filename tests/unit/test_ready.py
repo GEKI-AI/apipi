@@ -3,11 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from apipi import __version__
+from apipi import __version__, ready
 from apipi.cli import main
 from apipi.config import ConfigError, Settings
-from apipi.gateway import ready
-from apipi.gateway.ready import check_ready, run_checks
+from apipi.ready import check_ready, run_checks
 from apipi.worker.pi.version import PINNED_PI
 
 

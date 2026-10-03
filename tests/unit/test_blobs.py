@@ -10,17 +10,16 @@ from urllib.parse import quote, urlencode
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 
+from apipi.common.errors import ObjectStoreError
+from apipi.common.objects import NS_ARTIFACTS, NS_FILES, NS_SKILLS
+from apipi.common.s3 import s3_addressing, s3_client_kwargs
 from apipi.config import ConfigError, Settings, load_settings
 from apipi.store.blobs import (
-    NS_ARTIFACTS,
-    NS_FILES,
-    NS_SKILLS,
     ArtifactAdapter,
     LocalBlobs,
     LocalStore,
     MemoryBlobs,
     MemoryStore,
-    ObjectStoreError,
     S3Blobs,
     S3Store,
     _give_to_operator,
@@ -29,8 +28,6 @@ from apipi.store.blobs import (
     blob_store,
     file_object_id,
     object_store,
-    s3_addressing,
-    s3_client_kwargs,
     s3_namespace_prefix,
     s3_object_key,
     skill_object_id,

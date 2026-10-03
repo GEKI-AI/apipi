@@ -5,10 +5,29 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import Field, model_validator
 from pydantic_core import PydanticCustomError
 
+from apipi.common.errors import ApiError
+from apipi.common.idle import normalize_idle_ttl, validate_idle_metadata
+from apipi.common.models import require_saved_model
+from apipi.common.pi_metadata import (
+    THINKING_KEY,
+    apply_reasoning_effort,
+    public_metadata,
+    reasoning_body,
+    reject_client_thinking_key,
+    reject_codemode_without_builtin_tools,
+    reject_reasoning_conflict,
+    require_thinking_supported,
+    thinking_from_metadata,
+    validate_pi_metadata,
+)
+from apipi.common.sandbox import (
+    reject_removed_size_key,
+    strip_removed_size_key,
+    validate_sandbox_metadata,
+)
 from apipi.config import Settings
 from apipi.env.spec import EnvironmentSpec
 from apipi.gateway.auth import not_found
-from apipi.gateway.errors import ApiError
 from apipi.gateway.schemas import StrictModel
 from apipi.services.env_none import (
     is_env_none,
@@ -31,25 +50,6 @@ from apipi.store.repo import (
     get_agent,
     list_agents,
     update_agent,
-)
-from apipi.worker.pi.idle import normalize_idle_ttl, validate_idle_metadata
-from apipi.worker.pi.model_host import require_saved_model
-from apipi.worker.pi.sandbox import (
-    reject_removed_size_key,
-    strip_removed_size_key,
-    validate_sandbox_metadata,
-)
-from apipi.worker.pi.settings_json import (
-    THINKING_KEY,
-    apply_reasoning_effort,
-    public_metadata,
-    reasoning_body,
-    reject_client_thinking_key,
-    reject_codemode_without_builtin_tools,
-    reject_reasoning_conflict,
-    require_thinking_supported,
-    thinking_from_metadata,
-    validate_pi_metadata,
 )
 
 _UNIMPLEMENTED = ("multi_agent", "tool_search", "programmatic_tool_calling")

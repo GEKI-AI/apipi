@@ -9,8 +9,8 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
+from apipi.common.logutil import log_event
 from apipi.config import Settings
-from apipi.gateway.logutil import log_event
 from apipi.mcp.http import McpHttpServer
 from apipi.worker.pi.orphan import host_pi_stamp
 from apipi.worker.pi.version import PINNED_PI

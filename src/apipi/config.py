@@ -470,7 +470,7 @@ def parse_model_registry(value: object) -> object:
             raise ValueError("APIPI_MODEL_REGISTRY must be JSON") from exc
     if not isinstance(value, dict):
         raise ValueError("model registry must be a table")
-    from apipi.worker.pi.model_caps import ModelCapability
+    from apipi.common.model_caps import ModelCapability
 
     out: dict[str, dict[str, Any]] = {}
     for key, item in value.items():

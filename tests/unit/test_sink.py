@@ -8,19 +8,10 @@ from tests.support.worker_turn import (
     new_session,
 )
 
+from apipi.common.errors import ApiError
+from apipi.common.event_bus import EventHub
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError
 from apipi.services.ingest import DEFERRED_TYPES
-from apipi.services.runtime import (
-    EventHub,
-    FakeHarness,
-    Harness,
-    _emit_item,
-    _fail_turn,
-    continue_turn,
-    run_turn,
-)
-from apipi.services.sink import OutboxSink
 from apipi.services.turn_context import build_turn_context
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -31,7 +22,12 @@ from apipi.store.repo import (
     list_items,
     list_turns,
 )
+from apipi.worker.fake_harness import FakeHarness
 from apipi.worker.outbox import Outbox
+from apipi.worker.runtime import Harness, continue_turn, run_turn
+from apipi.worker.sink import OutboxSink
+from apipi.worker.turn_end import emit_item as _emit_item
+from apipi.worker.turn_end import fail_turn as _fail_turn
 
 
 def _sink(outbox: Outbox, tenant_id: uuid.UUID, session_id: uuid.UUID) -> OutboxSink:

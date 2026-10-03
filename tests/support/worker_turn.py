@@ -4,11 +4,10 @@ import uuid
 from datetime import timedelta
 from typing import Any, cast
 
+from apipi.common.event_bus import EventHub
 from apipi.config import Settings
 from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, IngestOutcome, flush_batch
-from apipi.services.runtime import EventHub, Harness, run_turn
-from apipi.services.sink import OutboxSink
 from apipi.services.turn_context import build_turn_context
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
@@ -19,6 +18,8 @@ from apipi.store.repo import (
     set_session_lease,
 )
 from apipi.worker.outbox import Outbox
+from apipi.worker.runtime import Harness, run_turn
+from apipi.worker.sink import OutboxSink
 
 
 async def new_session(

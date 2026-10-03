@@ -16,9 +16,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from apipi.common.dirs import store_root
+from apipi.common.objects import NS_ARTIFACTS, NS_FILES, local_object_path
 from apipi.config import ConfigError, Settings
-from apipi.store.blobs import NS_ARTIFACTS, NS_FILES, local_object_path
-from apipi.worker.pi.dirs import store_root
 
 SHARED_STORE_ERROR = (
     "filesystem store requires a shared path: mount the same "
@@ -81,7 +81,7 @@ def completed_envelope(
 
 def write_shared_object(settings: Settings, object_id: str, data: bytes) -> str:
     """Write `data` under the shared store root; return the relative path."""
-    from apipi.store.blobs import _object_id as _check_id
+    from apipi.common.objects import check_object_id as _check_id
 
     _check_id(object_id)
     root = store_root(settings)
@@ -98,7 +98,7 @@ def write_shared_object(settings: Settings, object_id: str, data: bytes) -> str:
 
 def shared_object_path(settings: Settings, local_path: str) -> Path:
     """Resolve a session-relative shared path without escaping the root."""
-    from apipi.services.turn_context import local_ref_path
+    from apipi.worker.turn_context import local_ref_path
 
     return local_ref_path(settings, local_path)
 
@@ -136,7 +136,7 @@ def handle_presign_reply(
 
 def write_shared_path(settings: Settings, relative_path: str, data: bytes) -> str:
     """Write `data` to `relative_path` under the shared store root."""
-    from apipi.services.turn_context import local_ref_path
+    from apipi.worker.turn_context import local_ref_path
 
     # Validate the path stays inside the root, then write it.
     target = local_ref_path(settings, relative_path)
@@ -167,8 +167,8 @@ async def upload_via_presign(
     (`artifact_store`, `artifact_too_large`, `workspace_too_large`,
     `payload_too_large`) so the turn fails the way direct writes do.
     """
+    from apipi.common.errors import ApiError
     from apipi.config import DiskLimitError
-    from apipi.gateway.errors import ApiError
 
     request_id, presign_payload = presign_envelope(
         session_id,

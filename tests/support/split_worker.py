@@ -168,7 +168,7 @@ async def spawn_split_worker(
     """
     from unittest.mock import patch as _patch
 
-    import apipi.worker.hub as _hub
+    import apipi.worker.client as _hub
 
     _real_heartbeat_images = _hub._heartbeat_images
 
@@ -187,11 +187,12 @@ async def spawn_split_worker(
 
     _images_patch = _patch.object(_hub, "_heartbeat_images", _test_heartbeat_images)
     _images_patch.start()
-    from apipi.services.event_bus import InMemoryEventBus
-    from apipi.services.lifecycle_export import OutboxLifecycleReporter
+    from apipi.common.event_bus import InMemoryEventBus
+    from apipi.worker.client import _serve_connection
+    from apipi.worker.commands import CommandDedupe
     from apipi.worker.deltas import DeltaRelay, LiveRedirectBus
     from apipi.worker.execution import local_execution
-    from apipi.worker.hub import CommandDedupe, _serve_connection
+    from apipi.worker.lifecycle import OutboxLifecycleReporter
     from apipi.worker.outbox import Outbox
 
     bus = InMemoryEventBus()
@@ -333,7 +334,7 @@ async def split_client_for(
     from httpx import ASGITransport, AsyncClient
 
     from apipi.gateway import create_app
-    from apipi.services.runtime import FakeHarness
+    from apipi.worker.fake_harness import FakeHarness
 
     api_settings = api_settings_for(settings)
     # `tracing` names the worker side, `api_tracing` the API side. When

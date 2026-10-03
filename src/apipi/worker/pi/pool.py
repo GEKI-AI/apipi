@@ -6,14 +6,14 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
+from apipi.common.logutil import log_event
+from apipi.common.metrics import Metrics
+from apipi.common.otel import Tracing, start_span
+from apipi.common.sandbox import size_for_mem
+from apipi.common.timefmt import utc_ts
 from apipi.config import CapacityError, Settings
-from apipi.gateway.logutil import log_event
-from apipi.gateway.metrics import Metrics
-from apipi.gateway.otel import Tracing, start_span
 from apipi.mcp.http import McpHttpServer
-from apipi.services.lifecycle_export import LifecycleEmitter, utc_ts
 from apipi.worker.pi.proc import PiProc, spawn_pi
-from apipi.worker.pi.sandbox import size_for_mem
 
 _EVENT_REASON = {
     "session": "stop",
@@ -71,7 +71,7 @@ class PiPool:
         self._born: dict[uuid.UUID, float] = {}
         self._live: dict[uuid.UUID, dict[str, Any]] = {}
         self._held: set[uuid.UUID] = set()
-        self.lifecycle: LifecycleEmitter | None = None
+        self.lifecycle: Any = None
         self.on_transition: OnTransition | None = None
         self._booting: set[uuid.UUID] = set()
         self._reserved: dict[uuid.UUID, tuple[uuid.UUID | None, int]] = {}

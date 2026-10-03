@@ -7,18 +7,11 @@ from pathlib import Path
 import zstandard
 
 from apipi import __version__
-from apipi.config import ConfigError, Settings
-from apipi.worker.pi.image_store import (
-    FileImageStore,
-    HttpImageStore,
-    S3ImageStore,
-    open_image_store,
-)
-from apipi.worker.pi.images import (
+from apipi.common.images import (
     ImageFormatError,
     ImageIndex,
     ImageManifest,
-    LocalImage,
+    configured_images_dir,
     is_versioned_store,
     latest_entry,
     load_index,
@@ -30,19 +23,18 @@ from apipi.worker.pi.images import (
     sha256_file,
     write_current,
 )
+from apipi.config import ConfigError, Settings
+from apipi.worker.pi.image_store import (
+    FileImageStore,
+    HttpImageStore,
+    S3ImageStore,
+    open_image_store,
+)
 from apipi.worker.pi.version import PINNED_PI
 
 log = logging.getLogger("apipi.worker.pi")
 
 Store = FileImageStore | S3ImageStore | HttpImageStore
-
-
-def configured_images_dir(settings: Settings) -> Path:
-    from apipi.worker.pi.microvm import xdg_cache_home
-
-    if settings.images_dir:
-        return Path(settings.images_dir)
-    return xdg_cache_home() / "apipi" / "images"
 
 
 def _host_arch() -> str:
@@ -301,12 +293,3 @@ def list_images(
         digest = have.digest[:12] if have else ""
         rows.append((image_id, version, digest, status))
     return rows
-
-
-def available_images(settings: Settings) -> list[LocalImage]:
-    from apipi.worker.pi.sandbox import min_vcpus_for_image
-
-    found = local_images(configured_images_dir(settings))
-    for item in found:
-        item.min_vcpus = min_vcpus_for_image(item.id, settings)
-    return found

@@ -10,9 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from sqlalchemy.pool import StaticPool
 
 from apipi.config import Settings
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import Base
+from apipi.worker.fake_harness import FakeHarness
 
 
 def _sqlite_engine(path: Path | None = None) -> AsyncEngine:
@@ -69,7 +69,7 @@ def _local_store_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 @pytest.fixture(autouse=True)
 def _clear_model_list_cache() -> Iterator[None]:
-    from apipi.worker.pi.model_host import clear_model_cache
+    from apipi.common.models import clear_model_cache
 
     clear_model_cache()
     yield

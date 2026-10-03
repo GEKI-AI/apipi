@@ -19,9 +19,10 @@ from urllib.parse import urlparse
 
 import pytest
 
+from apipi.common.objects import NS_ARTIFACTS
 from apipi.config import Settings
 from apipi.services.ingest import IngestBatcher, flush_batch
-from apipi.store.blobs import NS_ARTIFACTS, S3Store
+from apipi.store.blobs import S3Store
 from apipi.store.engine import Store
 from apipi.store.repo import (
     create_session,
@@ -262,10 +263,8 @@ async def _s3_split_flow(store: Store, tmp_path: Path, monkeypatch: Any) -> None
         row = await get_session(db, tenant_id, session_id)
         assert row is not None and row.pi_session_id is not None
     # Cold restore via the context GET ref (presigned URL for S3).
-    from apipi.services.turn_context import (
-        build_turn_context,
-        fetch_pi_session_bytes,
-    )
+    from apipi.services.turn_context import build_turn_context
+    from apipi.worker.turn_context import fetch_pi_session_bytes
 
     context = await build_turn_context(
         store, api_settings, tenant_id, session_id, objects=api_objects
@@ -339,7 +338,7 @@ async def _fs_split_flow(store: Store, tmp_path: Path) -> None:
     worker_settings = _fs_settings(tmp_path, "worker")
     # Separate sessions dirs, one shared store root.
     assert api_settings.sessions_dir != worker_settings.sessions_dir
-    from apipi.worker.pi.dirs import store_root
+    from apipi.common.dirs import store_root
 
     assert store_root(api_settings) == store_root(worker_settings)
 
@@ -390,10 +389,8 @@ async def _fs_split_flow(store: Store, tmp_path: Path) -> None:
         content_type="application/octet-stream",
         data=pi_data,
     )
-    from apipi.services.turn_context import (
-        build_turn_context,
-        fetch_pi_session_bytes,
-    )
+    from apipi.services.turn_context import build_turn_context
+    from apipi.worker.turn_context import fetch_pi_session_bytes
 
     context = await build_turn_context(store, api_settings, tenant_id, session_id)
     assert context["pi_session"]["present"] is True
@@ -440,7 +437,7 @@ async def test_split_artifacts_shared_root_mismatch(
     store: Store, tmp_path: Path
 ) -> None:
     """Separate store roots fail the shared-root check end to end."""
-    from apipi.worker.hub import answer_store_check
+    from apipi.worker.client import answer_store_check
 
     api_settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
@@ -454,8 +451,8 @@ async def test_split_artifacts_shared_root_mismatch(
         sessions_dir=str(tmp_path / "worker-sessions"),
         local_store_dir=str(tmp_path / "worker-shared"),
     )
-    from apipi.services.worker_artifacts import write_store_check
-    from apipi.worker.pi.dirs import store_root
+    from apipi.common.dirs import store_root
+    from apipi.common.store_check import write_store_check
 
     marker, nonce = write_store_check(store_root(api_settings))
     hello = {"store_check": {"marker": marker, "nonce": nonce}}
@@ -463,7 +460,7 @@ async def test_split_artifacts_shared_root_mismatch(
     # register proof rejects it with the documented shared-path error.
     with pytest.raises(Exception, match="shared path"):
         answer_store_check(worker_settings, hello)
-    from apipi.services.worker_artifacts import read_store_check
+    from apipi.common.store_check import read_store_check
 
     assert read_store_check(store_root(api_settings), marker, nonce) is True
     assert read_store_check(store_root(worker_settings), marker, nonce) is False
@@ -678,12 +675,12 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
     from httpx import ASGITransport, AsyncClient
 
     from apipi.gateway import create_app
-    from apipi.services.runtime import FakeHarness
     from apipi.store.blobs import S3Blobs
     from apipi.store.events import list_events
     from apipi.store.models import utc_now
+    from apipi.worker.commands import dispatch_command
     from apipi.worker.execution import local_execution
-    from apipi.worker.hub import dispatch_command
+    from apipi.worker.fake_harness import FakeHarness
 
     api_settings = _s3_settings(tmp_path)
     worker_settings = _s3_settings(tmp_path)
@@ -967,9 +964,9 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
     for name, stack in recorded:
         for filename, func in stack:
             assert "/apipi/worker/" not in filename, (name, filename, func)
-            assert not filename.endswith("services/sink.py"), (name, filename, func)
+            assert not filename.endswith("worker/sink.py"), (name, filename, func)
             assert not (
-                filename.endswith("services/runtime.py") and func == "_harvest_split"
+                filename.endswith("worker/turn_end.py") and func == "harvest_split"
             ), (name, filename, func)
 
     # A second identical turn uploads nothing new (API presign dedup).
@@ -1008,8 +1005,8 @@ async def test_split_killed_harvest_without_db(
     from tests.unit.test_blobs import FakeS3
 
     from apipi.services.event_bus import create_event_bus
-    from apipi.services.runtime import FakeHarness
     from apipi.worker.execution import LocalExecution
+    from apipi.worker.fake_harness import FakeHarness
     from apipi.worker.pi.pool import PiPool
 
     api_settings = _s3_settings(tmp_path)

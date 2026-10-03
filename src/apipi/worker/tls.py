@@ -44,7 +44,7 @@ def require_worker_tls(api_url: str) -> str:
     non-loopback plain URL). Loopback `http://`/`ws://` URLs stay
     allowed for local development.
     """
-    from apipi.worker.hub import worker_ws_url
+    from apipi.worker.client import worker_ws_url
 
     ws_url = worker_ws_url(api_url)
     parsed = urlparse(ws_url)

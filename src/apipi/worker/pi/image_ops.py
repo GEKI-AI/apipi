@@ -8,9 +8,8 @@ from typing import Literal
 import zstandard
 
 from apipi import __version__
-from apipi.config import ConfigError
-from apipi.worker.pi.image_store import FileImageStore, HttpImageStore, S3ImageStore
-from apipi.worker.pi.images import (
+from apipi.common.image_recipes import images_root, read_image_env, recipe_archs
+from apipi.common.images import (
     ImageFormatError,
     ImageIndex,
     ImageIndexEntry,
@@ -29,13 +28,9 @@ from apipi.worker.pi.images import (
     recipe_sha256,
     sha256_file,
 )
-from apipi.worker.pi.install import (
-    images_root,
-    read_image_env,
-    recipe_archs,
-    rootfs_build_args,
-    rootfs_output_name,
-)
+from apipi.config import ConfigError
+from apipi.worker.pi.image_store import FileImageStore, HttpImageStore, S3ImageStore
+from apipi.worker.pi.install import rootfs_build_args, rootfs_output_name
 from apipi.worker.pi.version import (
     PINNED_AGENT_BROWSER,
     PINNED_CHROME_HEADLESS_SHELL,
@@ -285,15 +280,15 @@ def publish_versioned(
     dry_run: bool = False,
     commit: str = "",
 ) -> list[str]:
+    from apipi.common.images import (
+        flat_artifact_name,
+        flat_manifest_name,
+        sha256_bytes,
+    )
     from apipi.worker.pi.image_catalog import (
         checksum_lines,
         normalize_version,
         parse_checksums,
-    )
-    from apipi.worker.pi.images import (
-        flat_artifact_name,
-        flat_manifest_name,
-        sha256_bytes,
     )
 
     if store.exists("index.json") and store.exists("SHA256SUMS"):

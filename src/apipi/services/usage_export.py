@@ -6,9 +6,9 @@ from typing import Any, Protocol
 
 import httpx
 
+from apipi.common.logutil import log_event
+from apipi.common.metrics import Metrics
 from apipi.config import ConfigError, Settings
-from apipi.gateway.logutil import log_event
-from apipi.gateway.metrics import Metrics
 
 log = logging.getLogger("apipi")
 

@@ -438,3 +438,9 @@ def _public_message(text: str, status: int | None) -> str:
     if "api key" in lowered or "bearer " in lowered:
         return "Model host error"
     return line
+
+
+def session_failed_data(message: str, code: str | None) -> dict[str, Any]:
+    if code:
+        return session_error_data(failure_for(code, message), mode="legacy")
+    return {"message": message}

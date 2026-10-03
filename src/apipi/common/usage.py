@@ -135,3 +135,20 @@ def usage_event(
         "upstream_attempts": upstream_attempts,
         "created_at": created_at.isoformat(),
     }
+
+
+def mcp_name(data: dict[str, Any]) -> str | None:
+    label = data.get("server_label")
+    if isinstance(label, str) and label:
+        return label
+    name = data.get("name")
+    if isinstance(name, str) and name:
+        return name
+    return None
+
+
+def tally(names: list[str]) -> tuple[list[str], dict[str, int]]:
+    counts: dict[str, int] = {}
+    for name in names:
+        counts[name] = counts.get(name, 0) + 1
+    return list(counts), counts

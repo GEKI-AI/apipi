@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from apipi.services.event_bus import EventBus
+from apipi.common.event_bus import EventBus
 
 log = logging.getLogger("apipi.worker")
 
@@ -228,15 +228,6 @@ def live_event_data(message: dict[str, Any]) -> tuple[uuid.UUID, str] | None:
     except (ValueError, TypeError, AttributeError):
         return None
     return turn_id, text
-
-
-def relay_rate_allowed(hits: list[float], *, now: float, limit: int) -> bool:
-    """Record one hit and say whether the per-second budget holds."""
-    cutoff = now - 1.0
-    while hits and hits[0] <= cutoff:
-        hits.pop(0)
-    hits.append(now)
-    return len(hits) <= limit
 
 
 def _now() -> float:

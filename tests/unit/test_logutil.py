@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from apipi.gateway.logutil import (
+from apipi.common.logutil import (
     FlushStreamHandler,
     JsonFormatter,
     extra_fields,

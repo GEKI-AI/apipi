@@ -1,10 +1,6 @@
-from apipi.services.runtime import (
-    _cwd_and_tools,
-    _effective_builtin_tools,
-    _effective_codemode,
-    _pi_spawn_overrides,
-    _skill_dirs,
-)
+from apipi.common.pi_metadata import effective_builtin_tools as _effective_builtin_tools
+from apipi.common.pi_metadata import effective_codemode as _effective_codemode
+from apipi.worker.runtime import _cwd_and_tools, _pi_spawn_overrides, _skill_dirs
 
 
 def test_effective_builtin_tools_defaults_on_for_hosted() -> None:

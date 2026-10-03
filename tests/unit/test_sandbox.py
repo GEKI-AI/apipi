@@ -1,8 +1,7 @@
 import pytest
 
-from apipi.config import Settings
-from apipi.gateway.errors import ApiError
-from apipi.worker.pi.sandbox import (
+from apipi.common.errors import ApiError
+from apipi.common.sandbox import (
     image_for_size,
     min_vcpus_for_image,
     require_image_size,
@@ -11,6 +10,7 @@ from apipi.worker.pi.sandbox import (
     sandbox_size_of,
     validate_sandbox_metadata,
 )
+from apipi.config import Settings
 
 
 def test_resolve_prefers_environment() -> None:
@@ -189,7 +189,7 @@ def test_validate_sandbox_metadata_skips_worker_availability(
     def boom(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("worker availability checked")
 
-    monkeypatch.setattr("apipi.worker.pi.image_pull.available_images", boom)
+    monkeypatch.setattr("apipi.common.images.available_images", boom)
     validate_sandbox_metadata(
         _microvm(),
         {"apipi.sandbox_image": "browser"},
@@ -237,7 +237,7 @@ def test_image_min_vcpus_override_replaces_floor() -> None:
 def test_image_min_vcpus_warns_once_when_below_recommended(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from apipi.worker.pi import sandbox as sandbox_mod
+    from apipi.common import sandbox as sandbox_mod
 
     sandbox_mod._warned_min_vcpus.clear()
     caplog.set_level("WARNING", logger="apipi.worker.pi")

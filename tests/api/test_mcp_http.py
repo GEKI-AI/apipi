@@ -5,8 +5,8 @@ import pytest
 from httpx import AsyncClient
 
 from apipi.config import Settings
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
+from apipi.worker.fake_harness import FakeHarness
 
 pytest_plugins = ["tests.support.mcp_http_server"]
 

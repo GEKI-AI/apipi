@@ -8,13 +8,13 @@ from sqlalchemy import select
 from tests.support.split_worker import split_client_for
 from tests.unit.test_blobs import FakeS3
 
+from apipi.common.dirs import store_root
 from apipi.config import Settings
 from apipi.store.blobs import S3Blobs, S3Store
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import create_artifact
 from apipi.worker.pi.artifacts import reap_workspaces
-from apipi.worker.pi.dirs import store_root
 
 
 def _token(name: str = "t") -> str:

@@ -10,10 +10,10 @@ from tests.support.split_worker import split_client_for, wait_for_idle
 
 from apipi.config import Settings
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.services.search import SearchService
 from apipi.store.engine import Store
 from apipi.store.repo import search_usage_for_turn
+from apipi.worker.fake_harness import FakeHarness
 
 TAVILY_BODY = {
     "results": [

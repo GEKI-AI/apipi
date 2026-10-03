@@ -36,16 +36,20 @@ from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
 
 from apipi.api.sessions import _event_stream
+from apipi.common.event_bus import InMemoryEventBus
+from apipi.common.usage import usage_from
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.event_bus import InMemoryEventBus, PostgresEventBus
-from apipi.services.runtime import FakeHarness, usage_from
+from apipi.services.event_bus import PostgresEventBus
 from apipi.store.engine import Store
+from apipi.worker.client import _serve_connection
+from apipi.worker.commands import CommandDedupe
 from apipi.worker.deltas import DeltaRelay, LiveRedirectBus
-from apipi.worker.execution import RemoteExecution, local_execution
-from apipi.worker.hub import CommandDedupe, _serve_connection
+from apipi.worker.execution import local_execution
+from apipi.worker.fake_harness import FakeHarness
 from apipi.worker.outbox import Outbox
+from apipi.workerhub.execution import RemoteExecution
 
 pytest_plugins = ["tests.support.mcp_http_server"]
 

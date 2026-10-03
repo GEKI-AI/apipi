@@ -96,7 +96,7 @@ async def test_payload_export_sends_items_not_turn_log(
         )
         captured.append(redact_payload(event, secrets))
 
-    monkeypatch.setattr("apipi.services.runtime.export_payload", record)
+    monkeypatch.setattr("apipi.services.turn_log.export_payload", record)
     payload_settings = settings.model_copy(
         update={"payload_export_url": "http://export.test/payloads"}
     )
@@ -134,7 +134,7 @@ async def test_payload_export_failure_does_not_break_turn(
     def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("payload export down")
 
-    monkeypatch.setattr("apipi.services.runtime.export_payload", boom)
+    monkeypatch.setattr("apipi.services.turn_log.export_payload", boom)
     payload_settings = settings.model_copy(
         update={"payload_export_url": "http://export.test/payloads"}
     )

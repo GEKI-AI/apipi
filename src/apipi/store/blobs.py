@@ -7,38 +7,22 @@ import uuid
 from collections.abc import MutableMapping
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Literal, NoReturn, Protocol
+from typing import Any, NoReturn, Protocol
 
+from apipi.common.dirs import blob_user, store_root
+from apipi.common.errors import ObjectStoreError
+from apipi.common.logutil import log_event
+from apipi.common.objects import (
+    NS_ARTIFACTS,
+    Namespace,
+    check_object_id,
+    local_object_path,
+)
+from apipi.common.s3 import make_s3_client
 from apipi.config import ConfigError, Settings
-from apipi.gateway.logutil import log_event
 from apipi.store.disposition import content_disposition, download_content_type
-from apipi.worker.pi.dirs import blob_user, store_root
-
-Namespace = Literal["artifacts", "files", "skills", "templates"]
-
-NS_ARTIFACTS: Namespace = "artifacts"
-NS_FILES: Namespace = "files"
-NS_SKILLS: Namespace = "skills"
-NS_TEMPLATES: Namespace = "templates"
 
 log = logging.getLogger("apipi")
-
-
-class ObjectStoreError(Exception):
-    def __init__(
-        self,
-        message: str,
-        *,
-        operation: str,
-        bucket: str,
-        key: str,
-        code: str,
-    ) -> None:
-        super().__init__(message)
-        self.operation = operation
-        self.bucket = bucket
-        self.key = key
-        self.code = code
 
 
 def blob_key(
@@ -55,15 +39,15 @@ def blob_prefix(tenant_id: uuid.UUID, key_id: str, session_id: uuid.UUID) -> str
 
 
 def file_object_id(tenant_id: uuid.UUID, file_id: str) -> str:
-    return f"{tenant_id}/{_object_id(file_id)}"
+    return f"{tenant_id}/{check_object_id(file_id)}"
 
 
 def skill_object_id(tenant_id: uuid.UUID, skill_id: str) -> str:
-    return f"{tenant_id}/{_object_id(skill_id)}"
+    return f"{tenant_id}/{check_object_id(skill_id)}"
 
 
 def template_object_id(tenant_id: uuid.UUID, template_id: str) -> str:
-    return f"{tenant_id}/{_object_id(template_id)}"
+    return f"{tenant_id}/{check_object_id(template_id)}"
 
 
 def s3_namespace_prefix(settings: Settings, namespace: Namespace) -> str:
@@ -80,7 +64,7 @@ def s3_namespace_prefix(settings: Settings, namespace: Namespace) -> str:
 
 def s3_object_key(settings: Settings, namespace: Namespace, object_id: str) -> str:
     prefix = s3_namespace_prefix(settings, namespace)
-    body = _object_id(object_id)
+    body = check_object_id(object_id)
     if prefix:
         return f"{prefix}/{body}"
     return body
@@ -90,7 +74,7 @@ def s3_prefix_key(settings: Settings, namespace: Namespace, prefix: str) -> str:
     head = s3_namespace_prefix(settings, namespace)
     body = prefix.strip().strip("/")
     if body:
-        body = _object_id(body) + "/"
+        body = check_object_id(body) + "/"
     if head and body:
         return f"{head}/{body}"
     if head:
@@ -139,23 +123,6 @@ def _give_to_operator(root: Path, path: Path) -> None:
         if parent == current:
             return
         current = parent
-
-
-def local_object_path(root: Path, namespace: Namespace, object_id: str) -> Path:
-    body = _object_id(object_id)
-    if namespace == NS_ARTIFACTS:
-        return root / ".artifacts" / body
-    return root / ".store" / namespace / body
-
-
-def _object_id(object_id: str) -> str:
-    text = object_id.strip().strip("/")
-    if not text:
-        raise ValueError("object id is required")
-    parts = text.split("/")
-    if any(part in {"", ".", ".."} for part in parts):
-        raise ValueError("invalid object id")
-    return text
 
 
 class ObjectStore(Protocol):
@@ -274,12 +241,12 @@ class MemoryStore:
         )
 
     def _key(self, namespace: Namespace, object_id: str) -> str:
-        return f"{namespace}/{_object_id(object_id)}"
+        return f"{namespace}/{check_object_id(object_id)}"
 
     def _prefix(self, namespace: Namespace, prefix: str) -> str:
         body = prefix.strip().strip("/")
         if body:
-            return f"{namespace}/{_object_id(body)}/"
+            return f"{namespace}/{check_object_id(body)}/"
         return f"{namespace}/"
 
     async def put(
@@ -613,33 +580,6 @@ class S3Blobs(ArtifactAdapter):
         )
 
 
-def s3_addressing(settings: Settings) -> str:
-    if settings.s3_addressing == "path":
-        return "path"
-    return "virtual"
-
-
-def s3_client_kwargs(settings: Settings) -> dict[str, object]:
-    style = s3_addressing(settings)
-    config_kwargs: dict[str, object] = {
-        "signature_version": "s3v4",
-        "s3": {
-            "addressing_style": style,
-            "payload_signing_enabled": False,
-        },
-        "request_checksum_calculation": "when_required",
-        "response_checksum_validation": "when_required",
-    }
-    kwargs: dict[str, object] = {
-        "service_name": "s3",
-        "region_name": settings.s3_region,
-        "config_kwargs": config_kwargs,
-    }
-    if settings.s3_endpoint:
-        kwargs["endpoint_url"] = settings.s3_endpoint
-    return kwargs
-
-
 def _s3_missing(exc: BaseException) -> bool:
     response = getattr(exc, "response", None)
     if not isinstance(response, dict):
@@ -668,43 +608,6 @@ def _s3_error_code(exc: BaseException) -> str:
             if isinstance(code, str) and code:
                 return code
     return type(exc).__name__
-
-
-def make_s3_client(
-    settings: Settings,
-    *,
-    missing: str,
-    aws_access_key_id: str | None = None,
-    aws_secret_access_key: str | None = None,
-    profile_name: str | None = None,
-) -> object:
-    try:
-        import boto3
-        from botocore.config import Config
-    except ImportError as exc:
-        raise ConfigError(missing) from exc
-    kwargs = s3_client_kwargs(settings)
-    config_kwargs = kwargs.pop("config_kwargs")
-    if not isinstance(config_kwargs, dict):
-        config_kwargs = {}
-    try:
-        config = Config(**config_kwargs)
-    except TypeError:
-        config = Config(s3=config_kwargs.get("s3", {"addressing_style": "path"}))
-    client_kwargs: dict[str, object] = {
-        "region_name": kwargs.get("region_name"),
-        "config": config,
-    }
-    endpoint = kwargs.get("endpoint_url")
-    if endpoint is not None:
-        client_kwargs["endpoint_url"] = endpoint
-    if aws_access_key_id is not None:
-        client_kwargs["aws_access_key_id"] = aws_access_key_id
-    if aws_secret_access_key is not None:
-        client_kwargs["aws_secret_access_key"] = aws_secret_access_key
-    if profile_name:
-        return boto3.Session(profile_name=profile_name).client("s3", **client_kwargs)
-    return boto3.client("s3", **client_kwargs)
 
 
 def _make_s3_client(settings: Settings) -> object:

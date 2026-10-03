@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from apipi.services.runtime import LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES
+from apipi.protocol import LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES
 from apipi.worker.pi.map import (
     THINKING_COMPLETED,
     THINKING_STARTED,

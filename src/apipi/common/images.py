@@ -6,6 +6,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from apipi.common.dirs import xdg_cache_home
+from apipi.config import Settings
+
 SCHEMA = 2
 IMAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
@@ -492,3 +495,19 @@ def local_images(images_dir: Path) -> list[LocalImage]:
 
 def local_kernel_path(images_dir: Path, arch: str) -> Path:
     return images_dir / "kernels" / arch / "vmlinux"
+
+
+def configured_images_dir(settings: Settings) -> Path:
+
+    if settings.images_dir:
+        return Path(settings.images_dir)
+    return xdg_cache_home() / "apipi" / "images"
+
+
+def available_images(settings: Settings) -> list[LocalImage]:
+    from apipi.common.sandbox import min_vcpus_for_image
+
+    found = local_images(configured_images_dir(settings))
+    for item in found:
+        item.min_vcpus = min_vcpus_for_image(item.id, settings)
+    return found

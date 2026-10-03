@@ -17,7 +17,6 @@ from tests.support.split_worker import api_settings_for, split_client_for
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.services.search import SearchService
 from apipi.services.turn_context import build_turn_context
 from apipi.store.engine import Store
@@ -29,6 +28,7 @@ from apipi.store.repo import (
     set_session_lease,
     update_session,
 )
+from apipi.worker.fake_harness import FakeHarness
 
 TAVILY_BODY = {
     "results": [{"title": "One", "url": "https://one.example/a", "content": "first"}],

@@ -3,8 +3,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import Response
 
+from apipi.common.objects import NS_FILES
 from apipi.gateway.auth import check_authorize, require_tenant
-from apipi.store.blobs import NS_FILES, file_object_id
+from apipi.store.blobs import file_object_id
 from apipi.store.disposition import content_disposition
 from apipi.store.models import Tenant
 

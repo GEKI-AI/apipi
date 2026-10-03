@@ -9,9 +9,9 @@ from typing import cast
 import pytest
 from tests.support.prom import metric_line
 
+from apipi.common.metrics import Metrics
 from apipi.config import Settings
-from apipi.gateway.metrics import Metrics
-from apipi.worker.hub import run_worker
+from apipi.worker.client import run_worker
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
@@ -109,9 +109,11 @@ async def test_run_worker_reaps_idle_sessions(
         lambda _settings: (None, None),
     )
     monkeypatch.setattr(
-        "apipi.worker.hub.websockets.connect", lambda *_a, **_k: _Connect()
+        "apipi.worker.client.websockets.connect", lambda *_a, **_k: _Connect()
     )
-    monkeypatch.setattr("apipi.worker.hub._install_drain_signals", lambda _event: None)
+    monkeypatch.setattr(
+        "apipi.worker.client._install_drain_signals", lambda _event: None
+    )
 
     task = asyncio.create_task(run_worker(settings, url="http://127.0.0.1:8000"))
     try:
@@ -132,7 +134,7 @@ async def test_run_worker_reaps_idle_sessions(
 async def test_run_worker_reports_lifecycle_over_socket(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from apipi.services.lifecycle_export import OutboxLifecycleReporter
+    from apipi.worker.lifecycle import OutboxLifecycleReporter
 
     (tmp_path / "worker.token").write_text("secret\n")
     monkeypatch.setenv("APIPI_LIFECYCLE_EXPORT_URL", "http://export.test/life")
@@ -163,9 +165,11 @@ async def test_run_worker_reports_lifecycle_over_socket(
         lambda _settings: (None, None),
     )
     monkeypatch.setattr(
-        "apipi.worker.hub.websockets.connect", lambda *_a, **_k: _Connect()
+        "apipi.worker.client.websockets.connect", lambda *_a, **_k: _Connect()
     )
-    monkeypatch.setattr("apipi.worker.hub._install_drain_signals", lambda _event: None)
+    monkeypatch.setattr(
+        "apipi.worker.client._install_drain_signals", lambda _event: None
+    )
     task = asyncio.create_task(run_worker(settings, url="http://127.0.0.1:8000"))
     try:
         await asyncio.wait_for(started.wait(), timeout=2)
@@ -217,9 +221,11 @@ async def test_run_worker_warns_when_the_lease_ttl_is_set_on_the_worker(
         lambda _settings: (None, None),
     )
     monkeypatch.setattr(
-        "apipi.worker.hub.websockets.connect", lambda *_a, **_k: _Connect()
+        "apipi.worker.client.websockets.connect", lambda *_a, **_k: _Connect()
     )
-    monkeypatch.setattr("apipi.worker.hub._install_drain_signals", lambda _event: None)
+    monkeypatch.setattr(
+        "apipi.worker.client._install_drain_signals", lambda _event: None
+    )
     with caplog.at_level("WARNING", logger="apipi.worker"):
         task = asyncio.create_task(run_worker(settings, url="http://127.0.0.1:8000"))
         try:

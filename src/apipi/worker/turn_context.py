@@ -1,0 +1,132 @@
+"""Read the command context on the worker: files, skills, and MCP servers."""
+
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from apipi.common.dirs import store_root
+from apipi.common.errors import store_error
+from apipi.config import Settings
+
+
+def local_ref_path(settings: Settings, local_path: str) -> Path:
+    """Resolve a context relative path inside the shared store root."""
+    root = store_root(settings).resolve()
+    candidate = (root / local_path).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise store_error(
+            "context path escapes the store root",
+            operation="get",
+            key=local_path,
+        )
+    return candidate
+
+
+async def fetch_ref_bytes(ref: Mapping[str, Any], settings: Settings) -> bytes:
+    """Fetch one context file/skill/blob reference without DB access."""
+    url = ref.get("url")
+    if isinstance(url, str) and url:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url)
+        except Exception as exc:
+            raise store_error(
+                f"cannot fetch turn context ref: {exc}", operation="get"
+            ) from exc
+        if response.status_code != 200:
+            raise store_error(
+                f"cannot fetch turn context ref: HTTP {response.status_code}",
+                operation="get",
+                key=url,
+            )
+        return response.content
+    local_path = ref.get("local_path")
+    if isinstance(local_path, str) and local_path:
+        path = local_ref_path(settings, local_path)
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            raise store_error(
+                f"cannot read turn context ref: {exc}",
+                operation="get",
+                key=local_path,
+            ) from exc
+    raise store_error("turn context ref has no url or local_path", operation="get")
+
+
+async def materialize_workspace_files(
+    files: list[Any], settings: Settings | None
+) -> list[tuple[str, bytes]]:
+    """Fetch workspace file bytes for context references without DB access."""
+    if not files or settings is None:
+        return []
+    materialized: list[tuple[str, bytes]] = []
+    for ref in files:
+        if not isinstance(ref, Mapping):
+            continue
+        path = ref.get("path")
+        if not isinstance(path, str):
+            continue
+        materialized.append((path, await fetch_ref_bytes(ref, settings)))
+    return materialized
+
+
+async def materialize_skill_zips(
+    skills: list[Any], settings: Settings | None
+) -> list[bytes]:
+    """Fetch skill zip bytes for context references without DB access."""
+    if not skills or settings is None:
+        return []
+    zips: list[bytes] = []
+    for ref in skills:
+        if not isinstance(ref, Mapping):
+            continue
+        zips.append(await fetch_ref_bytes(ref, settings))
+    return zips
+
+
+async def fetch_pi_session_bytes(
+    pi_session: Mapping[str, Any] | None, settings: Settings | None
+) -> bytes | None:
+    """Fetch the cold-restore Pi session blob without DB access."""
+    if not isinstance(pi_session, Mapping) or not pi_session.get("present"):
+        return None
+    if settings is None:
+        raise store_error(
+            "cannot restore the Pi session without settings", operation="get"
+        )
+    return await fetch_ref_bytes(pi_session, settings)
+
+
+def mcp_servers_from_context(context: Mapping[str, Any]) -> list[Any]:
+    """Rebuild McpHttpServer objects from a parsed turn context."""
+    from apipi.mcp.http import McpHttpServer
+
+    raw = context.get("mcp")
+    servers: list[Any] = []
+    if not isinstance(raw, list):
+        return servers
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("server_label")
+        url = item.get("server_url")
+        if not isinstance(label, str) or not isinstance(url, str):
+            continue
+        headers = item.get("headers")
+        allowed = item.get("allowed_tools")
+        servers.append(
+            McpHttpServer(
+                server_label=label,
+                server_url=url,
+                headers=dict(headers) if isinstance(headers, dict) else {},
+                allowed_tools=(
+                    tuple(i for i in allowed if isinstance(i, str))
+                    if isinstance(allowed, list)
+                    else ()
+                ),
+            )
+        )
+    return servers

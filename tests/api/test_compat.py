@@ -10,10 +10,12 @@ from tests.support.split_worker import split_client_for
 from tests.support.workspace import hosted_dir
 
 from apipi.api.sessions import _event_stream
+from apipi.common.event_bus import EventHub
 from apipi.config import Settings
-from apipi.services.runtime import FAKE_USAGE, PUBLIC_EVENT_TYPES, EventHub, FakeHarness
+from apipi.protocol import PUBLIC_EVENT_TYPES
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow
+from apipi.worker.fake_harness import FAKE_USAGE, FakeHarness
 
 _TOOLS = [
     {

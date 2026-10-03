@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from websockets.asyncio.server import ServerConnection, serve
 
 from apipi.config import ConfigError, Settings
-from apipi.worker.hub import _worker_connect_kwargs
+from apipi.worker.client import _worker_connect_kwargs
 from apipi.worker.tls import (
     check_worker_mtls_files,
     is_loopback_host,

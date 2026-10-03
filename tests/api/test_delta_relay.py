@@ -7,10 +7,11 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from apipi.api.sessions import _event_stream
+from apipi.common.usage import usage_from
 from apipi.config import Settings
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness, usage_from
 from apipi.store.engine import Store
+from apipi.worker.fake_harness import FakeHarness
 
 CHUNKS = ["hel", "lo ", "wor", "ld"]
 FULL_TEXT = "".join(CHUNKS)

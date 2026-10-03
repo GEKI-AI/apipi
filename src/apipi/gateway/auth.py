@@ -14,8 +14,8 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from apipi.common.errors import ApiError
 from apipi.config import ConfigError
-from apipi.gateway.errors import ApiError
 from apipi.gateway.tokens import hash_token
 from apipi.services.worker_tokens import WORKER_TOKEN_PREFIX
 from apipi.store.engine import Store

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from apipi.common.errors import ApiError
 from apipi.config import Settings, load_settings
 from apipi.gateway.content import parse_user_content
-from apipi.gateway.errors import ApiError
 from apipi.worker.pi.model_host import PI_PROVIDER, write_pi_models_json
 
 

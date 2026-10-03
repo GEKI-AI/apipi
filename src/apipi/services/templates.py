@@ -4,9 +4,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from apipi import __version__
+from apipi.common.errors import ApiError, ObjectStoreError
+from apipi.common.models import require_saved_model
+from apipi.common.objects import NS_FILES, NS_SKILLS, NS_TEMPLATES
+from apipi.common.sandbox import require_image_size, require_known_image
 from apipi.config import Settings
 from apipi.gateway.auth import not_found
-from apipi.gateway.errors import ApiError
 from apipi.gateway.schemas import StrictModel
 from apipi.services.agents import AgentService, AgentWrite
 from apipi.services.bundles import (
@@ -17,11 +20,7 @@ from apipi.services.bundles import (
 from apipi.services.files import FileService
 from apipi.services.skill_store import SkillService
 from apipi.store.blobs import (
-    NS_FILES,
-    NS_SKILLS,
-    NS_TEMPLATES,
     ObjectStore,
-    ObjectStoreError,
     S3Store,
     file_object_id,
     skill_object_id,
@@ -39,8 +38,6 @@ from apipi.store.repo import (
     get_vault,
     list_templates,
 )
-from apipi.worker.pi.model_host import require_saved_model
-from apipi.worker.pi.sandbox import require_image_size, require_known_image
 
 _PROVENANCE_ID = "apipi.template_id"
 _PROVENANCE_AT = "apipi.template_updated_at"
@@ -570,17 +567,17 @@ class TemplateService:
             from apipi.env.spec import EnvironmentSpec, environment_payload
 
             environment_payload(EnvironmentSpec.model_validate(defaults["environment"]))
+        from apipi.common.idle import normalize_idle_ttl, validate_idle_metadata
+        from apipi.common.pi_metadata import (
+            reject_client_thinking_key,
+            reject_codemode_without_builtin_tools,
+            validate_pi_metadata,
+        )
+        from apipi.common.sandbox import validate_sandbox_metadata
         from apipi.services.env_none import (
             is_env_none,
             reject_builtin_tools_for_env_none,
             reject_tools_for_env_none,
-        )
-        from apipi.worker.pi.idle import normalize_idle_ttl, validate_idle_metadata
-        from apipi.worker.pi.sandbox import validate_sandbox_metadata
-        from apipi.worker.pi.settings_json import (
-            reject_client_thinking_key,
-            reject_codemode_without_builtin_tools,
-            validate_pi_metadata,
         )
 
         validate_pi_metadata(body.get("metadata"))

@@ -15,7 +15,7 @@ from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.repo import list_artifacts
-from apipi.worker.hub import answer_store_check
+from apipi.worker.client import answer_store_check
 
 
 def _auth(token: str) -> dict[str, str]:
