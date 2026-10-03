@@ -115,7 +115,7 @@ async def test_usage_export_includes_search_fields(
     import uuid
     from datetime import UTC, datetime
 
-    from apipi.services.usage import usage_event
+    from apipi.common.usage import usage_event
 
     captured: list[httpx.Request] = []
 

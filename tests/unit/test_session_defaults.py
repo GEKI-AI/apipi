@@ -2,14 +2,14 @@ import uuid
 
 import pytest
 
+from apipi.common.errors import ApiError
+from apipi.common.sandbox import resolve_sandbox_image, resolve_sandbox_size
 from apipi.env.spec import EnvironmentSpec, environment_payload
-from apipi.gateway.errors import ApiError
 from apipi.services.session_defaults import (
     merge_session_create,
     normalize_sandbox_aliases,
     sandbox_defaults_from_metadata,
 )
-from apipi.worker.pi.sandbox import resolve_sandbox_image, resolve_sandbox_size
 
 
 def _env(**fields: object) -> EnvironmentSpec:

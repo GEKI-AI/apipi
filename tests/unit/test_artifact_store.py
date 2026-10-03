@@ -2,13 +2,13 @@ from pathlib import Path
 
 import pytest
 
+from apipi.common.dirs import wipe_workspace
 from apipi.config import DiskLimitError
 from apipi.worker.pi.artifacts import (
     dir_bytes,
     read_workspace_artifacts,
     unpack_artifact_tar,
     unpack_workspace_tar,
-    wipe_workspace,
 )
 from apipi.worker.pi.guest import (
     artifacts_tar_bytes,

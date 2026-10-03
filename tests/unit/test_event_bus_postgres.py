@@ -15,9 +15,10 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from apipi.gateway.metrics import Metrics
-from apipi.services.event_bus import PostgresEventBus, is_wake, message_seq
-from apipi.services.runtime import persist_event
+from apipi.common.event_bus import is_wake, message_seq
+from apipi.common.metrics import Metrics
+from apipi.services.event_bus import PostgresEventBus
+from apipi.services.session_events import persist_event
 from apipi.services.sessions import iter_session_events
 from apipi.store.engine import Store
 from apipi.store.repo import create_session, create_tenant

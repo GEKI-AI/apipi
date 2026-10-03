@@ -7,8 +7,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.prom import metric_line
 
+from apipi.common.metrics import Metrics
 from apipi.config import Settings
-from apipi.gateway.metrics import Metrics
 from apipi.worker.cgroup import jailer_cgroup_dir, read_cgroup
 from apipi.worker.pi.guest import guest_sample, guest_sample_bytes
 from apipi.worker.pi.pool import PiPool

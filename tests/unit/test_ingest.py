@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, flush_batch, last_seq_for
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -15,7 +16,6 @@ from apipi.store.repo import (
     list_turns,
     set_session_lease,
 )
-from apipi.worker.protocol import WorkerEnvelope
 
 
 async def _leased(
@@ -461,7 +461,7 @@ async def test_failed_turn_records_failure(store: Store, settings) -> None:
 async def test_mid_apply_failure_rolls_back_envelope(
     store: Store, settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import apipi.services.runtime as runtime_module
+    import apipi.services.turn_log as runtime_module
 
     worker_id = uuid.uuid4()
     tenant_id, session_id, _lease = await _leased(store, worker_id)
@@ -670,7 +670,7 @@ async def test_ingest_counts_ok_duplicate_and_rejected(
 ) -> None:
     from tests.support.prom import metric_line
 
-    from apipi.gateway.metrics import Metrics
+    from apipi.common.metrics import Metrics
 
     metrics = Metrics()
     worker_id = uuid.uuid4()

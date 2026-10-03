@@ -3,15 +3,17 @@ from typing import cast
 
 import pytest
 
+from apipi.common.errors import ApiError
+from apipi.common.event_bus import EventHub
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.errors import ApiError
-from apipi.services.runtime import EventHub, FakeHarness
 from apipi.store.engine import Store
-from apipi.worker.execution import LocalExecution, RemoteExecution
+from apipi.worker.execution import LocalExecution
+from apipi.worker.fake_harness import FakeHarness
 from apipi.worker.outbox import Outbox
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
+from apipi.workerhub.execution import RemoteExecution
 
 
 class _Alive:

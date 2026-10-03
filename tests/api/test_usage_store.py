@@ -146,7 +146,7 @@ async def test_usage_export_receives_event(
         del settings, metrics
         captured.append(event)
 
-    monkeypatch.setattr("apipi.services.runtime.export_usage", capture)
+    monkeypatch.setattr("apipi.services.turn_log.export_usage", capture)
     token = "export"
     async with split_client_for(export_settings, store, token=worker_secret) as (
         _app,
@@ -173,7 +173,7 @@ async def test_usage_export_failure_does_not_break_turn(
     def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("export down")
 
-    monkeypatch.setattr("apipi.services.runtime.export_usage", boom)
+    monkeypatch.setattr("apipi.services.turn_log.export_usage", boom)
     token = "export-fail"
     async with split_client_for(export_settings, store, token=worker_secret) as (
         _app,

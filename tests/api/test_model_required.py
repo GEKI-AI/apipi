@@ -39,7 +39,7 @@ async def test_unknown_model_rejected_on_agent_write(
     async def fake_ids(*_args: object, **_kwargs: object) -> list[str]:
         return ["other"]
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", fake_ids)
+    monkeypatch.setattr("apipi.common.models.listed_models", fake_ids)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

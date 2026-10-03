@@ -160,7 +160,7 @@ Worker to API:
 | `type` | Fields | What |
 | --- | --- | --- |
 | `register` | See [Handshake](#handshake) | Create or reconnect the worker. |
-| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `accepts` (optional), `arch` (optional), `drain` (optional bool), `images` (optional list) | Refresh `last_seen` and renew every lease of the worker. Sent every `heartbeat_seconds` from a timer of its own, so a busy socket does not delay it. May update caps, advertised `run_mode` and accepts set, architecture, drain posture, and the image list. |
+| `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `accepts` (optional), `arch` (optional), `image_store_version` (optional), `drain` (optional bool), `images` (optional list) | Refresh `last_seen` and renew every lease of the worker. Sent every `heartbeat_seconds` from a timer of its own, so a busy socket does not delay it. May update caps, advertised `run_mode` and accepts set, architecture, drain posture, and the image list. |
 | `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. The worker sends it only after the API acked every envelope the worker buffered for that session (see [Release order](#release-order)). |
 | `store.proof` | `marker`, `nonce` | Proof the worker sees the shared store root (filesystem store only). The worker reads the `hello` `store_check` marker file and echoes its nonce. A wrong proof closes the socket with `shared_store_required`. |
@@ -171,8 +171,10 @@ Worker to API:
 | envelope (`v: 2`) | `session_id`, `turn_id`, `seq`, `type`, `payload` | Ephemeral deltas (`delta.text`, `delta.reasoning`; see [Live deltas](#live-deltas)) and durable envelopes below. Artifact and file bytes never travel here, only ids, paths, sizes, and checksums. |
 
 The v2 envelope (`{v: 2, session_id, turn_id | null, seq, type,
-payload}`) and its message schemas are defined in
-`src/apipi/worker/protocol.py`, which the API and the worker share.
+payload}`) and its message schemas are defined in the
+`src/apipi/protocol/` package, which the API and the worker share.
+Every message on the socket, in both directions, is built from one of
+those models and parsed through one (see [Code layout](#code-layout)).
 Durable envelopes are batched per connection (about 50ms or
 `APIPI_WORKER_INGEST_BATCH_SIZE` messages), applied in one
 transaction per batch, and acked after commit; the API then publishes
@@ -187,7 +189,7 @@ API to worker:
 | `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
 | `search.reply` | `session_id`, `request_id`, `ok`, `results`, `code`, `message` | Answer to one `search.request`. `results` is a list of `title`, `url`, `snippet`, and `published_date` (nullable), the same for every provider. On failure `ok` is false, `code` is one of `search_denied`, `search_unavailable`, `search_timeout`, `search_failed`, or `invalid_request`, and `message` is a short text that is safe to show the model. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
-| `inventory.reply` | `revoke: [lease.revoke]`, `ttl: {session_id: {...}}` | Answer to `inventory` (and part of `hello.reply`): sessions to tear down plus reaper TTLs. |
+| `inventory.reply` | `revoke: [lease.revoke]`, `ttl: {session_id: {...}}` | Answer to `inventory` (and part of `hello.reply`): sessions to tear down plus reaper TTLs. A revoke entry for an on-disk workspace the worker holds no lease for has no `lease_id`. |
 | error object | `ok: false`, `error` | Auth or register failed, then the socket closes. |
 
 Message classes:
@@ -238,6 +240,28 @@ MiB). When it is full the worker fails the turn with
 failure itself). Envelopes are capped at 1 MiB. A bounded disk spool
 (`APIPI_WORKER_OUTBOX_DIR`) keeps a write-through copy of buffered
 envelopes so they survive a worker restart.
+
+## Code layout
+
+The wire contract and the two sides of the socket live in separate
+packages, so the contract has one home and a worker can run without the
+API code.
+
+| Package | What it holds |
+| --- | --- |
+| `apipi.protocol` | Every wire model, both directions: the handshake, control messages, envelopes and their payloads, commands with one payload model per `op`, the command context, replies, close reasons, and constants such as `PROTOCOL_VERSION` and the size limits. It imports only pydantic and the standard library. The base classes are named by role: `ControlMessage` for messages outside the envelope stream, `EnvelopePayload` for envelope payloads, `CommandPayload` for command payloads, and `ContextPart` for sections of the command context. `parse_worker_message` and `parse_api_message` turn one incoming frame into its model, and every model writes its frame with `to_wire()`. |
+| `apipi.workerhub` | The API side of the socket: `WorkerHub` and its leases, command building and the unacked command table, register and heartbeat handling, delta checks, inventory reconcile, and `RemoteExecution`. The socket route is `apipi.api.workers`, and ingest is `apipi.services.ingest`. |
+| `apipi.worker` | The worker process: the socket client (`run_worker`), command dispatch, the Pi runtime, `LocalExecution`, the outbox, `OutboxSink`, `OutboxLifecycleReporter`, artifact uploads, and the Pi harness and isolation backends under `apipi.worker.pi`. |
+| `apipi.common` | Code both sides use: logging, metrics, tracing, failure codes, the sandbox and agent metadata rules, the in-process event bus, and object store paths. It imports no FastAPI, SQLAlchemy, or store code. |
+
+`tests/unit/test_import_boundary.py` enforces the split. It starts a
+worker in a subprocess and checks that SQLAlchemy, asyncpg, FastAPI,
+`apipi.store`, `apipi.api`, `apipi.gateway`, `apipi.services`, and
+`apipi.workerhub` are not loaded. It also scans the sources: the API
+packages import nothing from `apipi.worker`, `apipi.common`,
+`apipi.protocol`, and `apipi.worker` import nothing from the API
+packages, and `apipi.protocol` imports only pydantic and the standard
+library.
 
 ## Search requests
 
@@ -311,8 +335,9 @@ Rejections and drops are counted in
 object in the command payload. The API builds it from the database,
 the vault, and the object store; the worker holds it in memory only
 and never logs it. The schemas live in
-`src/apipi/worker/turn_context.py`, and the builder in
-`src/apipi/services/turn_context.py`.
+`src/apipi/protocol/context.py`, and the builder in
+`src/apipi/services/turn_context.py`. The model key travels only in
+`context.model.api_key`. The command payload has no key of its own.
 
 | Field | What |
 | --- | --- |

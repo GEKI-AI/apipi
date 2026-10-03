@@ -1,10 +1,7 @@
 from typing import Any
 
-from apipi.gateway.errors import ApiError
-from apipi.worker.pi.settings_json import (
-    builtin_tools_from_metadata,
-    resolve_codemode,
-)
+from apipi.common.errors import ApiError
+from apipi.common.pi_metadata import builtin_tools_from_metadata, resolve_codemode
 
 ENV_NONE_TOOL_HELP = (
     "type=none sessions allow function tools, web_search and HTTP MCP only"

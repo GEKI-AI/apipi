@@ -4,17 +4,16 @@ from pathlib import Path
 
 import pytest
 
+from apipi.common.errors import ApiError
+from apipi.common.pi_metadata import resolve_thinking, validate_pi_metadata
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError
 from apipi.worker.pi.settings_json import (
     apply_pi_agent_files,
     capped_max_retries,
     model_retry_warnings,
     resolve_system_prompt,
-    resolve_thinking,
     retry_budget_ms,
     settings_payload,
-    validate_pi_metadata,
 )
 
 
@@ -95,7 +94,7 @@ def test_unset_system_prompt_removes_stale_file(tmp_path: Path) -> None:
 
 
 def test_reasoning_effort_mirrors_thinking() -> None:
-    from apipi.worker.pi.settings_json import (
+    from apipi.common.pi_metadata import (
         apply_reasoning_effort,
         reasoning_body,
         reject_reasoning_conflict,
@@ -114,7 +113,7 @@ def test_reasoning_effort_mirrors_thinking() -> None:
 
 
 def test_thinking_level_map_matches_pi() -> None:
-    from apipi.worker.pi.settings_json import (
+    from apipi.common.pi_metadata import (
         require_thinking_supported,
         thinking_level_supported,
     )
@@ -178,10 +177,7 @@ def test_invalid_thinking_rejected() -> None:
 
 
 def test_codemode_validates_and_resolves() -> None:
-    from apipi.worker.pi.settings_json import (
-        codemode_from_metadata,
-        resolve_codemode,
-    )
+    from apipi.common.pi_metadata import codemode_from_metadata, resolve_codemode
 
     assert codemode_from_metadata(None) is None
     assert codemode_from_metadata({}) is None
@@ -199,7 +195,7 @@ def test_codemode_validates_and_resolves() -> None:
 
 
 def test_builtin_tools_validates_and_resolves() -> None:
-    from apipi.worker.pi.settings_json import (
+    from apipi.common.pi_metadata import (
         builtin_tools_from_metadata,
         copy_inline_pi_metadata,
         reject_codemode_without_builtin_tools,

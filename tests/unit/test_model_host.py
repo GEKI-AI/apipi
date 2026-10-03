@@ -4,20 +4,22 @@ from pathlib import Path
 import httpx
 import pytest
 
-from apipi.config import ConfigError, Settings
-from apipi.gateway.errors import ApiError
-from apipi.worker.pi.model_host import (
-    PI_PROVIDER,
+from apipi.common.errors import ApiError
+from apipi.common.models import (
     fetch_model_ids,
     fetch_models_json,
     listed_models,
-    models_json_for_base_url,
     models_url,
     parse_model_ids,
-    probe_model_host,
     require_listed_model,
     require_model,
     require_saved_model,
+)
+from apipi.config import ConfigError, Settings
+from apipi.worker.pi.model_host import (
+    PI_PROVIDER,
+    models_json_for_base_url,
+    probe_model_host,
     write_pi_models_json,
 )
 from apipi.worker.pi.proc import pi_command_args, pi_env
@@ -321,7 +323,7 @@ def test_fetch_model_ids_ok(monkeypatch: pytest.MonkeyPatch) -> None:
         assert url.endswith("/models")
         return httpx.Response(200, json={"data": [{"id": "m1"}]})
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", fake_get)
+    monkeypatch.setattr("apipi.common.models.httpx.get", fake_get)
     assert fetch_model_ids("http://model.test/v1", "k") == ["m1"]
 
 
@@ -340,14 +342,14 @@ def _async_client(transport: httpx.MockTransport):
 
 async def test_listed_models_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "apipi.worker.pi.model_host.httpx.get",
+        "apipi.common.models.httpx.get",
         _forbid_sync_get,
     )
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(401, json={"error": "no"})
     )
     monkeypatch.setattr(
-        "apipi.worker.pi.model_host.httpx.AsyncClient", _async_client(transport)
+        "apipi.common.models.httpx.AsyncClient", _async_client(transport)
     )
     with pytest.raises(ApiError) as exc:
         await listed_models("http://model.test/v1", "k")
@@ -362,9 +364,9 @@ async def test_fetch_models_json_passthrough(monkeypatch: pytest.MonkeyPatch) ->
         assert request.headers["Authorization"] == "Bearer k"
         return httpx.Response(200, json=payload)
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.httpx.get", _forbid_sync_get)
+    monkeypatch.setattr("apipi.common.models.httpx.get", _forbid_sync_get)
     monkeypatch.setattr(
-        "apipi.worker.pi.model_host.httpx.AsyncClient",
+        "apipi.common.models.httpx.AsyncClient",
         _async_client(httpx.MockTransport(handler)),
     )
     assert await fetch_models_json("http://model.test/v1", "k") == payload
@@ -454,7 +456,7 @@ async def test_require_saved_model(
         calls += 1
         return ["m1"]
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", fake_list)
+    monkeypatch.setattr("apipi.common.models.listed_models", fake_list)
     settings = _settings(tmp_path).model_copy(update={"model_list": "turn"})
     await require_saved_model(settings, "m1", "k")
     with pytest.raises(ApiError) as exc:

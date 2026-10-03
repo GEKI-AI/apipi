@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from apipi.worker.hub import CommandDedupe
+from apipi.worker.commands import CommandDedupe
 
 HELLO_BASE = {"ok": True, "lease_ttl_seconds": 30, "heartbeat_seconds": 0.05}
 
@@ -97,7 +97,7 @@ def _command(
 
 
 async def test_duplicate_turn_start_dispatched_once(settings) -> None:
-    from apipi.worker.hub import _serve_connection
+    from apipi.worker.client import _serve_connection
     from apipi.worker.outbox import Outbox
 
     session_id = uuid.uuid4()
@@ -150,7 +150,7 @@ async def test_duplicate_turn_start_dispatched_once(settings) -> None:
 
 
 async def test_inventory_reply_applies_revoke_and_ttl(settings) -> None:
-    from apipi.worker.hub import _serve_connection
+    from apipi.worker.client import _serve_connection
     from apipi.worker.outbox import Outbox
 
     revoked = uuid.uuid4()
@@ -215,7 +215,7 @@ async def _serve(
     tasks,
     dedupe,
 ):
-    from apipi.worker.hub import _serve_connection
+    from apipi.worker.client import _serve_connection
 
     return asyncio.create_task(
         _serve_connection(
@@ -319,7 +319,7 @@ async def test_reconnect_replay_dispatched_once(settings) -> None:
 async def test_unleased_session_dirs_lists_unknown(settings) -> None:
     from pathlib import Path
 
-    from apipi.worker.hub import _unleased_session_dirs
+    from apipi.worker.inventory import _unleased_session_dirs
 
     root = Path(str(settings.sessions_dir))
     tenant_dir = root / str(uuid.uuid4())
@@ -340,7 +340,7 @@ async def test_unleased_session_dirs_lists_unknown(settings) -> None:
 async def test_apply_inventory_reply_wipes_only_unknown(settings) -> None:
     from pathlib import Path
 
-    from apipi.worker.hub import _apply_inventory_reply
+    from apipi.worker.inventory import _apply_inventory_reply
     from apipi.worker.outbox import Outbox
 
     root = Path(str(settings.sessions_dir))
@@ -438,7 +438,7 @@ async def test_heartbeat_runs_on_a_timer_when_the_socket_is_busy(settings) -> No
 async def test_inventory_runs_on_a_timer_when_the_socket_is_busy(
     settings, monkeypatch
 ) -> None:
-    monkeypatch.setattr("apipi.worker.hub.INVENTORY_INTERVAL", 0.05)
+    monkeypatch.setattr("apipi.worker.client.INVENTORY_INTERVAL", 0.05)
     sock = _BusySock({**HELLO_BASE, "worker_id": str(uuid.uuid4())})
     task, *_rest = await _start(settings, _Execution(), sock)
     try:
@@ -448,7 +448,7 @@ async def test_inventory_runs_on_a_timer_when_the_socket_is_busy(
 
 
 async def test_drain_runs_when_the_socket_is_busy(settings) -> None:
-    from apipi.worker.hub import _serve_connection
+    from apipi.worker.client import _serve_connection
     from apipi.worker.outbox import Outbox
 
     sock = _BusySock({**HELLO_BASE, "worker_id": str(uuid.uuid4())})
@@ -491,7 +491,7 @@ async def test_hello_without_heartbeat_fields_is_rejected(settings) -> None:
 async def test_worker_heartbeat_gap_metric_and_late_warning(
     settings, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from apipi.gateway.metrics import Metrics
+    from apipi.common.metrics import Metrics
 
     metrics = Metrics()
     execution = _Execution()
@@ -610,7 +610,7 @@ async def test_release_waits_until_the_outbox_is_acked(settings) -> None:
 async def test_release_goes_out_after_the_timeout_and_is_logged(
     settings, monkeypatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr("apipi.worker.hub.RELEASE_FLUSH_TIMEOUT", 0.1)
+    monkeypatch.setattr("apipi.worker.client.RELEASE_FLUSH_TIMEOUT", 0.1)
     session_id = uuid.uuid4()
     execution = _Execution()
     task, outbox, sock, lease_id = await _released(settings, execution, session_id)

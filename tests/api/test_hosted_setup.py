@@ -10,9 +10,9 @@ from tests.support.workspace import hosted_dir
 from apipi.config import Settings
 from apipi.env.setup import SetupError
 from apipi.gateway import create_app
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
+from apipi.worker.fake_harness import FakeHarness
 from apipi.worker.pi.artifacts import reap_workspaces
 from apipi.worker.pi.isolation.none import NoneIsolation
 

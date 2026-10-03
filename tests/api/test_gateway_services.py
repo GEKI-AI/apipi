@@ -3,9 +3,9 @@ import uuid
 
 import pytest
 
+from apipi.common.errors import ApiError
 from apipi.config import VAULT_MASTER_KEY_UNSET, Settings
 from apipi.gateway import Gateway
-from apipi.gateway.errors import ApiError
 from apipi.services.agents import AgentWrite
 from apipi.services.vaults import CredentialWrite, VaultWrite
 from apipi.store.engine import Store

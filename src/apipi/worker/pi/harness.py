@@ -3,8 +3,8 @@ from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
 
+from apipi.common.failures import failure_for, pi_payload
 from apipi.mcp.http import McpHttpServer
-from apipi.services.failures import failure_for, pi_payload
 from apipi.worker.pi.map import ThinkingTracker, map_pi_event
 from apipi.worker.pi.pool import PiPool
 

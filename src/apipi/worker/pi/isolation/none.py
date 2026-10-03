@@ -5,9 +5,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from apipi.common.dirs import PI_SESSION_REL, pi_session_file
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
-from apipi.worker.pi.dirs import PI_SESSION_REL, pi_session_file
 from apipi.worker.pi.extension import host_mcp_extension
 from apipi.worker.pi.proc import PiProc, pi_command_args, pi_env
 

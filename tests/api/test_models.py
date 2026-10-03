@@ -5,9 +5,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.split_worker import api_settings_for
 
+from apipi.common.errors import ApiError
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.errors import ApiError
 from apipi.store.engine import Store
 
 _PAYLOAD = {

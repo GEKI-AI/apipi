@@ -1,6 +1,6 @@
 import pytest
 
-from apipi.gateway.errors import ApiError
+from apipi.common.errors import ApiError
 from apipi.services.env_none import (
     ENV_NONE_BUILTIN_HELP,
     ENV_NONE_CODEMODE_HELP,

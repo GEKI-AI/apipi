@@ -20,6 +20,9 @@ from apipi.api.uploads import router as uploads_router
 from apipi.api.usage import router as usage_router
 from apipi.api.vaults import router as vaults_router
 from apipi.api.workers import router as workers_router
+from apipi.common.event_bus import EventBus
+from apipi.common.metrics import Metrics
+from apipi.common.otel import Tracing
 from apipi.config import VAULT_MASTER_KEY_UNSET, Settings, load_settings
 from apipi.gateway.auth import (
     AuthCache,
@@ -30,13 +33,12 @@ from apipi.gateway.auth import (
     load_authorize,
 )
 from apipi.gateway.errors import register_exception_handlers
-from apipi.gateway.logutil import RequestLogMiddleware
-from apipi.gateway.metrics import Metrics, mount_metrics
+from apipi.gateway.metrics import mount_metrics
 from apipi.gateway.middleware import InstanceMiddleware, MaxBodyMiddleware
-from apipi.gateway.otel import Tracing
 from apipi.gateway.request_id import RequestIdMiddleware
+from apipi.gateway.request_log import RequestLogMiddleware
 from apipi.services.agents import AgentService
-from apipi.services.event_bus import EventBus, create_event_bus
+from apipi.services.event_bus import create_event_bus
 from apipi.services.files import FileService
 from apipi.services.lifecycle_export import LifecycleEmitter, create_lifecycle
 from apipi.services.models import ModelsService
@@ -55,8 +57,8 @@ from apipi.store.engine import Store, create_engine
 from apipi.store.models import Tenant, utc_now
 from apipi.store.repo import ensure_tenant as store_ensure_tenant
 from apipi.store.repo import purge_turn_logs
-from apipi.worker.execution import RemoteExecution
-from apipi.worker.hub import WorkerHub
+from apipi.workerhub.execution import RemoteExecution
+from apipi.workerhub.hub import WorkerHub
 
 log = logging.getLogger("apipi")
 

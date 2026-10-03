@@ -4,7 +4,7 @@ from fastapi.routing import APIRoute
 from httpx import AsyncClient
 
 from apipi.gateway import create_app
-from apipi.services.runtime import event_body
+from apipi.services.session_events import event_body
 from apipi.services.sessions import artifact_body, item_body, session_body, turn_body
 from apipi.store.models import Artifact, Event, Item, SessionRow, Turn, utc_now
 

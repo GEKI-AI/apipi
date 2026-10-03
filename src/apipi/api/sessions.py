@@ -10,12 +10,12 @@ from pydantic_core import PydanticCustomError
 
 from apipi.api.authorize import require_session_agent
 from apipi.api.deps import model_key
+from apipi.common.event_bus import EventBus
 from apipi.env.spec import EnvironmentSpec
 from apipi.gateway.auth import check_authorize, require_tenant
 from apipi.gateway.request_id import request_id_of
 from apipi.gateway.schemas import StrictModel
 from apipi.services.agents import AgentWrite
-from apipi.services.event_bus import EventBus
 from apipi.services.sessions import SessionService, iter_session_events
 from apipi.store.disposition import content_disposition
 from apipi.store.engine import Store

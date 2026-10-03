@@ -7,7 +7,35 @@ from fastapi import APIRouter, WebSocket
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
-from apipi.services.event_bus import EventBus
+from apipi.common.event_bus import EventBus
+from apipi.protocol import (
+    INVALID_REGISTER_REASON,
+    REGISTER_REQUIRED_REASON,
+    REVOKED_REASON,
+    SHARED_STORE_REASON,
+    TOKEN_BOUND_REASON,
+    UNAUTHORIZED_REASON,
+    UNSUPPORTED_PROTOCOL_REASON,
+    WORKER_CLOSE_CODE,
+    WORKER_IN,
+    CumulativeAck,
+    HeartbeatMessage,
+    InventoryMessage,
+    InventoryReply,
+    LeaseAck,
+    LeaseRelease,
+    RejectMessage,
+    RevokeEntry,
+    SandboxSeenMessage,
+    SearchReply,
+    StoreProof,
+    TtlEntry,
+    UnsupportedProtocol,
+    WorkerEnvelope,
+    WorkerEventMessage,
+    parse_register,
+    parse_worker_message,
+)
 from apipi.services.ingest import (
     IngestBatcher,
     _Reject,
@@ -22,22 +50,9 @@ from apipi.services.worker_tokens import (
 )
 from apipi.store.engine import Store
 from apipi.store.repo import clear_worker_api_instance, get_session_by_lease
-from apipi.worker.hub import (
-    WORKER_IN,
-    TokenBindingError,
-    WorkerHub,
-    heartbeat_worker,
-    register_worker,
-)
-from apipi.worker.protocol import (
-    UNSUPPORTED_PROTOCOL_REASON,
-    WORKER_CLOSE_CODE,
-    CumulativeAck,
-    SearchReply,
-    UnsupportedProtocol,
-    WorkerEnvelope,
-    parse_register,
-)
+from apipi.workerhub.heartbeat import heartbeat_worker
+from apipi.workerhub.hub import WorkerHub
+from apipi.workerhub.register import TokenBindingError, register_worker
 
 log = logging.getLogger("apipi.worker")
 
@@ -58,7 +73,7 @@ def _bearer(websocket: WebSocket) -> str | None:
 
 
 async def _reject(websocket: WebSocket, error: str, *, reason: str) -> None:
-    await websocket.send_json({"ok": False, "error": error})
+    await websocket.send_json(RejectMessage(error=error).to_wire())
     await websocket.close(code=WORKER_CLOSE_CODE, reason=reason)
 
 
@@ -131,9 +146,10 @@ def _search_failure(
         session_id=session_id,
         request_id=request_id,
         ok=False,
+        results=[],
         code=code,
         message=text,
-    ).model_dump(mode="json")
+    ).to_wire()
 
 
 async def _flush_envelopes(
@@ -167,9 +183,7 @@ async def _flush_envelopes(
     ):
         async with lock:
             await websocket.send_json(
-                CumulativeAck(session_id=session_id, last_seq=last_seq).model_dump(
-                    mode="json"
-                )
+                CumulativeAck(session_id=session_id, last_seq=last_seq).to_wire()
             )
     for reply in outcome.presign_replies:
         async with lock:
@@ -184,7 +198,7 @@ async def _flush_envelopes(
                 intent.fields["run_mode"] = conn.run_mode
         emit_lifecycle_intents(lifecycle, outcome.lifecycle)
     if outcome.wipes:
-        from apipi.worker.pi.artifacts import wipe_artifact_store
+        from apipi.services.worker_artifacts import wipe_artifact_store
 
         blobs = websocket.app.state.blobs
         for tenant_id, key_id, session_id in outcome.wipes:
@@ -201,48 +215,6 @@ async def _flush_envelopes(
                 )
 
 
-def _parse_inventory(
-    message: dict[str, Any],
-) -> tuple[dict[uuid.UUID, uuid.UUID], list[uuid.UUID]] | None:
-    """The worker live set: leased sessions plus unleased on-disk dirs."""
-    raw_sessions = message.get("sessions")
-    if not isinstance(raw_sessions, list):
-        return None
-    reported: dict[uuid.UUID, uuid.UUID] = {}
-    unleased: list[uuid.UUID] = []
-    for entry in raw_sessions:
-        if not isinstance(entry, dict):
-            return None
-        try:
-            session_id = uuid.UUID(str(entry.get("session_id")))
-        except (ValueError, TypeError):
-            return None
-        raw_lease = entry.get("lease_id")
-        if raw_lease is None:
-            if session_id not in unleased:
-                unleased.append(session_id)
-            continue
-        try:
-            lease_id = uuid.UUID(str(raw_lease))
-        except (ValueError, TypeError):
-            return None
-        reported[session_id] = lease_id
-    return reported, unleased
-
-
-def _parse_seen_ids(message: dict[str, Any]) -> list[uuid.UUID] | None:
-    raw_ids = message.get("session_ids")
-    if not isinstance(raw_ids, list):
-        return None
-    seen: list[uuid.UUID] = []
-    for raw_id in raw_ids:
-        try:
-            seen.append(uuid.UUID(str(raw_id)))
-        except (ValueError, TypeError):
-            return None
-    return seen
-
-
 @router.websocket("/internal/worker")
 async def worker_socket(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -252,17 +224,17 @@ async def worker_socket(websocket: WebSocket) -> None:
     raw_token = _bearer(websocket)
     if raw_token is None or not raw_token.startswith(WORKER_TOKEN_PREFIX):
         hub.observe_protocol("unauthorized")
-        await _reject(websocket, "unauthorized", reason="unauthorized")
+        await _reject(websocket, "unauthorized", reason=UNAUTHORIZED_REASON)
         return
     token = await authenticate_token(store, raw_token)
     if token is None:
         if await is_revoked_secret(store, raw_token):
             hub.observe_protocol("revoked")
             log.warning("worker token revoked", extra={"event": "worker.auth.revoked"})
-            await _reject(websocket, "revoked", reason="revoked")
+            await _reject(websocket, "revoked", reason=REVOKED_REASON)
         else:
             hub.observe_protocol("unauthorized")
-            await _reject(websocket, "unauthorized", reason="unauthorized")
+            await _reject(websocket, "unauthorized", reason=UNAUTHORIZED_REASON)
         return
     try:
         raw: Any = await asyncio.wait_for(websocket.receive_json(), timeout=15)
@@ -273,7 +245,7 @@ async def worker_socket(websocket: WebSocket) -> None:
         return
     if not isinstance(raw, dict) or raw.get("type") != "register":
         hub.observe_protocol("invalid_register")
-        await _reject(websocket, "register required", reason="register_required")
+        await _reject(websocket, "register required", reason=REGISTER_REQUIRED_REASON)
         return
     try:
         register = parse_register(raw)
@@ -292,7 +264,7 @@ async def worker_socket(websocket: WebSocket) -> None:
         return
     except ValidationError:
         hub.observe_protocol("invalid_register")
-        await _reject(websocket, "invalid register", reason="invalid_register")
+        await _reject(websocket, "invalid register", reason=INVALID_REGISTER_REASON)
         return
     try:
         conn = await register_worker(hub, store, websocket, register, token, event_hub)
@@ -302,11 +274,11 @@ async def worker_socket(websocket: WebSocket) -> None:
             "worker token bound to another worker",
             extra={"event": "worker.auth.bound"},
         )
-        await _reject(websocket, "token_bound", reason="token_bound")
+        await _reject(websocket, "token_bound", reason=TOKEN_BOUND_REASON)
         return
     if conn is None:
         hub.observe_protocol("invalid_register")
-        await _reject(websocket, "invalid register", reason="invalid_register")
+        await _reject(websocket, "invalid register", reason=INVALID_REGISTER_REASON)
         return
     settings = websocket.app.state.settings
     metrics = websocket.app.state.metrics
@@ -368,53 +340,6 @@ async def worker_socket(websocket: WebSocket) -> None:
             msg_type = message.get("type")
             if msg_type not in WORKER_IN:
                 continue
-            if msg_type == "store.proof":
-                from apipi.worker.hub import verify_store_proof
-
-                marker = message.get("marker")
-                nonce = message.get("nonce")
-                if not isinstance(marker, str) or not isinstance(nonce, str):
-                    continue
-                if not verify_store_proof(
-                    settings, marker, nonce, expected=conn.store_proof
-                ):
-                    hub.observe_protocol("invalid_register")
-                    log.warning(
-                        "worker shared store proof failed",
-                        extra={
-                            "event": "worker.store.rejected",
-                            "worker_id": str(conn.worker_id),
-                        },
-                    )
-                    await websocket.send_json(
-                        {"ok": False, "error": "shared_store_required"}
-                    )
-                    await websocket.close(
-                        code=WORKER_CLOSE_CODE, reason="shared_store_required"
-                    )
-                    return
-                conn.store_proof = None
-                continue
-            if msg_type == "inventory":
-                parsed = _parse_inventory(message)
-                if parsed is None:
-                    continue
-                reported, unleased = parsed
-                revoke, ttl = await hub.reconcile_inventory(
-                    store, event_hub, conn.worker_id, reported, unleased
-                )
-                hub.observe_protocol("inventory")
-                async with send_lock:
-                    await websocket.send_json(
-                        {
-                            "type": "inventory.reply",
-                            "revoke": [
-                                {"type": "lease.revoke", **entry} for entry in revoke
-                            ],
-                            "ttl": ttl,
-                        }
-                    )
-                continue
             if msg_type == "search.request":
                 search = getattr(websocket.app.state, "search", None)
                 if len(search_tasks) >= SEARCH_MAX_INFLIGHT or search is None:
@@ -431,18 +356,65 @@ async def worker_socket(websocket: WebSocket) -> None:
                 search_tasks.add(task)
                 task.add_done_callback(search_tasks.discard)
                 continue
-            if msg_type == "sandbox.seen":
-                seen_ids = _parse_seen_ids(message)
-                if seen_ids is None:
-                    continue
-                owned = await hub.owned_sessions(store, conn, seen_ids)
+            try:
+                parsed = parse_worker_message(message)
+            except ValidationError:
+                continue
+            if isinstance(parsed, StoreProof):
+                from apipi.workerhub.register import verify_store_proof
+
+                if not verify_store_proof(
+                    settings, parsed.marker, parsed.nonce, expected=conn.store_proof
+                ):
+                    hub.observe_protocol("invalid_register")
+                    log.warning(
+                        "worker shared store proof failed",
+                        extra={
+                            "event": "worker.store.rejected",
+                            "worker_id": str(conn.worker_id),
+                        },
+                    )
+                    await websocket.send_json(
+                        RejectMessage(error=SHARED_STORE_REASON).to_wire()
+                    )
+                    await websocket.close(
+                        code=WORKER_CLOSE_CODE, reason=SHARED_STORE_REASON
+                    )
+                    return
+                conn.store_proof = None
+                continue
+            if isinstance(parsed, InventoryMessage):
+                reported: dict[uuid.UUID, uuid.UUID] = {}
+                unleased: list[uuid.UUID] = []
+                for entry in parsed.sessions:
+                    if entry.lease_id is None:
+                        if entry.session_id not in unleased:
+                            unleased.append(entry.session_id)
+                    else:
+                        reported[entry.session_id] = entry.lease_id
+                revoke, ttl = await hub.reconcile_inventory(
+                    store, event_hub, conn.worker_id, reported, unleased
+                )
+                hub.observe_protocol("inventory")
+                reply = InventoryReply(
+                    revoke=[RevokeEntry.model_validate(entry) for entry in revoke],
+                    ttl={
+                        uuid.UUID(key): TtlEntry.model_validate(value)
+                        for key, value in ttl.items()
+                    },
+                )
+                async with send_lock:
+                    await websocket.send_json(reply.to_wire())
+                continue
+            if isinstance(parsed, SandboxSeenMessage):
+                owned = await hub.owned_sessions(store, conn, parsed.session_ids)
                 if owned:
                     from apipi.services.sandbox_status import touch_seen
 
                     await touch_seen(store, owned)
                 hub.observe_protocol("sandbox.seen")
                 continue
-            if msg_type == "heartbeat":
+            if isinstance(parsed, HeartbeatMessage):
                 if conn.token_id is not None and await token_revoked(
                     store, conn.token_id
                 ):
@@ -454,28 +426,18 @@ async def worker_socket(websocket: WebSocket) -> None:
                             "worker_id": str(conn.worker_id),
                         },
                     )
-                    await websocket.close(code=WORKER_CLOSE_CODE, reason="revoked")
+                    await websocket.close(code=WORKER_CLOSE_CODE, reason=REVOKED_REASON)
                     return
-                await heartbeat_worker(hub, store, conn, message)
+                await heartbeat_worker(hub, store, conn, parsed)
                 continue
-            if msg_type == "lease.ack":
-                lease_id = _uuid(message.get("lease_id"))
-                command_id = message.get("id")
-                if lease_id is None or not isinstance(command_id, str):
+            if isinstance(parsed, LeaseAck):
+                if parsed.lease_id not in conn.leases:
                     continue
-                if lease_id not in conn.leases:
-                    continue
-                await hub.ack(lease_id, command_id)
+                await hub.ack(parsed.lease_id, str(parsed.id))
                 await hub.renew_on_activity(store, conn)
                 continue
-            if msg_type == "lease.release":
-                lease_id = _uuid(message.get("lease_id"))
-                session_id = _uuid(message.get("session_id"))
-                if (
-                    lease_id is None
-                    or session_id is None
-                    or lease_id not in conn.leases
-                ):
+            if isinstance(parsed, LeaseRelease):
+                if parsed.lease_id not in conn.leases:
                     continue
                 if len(batcher):
                     await _flush_envelopes(
@@ -490,26 +452,22 @@ async def worker_socket(websocket: WebSocket) -> None:
                         send_lock,
                     )
                 async with store.session() as db:
-                    row = await get_session_by_lease(db, lease_id)
+                    row = await get_session_by_lease(db, parsed.lease_id)
                 if row is None:
                     continue
-                await hub.release(store, row.tenant_id, session_id, lease_id)
+                await hub.release(
+                    store, row.tenant_id, parsed.session_id, parsed.lease_id
+                )
                 continue
-            if msg_type == "event":
-                lease_id = _uuid(message.get("lease_id"))
-                event_type = message.get("event_type")
-                data = message.get("data")
-                if lease_id is None or not isinstance(event_type, str):
+            if isinstance(parsed, WorkerEventMessage):
+                if parsed.lease_id not in conn.leases:
                     continue
-                if lease_id not in conn.leases:
-                    continue
-                payload = data if isinstance(data, dict) else None
                 await hub.handle_event(
                     store,
                     event_hub,
-                    lease_id=lease_id,
-                    event_type=event_type,
-                    data=payload,
+                    lease_id=parsed.lease_id,
+                    event_type=parsed.event_type,
+                    data=parsed.data,
                 )
     except WebSocketDisconnect:
         pass

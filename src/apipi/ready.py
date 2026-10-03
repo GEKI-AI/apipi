@@ -7,6 +7,8 @@ import asyncpg
 from sqlalchemy import text
 
 from apipi import __version__
+from apipi.common.logutil import configure_logging
+from apipi.common.models import fetch_model_ids
 from apipi.config import (
     ConfigError,
     Settings,
@@ -16,15 +18,10 @@ from apipi.config import (
     require_run_mode,
 )
 from apipi.gateway.auth import load_authenticate
-from apipi.gateway.logutil import configure_logging
 from apipi.services.vault_crypto import vault_master_key_unset
 from apipi.store.engine import create_engine
 from apipi.worker.pi.isolation import load_isolation
-from apipi.worker.pi.model_host import (
-    fetch_model_ids,
-    installed_pi_version,
-    require_pinned_pi,
-)
+from apipi.worker.pi.model_host import installed_pi_version, require_pinned_pi
 from apipi.worker.pi.probe import probe_run_mode
 from apipi.worker.pi.version import PINNED_PI
 
@@ -149,7 +146,7 @@ def run_checks(
                 checks.append(Check("ok", "sandbox probe", backend.name))
             except ConfigError as exc:
                 checks.append(Check("fail", "sandbox probe", str(exc)))
-    from apipi.worker.pi.image_pull import available_images
+    from apipi.common.images import available_images
 
     present = available_images(settings)
     if present:

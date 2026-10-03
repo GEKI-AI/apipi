@@ -26,10 +26,13 @@ Code comments stay omitted unless asked.
 
 | Path | What |
 | --- | --- |
-| `src/apipi/api/` | HTTP routes |
+| `src/apipi/api/` | HTTP routes and the `/internal/worker` socket route |
 | `src/apipi/gateway/` | Gateway handle, auth, errors, middleware, schemas |
-| `src/apipi/services/` | Session/Agent/Vault/File/Skill/Model/Usage services and EventHub |
-| `src/apipi/worker/` | Worker control, execution adapters, Pi harness, isolation |
+| `src/apipi/services/` | Session/Agent/Vault/File/Skill/Model/Usage services, worker ingest, and the PostgresEventBus |
+| `src/apipi/protocol/` | Every worker socket message: wire models, parsing, constants. Imports only pydantic and the standard library |
+| `src/apipi/workerhub/` | API side of the worker socket: hub, leases, commands, `RemoteExecution` |
+| `src/apipi/worker/` | Worker process: socket client, command dispatch, Pi runtime, execution, outbox, Pi harness, isolation. Imports nothing from the API |
+| `src/apipi/common/` | Code both sides use: logging, metrics, tracing, failure codes, metadata rules, in-process event bus. Imports no FastAPI, SQLAlchemy, or store |
 | `src/apipi/store/` | Durable store and object blobs |
 | `src/apipi/env/` | Computer and hosted/self_hosted environments |
 | `src/apipi/mcp/` | HTTP and stdio MCP |
@@ -87,6 +90,12 @@ fallback. `host` and `jail` are not valid. OpenAI-compatible
 - Keep domain logic in services and the store. HTTP only routes,
   validates, and serializes. Extenders call those services.
 - Persist the public event before SSE
+- Keep the worker apart from the API: `worker` imports nothing from
+  `api`, `gateway`, `services`, `store`, or `workerhub`, and those
+  packages import nothing from `worker`. Shared code goes in `common`
+  or `protocol`. `tests/unit/test_import_boundary.py` checks it.
+- Build and parse every worker socket message with a `protocol` model.
+  No hand-built dicts on the socket.
 - Fail unknown OpenAI fields clearly
 - Pin Pi when touching the adapter
 - Warn at startup when run mode is `none`

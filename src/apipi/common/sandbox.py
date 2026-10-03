@@ -2,8 +2,8 @@ import logging
 import re
 from typing import Any
 
+from apipi.common.errors import ApiError
 from apipi.config import ConfigError, Settings
-from apipi.gateway.errors import ApiError
 
 SANDBOX_SIZES = frozenset({"S", "M", "L"})
 SANDBOX_IMAGE_KEY = "apipi.sandbox_image"
@@ -100,7 +100,7 @@ def sandbox_image_of(environment: dict[str, Any] | None) -> str | None:
 
 
 def min_size_for_image(image_id: str) -> str | None:
-    from apipi.worker.pi.install import images_root, read_image_env
+    from apipi.common.image_recipes import images_root, read_image_env
 
     try:
         env = read_image_env(images_root() / image_id / "image.env")
@@ -160,8 +160,7 @@ def mem_mib_for_size(settings: Settings, size: str | None) -> int:
 
 def recommended_min_vcpus(image_id: str, settings: Settings | None = None) -> int:
     if settings is not None:
-        from apipi.worker.pi.image_pull import configured_images_dir
-        from apipi.worker.pi.images import read_current
+        from apipi.common.images import configured_images_dir, read_current
 
         root = configured_images_dir(settings)
         version = read_current(root, image_id)
@@ -178,7 +177,7 @@ def recommended_min_vcpus(image_id: str, settings: Settings | None = None) -> in
                     raw = data.get("min_vcpus")
                     if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 1:
                         return raw
-    from apipi.worker.pi.install import recipe_env
+    from apipi.common.image_recipes import recipe_env
 
     raw_text = recipe_env(image_id).get("MIN_VCPUS", "")
     if raw_text.isdigit() and int(raw_text) >= 1:
@@ -246,7 +245,7 @@ def validate_sandbox_metadata(
 
 
 def _builtin_images() -> frozenset[str]:
-    from apipi.worker.pi.install import recipe_ids
+    from apipi.common.image_recipes import recipe_ids
 
     try:
         found = frozenset(recipe_ids())
@@ -261,7 +260,7 @@ def require_known_image(settings: Settings, image_id: str) -> None:
     elif image_id in _builtin_images():
         known = True
     else:
-        from apipi.worker.pi.image_pull import available_images
+        from apipi.common.images import available_images
 
         known = any(item.id == image_id for item in available_images(settings))
     if not known:

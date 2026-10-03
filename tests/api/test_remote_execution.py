@@ -6,17 +6,15 @@ from httpx import ASGITransport, AsyncClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from tests.support.prom import metric_line
 
+from apipi.common.metrics import Metrics
+from apipi.common.otel import Tracing
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.metrics import Metrics
-from apipi.gateway.otel import Tracing
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FAKE_USAGE, FakeHarness
 from apipi.store.engine import Store
-from apipi.worker.execution import (
-    RemoteExecution,
-    worker_observability,
-)
+from apipi.worker.execution import worker_observability
+from apipi.worker.fake_harness import FAKE_USAGE, FakeHarness
+from apipi.workerhub.execution import RemoteExecution
 
 
 def _auth(token: str) -> dict[str, str]:

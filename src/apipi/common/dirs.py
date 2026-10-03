@@ -1,3 +1,6 @@
+import os
+import pwd
+import shutil
 import uuid
 from pathlib import Path
 
@@ -66,3 +69,32 @@ def artifact_blob_dir(
     )
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def wipe_workspace(workspace: Path) -> None:
+    if workspace.is_dir():
+        shutil.rmtree(workspace)
+
+
+def operator_home() -> Path:
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and os.geteuid() == 0:
+        try:
+            return Path(pwd.getpwnam(sudo_user).pw_dir)
+        except KeyError:
+            pass
+    return Path.home()
+
+
+def xdg_cache_home() -> Path:
+    raw = os.environ.get("XDG_CACHE_HOME")
+    if raw:
+        return Path(raw)
+    return operator_home() / ".cache"
+
+
+def xdg_data_home() -> Path:
+    raw = os.environ.get("XDG_DATA_HOME")
+    if raw:
+        return Path(raw)
+    return operator_home() / ".local" / "share"

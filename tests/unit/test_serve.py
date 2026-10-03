@@ -163,7 +163,7 @@ def test_worker_microvm_exits_without_kvm(
     async def boom(_settings: Settings, *, url: str | None = None) -> None:
         raise AssertionError("must not connect")
 
-    monkeypatch.setattr("apipi.worker.hub.run_worker", boom)
+    monkeypatch.setattr("apipi.worker.client.run_worker", boom)
     assert main(["worker"]) == 1
 
 
@@ -272,7 +272,7 @@ def test_worker_warns_on_removed_api_only_env(
     async def fake_run(_settings: Settings, **_kwargs: object) -> int:
         return 0
 
-    monkeypatch.setattr("apipi.worker.hub.run_worker", fake_run)
+    monkeypatch.setattr("apipi.worker.client.run_worker", fake_run)
     assert main(["worker"]) == 0
     assert API_ONLY_REMOVED in caplog.text
 

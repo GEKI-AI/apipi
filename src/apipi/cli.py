@@ -10,6 +10,7 @@ from typing import Any
 import uvicorn
 
 from apipi import __version__
+from apipi.common.logutil import configure_logging, uvicorn_log_config
 from apipi.config import (
     LIFECYCLE_EXPORT_OFF,
     LIFECYCLE_EXPORT_ON,
@@ -37,8 +38,7 @@ from apipi.config import (
     usage_store_log,
 )
 from apipi.gateway import create_app
-from apipi.gateway.logutil import configure_logging, uvicorn_log_config
-from apipi.gateway.ready import check_ready
+from apipi.ready import check_ready
 from apipi.store.engine import Store
 from apipi.store.migrate import migrate
 from apipi.worker.pi.image_check import (
@@ -634,7 +634,7 @@ def main(argv: list[str] | None = None) -> int:
 
             return run_dev(config_path=args.config, host=args.host, port=args.port)
         if args.command == "worker":
-            from apipi.worker.hub import run_worker
+            from apipi.worker.client import run_worker
 
             settings = prepare_worker(config_path=args.config)
             return asyncio.run(

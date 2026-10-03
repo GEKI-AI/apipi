@@ -12,14 +12,15 @@ from tests.support.split_worker import api_settings_for, split_client_for
 from tests.support.workspace import hosted_dir
 from tests.unit.test_blobs import FakeS3
 
+from apipi.common.dirs import pi_session_file
+from apipi.common.errors import ObjectStoreError
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
-from apipi.store.blobs import ObjectStoreError, S3Blobs, S3Store
+from apipi.store.blobs import S3Blobs, S3Store
 from apipi.store.engine import Store
 from apipi.store.repo import get_session
-from apipi.worker.pi.dirs import pi_session_file
+from apipi.worker.fake_harness import FakeHarness
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -213,9 +214,7 @@ async def test_expected_cache_restore_fails_turn(
             code="AccessDenied",
         )
 
-    monkeypatch.setattr(
-        "apipi.services.turn_context.fetch_pi_session_bytes", _boom_fetch
-    )
+    monkeypatch.setattr("apipi.worker.turn_context.fetch_pi_session_bytes", _boom_fetch)
     async with split_client_for(
         s3_settings,
         store,

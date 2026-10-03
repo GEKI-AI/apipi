@@ -3,12 +3,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from apipi.common.event_bus import EventHub
+from apipi.common.placement import placement_for, worker_accepts
 from apipi.config import Settings
-from apipi.services.runtime import EventHub
-from apipi.services.sink import OutboxSink
-from apipi.worker.hub import WorkerConnection, WorkerHub, _run_command
+from apipi.worker.commands import _run_command
 from apipi.worker.outbox import Outbox
-from apipi.worker.placement import placement_for, worker_accepts
+from apipi.worker.sink import OutboxSink
+from apipi.workerhub.connection import WorkerConnection
+from apipi.workerhub.hub import WorkerHub
 
 
 def test_env_none_places_none() -> None:

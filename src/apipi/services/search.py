@@ -8,9 +8,10 @@ import httpx
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from apipi.common.errors import ApiError
+from apipi.common.logutil import log_event
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError
-from apipi.gateway.logutil import log_event
+from apipi.protocol import SearchReply, SearchRequest, SearchResultItem
 from apipi.services.search_providers import (
     KeySource,
     SearchHit,
@@ -23,7 +24,6 @@ from apipi.services.search_providers import (
 from apipi.store.engine import Store
 from apipi.store.models import Event
 from apipi.store.repo import get_agent, get_session_by_id, record_search_usage
-from apipi.worker.protocol import SearchReply, SearchRequest, SearchResultItem
 
 log = logging.getLogger("apipi.search")
 
@@ -137,9 +137,10 @@ def _failure(
         session_id=session_id,
         request_id=request_id,
         ok=False,
+        results=[],
         code=code,
         message=message,
-    ).model_dump(mode="json")
+    ).to_wire()
 
 
 def _success(
@@ -158,7 +159,9 @@ def _success(
             )
             for hit in hits
         ],
-    ).model_dump(mode="json")
+        code=None,
+        message=None,
+    ).to_wire()
 
 
 class SearchService:

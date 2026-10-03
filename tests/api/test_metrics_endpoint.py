@@ -6,11 +6,11 @@ import pytest
 from httpx import AsyncClient
 from tests.support.prom import metric_line
 
+from apipi.common.metrics import Metrics
 from apipi.config import Settings
-from apipi.gateway.metrics import Metrics
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FAKE_USAGE
 from apipi.store.engine import Store
+from apipi.worker.fake_harness import FAKE_USAGE
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -42,7 +42,7 @@ async def metrics_client(
     """
     from tests.support.split_worker import split_client_for
 
-    from apipi.gateway.metrics import Metrics
+    from apipi.common.metrics import Metrics
 
     worker_metrics = Metrics()
     async with split_client_for(

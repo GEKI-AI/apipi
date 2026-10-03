@@ -15,7 +15,7 @@ from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.repo import list_artifacts
-from apipi.worker.hub import answer_store_check
+from apipi.worker.client import answer_store_check
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -146,12 +146,12 @@ async def test_filesystem_shared_root_split_simulation(
     store: Store, tmp_path: Path
 ) -> None:
     """API and worker share the store root but keep separate workspaces."""
+    from apipi.protocol import WorkerEnvelope
     from apipi.services.ingest import IngestBatcher, flush_batch
     from apipi.services.worker_artifacts import sha256_hex
     from apipi.store.blobs import blob_key
     from apipi.store.repo import create_session, create_tenant, set_session_lease
     from apipi.worker.artifact_upload import write_shared_object
-    from apipi.worker.protocol import WorkerEnvelope
 
     shared = tmp_path / "shared"
     api_settings = Settings(

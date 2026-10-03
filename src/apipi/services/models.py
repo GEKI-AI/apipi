@@ -1,8 +1,9 @@
 from typing import Any
 
+from apipi.common.errors import ApiError
+from apipi.common.models import fetch_models_json
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError, not_implemented
-from apipi.worker.pi.model_host import fetch_models_json
+from apipi.gateway.errors import not_implemented
 
 
 class ModelsService:

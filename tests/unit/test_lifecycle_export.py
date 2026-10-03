@@ -11,8 +11,8 @@ import pytest
 from tests.support import fake_sink
 from tests.support.prom import metric_line
 
+from apipi.common.metrics import Metrics
 from apipi.config import Settings
-from apipi.gateway.metrics import Metrics
 from apipi.services.lifecycle_export import (
     LifecycleEmitter,
     api_heartbeat_loop,

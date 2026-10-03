@@ -698,12 +698,10 @@ async def test_heartbeat_gap_is_measured_and_late_gaps_are_logged(
 ) -> None:
     import time
 
-    from apipi.gateway.metrics import Metrics
-    from apipi.worker.hub import (
-        WorkerConnection,
-        WorkerHub,
-        observe_heartbeat,
-    )
+    from apipi.common.metrics import Metrics
+    from apipi.workerhub.connection import WorkerConnection
+    from apipi.workerhub.heartbeat import observe_heartbeat
+    from apipi.workerhub.hub import WorkerHub
 
     metrics = Metrics()
     hub = WorkerHub(_worker_settings(settings), metrics=metrics)

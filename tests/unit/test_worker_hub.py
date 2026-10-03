@@ -5,19 +5,16 @@ from unittest.mock import MagicMock
 import pytest
 from tests.support.prom import metric_line
 
+from apipi.common.errors import ApiError
+from apipi.common.event_bus import EventHub
+from apipi.common.metrics import Metrics
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError
-from apipi.gateway.metrics import Metrics
-from apipi.services.runtime import EventHub
-from apipi.services.sink import OutboxSink
-from apipi.worker.hub import (
-    WorkerConnection,
-    WorkerHub,
-    WorkerImage,
-    dispatch_command,
-    images_from_message,
-)
+from apipi.worker.commands import dispatch_command
 from apipi.worker.outbox import Outbox
+from apipi.worker.sink import OutboxSink
+from apipi.workerhub.connection import WorkerConnection, WorkerImage
+from apipi.workerhub.heartbeat import images_from_message
+from apipi.workerhub.hub import WorkerHub
 
 
 def _settings() -> Settings:

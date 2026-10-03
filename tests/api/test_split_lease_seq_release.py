@@ -16,12 +16,12 @@ from tests.support.split_worker import (
 
 from apipi.config import Settings
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import FakeHarness
 from apipi.services.worker_tokens import create_token
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import WorkerIngest
 from apipi.store.repo import get_session
+from apipi.worker.fake_harness import FakeHarness
 
 TOKEN = "lease-seq-release"
 

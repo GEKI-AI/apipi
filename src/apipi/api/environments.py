@@ -3,8 +3,8 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
+from apipi.common.event_bus import EventBus
 from apipi.gateway.auth import not_found, require_tenant
-from apipi.services.event_bus import EventBus
 from apipi.services.sandbox_status import environment_public, expire_if_stale
 from apipi.store.engine import Store
 from apipi.store.models import Tenant

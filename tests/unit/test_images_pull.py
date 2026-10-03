@@ -4,11 +4,11 @@ from pathlib import Path
 import httpx
 import pytest
 
+from apipi.common.images import read_current
 from apipi.config import ConfigError, Settings, load_settings
 from apipi.worker.pi.image_ops import package_image, publish_images
 from apipi.worker.pi.image_pull import list_images, pull_images
 from apipi.worker.pi.image_store import S3ImageStore, open_image_store, parse_image_uri
-from apipi.worker.pi.images import read_current
 from apipi.worker.pi.microvm import microvm_images
 
 

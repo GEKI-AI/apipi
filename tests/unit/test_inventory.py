@@ -15,7 +15,8 @@ from apipi.store.repo import (
     get_session,
     set_session_lease,
 )
-from apipi.worker.hub import CommandDedupe, WorkerHub
+from apipi.worker.commands import CommandDedupe
+from apipi.workerhub.hub import WorkerHub
 
 
 async def _leased(
@@ -119,7 +120,7 @@ async def test_reconnect_to_another_replica_renews_lease(
     second = _hub(settings)
     bus = create_event_bus(settings, store=store)
     try:
-        from apipi.worker.hub import WorkerConnection
+        from apipi.workerhub.connection import WorkerConnection
 
         conn_a = WorkerConnection(
             worker_id=worker_id,
@@ -180,7 +181,7 @@ def test_command_dedupe_bounds_and_forgets() -> None:
 
 
 async def test_owned_sessions_filters_other_workers(store: Store, settings) -> None:
-    from apipi.worker.hub import WorkerConnection
+    from apipi.workerhub.connection import WorkerConnection
 
     worker_id = uuid.uuid4()
     other_id = uuid.uuid4()
@@ -231,7 +232,7 @@ async def test_reconcile_spares_orphan_with_command_in_flight(
 
 
 async def test_takeover_renews_only_claimed_leases(store: Store, settings) -> None:
-    from apipi.worker.hub import WorkerConnection
+    from apipi.workerhub.connection import WorkerConnection
 
     worker_id = uuid.uuid4()
     tenant_a, first_id, first_lease = await _leased(store, worker_id)
@@ -302,7 +303,7 @@ async def test_reconcile_unleased_released_session_gets_ttl_then_reaps(
     from types import SimpleNamespace
 
     from apipi.store.repo import clear_session_lease
-    from apipi.worker.hub import _seed_reaper_ttl
+    from apipi.worker.inventory import _seed_reaper_ttl
     from apipi.worker.pi.artifacts import reap_workspaces
     from apipi.worker.pi.pool import PiPool
 
@@ -362,7 +363,7 @@ def test_seed_reaper_ttl_never_moves_clock_backwards() -> None:
     import time
     from types import SimpleNamespace
 
-    from apipi.worker.hub import _seed_reaper_ttl
+    from apipi.worker.inventory import _seed_reaper_ttl
 
     session_id = str(uuid.uuid4())
     fresh = time.time()

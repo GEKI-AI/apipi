@@ -12,14 +12,12 @@ from sqlalchemy import select
 from tests.support.workspace import hosted_dir
 
 from apipi.api.sessions import _event_stream
+from apipi.common.errors import ApiError
+from apipi.common.event_bus import EventHub
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError
 from apipi.gateway.tokens import hash_token
-from apipi.services.runtime import (
-    PUBLIC_EVENT_TYPES,
-    EventHub,
-    persist_event,
-)
+from apipi.protocol import PUBLIC_EVENT_TYPES
+from apipi.services.session_events import persist_event
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import SessionRow, utc_now
@@ -479,8 +477,8 @@ async def test_turn_publishes_live_delta(
 ) -> None:
     from tests.support.split_worker import split_client_for
 
-    from apipi.services.runtime import FakeHarness as _FakeHarness
-    from apipi.services.runtime import usage_from as _usage_from
+    from apipi.common.usage import usage_from as _usage_from
+    from apipi.worker.fake_harness import FakeHarness as _FakeHarness
 
     class _StreamingHarness(_FakeHarness):
         """Yield the reply in spaced chunks so live deltas beat `done`.

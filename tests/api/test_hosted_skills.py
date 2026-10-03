@@ -3,7 +3,7 @@ import zipfile
 
 from httpx import AsyncClient
 
-from apipi.services.skills import discover_skill_dirs
+from apipi.common.skills import discover_skill_dirs
 
 
 def _auth(token: str) -> dict[str, str]:

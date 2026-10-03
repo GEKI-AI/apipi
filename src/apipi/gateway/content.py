@@ -3,8 +3,8 @@ import binascii
 from dataclasses import dataclass
 from typing import Any
 
+from apipi.common.errors import ApiError
 from apipi.config import Settings
-from apipi.gateway.errors import ApiError
 
 _DEFAULT_MIMES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
 
@@ -167,7 +167,7 @@ def require_image_model(
 ) -> None:
     if not content.images:
         return
-    from apipi.worker.pi.model_caps import model_accepts_image
+    from apipi.common.model_caps import model_accepts_image
 
     if model_accepts_image(settings.model_registry, model):
         return

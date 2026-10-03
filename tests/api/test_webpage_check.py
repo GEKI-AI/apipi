@@ -7,8 +7,8 @@ from tests.support.split_worker import api_settings_for, serve_split
 
 from apipi.config import Settings
 from apipi.gateway import Gateway
-from apipi.services.runtime import FakeHarness
 from apipi.store.engine import Store
+from apipi.worker.fake_harness import FakeHarness
 
 _APP = Path(__file__).resolve().parents[2] / "examples" / "webpage-check" / "app.py"
 

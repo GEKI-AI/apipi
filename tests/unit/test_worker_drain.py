@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import cast
 
 from apipi.config import Settings
-from apipi.worker.hub import drain_idle, drain_timeout_seconds, worker_heartbeat
+from apipi.worker.client import drain_idle, drain_timeout_seconds, worker_heartbeat
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
@@ -80,7 +80,7 @@ async def test_kill_unheld_skips_held_sessions() -> None:
 
 
 async def test_drain_reason_is_not_idle() -> None:
-    from apipi.services.lifecycle_export import OutboxLifecycleReporter
+    from apipi.worker.lifecycle import OutboxLifecycleReporter
     from apipi.worker.outbox import Outbox
 
     settings = Settings(
@@ -104,6 +104,6 @@ async def test_drain_reason_is_not_idle() -> None:
     envelope = outbox.pending(sid)[-1]
     assert envelope["type"] == "lifecycle.stop"
     assert envelope["payload"]["reason"] == "drain"
-    text = Path("src/apipi/worker/hub.py").read_text(encoding="utf-8")
+    text = Path("src/apipi/worker/client.py").read_text(encoding="utf-8")
     assert 'kill_unheld(reason="drain")' in text
     assert 'kill_unheld(reason="idle")' not in text

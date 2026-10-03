@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from apipi.services.usage import (
+from apipi.common.usage import (
     add_usage,
     empty_usage,
     usage_event,

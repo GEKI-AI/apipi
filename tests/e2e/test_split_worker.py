@@ -17,10 +17,10 @@ from typing import Any
 import pytest
 
 from apipi.config import Settings
+from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, flush_batch
 from apipi.store.engine import Store
 from apipi.worker.artifact_upload import handle_presign_reply
-from apipi.worker.protocol import WorkerEnvelope
 
 pytestmark = pytest.mark.e2e
 
@@ -161,8 +161,7 @@ async def _hosted_session(
 async def test_split_turn_tools_artifacts_and_streaming(
     store: Store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from apipi.services.event_bus import InMemoryEventBus
-    from apipi.services.runtime import FakeHarness
+    from apipi.common.event_bus import InMemoryEventBus
     from apipi.services.turn_context import build_turn_context
     from apipi.store.models import utc_now
     from apipi.store.repo import (
@@ -172,7 +171,8 @@ async def test_split_turn_tools_artifacts_and_streaming(
         list_turns,
         set_session_lease,
     )
-    from apipi.worker.hub import dispatch_command
+    from apipi.worker.commands import dispatch_command
+    from apipi.worker.fake_harness import FakeHarness
     from apipi.worker.outbox import Outbox
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -181,7 +181,7 @@ async def test_split_turn_tools_artifacts_and_streaming(
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "outputs").mkdir(parents=True, exist_ok=True)
     (workspace / "outputs" / "notes.txt").write_text("field notes")
-    from apipi.worker.pi.dirs import pi_session_file
+    from apipi.common.dirs import pi_session_file
 
     pi_session_file(workspace).parent.mkdir(parents=True, exist_ok=True)
     pi_session_file(workspace).write_text(_PI_SESSION_SEED)
@@ -304,14 +304,14 @@ async def test_split_turn_tools_artifacts_and_streaming(
 async def test_split_cold_restore_without_db(
     store: Store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from apipi.services.event_bus import InMemoryEventBus
-    from apipi.services.runtime import FakeHarness
+    from apipi.common.dirs import pi_session_file
+    from apipi.common.event_bus import InMemoryEventBus
     from apipi.services.turn_context import build_turn_context
     from apipi.store.models import utc_now
     from apipi.store.repo import get_session, set_session_lease
-    from apipi.worker.hub import dispatch_command
+    from apipi.worker.commands import dispatch_command
+    from apipi.worker.fake_harness import FakeHarness
     from apipi.worker.outbox import Outbox
-    from apipi.worker.pi.dirs import pi_session_file
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
     settings = await _split_settings(tmp_path)

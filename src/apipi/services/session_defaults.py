@@ -1,18 +1,18 @@
 import uuid
 from typing import Any
 
-from apipi.config import Settings
-from apipi.env.spec import EnvironmentSpec, environment_payload
-from apipi.gateway.auth import not_found
-from apipi.gateway.errors import ApiError
-from apipi.store.repo import get_file, get_skill, get_vault
-from apipi.worker.pi.sandbox import (
+from apipi.common.errors import ApiError
+from apipi.common.sandbox import (
     SANDBOX_IMAGE_KEY,
     require_image_size,
     require_known_image,
     resolve_sandbox_image,
     resolve_sandbox_size,
 )
+from apipi.config import Settings
+from apipi.env.spec import EnvironmentSpec, environment_payload
+from apipi.gateway.auth import not_found
+from apipi.store.repo import get_file, get_skill, get_vault
 
 _HOSTED = "openai_hosted"
 

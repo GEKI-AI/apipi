@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from apipi.worker.execution import LocalExecution
-from apipi.worker.hub import _seed_reaper_ttl
+from apipi.worker.inventory import _seed_reaper_ttl
 from apipi.worker.outbox import Outbox
 from apipi.worker.pi.artifacts import reap_workspaces
 
@@ -52,11 +52,9 @@ async def test_seen_loop_uses_hook_without_db(settings, monkeypatch) -> None:
     import asyncio
     import datetime
 
-    import apipi.services.sandbox_status as sandbox_status
+    import apipi.protocol as protocol
 
-    monkeypatch.setattr(
-        sandbox_status, "SEEN_INTERVAL", datetime.timedelta(seconds=0.01)
-    )
+    monkeypatch.setattr(protocol, "SEEN_INTERVAL", datetime.timedelta(seconds=0.01))
     seen: list[list[uuid.UUID]] = []
     called = asyncio.Event()
 
@@ -93,7 +91,7 @@ def test_seed_reaper_ttl_ignores_garbage() -> None:
 
 
 async def _workspace(settings, tenant_id: uuid.UUID, session_id: uuid.UUID) -> Path:
-    from apipi.worker.pi.dirs import sessions_root
+    from apipi.common.dirs import sessions_root
 
     path = sessions_root(settings) / str(tenant_id) / str(session_id)
     path.mkdir(parents=True, exist_ok=True)
@@ -207,13 +205,13 @@ def test_programmatic_settings_without_env_still_prepare(
 async def test_split_turn_needs_no_store_or_object_credentials(
     store: Any, settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from apipi.services.event_bus import InMemoryEventBus
-    from apipi.services.runtime import FakeHarness
-    from apipi.services.sink import OutboxSink
+    from apipi.common.event_bus import InMemoryEventBus
     from apipi.services.turn_context import build_turn_context
     from apipi.store.repo import create_session, create_tenant
     from apipi.worker.execution import LocalExecution
+    from apipi.worker.fake_harness import FakeHarness
     from apipi.worker.pi.pool import PiPool
+    from apipi.worker.sink import OutboxSink
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
     async with store.session() as db:
@@ -254,12 +252,12 @@ async def test_split_turn_needs_no_store_or_object_credentials(
 async def test_split_boot_hosted_needs_no_store(
     store: Any, settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from apipi.services.event_bus import InMemoryEventBus
-    from apipi.services.runtime import FakeHarness
+    from apipi.common.dirs import sessions_root
+    from apipi.common.event_bus import InMemoryEventBus
     from apipi.services.turn_context import build_turn_context
     from apipi.store.repo import create_session, create_tenant
     from apipi.worker.execution import LocalExecution
-    from apipi.worker.pi.dirs import sessions_root
+    from apipi.worker.fake_harness import FakeHarness
     from apipi.worker.pi.pool import PiPool
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -295,13 +293,13 @@ async def test_split_boot_hosted_needs_no_store(
 
 
 async def test_escaped_turn_reported_without_db(settings: Any) -> None:
-    from apipi.gateway.errors import ApiError
+    from apipi.common.errors import ApiError
 
     execution = _execution(settings)
     assert execution.outbox is not None
     session_id = uuid.uuid4()
     tenant_id = uuid.uuid4()
-    from apipi.worker.hub import _report_escaped_turn
+    from apipi.worker.commands import _report_escaped_turn
 
     await _report_escaped_turn(
         execution, tenant_id, session_id, ApiError("invalid_request", "nope")

@@ -1,215 +1,132 @@
-"""Turn context carried in worker commands (protocol v2, step 5/8).
+"""Read the command context on the worker: files, skills, and MCP servers."""
 
-`turn.start`, `turn.continue` and `sandbox.boot` carry a `context`
-object built by the API. The worker holds it in memory only and never
-logs it. File bytes never travel in the command: files, skills and the
-Pi session blob travel as references only, either presigned GET URLs
-(S3 store) or relative paths inside the shared local store root
-(filesystem store).
-"""
-
-import copy
-import json
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field
-
-COMMAND_CONTEXT_OPS = frozenset({"turn.start", "turn.continue", "sandbox.boot"})
-
-MAX_COMMAND_BYTES = 256_000
+from apipi.common.dirs import store_root
+from apipi.common.errors import store_error
+from apipi.config import Settings
 
 
-class CommandTooLarge(ValueError):
-    pass
-
-
-class ContextBytes(ValueError):
-    pass
-
-
-class ContextModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    base_url: str | None = None
-    api_key: str | None = None
-
-
-class ContextMcpServer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    server_label: str
-    server_url: str
-    headers: dict[str, str] = Field(default_factory=dict)
-    allowed_tools: list[str] = Field(default_factory=list)
-
-
-class ContextFileRef(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    path: str
-    object_id: str
-    url: str | None = None
-    local_path: str | None = None
-    size_bytes: int | None = None
-    content_type: str | None = None
-
-
-class ContextSkillRef(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    skill_id: str
-    object_id: str
-    url: str | None = None
-    local_path: str | None = None
-
-
-class ContextPiSession(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    present: bool = False
-    object_id: str | None = None
-    url: str | None = None
-    local_path: str | None = None
-
-
-class ContextSession(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    environment: dict[str, Any] = Field(default_factory=dict)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    required_actions: list[Any] = Field(default_factory=list)
-    status: str | None = None
-    user_id: str | None = None
-    org_id: str | None = None
-    key_id: str = ""
-    agent_id: str | None = None
-    idle_ttl_seconds: float | None = None
-
-
-class ContextAgent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model: str | None = None
-    instructions: str | None = None
-    function_tools: list[dict[str, Any]] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    builtin_tools: str = "on"
-    codemode: str = "off"
-    thinking: str | None = None
-    web_search: bool = False
-
-
-class TurnContext(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    session: ContextSession
-    agent: ContextAgent = Field(default_factory=ContextAgent)
-    model: ContextModel = Field(default_factory=ContextModel)
-    mcp: list[ContextMcpServer] = Field(default_factory=list)
-    files: list[ContextFileRef] = Field(default_factory=list)
-    skills: list[ContextSkillRef] = Field(default_factory=list)
-    pi_session: ContextPiSession = Field(default_factory=ContextPiSession)
-
-
-def _reject_bytes(value: Any) -> None:
-    if isinstance(value, bytes):
-        raise ContextBytes("turn context must not contain file bytes")
-    if isinstance(value, dict):
-        for item in value.values():
-            _reject_bytes(item)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            _reject_bytes(item)
-
-
-def parse_turn_context(raw: Any) -> TurnContext:
-    if not isinstance(raw, dict):
-        raise ContextBytes("turn context must be an object")
-    _reject_bytes(raw)
-    return TurnContext.model_validate(raw)
-
-
-def check_command_size(payload: dict[str, Any]) -> int:
-    size = len(json.dumps(payload, default=str))
-    if size > MAX_COMMAND_BYTES:
-        raise CommandTooLarge(
-            f"worker command is {size} bytes, limit is {MAX_COMMAND_BYTES}"
+def local_ref_path(settings: Settings, local_path: str) -> Path:
+    """Resolve a context relative path inside the shared store root."""
+    root = store_root(settings).resolve()
+    candidate = (root / local_path).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise store_error(
+            "context path escapes the store root",
+            operation="get",
+            key=local_path,
         )
-    return size
+    return candidate
 
 
-def check_context_op(op: str, payload: dict[str, Any]) -> None:
-    if op not in COMMAND_CONTEXT_OPS:
-        return
-    raw = payload.get("context")
-    if raw is None:
-        return
-    parse_turn_context(raw)
-    check_command_size(payload)
+async def fetch_ref_bytes(ref: Mapping[str, Any], settings: Settings) -> bytes:
+    """Fetch one context file/skill/blob reference without DB access."""
+    url = ref.get("url")
+    if isinstance(url, str) and url:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url)
+        except Exception as exc:
+            raise store_error(
+                f"cannot fetch turn context ref: {exc}", operation="get"
+            ) from exc
+        if response.status_code != 200:
+            raise store_error(
+                f"cannot fetch turn context ref: HTTP {response.status_code}",
+                operation="get",
+                key=url,
+            )
+        return response.content
+    local_path = ref.get("local_path")
+    if isinstance(local_path, str) and local_path:
+        path = local_ref_path(settings, local_path)
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            raise store_error(
+                f"cannot read turn context ref: {exc}",
+                operation="get",
+                key=local_path,
+            ) from exc
+    raise store_error("turn context ref has no url or local_path", operation="get")
 
 
-def _redact_url(url: str) -> str:
-    parts = urlsplit(url)
-    if parts.query or parts.fragment:
-        return urlunsplit((parts.scheme, parts.netloc, parts.path, "...", ""))
-    return url
+async def materialize_workspace_files(
+    files: list[Any], settings: Settings | None
+) -> list[tuple[str, bytes]]:
+    """Fetch workspace file bytes for context references without DB access."""
+    if not files or settings is None:
+        return []
+    materialized: list[tuple[str, bytes]] = []
+    for ref in files:
+        if not isinstance(ref, Mapping):
+            continue
+        path = ref.get("path")
+        if not isinstance(path, str):
+            continue
+        materialized.append((path, await fetch_ref_bytes(ref, settings)))
+    return materialized
 
 
-def redact_context(raw: Any) -> Any:
-    """Return a copy safe for logs: secrets replaced, URLs unsigned."""
-    redacted = copy.deepcopy(raw)
-    if not isinstance(redacted, dict):
-        return redacted
-    model = redacted.get("model")
-    if isinstance(model, dict) and model.get("api_key"):
-        model["api_key"] = "..."
-    servers = redacted.get("mcp")
-    if isinstance(servers, list):
-        for server in servers:
-            if not isinstance(server, dict):
-                continue
-            headers = server.get("headers")
-            if isinstance(headers, dict):
-                for key in headers:
-                    headers[key] = "..."
-            url = server.get("server_url")
-            if isinstance(url, str) and url:
-                server["server_url"] = _redact_url(url)
-    for key in ("files", "skills"):
-        refs = redacted.get(key)
-        if isinstance(refs, list):
-            for ref in refs:
-                if isinstance(ref, dict) and isinstance(ref.get("url"), str):
-                    ref["url"] = _redact_url(ref["url"])
-    pi_session = redacted.get("pi_session")
-    if isinstance(pi_session, dict) and isinstance(pi_session.get("url"), str):
-        pi_session["url"] = _redact_url(pi_session["url"])
-    return redacted
+async def materialize_skill_zips(
+    skills: list[Any], settings: Settings | None
+) -> list[bytes]:
+    """Fetch skill zip bytes for context references without DB access."""
+    if not skills or settings is None:
+        return []
+    zips: list[bytes] = []
+    for ref in skills:
+        if not isinstance(ref, Mapping):
+            continue
+        zips.append(await fetch_ref_bytes(ref, settings))
+    return zips
 
 
-def summarize_context(raw: dict[str, Any]) -> dict[str, Any]:
-    """Small secret-free summary for log fields."""
-    session = raw.get("session") if isinstance(raw, dict) else None
-    agent = raw.get("agent") if isinstance(raw, dict) else None
-    mcp = raw.get("mcp") if isinstance(raw, dict) else None
-    environment: dict[str, Any] = {}
-    if isinstance(session, dict) and isinstance(session.get("environment"), dict):
-        environment = session["environment"]
-    labels: list[str] = []
-    if isinstance(mcp, list):
-        for server in mcp:
-            if isinstance(server, dict) and isinstance(server.get("server_label"), str):
-                labels.append(server["server_label"])
-    files = raw.get("files") if isinstance(raw, dict) else None
-    skills = raw.get("skills") if isinstance(raw, dict) else None
-    model: str | None = None
-    if isinstance(agent, dict) and isinstance(agent.get("model"), str):
-        model = agent["model"]
-    return {
-        "env_type": environment.get("type"),
-        "model": model,
-        "mcp_servers": labels,
-        "file_count": len(files) if isinstance(files, list) else 0,
-        "skill_count": len(skills) if isinstance(skills, list) else 0,
-    }
+async def fetch_pi_session_bytes(
+    pi_session: Mapping[str, Any] | None, settings: Settings | None
+) -> bytes | None:
+    """Fetch the cold-restore Pi session blob without DB access."""
+    if not isinstance(pi_session, Mapping) or not pi_session.get("present"):
+        return None
+    if settings is None:
+        raise store_error(
+            "cannot restore the Pi session without settings", operation="get"
+        )
+    return await fetch_ref_bytes(pi_session, settings)
+
+
+def mcp_servers_from_context(context: Mapping[str, Any]) -> list[Any]:
+    """Rebuild McpHttpServer objects from a parsed turn context."""
+    from apipi.mcp.http import McpHttpServer
+
+    raw = context.get("mcp")
+    servers: list[Any] = []
+    if not isinstance(raw, list):
+        return servers
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("server_label")
+        url = item.get("server_url")
+        if not isinstance(label, str) or not isinstance(url, str):
+            continue
+        headers = item.get("headers")
+        allowed = item.get("allowed_tools")
+        servers.append(
+            McpHttpServer(
+                server_label=label,
+                server_url=url,
+                headers=dict(headers) if isinstance(headers, dict) else {},
+                allowed_tools=(
+                    tuple(i for i in allowed if isinstance(i, str))
+                    if isinstance(allowed, list)
+                    else ()
+                ),
+            )
+        )
+    return servers

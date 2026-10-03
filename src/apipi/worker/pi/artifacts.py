@@ -1,7 +1,6 @@
 import asyncio
 import io
 import mimetypes
-import shutil
 import tarfile
 import uuid
 from collections.abc import Callable, Mapping
@@ -9,13 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from apipi.common.dirs import pi_session_file, sessions_root, wipe_workspace
+from apipi.common.skills import copy_capability_directories
 from apipi.config import ConfigError, DiskLimitError, Settings
-from apipi.services.skills import copy_capability_directories
-from apipi.store.blobs import (
-    ArtifactBlobs,
-)
-from apipi.store.models import utc_now
-from apipi.worker.pi.dirs import pi_session_file, sessions_root
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
@@ -122,20 +117,6 @@ def read_workspace_artifacts(workspace: Path) -> list[tuple[str, bytes]]:
     return files
 
 
-def wipe_workspace(workspace: Path) -> None:
-    if workspace.is_dir():
-        shutil.rmtree(workspace)
-
-
-async def wipe_artifact_store(
-    blobs: ArtifactBlobs,
-    tenant_id: uuid.UUID,
-    key_id: str,
-    session_id: uuid.UUID,
-) -> None:
-    await blobs.delete_session(tenant_id, key_id, session_id)
-
-
 def ensure_openai_workspace(environment: dict[str, Any]) -> None:
     if environment.get("type") != "openai_hosted":
         return
@@ -216,7 +197,7 @@ async def reap_workspaces(
     now: datetime | None = None,
     ttl_overrides: Mapping[str, tuple[float | None, float, str | None]] | None = None,
 ) -> list[str]:
-    current = _utc(now or utc_now())
+    current = _utc(now or datetime.now(UTC))
     now_epoch = current.timestamp()
     wiped: list[str] = []
     root = sessions_root(settings)

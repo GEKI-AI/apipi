@@ -4,9 +4,8 @@ from typing import cast
 import pytest
 from tests.support.worker_turn import ingest_outbox, new_session, run_worker_turn
 
+from apipi.common.event_bus import EventHub
 from apipi.config import Settings
-from apipi.services.runtime import EventHub, FakeHarness, Harness, continue_turn
-from apipi.services.sink import OutboxSink
 from apipi.services.turn_context import build_turn_context
 from apipi.store.engine import Store
 from apipi.store.repo import (
@@ -16,7 +15,10 @@ from apipi.store.repo import (
     list_events,
     update_session,
 )
+from apipi.worker.fake_harness import FakeHarness
 from apipi.worker.outbox import Outbox
+from apipi.worker.runtime import Harness, continue_turn
+from apipi.worker.sink import OutboxSink
 
 
 async def _types(
@@ -33,7 +35,7 @@ async def test_run_turn_does_not_list_models(
     async def boom(*_args: object, **_kwargs: object) -> list[str]:
         raise AssertionError("listed")
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", boom)
+    monkeypatch.setattr("apipi.common.models.listed_models", boom)
     tenant_id, session_id = await new_session(store)
     host = settings.model_copy(
         update={"model_base_url": "http://model.test/v1", "model_list": "turn"}
@@ -95,7 +97,7 @@ async def test_continue_turn_does_not_list_models(
     async def boom(*_args: object, **_kwargs: object) -> list[str]:
         raise AssertionError("listed")
 
-    monkeypatch.setattr("apipi.worker.pi.model_host.listed_models", boom)
+    monkeypatch.setattr("apipi.common.models.listed_models", boom)
     async with store.session() as db:
         tenant = await create_tenant(db, name="t")
         row = await create_session(

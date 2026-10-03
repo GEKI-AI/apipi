@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from apipi.worker.pi.images import (
+from apipi.common.images import (
     ImageFormatError,
     ImageIndex,
     dump_index,

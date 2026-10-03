@@ -6,8 +6,8 @@ import stat
 import zipfile
 from typing import Any
 
-from apipi.gateway.errors import ApiError
-from apipi.services.skills import inspect_skill_zip
+from apipi.common.errors import ApiError
+from apipi.common.skills import inspect_skill_zip
 
 SCHEMA_VERSION = "1.0"
 KIND = "apipi.agent"
@@ -630,7 +630,7 @@ def _migrate_removed_metadata_keys(body: dict[str, Any], warnings: list[str]) ->
             "migrated apipi.sandbox_size to session_defaults.environment.sandbox_size"
         )
     if "apipi.thinking" in metadata:
-        from apipi.worker.pi.settings_json import thinking_to_effort
+        from apipi.common.pi_metadata import thinking_to_effort
 
         level = metadata.pop("apipi.thinking")
         reasoning = body.get("reasoning")

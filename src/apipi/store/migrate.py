@@ -4,8 +4,8 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 
+from apipi.common.logutil import configure_logging
 from apipi.config import Settings, load_settings, store_url
-from apipi.gateway.logutil import configure_logging
 from apipi.services.vaults import encrypt_plaintext_vault_tokens
 from apipi.store.engine import Store, create_engine
 

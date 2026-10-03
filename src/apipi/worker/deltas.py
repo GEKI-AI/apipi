@@ -18,7 +18,8 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from apipi.services.event_bus import EventBus
+from apipi.common.event_bus import EventBus
+from apipi.protocol import PAYLOAD_MODELS, WorkerEnvelope
 
 log = logging.getLogger("apipi.worker")
 
@@ -126,15 +127,13 @@ class DeltaRelay:
         last = self._seq.get(session_id, 0) + 1
         self._seq[session_id] = last
         try:
+            payload = PAYLOAD_MODELS[kind].model_validate(
+                {"turn_id": turn_id, "text": text}
+            )
             await send(
-                {
-                    "v": 2,
-                    "session_id": str(session_id),
-                    "turn_id": str(turn_id),
-                    "seq": last,
-                    "type": kind,
-                    "payload": {"turn_id": str(turn_id), "text": text},
-                }
+                WorkerEnvelope.build(
+                    session_id, last, kind, payload, turn_id=turn_id
+                ).to_wire()
             )
         except Exception:
             # At-most-once: a dead socket drops the batch. Never let
@@ -228,15 +227,6 @@ def live_event_data(message: dict[str, Any]) -> tuple[uuid.UUID, str] | None:
     except (ValueError, TypeError, AttributeError):
         return None
     return turn_id, text
-
-
-def relay_rate_allowed(hits: list[float], *, now: float, limit: int) -> bool:
-    """Record one hit and say whether the per-second budget holds."""
-    cutoff = now - 1.0
-    while hits and hits[0] <= cutoff:
-        hits.pop(0)
-    hits.append(now)
-    return len(hits) <= limit
 
 
 def _now() -> float:

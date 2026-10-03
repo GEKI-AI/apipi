@@ -6,7 +6,8 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 
-from apipi.gateway.errors import ApiError, register_exception_handlers
+from apipi.common.errors import ApiError
+from apipi.gateway.errors import register_exception_handlers
 from apipi.gateway.schemas import StrictModel
 
 

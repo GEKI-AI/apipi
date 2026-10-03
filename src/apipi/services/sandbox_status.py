@@ -1,18 +1,18 @@
 import contextlib
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import update
 
+from apipi.common.event_bus import EventBus
 from apipi.config import Settings
-from apipi.services.event_bus import EventBus
-from apipi.services.runtime import persist_event
+from apipi.protocol import SEEN_INTERVAL
+from apipi.services.session_events import persist_event
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import get_session, get_session_environment, update_environment
 
-SEEN_INTERVAL = timedelta(seconds=5)
 STALE_AFTER = SEEN_INTERVAL * 3
 EAGER_KEY = "apipi.sandbox_eager_boot"
 HOSTED = frozenset({"openai_hosted"})

@@ -1,7 +1,7 @@
 from pathlib import Path
 
+from apipi.common.dirs import sessions_root
 from apipi.config import Settings
-from apipi.worker.pi.dirs import sessions_root
 
 APIPI_EXTENSION_REL = ".pi/agent/extensions/apipi.ts"
 MCP_EXTENSION_REL = ".pi/agent/extensions/apipi-mcp.ts"

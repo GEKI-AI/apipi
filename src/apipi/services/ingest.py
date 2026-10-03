@@ -24,16 +24,17 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apipi.gateway.logutil import log_event
-from apipi.store.engine import Store
-from apipi.store.models import SessionRow, Turn, WorkerIngest, utc_now
-from apipi.worker.protocol import (
+from apipi.common.logutil import log_event
+from apipi.protocol import (
     EPHEMERAL_MESSAGE_TYPES,
     MAX_MESSAGE_BYTES,
+    ArtifactPresignReply,
     UnknownMessageType,
     WorkerEnvelope,
     parse_envelope,
 )
+from apipi.store.engine import Store
+from apipi.store.models import SessionRow, Turn, WorkerIngest, utc_now
 
 log = logging.getLogger("apipi.worker")
 
@@ -318,7 +319,7 @@ async def _validate(
     }:
         return None
     if envelope.type == "event":
-        from apipi.services.sink import LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES
+        from apipi.protocol import LIVE_EVENT_TYPES, PUBLIC_EVENT_TYPES
 
         inner = envelope.payload.get("type")
         if not isinstance(inner, str) or inner not in PUBLIC_EVENT_TYPES:
@@ -376,7 +377,7 @@ async def _store_event(
     from apipi.store.repo import append_event
 
     event = await append_event(db, tenant_id, session_id, type=type, data=data)
-    from apipi.services.sink import event_body
+    from apipi.services.session_events import event_body
 
     return event_body(event)
 
@@ -396,8 +397,8 @@ async def _apply(
     intents: list[LifecycleIntent],
     run_mode: str | None = None,
 ) -> None:
-    from apipi.services.failures import failure_from_dict
-    from apipi.services.usage import usage_from
+    from apipi.common.failures import failure_from_dict
+    from apipi.common.usage import usage_from
     from apipi.store.repo import (
         create_item,
         create_turn,
@@ -421,7 +422,7 @@ async def _apply(
         if applied is None:
             raise _Reject(INVALID_ENVELOPE)
         event_type, data = applied
-        from apipi.services.sink import event_body
+        from apipi.services.session_events import event_body
         from apipi.store.repo import append_event
 
         event = await append_event(
@@ -528,7 +529,7 @@ async def _apply(
             await db.flush()
         return
     if envelope.type == "usage":
-        from apipi.services.runtime import _write_turn_log
+        from apipi.services.turn_log import _write_turn_log
 
         turn_id = uuid.UUID(str(payload["turn_id"]))
         turn = await get_session_turn(db, tenant_id, session_id, turn_id)
@@ -637,42 +638,39 @@ async def _apply(
         except Exception as exc:
             code, message = _artifact_error(exc)
             replies.append(
-                {
-                    "type": "artifact.presign.reply",
-                    "session_id": str(session_id),
-                    "request_id": str(request_id),
-                    "ok": False,
-                    "code": code,
-                    "message": message,
-                }
+                ArtifactPresignReply(
+                    session_id=session_id,
+                    request_id=request_id,
+                    ok=False,
+                    code=code,
+                    message=message,
+                ).to_wire()
             )
             raise _Reject(code) from exc
         if issued.get("unchanged") is True:
             replies.append(
-                {
-                    "type": "artifact.presign.reply",
-                    "session_id": str(session_id),
-                    "request_id": str(request_id),
-                    "ok": True,
-                    "unchanged": True,
-                }
+                ArtifactPresignReply(
+                    session_id=session_id,
+                    request_id=request_id,
+                    ok=True,
+                    unchanged=True,
+                ).to_wire()
             )
             return
         replies.append(
-            {
-                "type": "artifact.presign.reply",
-                "session_id": str(session_id),
-                "request_id": str(request_id),
-                "ok": True,
-                "upload_id": str(issued["upload_id"]),
-                "artifact_id": str(issued["artifact_id"]),
-                "url": issued.get("url"),
-                "headers": issued.get("headers") or {},
-                "expires_at": issued.get("expires_at"),
-                "path": issued.get("path"),
-                "object_id": issued.get("object_id"),
-                "file_id": issued.get("file_id"),
-            }
+            ArtifactPresignReply(
+                session_id=session_id,
+                request_id=request_id,
+                ok=True,
+                upload_id=issued["upload_id"],
+                artifact_id=issued["artifact_id"],
+                url=issued.get("url"),
+                headers=issued.get("headers") or {},
+                expires_at=issued.get("expires_at"),
+                path=issued.get("path"),
+                object_id=issued.get("object_id"),
+                file_id=issued.get("file_id"),
+            ).to_wire()
         )
         return
     if envelope.type == "artifact.completed":
@@ -768,8 +766,8 @@ def classify_incoming(data: Any) -> tuple[str, WorkerEnvelope | None, int]:
 
 
 def _artifact_error(exc: BaseException) -> tuple[str, str]:
+    from apipi.common.errors import ObjectStoreError
     from apipi.config import DiskLimitError
-    from apipi.store.blobs import ObjectStoreError
 
     if isinstance(exc, _Reject):
         return exc.reason, str(exc)

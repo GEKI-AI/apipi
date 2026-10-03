@@ -3,8 +3,8 @@ from collections.abc import Callable
 from time import monotonic
 from typing import Any
 
-from apipi.services.failures import classify_host_message, pi_payload
-from apipi.services.usage import usage_from_messages
+from apipi.common.failures import classify_host_message, pi_payload
+from apipi.common.usage import usage_from_messages
 
 PREVIEW_CHARS = 100
 THINKING_STARTED = "agent.session.turn.thinking.started"

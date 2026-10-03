@@ -4,7 +4,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from apipi.gateway.metrics import Metrics
+from apipi.common.metrics import Metrics
 
 
 def metrics_app(metrics: Metrics) -> Starlette:

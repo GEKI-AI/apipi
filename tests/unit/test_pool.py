@@ -7,9 +7,9 @@ import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from tests.support.prom import metric_line
 
+from apipi.common.metrics import Metrics
+from apipi.common.otel import Tracing
 from apipi.config import Settings
-from apipi.gateway.metrics import Metrics
-from apipi.gateway.otel import Tracing
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 

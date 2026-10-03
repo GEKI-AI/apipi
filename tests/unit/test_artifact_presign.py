@@ -8,21 +8,22 @@ from pathlib import Path
 import pytest
 from tests.unit.test_blobs import FakeS3
 
-from apipi.config import ConfigError, Settings
-from apipi.services.ingest import IngestBatcher, flush_batch
-from apipi.services.worker_artifacts import (
+from apipi.common.dirs import store_root
+from apipi.common.objects import NS_ARTIFACTS
+from apipi.common.store_check import (
     SHARED_STORE_ERROR,
-    check_completed_path,
     read_store_check,
-    sha256_hex,
     write_store_check,
 )
-from apipi.store.blobs import (
-    NS_ARTIFACTS,
-    LocalStore,
-    S3Store,
-    blob_key,
+from apipi.config import ConfigError, Settings
+from apipi.protocol import (
+    MAX_MESSAGE_BYTES,
+    PAYLOAD_MODELS,
+    parse_envelope,
 )
+from apipi.services.ingest import IngestBatcher, flush_batch
+from apipi.services.worker_artifacts import check_completed_path, sha256_hex
+from apipi.store.blobs import LocalStore, S3Store, blob_key
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import (
@@ -37,13 +38,7 @@ from apipi.worker.artifact_upload import (
     presign_envelope,
     write_shared_object,
 )
-from apipi.worker.hub import answer_store_check
-from apipi.worker.pi.dirs import store_root
-from apipi.worker.protocol import (
-    MAX_MESSAGE_BYTES,
-    PAYLOAD_MODELS,
-    parse_envelope,
-)
+from apipi.worker.client import answer_store_check
 
 
 class _ListableFakeS3(FakeS3):
@@ -162,7 +157,7 @@ def test_shared_store_check_roundtrip(tmp_path: Path) -> None:
 def test_answer_store_check_rejects_without_shared_root(tmp_path: Path) -> None:
     api_settings = _settings(tmp_path, local_store_dir=str(tmp_path / "shared"))
     worker_settings = _settings(tmp_path, local_store_dir=str(tmp_path / "elsewhere"))
-    from apipi.services.worker_artifacts import write_store_check as _write
+    from apipi.common.store_check import write_store_check as _write
 
     root = store_root(api_settings)
     marker, nonce = _write(root)
@@ -175,7 +170,7 @@ def test_answer_store_check_rejects_without_shared_root(tmp_path: Path) -> None:
 
 
 def test_check_completed_path_rejects_traversal() -> None:
-    from apipi.store.blobs import ObjectStoreError
+    from apipi.common.errors import ObjectStoreError
 
     assert check_completed_path("a/b.txt") == "a/b.txt"
     for bad in ["", "../evil", "a/../../b", "/abs", "a//b", "a/./b"]:
@@ -209,7 +204,7 @@ def _presign_payload(request_id: uuid.UUID, size: int = 5) -> dict:
 
 
 def _envelope(session_id, seq, type, payload):
-    from apipi.worker.protocol import WorkerEnvelope
+    from apipi.protocol import WorkerEnvelope
 
     return WorkerEnvelope.model_validate(
         {

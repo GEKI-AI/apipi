@@ -2,8 +2,8 @@ import re
 import uuid
 from typing import Any
 
+from apipi.common.metrics import Metrics
 from apipi.config import Settings
-from apipi.gateway.metrics import Metrics
 from apipi.services.usage_export import (
     EventSink,
     HttpExporter,

@@ -11,19 +11,18 @@ from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
 from tests.support.split_worker import split_client_for, wait_for_event_types
 
+from apipi.common.dirs import pi_session_file, store_root
+from apipi.common.errors import ApiError
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.errors import ApiError
 from apipi.gateway.tokens import hash_token
-from apipi.services import runtime
-from apipi.services.runtime import FakeHarness
+from apipi.protocol import check_command_size, redact_context
 from apipi.services.turn_context import build_turn_context
 from apipi.store.blobs import blob_store
 from apipi.store.engine import Store
 from apipi.store.repo import get_session
-from apipi.worker.hub import _check_command_context
-from apipi.worker.pi.dirs import pi_session_file, store_root
-from apipi.worker.turn_context import check_command_size, redact_context
+from apipi.worker.fake_harness import FakeHarness
+from apipi.workerhub.commands import _check_command_context
 
 pytest_plugins = ["tests.support.mcp_http_server"]
 
@@ -277,11 +276,6 @@ async def test_worker_runs_turn_from_context_without_db_reads(
             )
             row.pi_session_id = blob_id
 
-        def _boom(*args: object, **kwargs: object) -> object:
-            raise AssertionError("worker must not read the database for turn context")
-
-        monkeypatch.setattr(runtime, "get_session", _boom)
-        monkeypatch.setattr(runtime, "definition_for_session", _boom)
         posted = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
             headers=_auth(token),

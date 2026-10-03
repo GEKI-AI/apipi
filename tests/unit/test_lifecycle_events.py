@@ -4,6 +4,7 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
+from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, flush_batch
 from apipi.services.lifecycle_export import LifecycleEmitter, api_heartbeat_loop
 from apipi.store.engine import Store
@@ -16,7 +17,6 @@ from apipi.store.repo import (
     get_session_by_id,
     set_session_lease,
 )
-from apipi.worker.protocol import WorkerEnvelope
 
 
 async def _hosted(
@@ -294,9 +294,9 @@ async def test_lifecycle_identity_comes_from_row(store: Store, settings) -> None
 
 
 async def test_reporter_start_validates_strictly() -> None:
-    from apipi.services.lifecycle_export import OutboxLifecycleReporter
+    from apipi.protocol import LifecycleStartPayload
+    from apipi.worker.lifecycle import OutboxLifecycleReporter
     from apipi.worker.outbox import Outbox
-    from apipi.worker.protocol import LifecycleStartPayload
 
     outbox = Outbox()
     reporter = OutboxLifecycleReporter(outbox)

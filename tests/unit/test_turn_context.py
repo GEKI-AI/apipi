@@ -4,16 +4,11 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
+from apipi.common.dirs import sessions_root, store_root
+from apipi.common.errors import ObjectStoreError
+from apipi.common.objects import NS_FILES, local_object_path
 from apipi.config import Settings
-from apipi.store.blobs import (
-    NS_FILES,
-    ObjectStoreError,
-    file_object_id,
-    local_object_path,
-)
-from apipi.worker.pi.dirs import sessions_root, store_root
-from apipi.worker.pi.pool import PiPool
-from apipi.worker.turn_context import (
+from apipi.protocol import (
     MAX_COMMAND_BYTES,
     CommandTooLarge,
     ContextBytes,
@@ -23,6 +18,8 @@ from apipi.worker.turn_context import (
     redact_context,
     summarize_context,
 )
+from apipi.store.blobs import file_object_id
+from apipi.worker.pi.pool import PiPool
 
 
 def _context(**overrides: object) -> dict:
@@ -128,7 +125,7 @@ async def test_summarize_context_has_no_secrets() -> None:
 
 
 async def test_local_ref_path_guard(settings: Settings) -> None:
-    from apipi.services.turn_context import fetch_ref_bytes, local_ref_path
+    from apipi.worker.turn_context import fetch_ref_bytes, local_ref_path
 
     root = store_root(settings)
     namespace_path = local_object_path(
@@ -241,8 +238,9 @@ async def test_reap_workspaces_sees_late_context_entries(
 
 
 def _local_execution(settings: Settings):
-    from apipi.services.runtime import EventHub, FakeHarness
+    from apipi.common.event_bus import EventHub
     from apipi.worker.execution import LocalExecution
+    from apipi.worker.fake_harness import FakeHarness
     from apipi.worker.outbox import Outbox
 
     return LocalExecution(

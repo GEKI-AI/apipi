@@ -2,20 +2,15 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from apipi.common.errors import ApiError
+from apipi.common.objects import NS_FILES, NS_SKILLS
+from apipi.common.skills import inspect_skill_zip
 from apipi.config import Settings
 from apipi.env.setup import SetupError
 from apipi.gateway.auth import not_found
-from apipi.gateway.errors import ApiError
 from apipi.services.files import FILE_PURPOSES, file_body, new_file_id
 from apipi.services.skill_store import new_skill_id, skill_body
-from apipi.services.skills import inspect_skill_zip
-from apipi.store.blobs import (
-    NS_FILES,
-    NS_SKILLS,
-    S3Store,
-    file_object_id,
-    skill_object_id,
-)
+from apipi.store.blobs import S3Store, file_object_id, skill_object_id
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import (

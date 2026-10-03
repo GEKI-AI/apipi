@@ -8,6 +8,46 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from apipi.common.dirs import session_workspace, wipe_workspace
+from apipi.common.errors import ApiError, ObjectStoreError
+from apipi.common.event_bus import EventBus, is_wake
+from apipi.common.failures import error_extra
+from apipi.common.idle import (
+    metadata_has_idle_ttl,
+    normalize_idle_ttl,
+    validate_idle_metadata,
+)
+from apipi.common.logutil import log_event
+from apipi.common.metrics import Metrics
+from apipi.common.models import require_model
+from apipi.common.otel import Tracing, set_span, start_span
+from apipi.common.pi_metadata import (
+    THINKING_KEY,
+    apply_reasoning_effort,
+    copy_inline_pi_metadata,
+    public_metadata,
+    reasoning_body,
+    reject_client_thinking_key,
+    reject_codemode_without_builtin_tools,
+    reject_reasoning_conflict,
+    require_thinking_supported,
+    resolve_thinking,
+    thinking_from_metadata,
+    thinking_to_effort,
+    validate_pi_metadata,
+)
+from apipi.common.sandbox import (
+    mem_mib_for_size,
+    reject_removed_size_key,
+    require_image_size,
+    require_known_image,
+    resolve_sandbox_image,
+    resolve_sandbox_size,
+    sandbox_size_of,
+    strip_removed_size_key,
+)
+from apipi.common.skills import copy_capability_directories
+from apipi.common.usage import usage_from
 from apipi.config import Settings
 from apipi.env.setup import (
     SetupError,
@@ -17,10 +57,7 @@ from apipi.env.setup import (
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.gateway.auth import not_found
 from apipi.gateway.content import parse_user_content, require_image_model
-from apipi.gateway.errors import ApiError, gone
-from apipi.gateway.logutil import log_event
-from apipi.gateway.metrics import Metrics
-from apipi.gateway.otel import Tracing, set_span, start_span
+from apipi.gateway.errors import gone
 from apipi.gateway.tokens import hash_token
 from apipi.mcp.guard import check_mcp_url, split_allow_hosts
 from apipi.mcp.http import (
@@ -39,28 +76,21 @@ from apipi.services.env_none import (
     reject_builtin_tools_for_env_none,
     validate_env_none,
 )
-from apipi.services.event_bus import EventBus, is_wake
-from apipi.services.failures import error_extra
 from apipi.services.files import FileService
-from apipi.services.runtime import (
-    event_body,
-    fail_session,
-    fail_stale_in_progress,
-    persist_event,
-)
 from apipi.services.search import SearchResolver, require_search
 from apipi.services.session_defaults import merge_session_create, require_default_refs
+from apipi.services.session_events import event_body, persist_event
 from apipi.services.skill_store import SkillService
-from apipi.services.skills import copy_capability_directories
 from apipi.services.turn_context import build_turn_context
-from apipi.services.usage import usage_from
+from apipi.services.turn_state import fail_session, fail_stale_in_progress
 from apipi.services.vault_crypto import (
     VaultCryptoError,
     decrypt_vault_token,
     vault_aad,
     vault_key_bytes,
 )
-from apipi.store.blobs import ArtifactBlobs, ObjectStoreError, blob_key
+from apipi.services.worker_artifacts import wipe_artifact_store
+from apipi.store.blobs import ArtifactBlobs, blob_key
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import Artifact, Item, SessionRow, Turn
@@ -81,40 +111,7 @@ from apipi.store.repo import (
     list_turns,
     update_session,
 )
-from apipi.worker.execution import RemoteExecution
-from apipi.worker.pi.artifacts import wipe_artifact_store, wipe_workspace
-from apipi.worker.pi.dirs import session_workspace
-from apipi.worker.pi.idle import (
-    metadata_has_idle_ttl,
-    normalize_idle_ttl,
-    validate_idle_metadata,
-)
-from apipi.worker.pi.model_host import require_model
-from apipi.worker.pi.sandbox import (
-    mem_mib_for_size,
-    reject_removed_size_key,
-    require_image_size,
-    require_known_image,
-    resolve_sandbox_image,
-    resolve_sandbox_size,
-    sandbox_size_of,
-    strip_removed_size_key,
-)
-from apipi.worker.pi.settings_json import (
-    THINKING_KEY,
-    apply_reasoning_effort,
-    copy_inline_pi_metadata,
-    public_metadata,
-    reasoning_body,
-    reject_client_thinking_key,
-    reject_codemode_without_builtin_tools,
-    reject_reasoning_conflict,
-    require_thinking_supported,
-    resolve_thinking,
-    thinking_from_metadata,
-    thinking_to_effort,
-    validate_pi_metadata,
-)
+from apipi.workerhub.execution import RemoteExecution
 
 log = logging.getLogger("apipi")
 

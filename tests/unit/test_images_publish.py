@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 
 from apipi.cli import main
+from apipi.common.images import load_index, manifest_name, sha256_file
 from apipi.config import ConfigError, Settings
 from apipi.worker.pi.image_ops import package_image, publish_images
 from apipi.worker.pi.image_store import open_image_store
-from apipi.worker.pi.images import load_index, manifest_name, sha256_file
 
 
 class _Missing(Exception):

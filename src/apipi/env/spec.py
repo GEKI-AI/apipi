@@ -3,6 +3,7 @@ from typing import Any, Literal, Self
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
 
+from apipi.common.errors import ApiError
 from apipi.env.setup import (
     SetupError,
     file_id_refs_from,
@@ -13,7 +14,7 @@ from apipi.env.setup import (
     setup_commands_from,
     skill_refs_from,
 )
-from apipi.gateway.errors import ApiError, not_implemented
+from apipi.gateway.errors import not_implemented
 from apipi.gateway.schemas import StrictModel
 
 _UNIMPLEMENTED = (
