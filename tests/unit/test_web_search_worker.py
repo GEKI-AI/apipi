@@ -286,10 +286,7 @@ def test_pi_command_args_web_search_keeps_the_tool_enabled() -> None:
     assert "--no-tools" not in on
     assert "--no-builtin-tools" not in on
     code = pi_command_args(settings, tools=True, codemode="on", web_search=True)
-    tools = code[code.index("--tools") + 1].split(",")
-    assert "web_search" in tools
-    plain_code = pi_command_args(settings, tools=True, codemode="on")
-    assert "web_search" not in plain_code[plain_code.index("--tools") + 1]
+    assert "--tools" not in code
     none_env = pi_command_args(settings, tools=True, env_type="none", web_search=True)
     assert "--no-builtin-tools" in none_env
 

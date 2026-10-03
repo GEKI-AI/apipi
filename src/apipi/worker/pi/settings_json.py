@@ -361,6 +361,7 @@ def settings_payload(
     }
     if codemode in ("on", "only"):
         payload["codemode"] = {"mode": codemode}
+        payload["defaultTools"] = ["+codemode"]
     return payload
 
 
@@ -394,8 +395,12 @@ def merged_settings(
     codemode: str = "off",
     current: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    base = dict(current or {})
+    if codemode not in ("on", "only"):
+        base.pop("codemode", None)
+        base.pop("defaultTools", None)
     return _merge(
-        current or {}, settings_payload(settings, thinking=thinking, codemode=codemode)
+        base, settings_payload(settings, thinking=thinking, codemode=codemode)
     )
 
 

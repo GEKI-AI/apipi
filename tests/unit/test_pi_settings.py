@@ -309,3 +309,28 @@ def test_retry_budget_warns_when_over_turn_timeout() -> None:
     assert model_retry_warnings(settings) == []
     over = settings.model_copy(update={"model_timeout_ms": 200000})
     assert model_retry_warnings(over)
+
+
+def test_codemode_enables_the_tool_through_default_tools(tmp_path: Path) -> None:
+    from apipi.config import Settings
+    from apipi.worker.pi.settings_json import apply_pi_agent_files, settings_payload
+
+    settings = Settings(database_url="sqlite+aiosqlite:///x.db", run_mode="none")
+    for mode in ("on", "only"):
+        payload = settings_payload(settings, thinking="off", codemode=mode)
+        assert payload["defaultTools"] == ["+codemode"]
+        assert payload["codemode"] == {"mode": mode}
+    off = settings_payload(settings, thinking="off")
+    assert "defaultTools" not in off and "codemode" not in off
+
+    directory = tmp_path / "agent"
+    apply_pi_agent_files(
+        directory, settings, thinking="off", system_prompt=None, codemode="only"
+    )
+    written = json.loads((directory / "settings.json").read_text())
+    assert written["defaultTools"] == ["+codemode"]
+    apply_pi_agent_files(
+        directory, settings, thinking="off", system_prompt=None, codemode="off"
+    )
+    written = json.loads((directory / "settings.json").read_text())
+    assert "defaultTools" not in written and "codemode" not in written

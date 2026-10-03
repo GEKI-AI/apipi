@@ -202,8 +202,7 @@ def test_pi_command_args_use_explicit_extensions(tmp_path: Path) -> None:
     assert with_mcp.count("--extension") == 1
     assert with_mcp[with_mcp.index("--extension") + 1] == "builtin:mcp"
     with_code = pi_command_args(_settings(tmp_path), tools=True, codemode="on")
-    assert "--tools" in with_code
-    assert with_code[with_code.index("--tools") + 1] == "read,bash,edit,write,codemode"
+    assert "--tools" not in with_code
     assert "builtin:codemode" in with_code
     assert "builtin:llama.cpp" not in with_code
     assert "builtin:tool-search" not in with_code
