@@ -446,7 +446,11 @@ def create_event_bus(
     metrics: Any | None = None,
 ) -> EventBus:
     """Build the configured bus. Explicit ``postgres`` on SQLite fails."""
-    engine_url = str(store.engine.url) if store is not None else None
+    engine_url = (
+        store.engine.url.render_as_string(hide_password=False)
+        if store is not None
+        else None
+    )
     name = resolve_event_bus_name(settings, engine_url=engine_url)
     if name == "postgres":
         checked = engine_url if engine_url is not None else settings.database_url

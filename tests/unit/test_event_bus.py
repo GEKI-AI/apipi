@@ -205,9 +205,29 @@ async def test_factory_matches_injected_store(store: Store, tmp_path: Path) -> N
         run_mode="none",
         sessions_dir=str(tmp_path / "sessions"),
     )
-    assert isinstance(create_event_bus(settings, store=store), InMemoryEventBus)
+    expected = (
+        InMemoryEventBus if store.engine.dialect.name == "sqlite" else PostgresEventBus
+    )
+    assert isinstance(create_event_bus(settings, store=store), expected)
     assert resolve_event_bus_name(settings, engine_url="sqlite://") == "memory"
     assert resolve_event_bus_name(settings, engine_url="postgresql://x") == "postgres"
+
+
+def test_injected_postgres_store_keeps_the_password_in_the_bus_dsn(
+    tmp_path: Path,
+) -> None:
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine("postgresql+asyncpg://apipi:s3cret@db.example/apipi")
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:s3cret@db.example/apipi",
+        run_mode="none",
+        sessions_dir=str(tmp_path / "sessions"),
+    )
+    bus = create_event_bus(settings, store=Store(engine))
+    assert isinstance(bus, PostgresEventBus)
+    assert "s3cret" in bus._dsn
+    assert "***" not in bus._dsn
 
 
 def test_explicit_postgres_on_sqlite_fails(tmp_path: Path) -> None:

@@ -445,6 +445,7 @@ async def test_cross_replica_wake_where_possible(
     worker = FakeWorker(first_app, worker_secret)
     hello = await worker.connect()
     await _lease(store, tenant_id, session_id, uuid.UUID(str(hello["worker_id"])))
+    await second_app.state.event_hub.start()
     queue = second_app.state.event_hub.subscribe(session_id)
     try:
         started = time.monotonic()
@@ -465,4 +466,5 @@ async def test_cross_replica_wake_where_possible(
         assert elapsed < 2.0
     finally:
         second_app.state.event_hub.unsubscribe(session_id, queue)
+        await second_app.state.event_hub.close()
         await worker.close()

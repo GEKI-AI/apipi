@@ -756,5 +756,9 @@ async def test_workspace_reaped_is_acked_after_the_lease_ended(
     assert outcome.acks == {session_id: 7}
     assert outcome.rejected == []
     async with store.session() as db:
-        rows = (await db.scalars(select(WorkerIngest))).all()
+        rows = (
+            await db.scalars(
+                select(WorkerIngest).where(WorkerIngest.session_id == session_id)
+            )
+        ).all()
     assert rows == []
