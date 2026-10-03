@@ -300,6 +300,46 @@ async def test_turn_mismatch_is_rejected(store: Store, settings) -> None:
     assert await last_seq_for(store, worker_id, session_id) == 3
 
 
+async def test_follow_up_turn_survives_a_wall_clock_step_back(
+    store: Store, settings
+) -> None:
+    """The newest turn is the one created last, not the one stamped last.
+
+    `created_at` comes from the wall clock, which can step backwards (a
+    WSL2 or NTP correction) between two turns. The follow-up turn then
+    gets an earlier stamp than the turn before it. Its envelopes must
+    still apply instead of being rejected as `turn_mismatch`.
+    """
+    from sqlalchemy import update
+
+    from apipi.store.models import Turn
+
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    first = uuid.uuid4()
+    outcome = await _flush(store, worker_id, _turn_flow(session_id, first), settings)
+    assert outcome.rejected == []
+    async with store.session() as db:
+        await db.execute(
+            update(Turn)
+            .where(Turn.id == first)
+            .values(created_at=utc_now() + timedelta(hours=1))
+        )
+    second = uuid.uuid4()
+    follow_up = [
+        envelope.model_copy(update={"seq": envelope.seq + 13})
+        for envelope in _turn_flow(session_id, second)
+    ]
+    outcome = await _flush(store, worker_id, follow_up, settings)
+    assert outcome.rejected == []
+    assert outcome.acks == {session_id: 26}
+    async with store.session() as db:
+        turns = await list_turns(db, tenant_id, session_id)
+        assert turns is not None
+        assert [turn.id for turn in turns] == [first, second]
+        assert [turn.status for turn in turns] == ["completed", "completed"]
+
+
 async def test_unknown_and_live_events_rejected(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
     _tenant, session_id, _lease = await _leased(store, worker_id)
