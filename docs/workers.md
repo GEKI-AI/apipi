@@ -374,11 +374,15 @@ logged), applies a 32 KiB size cap and a per-session rate budget
 and publishes accepted deltas as `live` bus messages without writing
 to the store. The lease check reads the socket's in-memory lease
 state and only re-reads the lease row when that state cannot answer
-or is older than 30 seconds; a delta for a turn whose
+or is older than 30 seconds. A delta for a turn whose
 `output_text.done` or terminal turn event already committed is
-dropped after reading only the events stored since the last check
-(turns already known done need no read at all): the final item is
-the source of truth, and reconnect and export skip deltas.
+dropped without a database read: ingest records those turns in
+memory when it stores the events of this connection, so the check
+costs nothing per delta. The final item is the source of truth, and
+reconnect and export skip deltas. After a reconnect the record of
+finished turns starts empty, so a straggling delta for a turn that
+finished before the reconnect can be published once more; it is
+ephemeral and the final item replaces it.
 Per-session delta state is dropped when the lease ends or the
 connection closes. `delta.reasoning` envelopes are accepted but
 never fanned out.
@@ -525,7 +529,13 @@ the filesystem store the API returns the exact store-root relative
 `path` in the reply; the worker writes there and reports
 `artifact.completed` with that path; the API validates the path
 matches the reserved key, checks size and checksum, and then writes
-the rows.
+the rows. The API reads and hashes the object before it opens the
+transaction that holds the session row lock, and it hashes in chunks
+in a thread, so a large artifact or a slow store never blocks other
+sockets or holds a database connection. The same holds for the store
+reads of `artifact.presign` (the used bytes and the digest of the
+latest stored file), and for the filesystem store, whose reads run
+in a thread too.
 
 A reconnect may go to any replica. The worker sends its running
 sessions with their `last_seq` in `register`; the API answers with
@@ -633,6 +643,87 @@ wipes the directory when the TTL runs out. Only once the row is gone
 does the API revoke, and the worker wipes the directory and reports
 `workspace.reaped` as a receipt. Only `session.stopped` deletes the
 session blobs.
+
+## How the API serves a socket
+
+Each worker socket runs a few tasks on the API replica that holds it,
+so slow work on one kind of message never delays the others.
+
+| Task | What it does |
+| --- | --- |
+| Receive loop | Reads a frame, parses it, and hands it to one of the lanes below. It does no database or store work. |
+| Writer | The only place that writes to the socket. Every frame goes through its bounded queue of 1024 frames: replies, acks, commands from HTTP requests, and `lease.revoke` from the reaper. A frame that is not written within 10 seconds, or a full queue, closes the connection with the reason `write_timeout`. |
+| Control lane | Handles `heartbeat`, `lease.ack`, `lease.release`, `inventory`, `sandbox.seen`, and `store.proof` in order. Ingest, presign, and artifact checks never wait in front of it, so heartbeats keep the leases alive while a large artifact is verified. |
+| Ingest lane | Applies durable envelopes in batches and handles the legacy `event` message, in order. Presign and `artifact.completed` read the object store before the batch transaction opens. A `lease.release` for a session with envelopes still waiting goes through this lane, so it never overtakes them. |
+| Delta lane | Validates and publishes live deltas. When 1024 deltas wait, further deltas are dropped and counted as `delta.queue_full`. |
+| Search tasks | One task per `search.request`, at most 32 at a time. |
+
+If the ingest lane is full (2048 messages), the receive loop waits for
+it, which also delays the control lane. This only happens when a
+worker sends faster than the API can store.
+
+The API sends nothing to a worker before `hello.reply`. The reply is
+the first frame in the writer queue, and the connection becomes
+visible to placement, commands, and the reaper only after that, so no
+command, revoke, or ack can reach a worker that has not seen its
+`hello`. Because of that a new connection is not picked for a session
+for the few milliseconds of its handshake.
+
+A second socket of the same worker replaces the first on the same
+replica: the older socket is closed with the reason `takeover`, and
+its cleanup no longer clears the `api_instance_id` that the new socket
+set. `generation` is checked: every register bumps it, and a heartbeat
+from a connection with an older generation neither renews leases nor
+touches the worker row. The API closes such a socket with the reason
+`takeover`. This covers the case where an old socket on another
+replica is still open after the worker reconnected.
+
+## What closes a connection and what does not
+
+These close the socket, and the reason is what
+`apipi_worker_disconnects_total{reason}` and the `worker.disconnected`
+log line show:
+
+| Reason | Close code | When |
+| --- | --- | --- |
+| `clean` | `1000`, `1001` | The worker closed the socket. |
+| `error` | other | The peer vanished, a frame was larger than the server limit (`1009`), or a task of the connection failed unexpectedly. |
+| `ping_timeout` | `1011` from the server | The server's keepalive ping got no answer. |
+| `write_timeout` | `1011` | A frame was not written within 10 seconds, or the writer queue was full. The worker reconnects and replays. |
+| `takeover` | `1000` | The same worker connected again, or a heartbeat came from a superseded generation. |
+| `revoked` | `1008` | The worker token was revoked. The API checks it on every heartbeat. |
+| `protocol_violation` | `1008` | The shared store proof failed. A bad `register`, a wrong protocol, or a bad token is rejected before `hello` with its own reason (see Handshake). |
+| `ingest_failed` | `1011` | One ingest batch still failed after three attempts. Nothing was acked, so the worker reconnects and replays from the persisted cursor. |
+
+These do not close the socket:
+
+- A database or store error while handling one message. It is logged as
+  `worker.message.failed` (rate limited per message type) and counted as
+  `message_failed`. A `lease.release` is retried three times with short
+  pauses. A `heartbeat`, `inventory`, `sandbox.seen`, or delta that
+  fails is skipped, because the worker sends the next one on its own
+  timer. An ingest batch is retried three times before the connection
+  is closed as `ingest_failed`. If a step after the commit fails (the
+  renewal, the publish on the event bus, a lifecycle export, or the blob
+  wipe), the acks are already sent and the next steps still run.
+- A frame that is binary, not valid JSON, or not a JSON object. It is
+  skipped, logged as `worker.frame.invalid`, and counted as
+  `frame_invalid`. A message with a known `type` and invalid fields is
+  skipped, logged as `worker.message.invalid`, and counted as
+  `message_invalid`. An unknown `type` is ignored. A durable envelope
+  that fails validation is rejected and acked past, as before.
+- A heartbeat with an invalid optional field (`capacity`, `memory_mb`,
+  `run_mode`, `images`). The field is ignored and logged as
+  `worker.heartbeat.field_ignored`, and the leases are still extended.
+- A failure of the lease reaper. The loop logs it, counts it in
+  `apipi_background_loop_errors_total{loop="lease_reaper"}`, and runs
+  again one second later.
+
+The API sets the WebSocket frame limit of uvicorn (`ws_max_size`) to
+4 MiB. The 1,000,000 byte limit for one durable envelope is checked
+after parsing and acked past, so the frame limit only has to be
+larger than any envelope a worker may send. A frame over 4 MiB closes
+the socket with code `1009`.
 
 ## Leases
 
@@ -794,7 +885,14 @@ When `lease_until` passes, the lease is cleared and the session gets
 `worker_lease_expired`. The turn is not moved to another worker: the
 guest and workspace were on the expired host. Start a new turn after
 that error. Heartbeats extend `lease_until` so a live worker does not
-expire mid-turn, even when its socket is busy with envelopes.
+expire mid-turn, even when its socket is busy with envelopes. The
+reaper clears the rows and stores the error events in one transaction.
+Only after that commit does it write the log lines, forget the
+in-memory lease, and send `lease.revoke` to the worker if it is
+connected to this replica. Each revoke has a 5 second timeout and goes
+through the connection's writer, so a stuck socket cannot hold the row
+locks or stop the loop. A failed revoke is logged as
+`worker.lease.revoke_failed`.
 
 Host Pi (`none`) is a child of the worker. A graceful stop
 runs pool teardown. A `kill -9` of the worker leaves those children.

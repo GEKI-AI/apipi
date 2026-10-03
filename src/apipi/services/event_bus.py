@@ -19,6 +19,7 @@ Message kinds:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -43,6 +44,7 @@ log = logging.getLogger("apipi")
 
 EVENT_CHANNEL = "apipi_events"
 NOTIFY_LIMIT = 8000
+NOTIFY_TIMEOUT = 5.0
 LIVE_HEADROOM = 256
 _CONNECT_BACKOFF = 5.0
 LIVE_WINDOW = 0.04
@@ -99,6 +101,7 @@ class PostgresEventBus(LocalFanout):
         self._live: dict[uuid.UUID, list[dict[str, Any]]] = {}
         self._running = False
         self._lock = asyncio.Lock()
+        self._notify_lock = asyncio.Lock()
         self._tasks: list[asyncio.Task[None]] = []
         self._connect_not_before = 0.0
         self._warnings = RateLimitedLog(log)
@@ -143,7 +146,9 @@ class PostgresEventBus(LocalFanout):
         if not self._running:
             try:
                 await self.start()
-            except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 log.warning("event bus start failed; local delivery only: %s", exc)
                 self._note_remote_failure()
         self._dispatch(session_id, message)
@@ -154,7 +159,9 @@ class PostgresEventBus(LocalFanout):
                 await self._notify(wake)
             else:
                 self._buffer_live(session_id, message)
-        except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
             self._note_notify_error(exc)
             self._note_remote_failure()
 
@@ -191,8 +198,22 @@ class PostgresEventBus(LocalFanout):
                 payload.get("session_id"),
             )
             return
-        conn = await self._ensure_publish()
-        await conn.execute("SELECT pg_notify($1, $2)", EVENT_CHANNEL, raw)
+        async with self._notify_lock:
+            conn = await self._ensure_publish()
+            try:
+                await asyncio.wait_for(
+                    conn.execute("SELECT pg_notify($1, $2)", EVENT_CHANNEL, raw),
+                    timeout=NOTIFY_TIMEOUT,
+                )
+            except BaseException:
+                self._drop_publish(conn)
+                raise
+
+    def _drop_publish(self, conn: asyncpg.Connection) -> None:
+        if self._publish_conn is conn:
+            self._publish_conn = None
+        with contextlib.suppress(Exception):
+            conn.terminate()
 
     async def _ensure_publish(self) -> asyncpg.Connection:
         async with self._lock:
@@ -301,7 +322,9 @@ class PostgresEventBus(LocalFanout):
                             "origin": self._origin,
                         }
                     )
-            except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
                 self._note_notify_error(exc)
                 self._note_remote_failure()
 

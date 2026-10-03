@@ -200,6 +200,27 @@ async def get_session_by_id(
     return await db.scalar(select(SessionRow).where(SessionRow.id == session_id))
 
 
+async def get_sessions_by_ids(
+    db: AsyncSession, session_ids: Collection[uuid.UUID]
+) -> dict[uuid.UUID, SessionRow]:
+    if not session_ids:
+        return {}
+    rows = await db.scalars(select(SessionRow).where(SessionRow.id.in_(session_ids)))
+    return {row.id: row for row in rows}
+
+
+async def agent_idle_ttls(
+    db: AsyncSession, agent_ids: Collection[uuid.UUID]
+) -> dict[tuple[uuid.UUID, uuid.UUID], str | None]:
+    """The idle TTL of each agent, keyed by (tenant_id, agent_id), in one query."""
+    if not agent_ids:
+        return {}
+    result = await db.execute(
+        select(Agent.tenant_id, Agent.id, Agent.idle_ttl).where(Agent.id.in_(agent_ids))
+    )
+    return {(tenant_id, agent_id): ttl for tenant_id, agent_id, ttl in result}
+
+
 async def list_sessions(
     db: AsyncSession, tenant_id: uuid.UUID, *, user_id: str | None = None
 ) -> list[SessionRow]:
@@ -947,10 +968,14 @@ async def touch_worker(
     capacity: int | None = None,
     memory_mb: int | None = None,
     api_instance_id: str | None = None,
+    generation: int | None = None,
 ) -> WorkerRow | None:
+    """Record a sign of life. A superseded `generation` leaves the row as it is."""
     row = await get_worker(db, worker_id)
     if row is None:
         return None
+    if generation is not None and row.generation != generation:
+        return row
     row.last_seen = utc_now()
     if capacity is not None:
         row.capacity = capacity
@@ -1100,16 +1125,28 @@ async def list_worker_leases(
 
 
 async def extend_worker_leases(
-    db: AsyncSession, worker_id: uuid.UUID, *, lease_until: datetime
+    db: AsyncSession,
+    worker_id: uuid.UUID,
+    *,
+    lease_until: datetime,
+    generation: int | None = None,
 ) -> None:
-    await db.execute(
-        update(SessionRow)
-        .where(
-            SessionRow.worker_id == worker_id,
-            SessionRow.lease_id.is_not(None),
+    """Extend every lease of the worker; a superseded `generation` extends none."""
+    statement = update(SessionRow).where(
+        SessionRow.worker_id == worker_id,
+        SessionRow.lease_id.is_not(None),
+    )
+    if generation is not None:
+        statement = statement.where(
+            select(WorkerRow.generation)
+            .where(WorkerRow.id == worker_id)
+            .scalar_subquery()
+            == generation
         )
-        .values(lease_until=lease_until, updated_at=utc_now())
-        .execution_options(synchronize_session=False)
+    await db.execute(
+        statement.values(
+            lease_until=lease_until, updated_at=utc_now()
+        ).execution_options(synchronize_session=False)
     )
 
 

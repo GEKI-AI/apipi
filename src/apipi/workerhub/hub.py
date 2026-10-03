@@ -56,10 +56,10 @@ from apipi.workerhub.commands import (
 )
 from apipi.workerhub.connection import WorkerConnection, claimed_leases
 from apipi.workerhub.deltas import DeltaLease
-from apipi.workerhub.wire import close_socket, send_message, send_wire
 
 log = logging.getLogger("apipi.worker")
 
+REVOKE_TIMEOUT = 5.0
 MAX_HEARTBEAT_SECONDS = 10.0
 MIN_HEARTBEAT_SECONDS = 0.05
 
@@ -111,6 +111,17 @@ class WorkerHub:
     def observe_disconnect(self, reason: str) -> None:
         if self.metrics is not None:
             self.metrics.observe_worker_disconnect(reason)
+
+    async def _send(self, conn: WorkerConnection, wire: dict[str, Any]) -> None:
+        if conn.writer.metrics is None:
+            conn.writer.bind(self.metrics, self.observe_send_queue)
+        await conn.send(wire)
+
+    def observe_send_queue(self) -> None:
+        if self.metrics is not None:
+            self.metrics.set_worker_send_queue_depth(
+                sum(conn.writer.depth for conn in self._conns.values())
+            )
 
     def observe_lease_event(self, event: str) -> None:
         if self.metrics is not None:
@@ -165,15 +176,24 @@ class WorkerHub:
                 db,
                 conn.worker_id,
                 lease_until=utc_now() + self.settings.worker_lease_ttl,
+                generation=conn.generation,
             )
         self.observe_lease_event("renewed")
 
     async def attach(self, conn: WorkerConnection) -> WorkerConnection | None:
+        """Make the connection current and pickable.
+
+        Register calls this only after `hello` was sent, so no command
+        or revoke reaches a worker before its handshake. An older
+        connection of the same worker is asked to close with the reason
+        `takeover`.
+        """
+        conn.writer.bind(self.metrics, self.observe_send_queue)
         async with self._lock:
             previous = self._conns.get(conn.worker_id)
             self._conns[conn.worker_id] = conn
         if previous is not None and previous is not conn:
-            previous.disconnect_reason = "takeover"
+            previous.request_close("takeover")
             for lease_id in previous.leases:
                 self.observe_lease_event("taken_over")
                 log_event(
@@ -186,22 +206,24 @@ class WorkerHub:
                     reason="reconnect",
                     previous_connection_id=previous.connection_id,
                 )
-            await close_socket(previous.websocket)
         self._observe()
         return conn
 
     async def detach(
         self, worker_id: uuid.UUID, conn: WorkerConnection | None = None
-    ) -> None:
+    ) -> bool:
+        """Drop the connection if it is still the current one; say whether it was."""
         async with self._lock:
             current = self._conns.get(worker_id)
             if current is None:
-                return
+                return False
             if conn is not None and current is not conn:
-                return
+                return False
             del self._conns[worker_id]
         self._observe()
+        self.observe_send_queue()
         self._forget_worker_deltas(worker_id)
+        return True
 
     def note_inventory(
         self, worker_id: uuid.UUID, sessions: dict[uuid.UUID, uuid.UUID]
@@ -424,7 +446,7 @@ class WorkerHub:
             tenant_id=tenant_id,
         )
         try:
-            await send_wire(conn.websocket, wire, metrics=self.metrics)
+            await self._send(conn, wire)
         except Exception:
             self._note_send_failed(lease_id, wire)
             raise
@@ -483,7 +505,7 @@ class WorkerHub:
         _check_command_context(op, wire["payload"])
         self._set_unacked(lease_id, wire)
         try:
-            await send_wire(conn.websocket, wire, metrics=self.metrics)
+            await self._send(conn, wire)
         except Exception:
             self._note_send_failed(lease_id, wire)
             raise
@@ -563,44 +585,32 @@ class WorkerHub:
         self._observe()
 
     async def expire(self, store: Store, hub: EventBus) -> list[uuid.UUID]:
-        expired: list[uuid.UUID] = []
+        """Clear expired leases, then tell the connected workers.
+
+        The rows are cleared and the failure events stored in one
+        transaction. Everything that touches memory or a socket (the
+        log lines, the delta state, the `lease.revoke` frames) happens
+        after that transaction committed, so a failed commit changes
+        nothing in memory and no socket write holds the row locks.
+        """
+        ttl = self.settings.worker_lease_ttl.total_seconds()
+        cleared: list[tuple[Any, ...]] = []
         async with store.session() as db:
             rows = await list_expired_leases(db, utc_now())
             for row in rows:
-                lease_id = row.lease_id
-                worker_id = row.worker_id
-                lease_until = row.lease_until
+                cleared.append(
+                    (
+                        row.id,
+                        row.tenant_id,
+                        row.worker_id,
+                        row.lease_id,
+                        row.lease_until,
+                    )
+                )
                 await clear_session_lease(db, row.tenant_id, row.id)
                 lease_failure = failure_for(
                     "worker_lease_expired", "Worker lease expired"
                 )
-                ttl = self.settings.worker_lease_ttl.total_seconds()
-                since_renewal = None
-                if lease_until is not None:
-                    if lease_until.tzinfo is None:
-                        lease_until = lease_until.replace(tzinfo=UTC)
-                    since_renewal = round(
-                        (utc_now() - lease_until).total_seconds() + ttl, 3
-                    )
-                conn = self._conns.get(worker_id) if worker_id is not None else None
-                heartbeat_age = None
-                if conn is not None and conn.last_heartbeat is not None:
-                    heartbeat_age = round(time.monotonic() - conn.last_heartbeat, 3)
-                log_event(
-                    log,
-                    logging.ERROR,
-                    "worker lease expired",
-                    event="worker.lease.expired",
-                    tenant_id=row.tenant_id,
-                    session_id=row.id,
-                    worker_id=worker_id,
-                    lease_ttl_seconds=ttl,
-                    last_renewal_age_seconds=since_renewal,
-                    last_heartbeat_age_seconds=heartbeat_age,
-                    worker_connected=conn is not None,
-                    **log_extra(lease_failure),
-                )
-                self.observe_lease_event("expired")
                 await persist_event(
                     db,
                     hub,
@@ -609,21 +619,72 @@ class WorkerHub:
                     type="agent.session.error",
                     data=session_error_data(lease_failure, mode="legacy"),
                 )
-                expired.append(row.id)
-                self._forget_delta(row.id)
-                if lease_id is not None:
-                    self._drop_unacked(lease_id)
-                    if conn is not None:
-                        conn.leases.discard(lease_id)
-                        conn.lease_mem.pop(lease_id, None)
-                        await send_message(
-                            conn.websocket,
-                            LeaseRevoke(session_id=row.id, lease_id=lease_id),
-                            metrics=self.metrics,
-                        )
-                        self.observe_lease_event("revoked")
+        lease_failure = failure_for("worker_lease_expired", "Worker lease expired")
+        expired: list[uuid.UUID] = []
+        revokes: list[tuple[WorkerConnection, LeaseRevoke]] = []
+        for session_id, tenant_id, worker_id, lease_id, lease_until in cleared:
+            since_renewal = None
+            if lease_until is not None:
+                if lease_until.tzinfo is None:
+                    lease_until = lease_until.replace(tzinfo=UTC)
+                since_renewal = round(
+                    (utc_now() - lease_until).total_seconds() + ttl, 3
+                )
+            conn = self._conns.get(worker_id) if worker_id is not None else None
+            heartbeat_age = None
+            if conn is not None and conn.last_heartbeat is not None:
+                heartbeat_age = round(time.monotonic() - conn.last_heartbeat, 3)
+            log_event(
+                log,
+                logging.ERROR,
+                "worker lease expired",
+                event="worker.lease.expired",
+                tenant_id=tenant_id,
+                session_id=session_id,
+                worker_id=worker_id,
+                lease_ttl_seconds=ttl,
+                last_renewal_age_seconds=since_renewal,
+                last_heartbeat_age_seconds=heartbeat_age,
+                worker_connected=conn is not None,
+                **log_extra(lease_failure),
+            )
+            self.observe_lease_event("expired")
+            expired.append(session_id)
+            self._forget_delta(session_id)
+            if lease_id is not None:
+                self._drop_unacked(lease_id)
+                if conn is not None:
+                    conn.leases.discard(lease_id)
+                    conn.lease_mem.pop(lease_id, None)
+                    revokes.append(
+                        (conn, LeaseRevoke(session_id=session_id, lease_id=lease_id))
+                    )
         self._observe()
+        if revokes:
+            await asyncio.gather(
+                *(self._send_revoke(conn, revoke) for conn, revoke in revokes)
+            )
         return expired
+
+    async def _send_revoke(self, conn: WorkerConnection, revoke: LeaseRevoke) -> None:
+        try:
+            await asyncio.wait_for(
+                self._send(conn, revoke.to_wire()), timeout=REVOKE_TIMEOUT
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._warnings.warning(
+                "lease revoke not sent",
+                event="worker.lease.revoke_failed",
+                error_code="revoke_failed",
+                worker_id=conn.worker_id,
+                lease_id=revoke.lease_id,
+                error=type(exc).__name__,
+            )
+            self.observe_protocol("revoke_failed")
+            return
+        self.observe_lease_event("revoked")
 
     async def replay(
         self,
@@ -693,7 +754,7 @@ class WorkerHub:
         for lease_id in conn.leases:
             pending = self._unacked.get(lease_id)
             if pending is not None:
-                await send_wire(conn.websocket, pending, metrics=self.metrics)
+                await self._send(conn, pending)
                 op = str(pending.get("op"))
                 self.observe_command(op, "retransmitted")
                 conn.warnings.warning(
@@ -745,11 +806,19 @@ class WorkerHub:
         worker_id: uuid.UUID,
         reported: dict[uuid.UUID, uuid.UUID],
         unleased: Collection[uuid.UUID] = (),
+        *,
+        conn: WorkerConnection | None = None,
     ) -> tuple[list[dict[str, str]], dict[str, dict[str, Any]]]:
         """Compare the worker live set against the lease rows."""
         return await inventory_gate.reconcile_inventory(
-            self, store, bus, worker_id, reported, unleased
+            self, store, bus, worker_id, reported, unleased, conn=conn
         )
+
+    def note_stored_events(
+        self, session_id: uuid.UUID, bodies: Collection[dict[str, Any]]
+    ) -> None:
+        """Feed the delta gate with events ingest just stored."""
+        delta_gate.note_stored_events(self, session_id, bodies)
 
     async def handle_event(
         self,
