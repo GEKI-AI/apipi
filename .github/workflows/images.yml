@@ -63,7 +63,7 @@ jobs:
       - name: Publish a versioned store
         if: steps.reuse.outputs.reused != 'true'
         run: |
-          uv run apipi images publish \
+          uv run apipi images push \
             --from "$GITHUB_WORKSPACE/image-out" \
             --to "file://$GITHUB_WORKSPACE/image-store" \
             --store-version "${GITHUB_REF_NAME#v}"
