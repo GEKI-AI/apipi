@@ -14,6 +14,7 @@ from apipi.common.failures import (
 )
 from apipi.common.logutil import log_event
 from apipi.services.session_events import persist_event
+from apipi.services.turn_state import fail_stale_in_progress
 from apipi.store.engine import Store
 from apipi.store.repo import (
     agent_idle_ttls,
@@ -113,6 +114,7 @@ async def reconcile_inventory(
                     data=session_error_data(orphan, mode="legacy"),
                 )
                 await clear_session_lease(db, row.tenant_id, row.id)
+                await fail_stale_in_progress(db, bus, row.tenant_id, row.id)
                 hub._forget_delta(session_id)
                 if conn is not None and row.lease_id is not None:
                     conn.leases.discard(row.lease_id)
