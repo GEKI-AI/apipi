@@ -55,7 +55,7 @@ from apipi.env.setup import (
     reject_microvm_system_packages,
 )
 from apipi.env.spec import EnvironmentSpec, environment_payload
-from apipi.gateway.auth import not_found
+from apipi.gateway.auth import AuthIdentity, not_found
 from apipi.gateway.content import parse_user_content, require_image_model
 from apipi.gateway.errors import gone
 from apipi.gateway.tokens import hash_token
@@ -77,6 +77,7 @@ from apipi.services.env_none import (
     validate_env_none,
 )
 from apipi.services.files import FileService
+from apipi.services.model_credentials import ModelCredentials
 from apipi.services.search import SearchResolver, require_search
 from apipi.services.session_defaults import merge_session_create, require_default_refs
 from apipi.services.session_events import event_body, persist_event
@@ -327,8 +328,14 @@ class SessionService:
         tracing: Tracing | None,
         metrics: Metrics | None = None,
         search: SearchResolver | None = None,
+        model_credentials: ModelCredentials | None = None,
     ) -> None:
         self.settings = settings
+        self.model_credentials = (
+            model_credentials
+            if model_credentials is not None
+            else ModelCredentials(settings)
+        )
         self.search = search if search is not None else SearchResolver(settings)
         self.store = store
         self.event_hub = event_hub
@@ -412,15 +419,22 @@ class SessionService:
     ) -> dict[str, Any]:
         """The command context for a turn another replica forwarded to this one.
 
-        The request bearer never leaves the replica that took the request,
-        so the model key is the operator key, if one is set.
+        The request bearer never leaves the replica that took the request.
+        The model key comes from the identity the forward row carries.
         """
+        identity = AuthIdentity(
+            key_id=key_id or "",
+            tenant_id=tenant_id,
+            user_id=user_id,
+            org_id=org_id,
+        )
+        api_key = await self.model_credentials.resolve(identity, None)
         servers = await self._mcp_servers(tenant_id, session_id)
         return await self._turn_context(
             tenant_id,
             session_id,
             servers,
-            api_key=self.settings.model_api_key_overwrite or None,
+            api_key=api_key,
             key_id=key_id,
             user_id=user_id,
             org_id=org_id,

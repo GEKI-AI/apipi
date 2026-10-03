@@ -86,8 +86,9 @@ fallback. `host` and `jail` are not valid. OpenAI-compatible
 ## Do
 
 - Change `CONSTITUTION.md` rarely. Edit in place. No amendment log.
-- Tenant-scope every query. Auth is a callback; do not store gateway
-  bearers.
+- Tenant-scope every query. Auth is a callback; do not store or
+  forward gateway bearers. A model credential callback may issue the
+  model key from the authenticated identity.
 - Keep domain logic in services and the store. HTTP only routes,
   validates, and serializes. Extenders call those services.
 - Persist the public event before SSE

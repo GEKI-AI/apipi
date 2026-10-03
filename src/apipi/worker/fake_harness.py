@@ -24,6 +24,7 @@ class FakeHarness:
         self.skill_dirs: list[str] | None = None
         self.instructions: str | None = None
         self.tools: bool | None = None
+        self.api_keys: list[str | None] = []
         self.hold = False
         self.fail_message: str | None = None
         self.usage: dict[str, int] = dict(FAKE_USAGE)
@@ -50,6 +51,8 @@ class FakeHarness:
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         del session_id, cwd
         self.tools = tools
+        raw_key = _kwargs.get("api_key")
+        self.api_keys.append(raw_key if isinstance(raw_key, str) else None)
         if self.hold:
             if abort is not None:
                 await abort.wait()

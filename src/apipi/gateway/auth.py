@@ -193,7 +193,7 @@ def load_authorize(path: str | None) -> Authorize | None:
     return fn
 
 
-async def _call_off_loop(fn: Callable[..., object], *args: object) -> object:
+async def call_off_loop(fn: Callable[..., object], *args: object) -> object:
     if inspect.iscoroutinefunction(fn):
         return await fn(*args)
     result = await asyncio.to_thread(fn, *args)
@@ -264,8 +264,8 @@ async def _invoke_off_loop(
     fn: Callable[..., object], token: str, ctx: AuthRequest
 ) -> object:
     if _takes_context(fn):
-        return await _call_off_loop(fn, token, ctx)
-    return await _call_off_loop(fn, token)
+        return await call_off_loop(fn, token, ctx)
+    return await call_off_loop(fn, token)
 
 
 def invoke_authenticate(
@@ -284,9 +284,9 @@ async def _plugin_cache_key(
         return None
     try:
         if _takes_context(cache_fn):
-            raw = await _call_off_loop(cache_fn, token, ctx)
+            raw = await call_off_loop(cache_fn, token, ctx)
         else:
-            raw = await _call_off_loop(cache_fn, token)
+            raw = await call_off_loop(cache_fn, token)
     except Exception:
         return None
     if isinstance(raw, str) and raw.strip():
@@ -460,11 +460,11 @@ async def check_authorize(
     ctx = auth_request_of(request)
     try:
         if _takes_authorize_context(authorize):
-            raw = await _call_off_loop(
+            raw = await call_off_loop(
                 authorize, identity, action, resource_type, resource_id, ctx
             )
         else:
-            raw = await _call_off_loop(
+            raw = await call_off_loop(
                 authorize, identity, action, resource_type, resource_id
             )
     except ApiError:

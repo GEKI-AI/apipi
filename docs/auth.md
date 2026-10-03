@@ -8,11 +8,55 @@ The gateway does not mint or store API keys. Callers reuse the bearer
 they already use with an LLM router. Isolation is by `tenant_id`. An
 id that belongs to another tenant is `404`, not `403`.
 
-The same bearer is the model key unless `OPENAI_API_KEY_OVERWRITE` is
-set. Auth only maps the token to `key_id` and `tenant_id`. The raw
-gateway bearer is not written to Postgres. Pi reaches the model host
-through a host credential broker. The guest does not receive the real
-key.
+Auth only maps the token to `key_id` and `tenant_id`. The raw gateway
+bearer is not written to Postgres and is not sent to another API
+replica. Pi reaches the model host through a host credential broker.
+The guest does not receive the real key.
+
+## Model credential
+
+The model key is the string that Pi sends to the model host as
+`Authorization: Bearer`. ApiPi picks it in this order, in one place:
+
+1. `OPENAI_API_KEY_OVERWRITE`, when it is set. This is an operator key
+   for tests and single-key setups.
+2. The `model_credential` callback, when one is configured. It wins over
+   the bearer, also when a bearer is present, so Pi and the model host
+   always deal with one kind of credential.
+3. The request bearer.
+
+If none of them gives a value, the request fails at once with `503` and
+code `model_key_unavailable`. The turn does not start and no empty key
+reaches a worker. A callback that raises, or returns anything but a
+non-empty string, fails the same way. The error text never contains the
+exception text.
+
+```
+model_credential(identity, bearer) -> str
+```
+
+`identity` is the `AuthIdentity` of the request (`key_id`, `tenant_id`,
+`user_id`, `org_id`). `bearer` is the request bearer, or `None` when the
+callback runs for a command that another replica forwarded. The
+callback may be sync or async. A sync callback runs in a thread, as the
+auth callback does. It runs on the API replica that sends the command,
+at the start of every turn (and for `GET /v1/models` and agent writes
+that check the model), never on the token stream path, so keep it
+cheap. Each turn gets a fresh value, so the credential may expire. The
+worker swaps it into the credential broker before the turn, so a Pi that
+stays up across turns uses the new value.
+
+This is what makes several API replicas work. A command that a replica
+forwards to the replica holding the worker socket carries the identity
+(`key_id`, `tenant_id`, `user_id`, `org_id`) in its stored row and no
+bearer. The owning replica calls the callback with that identity. The
+model host only needs to know who is calling and that ApiPi vouches for
+it. It does not need the raw key. `examples/model_credential.py` signs a
+short-lived HMAC token for that and shows the check for the model host.
+
+`APIPI_MODEL_CREDENTIAL` (TOML `model_credential`) is the import path
+(`package.mod:func`). When you construct a `Gateway` in process, pass
+`model_credential=`. The type is `apipi.ModelCredential`.
 
 ## Callback
 

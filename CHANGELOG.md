@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Model credential callback (#503). `model_credential(identity, bearer)` returns the key Pi sends to the model host, so a turn on any API replica reaches it. Set it with `APIPI_MODEL_CREDENTIAL` (TOML `model_credential`) or `Gateway.create(model_credential=...)`; the type is `apipi.ModelCredential`. The order is `OPENAI_API_KEY_OVERWRITE`, then the callback, then the request bearer, and a request with none of them fails at once with `503` `model_key_unavailable`. A forwarded command resolves the key on the owning replica from the identity stored in its row (`key_id`, `user_id`, `org_id`, tenant); the raw bearer is still never stored or forwarded. The worker now applies the key of the command context to the credential broker at the start of every turn, so a short-lived or rotated credential works for a Pi that stays up. `worker.forward.model_key_dropped` is removed. `examples/model_credential.py` shows an HMAC-signed token and the model host check.
+
 ### Changed
 
 - Pi upgraded from 0.99.1 to 1.0.0. All guest images (default, browser, work) are rebuilt as a new store version; mirror or pull them before upgrading workers.

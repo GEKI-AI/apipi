@@ -97,6 +97,9 @@ class PiHarness:
         )
         broker = getattr(proc, "broker", None)
         if broker is not None:
+            set_model_key = getattr(broker, "set_model_key", None)
+            if callable(set_model_key) and isinstance(api_key, str):
+                set_model_key(api_key)
             set_context = getattr(broker, "set_context", None)
             if callable(set_context):
                 set_context(str(session_id), agent_id)

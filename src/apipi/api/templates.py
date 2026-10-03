@@ -178,7 +178,7 @@ async def create_agent_from_template(
         tenant.id,
         template_id,
         body,
-        api_key=model_key(request),
+        api_key=await model_key(request),
         user_id=_user_id(request),
         org_id=_org_id(request),
     )

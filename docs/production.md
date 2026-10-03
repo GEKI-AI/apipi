@@ -154,10 +154,16 @@ What you need to run several replicas:
   and the default on SQLite) is for one API process. With it, nothing is
   forwarded and placement only sees the local workers. SQLite is a single
   process store, so do not run two API processes on one SQLite file.
-- **The operator model key.** The request bearer never goes through the
-  database, so it is not forwarded. Set `OPENAI_API_KEY_OVERWRITE` on the
-  API, or a turn that a replica forwards reaches Pi without the caller's
-  key.
+- **A model credential callback.** The request bearer never goes through
+  the database, so it is not forwarded. A command that a replica forwards
+  carries the identity of the request (`key_id`, `tenant_id`, `user_id`,
+  `org_id`), and the replica that holds the worker socket calls
+  `APIPI_MODEL_CREDENTIAL` with it to get the model key. Set the same
+  callback on every replica, and have the model host accept what it
+  returns (see [auth](auth.md#model-credential)). Without a callback and
+  without `OPENAI_API_KEY_OVERWRITE`, a forwarded turn fails with `503`
+  `model_key_unavailable`. `OPENAI_API_KEY_OVERWRITE` is an operator key
+  for tests; it is not a way to run several replicas.
 - **The same `APIPI_VAULT_MASTER_KEY` and settings on every replica.** The
   replica that holds the socket builds the turn context, so it must read
   the vault and the object store the same way.

@@ -970,16 +970,22 @@ every replica also reads its pending rows every
 with a conditional update, so a repeated notification or poll sends the
 command once, and the command id is the same on every retry.
 
-The model key is the one value that is not forwarded. The key of the
-request is the caller's bearer, and the gateway never writes the bearer
-to Postgres. A forwarded turn therefore carries `OPENAI_API_KEY_OVERWRITE`
-if the operator set it, and no key otherwise. A worker that was given no
-key falls back to its own `OPENAI_API_KEY_OVERWRITE`, and its running Pi
-keeps the key it started with. In a deployment with several replicas and
-no operator key, a Pi that has to start again on a forwarded turn fails
-with `upstream_unauthorized`. The API logs `worker.forward.model_key_dropped`
-the first time it forwards such a turn, then at most once a minute. Set
-`OPENAI_API_KEY_OVERWRITE` on the API when you run several replicas.
+The request bearer is never forwarded, because the gateway never writes
+it to Postgres. The row keeps the identity of the request (`key_id`,
+`user_id`, `org_id`, with the tenant in the row), and the replica that
+holds the socket builds the context and resolves the model key from that
+identity: `OPENAI_API_KEY_OVERWRITE`, then the `model_credential`
+callback (see [auth](auth.md#model-credential)). Without either, the
+forward fails at once with `503` `model_key_unavailable`, and the turn
+does not start.
+
+The key in `context.model.api_key` applies at the start of every turn,
+not only when Pi starts. In `none` and `microvm` mode Pi never holds the
+key: it calls the credential broker on the host with a placeholder, and
+the worker sets the broker's key in place before the turn. A short-lived
+or rotated credential therefore works for a Pi that stays up across
+turns, and Pi is not restarted for it. A custom run mode that does not
+use the broker gets the key only when Pi starts.
 
 What it costs: for each forwarded command, one insert, one claim, one
 status update, and one delete on a small table, plus two notifications.
