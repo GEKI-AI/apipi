@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-03
+
+### Fixed
+
+- The Images workflow called `apipi images publish`, which #460 removed, so the `v0.14.0` run built the guest images and then failed before it could publish the store. It now uses `apipi images push`. `0.14.0` has no guest image assets on its GitHub release: upgrade to `0.14.1`, or on `0.14.0` set `APIPI_IMAGE_STORE_VERSION=0.14.1` and run `apipi images pull`. The Python package itself is unchanged.
+
 ## [0.14.0] - 2026-10-03
 
 ### Added
