@@ -806,7 +806,7 @@ async def run_turn(
                                 retry_state,
                                 sink=sink,
                             )
-                except OutboxFull:
+                except OutboxFull as full:
                     await fail_outbox_full(
                         hub,
                         sink,
@@ -818,6 +818,7 @@ async def run_turn(
                         tracing=tracing,
                         settings=settings,
                         user_id=user_id,
+                        reason=full,
                     )
                     return
                 except CapacityError as exc:
@@ -1181,7 +1182,7 @@ async def continue_turn(
                                 retry_state,
                                 sink=sink,
                             )
-                except OutboxFull:
+                except OutboxFull as full:
                     await fail_outbox_full(
                         hub,
                         sink,
@@ -1193,6 +1194,7 @@ async def continue_turn(
                         tracing=tracing,
                         settings=settings,
                         user_id=user_id,
+                        reason=full,
                     )
                     return
                 except TurnFailed as exc:

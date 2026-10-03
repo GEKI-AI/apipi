@@ -269,7 +269,9 @@ def _append(outbox: Outbox, session: uuid.UUID) -> None:
 def test_outbox_metrics_and_warnings(caplog: pytest.LogCaptureFixture) -> None:
     metrics = Metrics()
     caplog.set_level(logging.WARNING, logger="apipi.worker")
-    outbox = Outbox(max_messages=10, max_bytes=1024 * 1024, metrics=metrics)
+    outbox = Outbox(
+        max_messages=10, max_bytes=1024 * 1024, metrics=metrics, session_share=1.0
+    )
     session = uuid.uuid4()
     for _ in range(8):
         _append(outbox, session)
@@ -468,6 +470,7 @@ async def test_run_worker_connection_series_and_logs(
         "apipi.worker.execution.worker_observability", lambda _s: (metrics, None)
     )
     monkeypatch.setattr("apipi.worker.client._install_drain_signals", lambda _e: None)
+    monkeypatch.setattr("apipi.worker.client.random.random", lambda: 1.0)
 
     async def no_scrape(*_a: object, **_k: object) -> None:
         await asyncio.Event().wait()

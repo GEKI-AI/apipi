@@ -91,7 +91,9 @@ class SplitWorker:
         bus: Any,
         relay: Any | None = None,
         images_patch: Any | None = None,
+        session_leases: dict[Any, Any] | None = None,
     ) -> None:
+        self.session_leases = session_leases if session_leases is not None else {}
         self.app = app
         self.execution = execution
         self.harness = harness
@@ -267,6 +269,7 @@ async def spawn_split_worker(
         bus,
         relay,
         _images_patch,
+        session_leases,
     )
     await worker.wait_ready()
     return worker

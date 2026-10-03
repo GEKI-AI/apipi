@@ -289,10 +289,17 @@ async def fail_outbox_full(
     tracing: Tracing | None = None,
     settings: Settings | None = None,
     user_id: str | None = None,
+    reason: OutboxFull | None = None,
 ) -> None:
-    """Fail a turn whose outbox is full, spending the emergency budget."""
+    """Fail a turn whose outbox is full, spending the emergency budget.
 
-    if metrics is not None:
+    An envelope that is too large fails the turn the same way with its
+    own code, `worker_message_too_large`.
+    """
+
+    code = reason.code if reason is not None else OutboxFull.code
+    message = reason.message if reason is not None else OutboxFull.message
+    if metrics is not None and code == OutboxFull.code:
         metrics.observe_worker_outbox_full()
     abort = hub.turn_abort(session_id)
     if abort is not None:
@@ -304,12 +311,12 @@ async def fail_outbox_full(
                 tenant_id,
                 session_id,
                 turn_id,
-                "Worker outbox is full",
+                message,
                 request_id=request_id,
                 metrics=metrics,
                 tracing=tracing,
                 settings=settings,
-                code="worker_outbox_full",
+                code=code,
                 user_id=user_id,
                 sink=sink,
             )
@@ -320,7 +327,7 @@ async def fail_outbox_full(
                 "session_id": str(session_id),
                 "turn_id": str(turn_id),
                 "event": "worker.outbox.dropped",
-                "error_code": "worker_outbox_full",
+                "error_code": code,
             },
         )
 

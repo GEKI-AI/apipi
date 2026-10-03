@@ -194,20 +194,24 @@ a `count` of the occurrences since the last line.
 | `worker.connected` | info | The API accepted a worker register. Carries `worker_id`, `connection_id`, `run_mode`, `version`, and the number of leases it reattached. |
 | `worker.hello.sent` | info | The API sent `hello.reply`. Carries `connection_id`, the number of running sessions, and the number of revokes. |
 | `worker.hello.received` | info | The worker received `hello.reply`. Carries `connection_id`, the lease TTL, the heartbeat interval, and the connect time. |
-| `worker.disconnected` | info | A worker socket closed. On the API it carries `reason` (`clean`, `error`, `takeover`, `revoked`, `protocol_violation`), `duration_s`, `leases`, and `unacked_commands`. On the worker it carries `duration_s`, `unacked_envelopes`, and `deltas_dropped`. Look at `reason` when many workers disconnect together. |
-| `worker.connection.lost` | warning | The worker lost its socket or could not connect. `error_code` is the reconnect reason (`closed`, `connect_error`, `error`). Rate limited. |
+| `worker.disconnected` | info | A worker socket closed. On the API it carries `reason` (`clean`, `error`, `takeover`, `revoked`, `protocol_violation`), `duration_s`, `leases`, and `unacked_commands`. On the worker it carries `reason` (`closed`, `ping_timeout`, `error`, `drained`, `drain_timeout`), `duration_s`, `unacked_envelopes`, `unacked_sessions`, and `deltas_dropped`. Look at `reason` when many workers disconnect together. |
+| `worker.connection.lost` | warning | The worker lost its socket or could not connect. `error_code` is the reconnect reason (`closed`, `connect_error`, `ping_timeout`, `hello_timeout`, `error`). Rate limited. |
 | `worker.reconnecting` | info | The worker will reconnect. Carries `reason`, `attempt`, and `delay_s`. |
-| `worker.drain.started`, `worker.drain.finished` | info, warning | The worker started or finished draining. `finished` is a warning with `error_code` `drain_timeout` when sessions were still live at the drain timeout. |
-| `worker.spool.recovered` | info | The worker reloaded its disk outbox at start. Carries the number of sessions, envelopes, and bytes. |
-| `worker.replay` | info | The worker resends unacked envelopes after a reconnect. Carries `envelopes` and `sessions`. |
+| `worker.drain.started`, `worker.drain.waiting`, `worker.drain.finished` | info, info, warning | The worker started or finished draining. `waiting` means no Pi is live and the worker waits for the API to ack the outbox. `finished` is a warning with `error_code` `drain_timeout` when sessions were still live or envelopes unacked at the drain timeout, with `sessions`, `unacked_sessions`, and `unacked_envelopes`. |
+| `worker.spool.recovered` | info | The worker reloaded its disk outbox at start. Carries the number of sessions, envelopes, and bytes, `skipped_lines` (torn or invalid lines), and `spool_bytes`. |
+| `worker.outbox.spool_error` | warning | The disk spool could not be written, compacted, synced, or removed. Carries `path`. Rate limited. |
+| `worker.replay` | info | The worker resends unacked envelopes after a reconnect. Carries `envelopes` (sent before and sent again), `sessions`, and `unclaimed_sessions` (spooled sessions the worker did not claim in `register`). |
+| `worker.harvest.skipped` | info | A killed session was not harvested because no socket was open. Carries `session_id`. |
+| `worker.outbox.oversize` | warning | An envelope was over `MAX_MESSAGE_BYTES` and the turn failed with `worker_message_too_large`. Carries `type` and `size`. Rate limited. |
+| `worker.message.failed` | warning | The worker failed to handle one message and went on. Rate limited. |
 | `worker.command` | info | The worker accepted a command. Carries `op`, `command_id`, `lease_id`, `request_id`, `traceparent`, and a summary of the context (counts and ids, never keys or text). |
 | `worker.lease.granted`, `worker.lease.released`, `worker.lease.revoked`, `worker.lease.taken_over` | info | A lease changed. Carries `lease_id`, `session_id`, `worker_id`, and `reason` where it applies. `worker.lease.expired` and `worker.lease.orphaned` are the error lines for the other two changes. |
 | `worker.command.ack_timeout` | warning | The worker did not ack a command in time. Carries `command_id`, `lease_id`, and `op`. Check the worker connection and its event loop. Rate limited. |
 | `worker.command.retransmitted` | warning | The API resent an unacked command after a worker reconnected. Rate limited. |
 | `worker.handler.slow` | warning | The API took more than 1 second to handle one worker message. Carries `type` and `seconds`. Other messages on that socket waited. Rate limited. |
-| `worker.outbox.high`, `worker.outbox.full` | warning | The worker outbox is above 80 percent of its message or byte bound, or an append failed because it is full. The API is not acking fast enough or is down. Rate limited. |
+| `worker.outbox.high`, `worker.outbox.full` | warning | The worker outbox is above 80 percent of its message or byte bound, or an append failed because it is full (`scope` is `worker` or `session`, one session may use half of the bound). The API is not acking fast enough or is down. Rate limited. |
 | `worker.waiter.timeout` | warning | The worker waited too long for a presign or search reply. Carries `kind`. Rate limited. |
-| `worker.message.invalid` | warning | The worker received a message it could not parse. Carries `type`. Rate limited. |
+| `worker.message.invalid` | warning | The worker received a frame it could not parse or validate and skipped it. Carries `reason` (`malformed` or `invalid`) and, for a valid JSON object, `type`. Rate limited. |
 | `worker.delta.oversize`, `worker.delta.rate_limited`, `worker.delta.rejected` | warning | The API dropped a live delta. Rate limited, so a line stands for `count` drops. |
 | `background.loop.error` | warning | A background loop caught an error and went on. Carries `loop` and `error`. Alert on `apipi_background_loop_errors_total` as well. Rate limited per loop. |
 | `background.task.failed` | error | A background task ended with an exception and no longer runs. Restart the process. |

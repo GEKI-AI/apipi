@@ -200,20 +200,20 @@ These series are exposed by the worker (`apipi worker`) on its
 | Series | Type and labels | What it tells you |
 | --- | --- | --- |
 | `apipi_worker_connected` | gauge | 1 while the socket is up and `hello` was received. |
-| `apipi_worker_reconnects_total` | counter, `reason` | Reconnect attempts: `closed`, `connect_error`, `error`. |
+| `apipi_worker_reconnects_total` | counter, `reason` | Reconnect attempts: `closed`, `connect_error`, `ping_timeout` (no pong within 10 seconds), `hello_timeout` (no `hello.reply` within 15 seconds), `error`. |
 | `apipi_worker_connect_seconds` | histogram | Dial plus handshake time. |
 | `apipi_worker_outbox_messages`, `apipi_worker_outbox_bytes` | gauges | Unacked envelopes and their size, sampled every second. |
 | `apipi_worker_outbox_oldest_seconds` | gauge | Age of the oldest unacked envelope. This is the main alert for a stuck API or socket. |
 | `apipi_worker_outbox_full_total` | counter | Turns failed with `worker_outbox_full`. |
 | `apipi_worker_ack_seconds` | histogram | Time from outbox append to the cumulative ack. |
-| `apipi_worker_replayed_total` | counter | Envelopes resent after a reconnect. |
-| `apipi_worker_spool_write_seconds`, `apipi_worker_spool_bytes` | histogram, gauge | Disk spool write cost and size, only with `APIPI_WORKER_OUTBOX_DIR`. |
+| `apipi_worker_replayed_total` | counter | Envelopes resent after a reconnect or a restart (envelopes that were sent before and are still unacked). First sends are not counted. |
+| `apipi_worker_spool_write_seconds`, `apipi_worker_spool_bytes` | histogram, gauge | Disk spool append and compaction cost and spool size, only with `APIPI_WORKER_OUTBOX_DIR`. |
 | `apipi_worker_commands_received_total` | counter, `op`, `result` | Command handling: `dispatched`, `duplicate` (a retransmit that was only acked), `rejected` (invalid or without a tenant), `failed`. |
 | `apipi_worker_command_seconds` | histogram, `op` | Dispatch time. For `turn.start` and `turn.continue` it includes the turn run. |
-| `apipi_worker_waiter_total` | counter, `kind` (`presign`, `search`), `result` (`ok`, `timeout`, `disconnected`) | Waits for a reply from the API. |
-| `apipi_worker_deltas_dropped_total` | counter, `reason` | Live deltas the worker did not send. Today every drop is `disconnected`. |
+| `apipi_worker_waiter_total` | counter, `kind` (`presign`, `search`), `result` (`ok`, `timeout`, `disconnected`) | Waits for a reply from the API. `disconnected` is a wait that ended because the socket closed. A presign wait ends this way only when the API had acked the request, so its reply was lost; otherwise the worker keeps waiting for the replay. |
+| `apipi_worker_deltas_dropped_total` | counter, `reason` | Live deltas the worker did not send: `disconnected` (no socket) or `oversize` (over the message limit). |
 | `apipi_worker_draining` | gauge | 1 while the worker drains. |
-| `apipi_background_loop_errors_total`, `apipi_background_loop_last_run_timestamp`, `apipi_event_loop_lag_seconds` | as on the API | Worker loops: `worker_observe`, `session_reaper`, `workspace_reaper`, `sandbox_seen`, `outbox_metrics`. |
+| `apipi_background_loop_errors_total`, `apipi_background_loop_last_run_timestamp`, `apipi_event_loop_lag_seconds` | as on the API | Worker loops: `worker_observe`, `session_reaper`, `workspace_reaper`, `sandbox_seen`, `outbox_metrics`, `outbox_spool`. Tasks: `worker_metrics`, `worker_command`, `worker_stop`, `worker_revoke`, `worker_release`. |
 
 `apipi_worker_heartbeat_gap_seconds` is exposed by both processes, as
 described above.
@@ -282,6 +282,9 @@ bill. See [usage](usage.md#session-lifecycle-export).
 | `apipi_worker_heartbeat_gap_seconds` p99 | Alert when it nears half the lease TTL |
 | `apipi_worker_handle_seconds` p99 by `type` | Head-of-line blocking in the receive loop |
 | `apipi_event_loop_lag_seconds` p99 | A blocked event loop on the API or a worker |
+| `apipi_worker_connected` equal to 0 for longer than the lease TTL, or rate of `apipi_worker_reconnects_total` by `reason` (`ping_timeout`, `hello_timeout`) | A worker cannot reach the API, a half-open network path, or an API that accepts sockets and does not answer |
+| `apipi_worker_waiter_total{result="timeout"}` or `result="disconnected"` | A presign or search reply never arrived; artifacts of a turn may be missing |
+| `event=worker.outbox.oversize` and `event=worker.drain.finished` with `error_code=drain_timeout` | A turn failed with `worker_message_too_large`; a worker stopped with results or sessions left |
 | `time() - apipi_background_loop_last_run_timestamp` for `lease_reaper` and `delta_flusher` | A dead or hung background loop. Also alert on `apipi_background_loop_errors_total`. |
 | Rate of `apipi_worker_commands_total{result="timeout"}` and `result="retransmitted"` | Workers that do not ack commands |
 | `apipi_worker_ingest_total{result="transient_error"}` | The API cannot store worker results |

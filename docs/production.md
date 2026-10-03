@@ -295,6 +295,25 @@ longer than `--drain-timeout`. A timeout exits 1; systemd then SIGKILLs
 the cgroup (`KillMode=control-group`). Keep API health successful while
 a turn is in flight. A live session stays on the worker that owns it.
 
+A drain finishes only when no Pi is live and the API has acked every
+result the worker still buffers, so a stop during an API outage waits
+for the API up to `--drain-timeout`. Set `TimeoutStopSec` a minute
+longer than the drain timeout: after the timeout the worker closes the
+guests it still holds while the socket is open, which can take up to
+30 seconds for the artifact upload. The timeout is also enforced while
+the worker is disconnected. Look for `worker.drain.started`,
+`worker.drain.waiting`, and `worker.drain.finished` in the worker log.
+
+When the API restarts or the network drops, workers notice within 15
+seconds (ping every 5 seconds, 10 second pong timeout), keep their
+turns running, and reconnect after a random delay of at most 10
+seconds, so a fleet does not reconnect all at once. Buffered results
+are sent again after the reconnect. A worker is orphaned only when it
+stays away longer than the lease TTL. With `APIPI_WORKER_OUTBOX_DIR` set
+the worker also keeps the buffered results on disk (fsync once per
+second) for a quick restart of the worker process itself. See
+[workers](workers.md#keepalive-and-reconnect).
+
 Host workers (`none`) stamp Pi and host MCP with
 `APIPI_WORKER_PID`. After a crash, the next `apipi worker` start reaps processes whose stamped parent is dead. It
 does not kill another live worker's Pi, and it does not match on the

@@ -44,6 +44,65 @@ def _seed_reaper_ttl(execution: Any, ttl: Any) -> None:
         remember[session_id] = (seconds, last_seen, parsed.env_type)
 
 
+def forget_revoked(
+    session_id: uuid.UUID,
+    *,
+    session_leases: dict[uuid.UUID, str] | None,
+    relay: Any | None,
+    dedupe: "CommandDedupe | None",
+) -> bool:
+    """Drop the local state of a revoked session; True when the lease was known.
+
+    Everything here is quick and synchronous, so the receive loop can
+    do it at once. The guest teardown is `finish_revoke`.
+    """
+    if dedupe is not None:
+        dedupe.forget(session_id)
+    known = session_leases is not None and session_id in session_leases
+    if session_leases is not None:
+        session_leases.pop(session_id, None)
+    if relay is not None:
+        forget = getattr(relay, "forget", None)
+        if callable(forget):
+            forget(session_id)
+    return known
+
+
+async def finish_revoke(
+    execution: Any,
+    session_id: uuid.UUID,
+    *,
+    known: bool,
+    settings: Any | None,
+    outbox: Any | None,
+) -> None:
+    """Tear the guest of a revoked session down and wipe an unknown workspace."""
+    await execution.teardown(session_id)
+    if outbox is not None:
+        drop = getattr(outbox, "drop_session", None)
+        if callable(drop):
+            drop(session_id)
+    if settings is not None and not known:
+        # Revoked without a local lease: an on-disk workspace the
+        # worker only reported as unleased. Wipe it so reaped
+        # leftovers do not accumulate after a restart.
+        await wipe_unknown_workspace(settings, execution, outbox, session_id)
+    log.info("worker revoked session", extra={"session_id": str(session_id)})
+
+
+def revoked_sessions(reply: dict[str, Any]) -> list[uuid.UUID]:
+    revoke = reply.get("revoke")
+    if not isinstance(revoke, list):
+        return []
+    found: list[uuid.UUID] = []
+    for entry in revoke:
+        try:
+            found.append(RevokeEntry.model_validate(entry).session_id)
+        except ValidationError:
+            continue
+    return found
+
+
 async def _apply_inventory_reply(
     execution: Any,
     reply: dict[str, Any],
@@ -56,34 +115,16 @@ async def _apply_inventory_reply(
 ) -> None:
     """Apply revocations and reaper TTLs from an inventory reply."""
     _seed_reaper_ttl(execution, reply.get("ttl"))
-    revoke = reply.get("revoke")
-    if not isinstance(revoke, list):
-        return
-    for entry in revoke:
-        try:
-            session_id = RevokeEntry.model_validate(entry).session_id
-        except ValidationError:
-            continue
-        if dedupe is not None:
-            dedupe.forget(session_id)
-        known = session_leases is not None and session_id in session_leases
-        if session_leases is not None:
-            session_leases.pop(session_id, None)
-        if relay is not None:
-            forget = getattr(relay, "forget", None)
-            if callable(forget):
-                forget(session_id)
-        await execution.teardown(session_id)
-        if outbox is not None:
-            drop = getattr(outbox, "drop_session", None)
-            if callable(drop):
-                drop(session_id)
-        if settings is not None and not known:
-            # Revoked without a local lease: an on-disk workspace the
-            # worker only reported as unleased. Wipe it so reaped
-            # leftovers do not accumulate after a restart.
-            await wipe_unknown_workspace(settings, execution, outbox, session_id)
-        log.info("worker revoked session", extra={"session_id": str(session_id)})
+    for session_id in revoked_sessions(reply):
+        known = forget_revoked(
+            session_id,
+            session_leases=session_leases,
+            relay=relay,
+            dedupe=dedupe,
+        )
+        await finish_revoke(
+            execution, session_id, known=known, settings=settings, outbox=outbox
+        )
 
 
 async def wipe_unknown_workspace(
