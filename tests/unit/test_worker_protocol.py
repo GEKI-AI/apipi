@@ -289,10 +289,14 @@ def test_register_and_hello_reply_round_trip() -> None:
             "protocol": 2,
             "worker_id": str(worker_id),
             "generation": 3,
+            "lease_ttl_seconds": 30,
+            "heartbeat_seconds": 10,
             "sessions": {str(uuid.uuid4()): 9},
         }
     )
     assert reply.protocol == 2
+    assert reply.lease_ttl_seconds == 30
+    assert reply.heartbeat_seconds == 10
     assert HelloReply.model_validate(reply.model_dump(mode="json")) == reply
     event = WorkerEventMessage.model_validate(
         {

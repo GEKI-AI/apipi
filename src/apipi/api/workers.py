@@ -161,6 +161,7 @@ async def _flush_envelopes(
         run_mode=conn.run_mode,
     )
     lock = send_lock if send_lock is not None else asyncio.Lock()
+    await websocket.app.state.workers.renew_on_activity(store, conn)
     for session_id, last_seq in sorted(
         outcome.acks.items(), key=lambda item: str(item[0])
     ):
@@ -364,7 +365,6 @@ async def worker_socket(websocket: WebSocket) -> None:
             if kind == "garbage":
                 _log_garbage(hub, metrics, message)
                 continue
-                continue
             msg_type = message.get("type")
             if msg_type not in WORKER_IN:
                 continue
@@ -466,6 +466,7 @@ async def worker_socket(websocket: WebSocket) -> None:
                 if lease_id not in conn.leases:
                     continue
                 await hub.ack(lease_id, command_id)
+                await hub.renew_on_activity(store, conn)
                 continue
             if msg_type == "lease.release":
                 lease_id = _uuid(message.get("lease_id"))
@@ -476,6 +477,18 @@ async def worker_socket(websocket: WebSocket) -> None:
                     or lease_id not in conn.leases
                 ):
                     continue
+                if len(batcher):
+                    await _flush_envelopes(
+                        store,
+                        event_hub,
+                        conn,
+                        batcher,
+                        settings,
+                        metrics,
+                        websocket,
+                        websocket.app.state.objects,
+                        send_lock,
+                    )
                 async with store.session() as db:
                     row = await get_session_by_lease(db, lease_id)
                 if row is None:

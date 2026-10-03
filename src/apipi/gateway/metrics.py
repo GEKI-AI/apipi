@@ -32,6 +32,7 @@ _LATENCY_BUCKETS = (
     120.0,
     300.0,
 )
+_HEARTBEAT_GAP_BUCKETS = (0.5, 1.0, 2.5, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0, 120.0)
 _TOKEN_KINDS = (
     ("prompt_tokens", "prompt"),
     ("completion_tokens", "completion"),
@@ -132,6 +133,30 @@ class Metrics:
             "apipi_worker_protocol_total",
             "Worker protocol handshake and auth outcomes",
             ["event"],
+            registry=self.registry,
+        )
+        self.worker_heartbeat_gap = Histogram(
+            "apipi_worker_heartbeat_gap_seconds",
+            "Seconds between consecutive worker heartbeats",
+            registry=self.registry,
+            buckets=_HEARTBEAT_GAP_BUCKETS,
+        )
+        self.worker_lease_events = Counter(
+            "apipi_worker_lease_events_total",
+            "Worker lease renewals, releases, and expiries",
+            ["event"],
+            registry=self.registry,
+        )
+        self.worker_ingest = Counter(
+            "apipi_worker_ingest_total",
+            "Worker durable envelopes by type and ingest result",
+            ["type", "result"],
+            registry=self.registry,
+        )
+        self.worker_ingest_rejected = Counter(
+            "apipi_worker_ingest_rejected_total",
+            "Worker durable envelopes rejected by ingest",
+            ["reason"],
             registry=self.registry,
         )
         self.worker_capacity = Gauge(
@@ -339,6 +364,18 @@ class Metrics:
 
     def observe_worker_protocol(self, event: str) -> None:
         self.worker_protocol.labels(event=event).inc()
+
+    def observe_worker_heartbeat_gap(self, seconds: float) -> None:
+        self.worker_heartbeat_gap.observe(max(seconds, 0.0))
+
+    def observe_worker_lease_event(self, event: str) -> None:
+        self.worker_lease_events.labels(event=event).inc()
+
+    def observe_worker_ingest(self, type: str, result: str) -> None:
+        self.worker_ingest.labels(type=type, result=result).inc()
+
+    def observe_worker_ingest_rejected(self, reason: str) -> None:
+        self.worker_ingest_rejected.labels(reason=reason).inc()
 
     def set_worker_util(
         self,

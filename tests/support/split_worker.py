@@ -251,7 +251,6 @@ async def spawn_split_worker(
             draining,
             drain_deadline=None,
             wait=1.0,
-            heartbeat=1.0,
             emitter=emitter,
             dedupe=dedupe,
         )

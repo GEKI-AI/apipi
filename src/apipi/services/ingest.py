@@ -47,6 +47,11 @@ OVERSIZE = "oversize"
 INVALID_ENVELOPE = "invalid_envelope"
 UNKNOWN_SESSION = "unknown_session"
 
+# Receipts that change nothing on the API. They are acked from any
+# worker without a lease and never claim a ledger row, so a late
+# receipt neither gets lost nor blocks the sequence of a later lease.
+LEASE_FREE_TYPES = frozenset({"workspace.reaped"})
+
 # Envelope types no sender may emit yet: rejected like any other
 # violation (and acked past, so the worker drops them). Empty now:
 # #448 owns `artifact.presign` / `artifact.completed` and #449 owns
@@ -808,6 +813,7 @@ async def flush_batch(
     if not queued:
         return outcome
     turn_cache = _TurnCache()
+    duplicates: dict[uuid.UUID, list[int]] = {}
     async with store.session() as db:
         rows: dict[uuid.UUID, SessionRow | None] = {}
         for queued_item in queued:
@@ -823,6 +829,12 @@ async def flush_batch(
             tenant_id = row.tenant_id if row is not None else None
             wakes_before = len(outcome.wakes)
             try:
+                if row is not None and envelope.type in LEASE_FREE_TYPES:
+                    _count_ingest(metrics, envelope.type, "ok")
+                    outcome.acks[session_id] = max(
+                        outcome.acks.get(session_id, 0), envelope.seq
+                    )
+                    continue
                 if row is None or row.worker_id != worker_id or row.lease_id is None:
                     raise _Reject(NOT_LEASED)
                 if queued_item.raw_size > MAX_MESSAGE_BYTES:
@@ -868,13 +880,17 @@ async def flush_batch(
                         )
                         if envelope.type == "session.stopped":
                             outcome.wipes.append((row.tenant_id, row.key_id, row.id))
+                    _count_ingest(metrics, envelope.type, "ok")
                 except _Duplicate:
-                    pass
+                    duplicates.setdefault(session_id, []).append(envelope.seq)
+                    _count_ingest(metrics, envelope.type, "duplicate")
             except _Reject as rejected:
                 del outcome.wakes[wakes_before:]
                 reason = rejected.reason
                 outcome.rejected.append((session_id, envelope.seq, reason))
-                _count_reject(metrics, worker_id, session_id, tenant_id, reason)
+                _count_reject(
+                    metrics, worker_id, session_id, tenant_id, reason, envelope.type
+                )
             except Exception:
                 del outcome.wakes[wakes_before:]
                 log.exception(
@@ -888,16 +904,45 @@ async def flush_batch(
                     },
                 )
                 outcome.rejected.append((session_id, envelope.seq, "ingest_error"))
-                _count_reject(metrics, worker_id, session_id, tenant_id, "ingest_error")
+                _count_reject(
+                    metrics,
+                    worker_id,
+                    session_id,
+                    tenant_id,
+                    "ingest_error",
+                    envelope.type,
+                )
             outcome.acks[session_id] = max(
                 outcome.acks.get(session_id, 0), envelope.seq
             )
         for session_id, last_seq in outcome.acks.items():
             row = rows.get(session_id)
-            if row is not None and last_seq > row.worker_seq:
+            if (
+                row is not None
+                and row.worker_id == worker_id
+                and row.lease_id is not None
+                and last_seq > row.worker_seq
+            ):
                 row.worker_seq = last_seq
         await db.flush()
+    for session_id, seqs in duplicates.items():
+        log_event(
+            log,
+            logging.INFO,
+            "worker envelopes already ingested",
+            event="worker.ingest.duplicate",
+            session_id=session_id,
+            worker_id=worker_id,
+            count=len(seqs),
+            first_seq=min(seqs),
+            last_seq=max(seqs),
+        )
     return outcome
+
+
+def _count_ingest(metrics: Any, type: str, result: str) -> None:
+    if metrics is not None:
+        metrics.observe_worker_ingest(type, result)
 
 
 def _count_reject(
@@ -906,6 +951,7 @@ def _count_reject(
     session_id: uuid.UUID,
     tenant_id: uuid.UUID | None,
     reason: str,
+    type: str,
 ) -> None:
     log_event(
         log,
@@ -919,6 +965,8 @@ def _count_reject(
     )
     if metrics is not None:
         metrics.observe_worker_protocol("envelope_rejected")
+        metrics.observe_worker_ingest(type, "rejected")
+        metrics.observe_worker_ingest_rejected(reason)
 
 
 async def last_seq_for(

@@ -179,7 +179,13 @@ are never logged.
 | `sandbox.boot.failed` | error | MicroVM jailer or vsock attach failed. `error_code` is `sandbox_boot_failed`. |
 | `worker.command.failed` | warning or error | A worker command raised. Caller errors are warning. Internal faults are error. Fields include `session_id`, `tenant_id`, and `request_id`. Turn commands also emit a session failure event unless the session is already `failed`. |
 | `worker.assign.failed` | warning | No worker capacity (`capacity` or `capacity_tenant`). |
-| `worker.lease.expired` | error | A worker lease TTL elapsed. `error_code` is `worker_lease_expired`. |
+| `worker.lease.expired` | error | A worker lease TTL elapsed. `error_code` is `worker_lease_expired`. Also carries `lease_ttl_seconds`, `last_renewal_age_seconds` (time since the lease was last renewed), `last_heartbeat_age_seconds` (time since the last heartbeat on the connected socket, absent when the worker is not connected), and `worker_connected`. |
+| `worker.heartbeat.late` | warning | The gap between two heartbeats passed half the lease TTL. `source` is `api` (measured on receipt, so it includes the network) or `worker` (measured on the sending timer). Carries `gap_seconds`, `lease_ttl_seconds`, and `worker_id` on the API side. |
+| `worker.event.rejected` | warning | A durable worker envelope was rejected by ingest. `error_code` is the reason (`not_leased`, `turn_mismatch`, and so on). The worker is still acked past it. |
+| `worker.ingest.duplicate` | info | A batch contained envelopes whose sequence numbers were already ingested. One line per session and batch, with `count`, `first_seq`, and `last_seq`. Normal after a reconnect replay. |
+| `worker.release.unflushed` | warning | The worker waited for the API to ack its buffered envelopes before a `lease.release` or the `session.stop` ack, and gave up after `RELEASE_FLUSH_TIMEOUT` (10 seconds). The release went out anyway. |
+| `worker.command.cursor_missing` | warning | A `turn.start`, `turn.continue`, or `sandbox.boot` command carried no valid `last_seq`, so the worker could not continue the session sequence from the API cursor. |
+| `worker.lease_ttl.ignored` | warning | `APIPI_WORKER_LEASE_TTL` is set on a worker. The API sets the TTL, so the worker ignores it. |
 | `search.usage_failed` | error | The API could not store the usage of a search after three tries. The model still gets the results. Carries the provider, the key source, and the counts, so the numbers can be added by hand. |
 | `search.denied` | warning | An agent has the `web_search` tool but search is not allowed for the session, so the tool was not loaded for the turn, or a `search.request` arrived for such a session. Carries no query text. The turn does not fail. |
 | `usage.export.dropped` | warning | Usage HTTPS export or sink dropped the event. |
@@ -453,6 +459,10 @@ Prometheus text format. `/health` and `/metrics` are not counted.
 | `apipi_workers` | gauge | connected sandbox workers (`run_mode`) |
 | `apipi_worker_leases` | gauge | active session leases (`run_mode`) |
 | `apipi_worker_assign_seconds` | histogram | time to assign a lease |
+| `apipi_worker_heartbeat_gap_seconds` | histogram | seconds between consecutive worker heartbeats, on the API (receipt) and on the worker (send) |
+| `apipi_worker_lease_events_total` | counter | `event` (`renewed`, `released`, `expired`) |
+| `apipi_worker_ingest_total` | counter | `type` (envelope type), `result` (`ok`, `duplicate`, `rejected`) |
+| `apipi_worker_ingest_rejected_total` | counter | `reason` (for example `not_leased`, `turn_mismatch`) |
 | `apipi_worker_capacity` | gauge | advertised session slots on this worker |
 | `apipi_worker_sessions` | gauge | live sandboxes on this worker |
 | `apipi_worker_memory_mib_used` | gauge | reserved guest RAM in use |

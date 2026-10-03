@@ -29,7 +29,9 @@ push channel for revocations and deltas.
 Every worker to API message after the handshake is
 `{v: 2, session_id, turn_id | null, seq, type, payload}`. `seq` is
 monotonic per session and assigned by the worker. It continues from
-the API's `last_seq` on a new lease or reconnect.
+the API's `last_seq` on a new lease or reconnect: a reconnect gets the
+cursor in `hello.reply`, and a new lease gets it in the command that
+starts the work (see Sequence on a new lease).
 
 Message classes:
 
@@ -45,7 +47,8 @@ Message classes:
 API to worker: `command{command_id, session_id, op, lease_id,
 payload}` (idempotent by `command_id`, on the wire as `id`),
 cumulative `ack{session_id, last_seq}`, `lease.revoke`, and
-`hello.reply{protocol: 2, sessions: {id: last_seq}}`.
+`hello.reply{protocol: 2, lease_ttl_seconds, heartbeat_seconds,
+sessions: {id: last_seq}}`.
 
 ## Handshake and version
 
@@ -63,6 +66,50 @@ The API replies with its persisted `last_seq` per running session
 after that seq. Sequence persistence is not part of this step: until
 the ingest and replay step lands, the API always sends `last_seq: 0`
 as an explicit placeholder. Nothing may rely on the value yet.
+
+## Leases, sequence, and release
+
+Three rules keep a running turn and its results from vanishing without
+an error. Each was chosen as the smallest change that holds.
+
+**Heartbeats come from a timer.** The worker sends `heartbeat` from its
+own task on a monotonic timer, not when the socket has been quiet. The
+API acks every ingest batch, so a busy turn keeps the socket from ever
+being quiet, and a quiet-socket heartbeat starved until the lease
+expired. The inventory and the drain check run on timers too. The API
+owns the numbers: `hello.reply` carries `lease_ttl_seconds` and
+`heartbeat_seconds` (a third of the TTL, at most 10 seconds), and the
+worker uses them. A worker-side `APIPI_WORKER_LEASE_TTL` has no effect
+and logs a warning, so the two sides cannot disagree. As defense in
+depth the API also renews a worker's leases on a command ack and on a
+committed ingest batch, at most once per heartbeat interval. Late
+heartbeats, lease events, duplicate claims, and `not_leased` rejects
+are counted and logged so they are visible in production.
+
+**The command carries the cursor.** `turn.start`, `turn.continue`, and
+`sandbox.boot` carry `payload.last_seq`, the persisted
+`sessions.worker_seq` read after the lease is granted. The worker calls
+`outbox.set_base` before it dispatches, which never moves backwards, so
+it is safe on a worker that kept an earlier buffer. The alternative was
+to key the ingest ledger by `(session_id, lease_id, seq)`. That changes
+the ledger, the cursor, and the meaning of `hello.sessions`, so the
+cursor in the command was preferred. Only the lease holder advances
+`sessions.worker_seq`: envelopes rejected from a stale worker are acked
+but never move the cursor.
+
+**Release waits for the outbox.** The worker sends `lease.release`, and
+the `lease.ack` of `session.stop`, only after the API acked every
+envelope buffered for that session, with a timeout (10 seconds) after
+which it releases anyway and logs. This was chosen over a durable
+`lease.released` envelope and over carrying a lease id in every
+envelope, because both change the envelope schema and the ingest
+checks, while the wait is local to the worker and uses the cumulative
+ack that already exists. The API also flushes the batch it holds
+before it handles a `lease.release`. `workspace.reaped` is sent after
+the lease ended by design, so the API acks it for any existing session
+without a lease and without a ledger row; it changes nothing.
+`session.stop` runs as its own task, because waiting for acks inside
+the receive loop would block the acks it waits for.
 
 ## Semantics
 

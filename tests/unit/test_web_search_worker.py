@@ -690,7 +690,16 @@ class _Sock:
         self.label = label
         self.sent: list[dict[str, Any]] = []
         self.inbox: asyncio.Queue[Any] = asyncio.Queue()
-        self.inbox.put_nowait(json.dumps({"ok": True, "worker_id": str(uuid.uuid4())}))
+        self.inbox.put_nowait(
+            json.dumps(
+                {
+                    "ok": True,
+                    "worker_id": str(uuid.uuid4()),
+                    "lease_ttl_seconds": 30,
+                    "heartbeat_seconds": 10,
+                }
+            )
+        )
 
     async def send(self, data: str) -> None:
         self.sent.append(json.loads(data))

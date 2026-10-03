@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from datetime import timedelta
+from typing import Any, cast
 
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
@@ -101,6 +102,8 @@ async def test_worker_register_lease_command_event_and_expiry(
         hello = await worker.connect(capacity=2)
         assert hello["ok"] is True
         assert hello["type"] == "hello"
+        assert hello["lease_ttl_seconds"] == 30
+        assert hello["heartbeat_seconds"] == 10
         command = await app.state.workers.acquire(
             store,
             tenant_id,
@@ -111,7 +114,7 @@ async def test_worker_register_lease_command_event_and_expiry(
         assert command is not None
         assert command["type"] == "command"
         assert command["op"] == "turn.start"
-        assert command["payload"] == {"text": "hi", "run_mode": "none"}
+        assert command["payload"] == {"text": "hi", "run_mode": "none", "last_seq": 0}
         incoming = await worker.receive_json()
         assert incoming["id"] == command["id"]
         assert incoming["lease_id"] == command["lease_id"]
@@ -533,3 +536,266 @@ async def test_session_kind_is_ignored_for_placement(
         assert uuid.UUID(command["lease_id"]) in conn.leases
         await none_worker.close()
         await microvm.close()
+
+
+async def _leased_session(
+    app, client: AsyncClient, store: Store, worker: FakeWorker, token: str = "t"
+) -> tuple[uuid.UUID, uuid.UUID, dict]:
+    tenant_id = _tenant(token)
+    agent = await client.post(
+        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+    )
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
+    )
+    session_id = uuid.UUID(created.json()["id"])
+    await worker.connect()
+    command = await app.state.workers.acquire(
+        store, tenant_id, session_id, op="turn.cancel"
+    )
+    assert command is not None
+    await worker.receive_json()
+    return tenant_id, session_id, command
+
+
+async def test_hello_carries_the_api_heartbeat_interval(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    app = create_app(
+        api_settings_for(
+            _worker_settings(settings, worker_lease_ttl=timedelta(seconds=3))
+        ),
+        store=store,
+    )
+    worker = FakeWorker(app, worker_secret)
+    hello = await worker.connect()
+    assert hello["lease_ttl_seconds"] == 3
+    assert hello["heartbeat_seconds"] == 1
+    await worker.close()
+
+
+async def test_commands_carry_the_session_cursor(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        worker = FakeWorker(app, worker_secret)
+        tenant_id, session_id, _command = await _leased_session(
+            app, client, store, worker
+        )
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            assert row is not None
+            row.worker_seq = 7
+            await db.flush()
+        follow = await app.state.workers.command(
+            store, tenant_id, session_id, op="turn.start", payload={"text": "again"}
+        )
+        assert follow is not None
+        assert follow["payload"]["last_seq"] == 7
+        cancel = await app.state.workers.command(
+            store, tenant_id, session_id, op="turn.cancel"
+        )
+        assert cancel is not None
+        assert "last_seq" not in cancel["payload"]
+        await worker.close()
+
+
+async def test_new_lease_command_carries_the_persisted_cursor(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        worker = FakeWorker(app, worker_secret)
+        tenant_id, session_id, first = await _leased_session(app, client, store, worker)
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            assert row is not None
+            row.worker_seq = 41
+            await db.flush()
+        await app.state.workers.release(
+            store, tenant_id, session_id, uuid.UUID(first["lease_id"])
+        )
+        second = await app.state.workers.acquire(
+            store,
+            tenant_id,
+            session_id,
+            op="turn.start",
+            payload={"text": "next"},
+        )
+        assert second is not None
+        assert second["payload"]["last_seq"] == 41
+        await worker.close()
+
+
+async def test_ack_and_ingest_renew_the_lease_once_per_interval(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    app = create_app(
+        api_settings_for(
+            _worker_settings(settings, worker_lease_ttl=timedelta(seconds=3))
+        ),
+        store=store,
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        worker = FakeWorker(app, worker_secret)
+        tenant_id, session_id, command = await _leased_session(
+            app, client, store, worker
+        )
+
+        async def lease_until():
+            async with store.session() as db:
+                row = await get_session(db, tenant_id, session_id)
+                assert row is not None
+                return row.lease_until
+
+        conn = app.state.workers.get(uuid.UUID(str(worker.worker_id)))
+        assert conn is not None
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            assert row is not None
+            row.lease_until = utc_now() + timedelta(milliseconds=500)
+            await db.flush()
+        before = await lease_until()
+        conn.last_renewed = 0.0
+        await worker.send_json(
+            {
+                "type": "lease.ack",
+                "id": command["id"],
+                "lease_id": command["lease_id"],
+            }
+        )
+        for _ in range(50):
+            after = await lease_until()
+            if after != before:
+                break
+            await asyncio.sleep(0.02)
+        assert after is not None and before is not None
+        assert after > before
+        renewed_at = conn.last_renewed
+        await worker.send_json(
+            {
+                "type": "lease.ack",
+                "id": command["id"],
+                "lease_id": command["lease_id"],
+            }
+        )
+        await asyncio.sleep(0.1)
+        assert conn.last_renewed == renewed_at
+        await worker.close()
+
+
+async def test_heartbeat_gap_is_measured_and_late_gaps_are_logged(
+    settings: Settings, caplog
+) -> None:
+    import time
+
+    from apipi.gateway.metrics import Metrics
+    from apipi.worker.hub import (
+        WorkerConnection,
+        WorkerHub,
+        observe_heartbeat,
+    )
+
+    metrics = Metrics()
+    hub = WorkerHub(_worker_settings(settings), metrics=metrics)
+    conn = WorkerConnection(
+        worker_id=uuid.uuid4(),
+        generation=1,
+        websocket=cast(Any, None),
+        capacity=1,
+        memory_mb=512,
+        run_mode="none",
+    )
+    conn.connected_at = time.monotonic() - 20
+    with caplog.at_level("WARNING", logger="apipi.worker"):
+        observe_heartbeat(hub, conn)
+        observe_heartbeat(hub, conn)
+    late = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "worker.heartbeat.late"
+    ]
+    assert len(late) == 1
+    assert late[0].source == "api"
+    assert late[0].gap_seconds >= 20
+    body = metrics.scrape().decode()
+    assert "apipi_worker_heartbeat_gap_seconds_count 2.0" in body
+
+
+async def test_lease_events_are_counted(
+    settings: Settings, store: Store, worker_secret: str, caplog
+) -> None:
+    from tests.support.prom import metric_line
+
+    app = create_app(
+        api_settings_for(
+            _worker_settings(settings).model_copy(update={"metrics": True})
+        ),
+        store=store,
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        worker = FakeWorker(app, worker_secret)
+        tenant_id, session_id, command = await _leased_session(
+            app, client, store, worker
+        )
+        await worker.send_json({"type": "heartbeat"})
+        for _ in range(50):
+            body = app.state.metrics.scrape().decode()
+            if 'apipi_worker_lease_events_total{event="renewed"}' in body:
+                break
+            await asyncio.sleep(0.02)
+        assert metric_line(
+            body, "apipi_worker_lease_events_total", event="renewed"
+        ).endswith(" 1.0")
+        await worker.send_json(
+            {
+                "type": "lease.release",
+                "session_id": str(session_id),
+                "lease_id": command["lease_id"],
+            }
+        )
+        for _ in range(50):
+            body = app.state.metrics.scrape().decode()
+            if 'apipi_worker_lease_events_total{event="released"}' in body:
+                break
+            await asyncio.sleep(0.02)
+        assert metric_line(
+            body, "apipi_worker_lease_events_total", event="released"
+        ).endswith(" 1.0")
+        again = await app.state.workers.acquire(
+            store, tenant_id, session_id, op="turn.cancel"
+        )
+        assert again is not None
+        await worker.receive_json()
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            assert row is not None
+            row.lease_until = utc_now() - timedelta(seconds=5)
+            await db.flush()
+        with caplog.at_level("ERROR", logger="apipi.worker"):
+            await app.state.workers.expire(store, app.state.event_hub)
+        body = app.state.metrics.scrape().decode()
+        assert metric_line(
+            body, "apipi_worker_lease_events_total", event="expired"
+        ).endswith(" 1.0")
+        expired = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "worker.lease.expired"
+        ]
+        assert len(expired) == 1
+        assert expired[0].lease_ttl_seconds == 30
+        assert expired[0].last_renewal_age_seconds >= 30
+        assert expired[0].worker_connected is True
+        await worker.close()

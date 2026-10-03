@@ -34,7 +34,14 @@ class _Sock:
     async def recv(self) -> str:
         if not self._hello:
             self._hello = True
-            return json.dumps({"ok": True, "worker_id": str(uuid.uuid4())})
+            return json.dumps(
+                {
+                    "ok": True,
+                    "worker_id": str(uuid.uuid4()),
+                    "lease_ttl_seconds": 30,
+                    "heartbeat_seconds": 10,
+                }
+            )
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
 
@@ -181,4 +188,47 @@ async def test_run_worker_reports_lifecycle_over_socket(
     assert closed.is_set()
     assert any(
         "API-only lifecycle settings" in record.message for record in caplog.records
+    )
+
+
+async def test_run_worker_warns_when_the_lease_ttl_is_set_on_the_worker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    (tmp_path / "worker.token").write_text("secret\n")
+    settings = Settings(
+        run_mode="none",
+        worker_token_file=str(tmp_path / "worker.token"),
+        worker_lease_ttl=timedelta(seconds=10),
+    )
+    started = asyncio.Event()
+
+    class _TtlExecution(_Execution):
+        async def sandbox_seen_loop(self) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+    execution = _TtlExecution(PiPool(settings), asyncio.Event())
+    monkeypatch.setattr(
+        "apipi.worker.execution.local_execution",
+        lambda *_args, **_kwargs: execution,
+    )
+    monkeypatch.setattr(
+        "apipi.worker.execution.worker_observability",
+        lambda _settings: (None, None),
+    )
+    monkeypatch.setattr(
+        "apipi.worker.hub.websockets.connect", lambda *_a, **_k: _Connect()
+    )
+    monkeypatch.setattr("apipi.worker.hub._install_drain_signals", lambda _event: None)
+    with caplog.at_level("WARNING", logger="apipi.worker"):
+        task = asyncio.create_task(run_worker(settings, url="http://127.0.0.1:8000"))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    assert any(
+        getattr(record, "event", None) == "worker.lease_ttl.ignored"
+        for record in caplog.records
     )
