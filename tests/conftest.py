@@ -46,7 +46,12 @@ async def store(tmp_path: Path) -> AsyncIterator[Store]:
     if url:
         engine = create_async_engine(url, pool_pre_ping=True)
         async with engine.begin() as conn:
-            await conn.execute(text("TRUNCATE TABLE tenants, worker_tokens CASCADE"))
+            await conn.execute(
+                text(
+                    "TRUNCATE TABLE tenants, worker_tokens, workers, "
+                    "worker_forwards CASCADE"
+                )
+            )
     else:
         engine = _sqlite_engine(tmp_path / "test.db")
         async with engine.begin() as conn:

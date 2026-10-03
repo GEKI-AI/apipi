@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -16,9 +16,6 @@ from apipi.protocol import (
     parse_turn_context,
 )
 
-if TYPE_CHECKING:
-    from apipi.workerhub.hub import WorkerHub
-
 
 def session_image(environment: dict[str, Any] | None) -> str:
     from apipi.common.sandbox import (
@@ -32,14 +29,9 @@ def session_image(environment: dict[str, Any] | None) -> str:
     return image_for_size(sandbox_size_of(environment))
 
 
-def image_unavailable_message(hub: WorkerHub, image: str) -> str:
+def image_unavailable_message(arches: set[str], image: str) -> str:
     from apipi.common.image_recipes import recipe_archs
 
-    arches = {
-        conn.arch
-        for conn in hub._conns.values()
-        if "microvm" in conn.accepts and conn.arch and image not in conn.images
-    }
     supported = recipe_archs(image)
     if arches and supported and arches.isdisjoint(supported):
         listed = ", ".join(sorted(arches))

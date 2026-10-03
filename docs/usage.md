@@ -228,6 +228,12 @@ a `count` of the occurrences since the last line.
 | `worker.heartbeat.field_ignored` | warning | A heartbeat had an invalid optional field. The field was ignored and the leases were still extended. Carries `fields`. Rate limited. |
 | `worker.connection.superseded` | warning | A heartbeat came from a connection whose generation is older than the worker's current one. The API closes it with the reason `takeover`. |
 | `worker.lane.backpressure`, `worker.delta.queue_full` | warning | A lane of one socket is full. The ingest lane makes the socket wait. The delta lane drops deltas. Rate limited. |
+| `worker.forward.failed` | warning | A command forwarded to another API replica failed. `error_code` is `worker_unreachable` or `forward_timeout` (or the code the other replica returned). Carries `op`, `reason`, and `duration_seconds`. Rate limited. |
+| `worker.forward.handled` | info or warning | This replica sent, or refused, a command another replica forwarded. Carries `forward_id`, `op`, `action`, `origin`, `result`, and `duration_seconds`. |
+| `worker.forward.error` | error | A forwarded command failed with an unexpected error on the replica that holds the socket. `error_code` is `forward_failed`. |
+| `worker.forward.replica_stale` | warning | A command needed a worker whose replica stopped heartbeating, so it failed at once with `worker_unreachable`. Carries `worker_id` and `instance`. Rate limited. |
+| `worker.forward.model_key_dropped` | warning | A turn was forwarded and the request bearer was not. Set `OPENAI_API_KEY_OVERWRITE`. Rate limited. |
+| `worker.stop.undelivered` | warning | A delete could not deliver `session.stop` to another replica, so the lease was released anyway. |
 | `worker.lease.revoke_failed` | warning | The reaper could not send `lease.revoke` (timeout or closed socket). The lease is already cleared. Rate limited. |
 | `worker.connection.failed` | error | A task of one worker connection ended with an unexpected exception. The socket closes with the reason `error`. |
 | `worker.detach.failed` | warning | The API could not clear `api_instance_id` after a disconnect. The next heartbeat or register sets it again. |

@@ -97,6 +97,12 @@ after a disconnect today. That mode is not implemented.
 | `internal` | internal | Unexpected exception | no | error |
 
 Request-time HTTP errors that are not turn failures keep their codes.
+`worker_unreachable` is `503`: the worker holding the session lease
+cannot be reached, because its API replica stopped heartbeating or the
+worker disconnected. `forward_timeout` is `504`: the API replica that
+holds the worker socket did not answer a forwarded command in 10
+seconds. A cancel that cannot be delivered returns one of them. See
+[commands across API replicas](workers.md#commands-across-api-replicas).
 `capacity` and `capacity_tenant` are `429`. `payload_too_large` is
 `413`. Auth `unauthorized` is `401`. Their `failure_source` is `user`
 when a worker command logs them. They are warning, not error.

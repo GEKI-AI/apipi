@@ -58,7 +58,7 @@ hosted files and skills).
 | `DATABASE_URL` | `database_url` | `.apipi/apipi.db` (SQLite) | Store URL. Unset uses SQLite in the current directory. File SQLite uses WAL. One process only. Shared store: `postgresql+asyncpg://…`. Every API process points at the same URL. Workers never use it: `apipi worker` refuses to start when `DATABASE_URL` is set in the environment or `database_url` is set in the worker config file. |
 | `APIPI_HOST` | `host` | `0.0.0.0` | Bind address. |
 | `APIPI_PORT` | `port` | `8000` | Bind port. |
-| `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Used to confirm stickiness on [multiple nodes](scale.md). |
+| `APIPI_INSTANCE_ID` | `instance_id` | unset | Short name for this process. When set, HTTP responses except `/health` include `X-ApiPi-Instance`. Also the prefix of the instance id the process registers for [command forwarding](workers.md#commands-across-api-replicas), which adds a random suffix. |
 | `APIPI_LOG_LEVEL` | `log_level` | `info` | `debug` \| `info` \| `warning` \| `error` \| `critical`. |
 | `APIPI_LOG_FORMAT` | `log_format` | `json` | `json` (one object per line on stderr) or `text` (laptop). |
 | `APIPI_IDLE_TTL` | `idle_ttl` | `15m` | Idle timer for `none` sessions. Kills Pi to free RAM. Hosted computers use the sandbox TTL instead. This follows environment type, not `APIPI_RUN_MODE`. `apipi worker` runs the timer. An agent or session `idle_ttl` overrides it. |

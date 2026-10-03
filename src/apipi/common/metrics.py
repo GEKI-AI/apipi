@@ -226,6 +226,25 @@ class Metrics:
             registry=self.registry,
             buckets=_HANDLE_BUCKETS,
         )
+        self.worker_forwards = Counter(
+            "apipi_worker_forwards_total",
+            "Commands forwarded to the API replica that holds the worker socket",
+            ["op", "result"],
+            registry=self.registry,
+        )
+        self.worker_forward_seconds = Histogram(
+            "apipi_worker_forward_seconds",
+            "Time from storing a forward to its result",
+            ["op"],
+            registry=self.registry,
+            buckets=_HANDLE_BUCKETS,
+        )
+        self.worker_forward_failures = Counter(
+            "apipi_worker_forward_failures_total",
+            "Forwarded commands that failed, by reason",
+            ["reason"],
+            registry=self.registry,
+        )
         self.worker_commands_unacked = Gauge(
             "apipi_worker_commands_unacked",
             "Commands waiting for lease.ack",
@@ -633,6 +652,13 @@ class Metrics:
 
     def observe_worker_command(self, op: str, result: str) -> None:
         self.worker_commands.labels(op=op, result=result).inc()
+
+    def observe_worker_forward(self, op: str, result: str, seconds: float) -> None:
+        self.worker_forwards.labels(op=op, result=result).inc()
+        self.worker_forward_seconds.labels(op=op).observe(max(seconds, 0.0))
+
+    def observe_worker_forward_failure(self, reason: str) -> None:
+        self.worker_forward_failures.labels(reason=reason).inc()
 
     def observe_worker_command_ack(self, op: str, seconds: float) -> None:
         self.worker_command_ack.labels(op=op).observe(max(seconds, 0.0))

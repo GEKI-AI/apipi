@@ -26,6 +26,7 @@ from apipi.store.models import (
     UsageRollup,
     Vault,
     VaultCredential,
+    WorkerForward,
     WorkerRow,
     WorkerToken,
     utc_now,
@@ -928,6 +929,14 @@ async def purge_turn_logs(db: AsyncSession, older_than: datetime) -> int:
     return int(getattr(result, "rowcount", 0) or 0)
 
 
+def _apply_fleet(row: WorkerRow, fleet: dict[str, Any] | None) -> None:
+    if not fleet:
+        return
+    for key in ("accepts", "images", "arch", "draining"):
+        if key in fleet:
+            setattr(row, key, fleet[key])
+
+
 async def upsert_worker(
     db: AsyncSession,
     worker_id: uuid.UUID,
@@ -935,6 +944,7 @@ async def upsert_worker(
     capacity: int,
     memory_mb: int,
     api_instance_id: str | None = None,
+    fleet: dict[str, Any] | None = None,
 ) -> WorkerRow:
     row = await db.scalar(select(WorkerRow).where(WorkerRow.id == worker_id))
     if row is None:
@@ -953,6 +963,7 @@ async def upsert_worker(
         row.generation += 1
         row.last_seen = utc_now()
         row.api_instance_id = api_instance_id
+    _apply_fleet(row, fleet)
     await db.flush()
     return row
 
@@ -969,6 +980,7 @@ async def touch_worker(
     memory_mb: int | None = None,
     api_instance_id: str | None = None,
     generation: int | None = None,
+    fleet: dict[str, Any] | None = None,
 ) -> WorkerRow | None:
     """Record a sign of life. A superseded `generation` leaves the row as it is."""
     row = await get_worker(db, worker_id)
@@ -983,8 +995,118 @@ async def touch_worker(
         row.memory_mb = memory_mb
     if api_instance_id is not None:
         row.api_instance_id = api_instance_id
+    _apply_fleet(row, fleet)
     await db.flush()
     return row
+
+
+async def list_live_workers(
+    db: AsyncSession, *, seen_after: datetime, exclude_instance: str | None = None
+) -> list[WorkerRow]:
+    """Workers holding a socket on some replica and heard from since `seen_after`."""
+    query = select(WorkerRow).where(
+        WorkerRow.api_instance_id.is_not(None), WorkerRow.last_seen >= seen_after
+    )
+    if exclude_instance is not None:
+        query = query.where(WorkerRow.api_instance_id != exclude_instance)
+    return list(await db.scalars(query))
+
+
+async def list_leased_environments(
+    db: AsyncSession, worker_ids: Collection[uuid.UUID]
+) -> list[tuple[uuid.UUID, dict[str, Any]]]:
+    """The worker and environment of every session leased to one of `worker_ids`."""
+    if not worker_ids:
+        return []
+    result = await db.execute(
+        select(SessionRow.worker_id, SessionRow.environment).where(
+            SessionRow.worker_id.in_(list(worker_ids)),
+            SessionRow.lease_id.is_not(None),
+        )
+    )
+    return [(row[0], row[1] if isinstance(row[1], dict) else {}) for row in result]
+
+
+async def create_worker_forward(db: AsyncSession, row: WorkerForward) -> None:
+    db.add(row)
+    await db.flush()
+
+
+async def get_worker_forward(
+    db: AsyncSession, forward_id: uuid.UUID
+) -> WorkerForward | None:
+    row = await db.scalar(select(WorkerForward).where(WorkerForward.id == forward_id))
+    if row is not None:
+        await db.refresh(row)
+    return row
+
+
+async def claim_worker_forward(
+    db: AsyncSession, forward_id: uuid.UUID, *, target: str
+) -> WorkerForward | None:
+    """Claim a pending forward addressed to `target`; None if it was taken."""
+    result = await db.execute(
+        update(WorkerForward)
+        .where(
+            WorkerForward.id == forward_id,
+            WorkerForward.target == target,
+            WorkerForward.status == "pending",
+        )
+        .values(status="claimed", updated_at=utc_now())
+        .execution_options(synchronize_session=False)
+    )
+    if not getattr(result, "rowcount", 0):
+        return None
+    return await get_worker_forward(db, forward_id)
+
+
+async def set_worker_forward_status(
+    db: AsyncSession,
+    forward_id: uuid.UUID,
+    status: str,
+    *,
+    code: str | None = None,
+    message: str | None = None,
+    http_status: int | None = None,
+    only_from: str | None = None,
+) -> bool:
+    """Set a forward's status; with `only_from`, only when it still has that status."""
+    query = update(WorkerForward).where(WorkerForward.id == forward_id)
+    if only_from is not None:
+        query = query.where(WorkerForward.status == only_from)
+    result = await db.execute(
+        query.values(
+            status=status,
+            code=code,
+            message=message,
+            http_status=http_status,
+            updated_at=utc_now(),
+        ).execution_options(synchronize_session=False)
+    )
+    return bool(getattr(result, "rowcount", 0))
+
+
+async def list_pending_worker_forwards(
+    db: AsyncSession, *, target: str, limit: int = 100
+) -> list[uuid.UUID]:
+    result = await db.scalars(
+        select(WorkerForward.id)
+        .where(WorkerForward.target == target, WorkerForward.status == "pending")
+        .order_by(WorkerForward.created_at)
+        .limit(limit)
+    )
+    return list(result)
+
+
+async def delete_worker_forward(db: AsyncSession, forward_id: uuid.UUID) -> None:
+    await db.execute(delete(WorkerForward).where(WorkerForward.id == forward_id))
+
+
+async def purge_worker_forwards(db: AsyncSession, older_than: datetime) -> int:
+    result = await db.execute(
+        delete(WorkerForward).where(WorkerForward.created_at < older_than)
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def clear_worker_api_instance(

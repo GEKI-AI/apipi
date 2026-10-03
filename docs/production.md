@@ -133,6 +133,45 @@ land on any API replica. The session is owned by the worker lease.
 There is no live handoff of a running guest. Load-balancer examples are
 in [multiple nodes](scale.md).
 
+## Several API replicas
+
+Any API replica can serve any request. A worker holds its socket on one
+replica, and a replica without that socket forwards the command to the
+one that has it, so you need no sticky routing for `/internal/worker`
+and no per-worker API address. Placement sees the workers of every
+replica. [Commands across API replicas](workers.md#commands-across-api-replicas)
+describes how it works and how it fails.
+
+What you need to run several replicas:
+
+- **Postgres.** Forwarding uses `LISTEN` and `NOTIFY` and a small
+  `worker_forwards` table in the same database. Every replica needs its
+  dedicated `LISTEN` connection (see [Database pool](#database-pool)).
+  `APIPI_EVENT_BUS=auto` selects Postgres when `DATABASE_URL` is
+  Postgres. Set `APIPI_EVENT_BUS=postgres` to make a wrong setting fail
+  at start.
+- **One event bus per database.** `InMemoryEventBus` (`APIPI_EVENT_BUS=memory`,
+  and the default on SQLite) is for one API process. With it, nothing is
+  forwarded and placement only sees the local workers. SQLite is a single
+  process store, so do not run two API processes on one SQLite file.
+- **The operator model key.** The request bearer never goes through the
+  database, so it is not forwarded. Set `OPENAI_API_KEY_OVERWRITE` on the
+  API, or a turn that a replica forwards reaches Pi without the caller's
+  key.
+- **The same `APIPI_VAULT_MASTER_KEY` and settings on every replica.** The
+  replica that holds the socket builds the turn context, so it must read
+  the vault and the object store the same way.
+- **Clock and heartbeats.** A worker on another replica counts as live
+  when it was heard from within `APIPI_WORKER_LEASE_TTL`. A replica that
+  stops is detected after that time, and commands for its workers fail
+  with `503` `worker_unreachable` until the workers reconnect elsewhere.
+
+Watch `apipi_worker_forwards_total`, `apipi_worker_forward_seconds`, and
+`apipi_worker_forward_failures_total` (see
+[observability](observability.md#prometheus)). Each forward adds a few
+small queries and two notifications, so the pool sizing rule above still
+holds.
+
 ## Sizing
 
 Count **live** Pi processes (or guests) on **workers**. The API
@@ -275,7 +314,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_MAX_WORKSPACE_BYTES` / `APIPI_MAX_ARTIFACT_BYTES` | Directory and published-artifact caps. |
 | `APIPI_ARTIFACT_STORE` | `local` or `s3`. Production uses `s3` so workers hold no store credentials. `local` defaults to `.apipi/store` on a single host. With several hosts, the API and every worker must share one `APIPI_LOCAL_STORE_DIR`. |
 | `APIPI_MICROVM_EGRESS_ALLOWLIST` / `HOSTS` / `MBIT` | Optional destination allowlist (off by default) and 50 Mbit TAP rate. Private IPv4 ranges are always rejected. |
-| `APIPI_INSTANCE_ID` | Sets `X-ApiPi-Instance` so you can confirm stickiness. |
+| `APIPI_INSTANCE_ID` | Sets `X-ApiPi-Instance` so you can see which replica answered. |
 | `APIPI_VAULT_MASTER_KEY` | Encrypts MCP vault tokens at rest. Put a 32-byte key in the process environment or a k8s secret. Unset uses a local default and logs a warning; do not leave that in production. Same key on every API process that writes or injects vault secrets. |
 
 ## Worker token rotation

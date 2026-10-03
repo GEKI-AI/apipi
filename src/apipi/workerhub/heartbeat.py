@@ -111,6 +111,28 @@ def parse_heartbeat(
         return HeartbeatMessage.model_validate(cleaned)
 
 
+def _fleet_state(
+    conn: WorkerConnection, heartbeat: HeartbeatMessage, parsed_mode: str | None
+) -> tuple[frozenset[str], dict[str, WorkerImage], str, bool]:
+    """The accepts, images, arch, and drain state after this heartbeat."""
+    accepts = conn.accepts
+    if heartbeat.accepts:
+        cleaned = {
+            item.strip().lower()
+            for item in heartbeat.accepts
+            if item.strip().lower() in {"none", "microvm"}
+        }
+        if cleaned:
+            accepts = frozenset(cleaned)
+    arch = heartbeat.arch or conn.arch
+    images = conn.images
+    if "images" in heartbeat.model_fields_set or parsed_mode is not None:
+        kind = "microvm" if "microvm" in accepts else "none"
+        images = images_from_heartbeat(heartbeat, kind)
+    draining = conn.draining if heartbeat.drain is None else heartbeat.drain is True
+    return accepts, images, arch, draining
+
+
 async def heartbeat_worker(
     hub: WorkerHub, store: Store, conn: WorkerConnection, heartbeat: HeartbeatMessage
 ) -> bool:
@@ -129,14 +151,21 @@ async def heartbeat_worker(
                 fields=["run_mode"],
             )
     observe_heartbeat(hub, conn)
+    state = _fleet_state(conn, heartbeat, parsed_mode)
     async with store.session() as db:
         touched = await touch_worker(
             db,
             conn.worker_id,
             capacity=heartbeat.capacity,
             memory_mb=heartbeat.memory_mb,
-            api_instance_id=hub.settings.instance_id,
+            api_instance_id=hub.instance_id,
             generation=conn.generation,
+            fleet={
+                "accepts": sorted(state[0]),
+                "images": sorted(state[1]),
+                "arch": state[2] or None,
+                "draining": state[3],
+            },
         )
         if touched is not None and touched.generation != conn.generation:
             return False
@@ -155,24 +184,13 @@ async def heartbeat_worker(
     if parsed_mode is not None:
         conn.run_mode = parsed_mode
         hub._observe()
-    if heartbeat.accepts:
-        cleaned = {
-            item.strip().lower()
-            for item in heartbeat.accepts
-            if item.strip().lower() in {"none", "microvm"}
-        }
-        if cleaned:
-            conn.accepts = frozenset(cleaned)
-            hub._observe()
-    if heartbeat.arch:
-        conn.arch = heartbeat.arch
-    if "images" in fields or parsed_mode is not None:
-        kind = "microvm" if "microvm" in conn.accepts else "none"
-        conn.images = images_from_heartbeat(heartbeat, kind)
-    if heartbeat.drain is True:
-        conn.draining = True
+    accepts, images, arch, draining = state
+    if accepts != conn.accepts:
         hub._observe()
-    elif heartbeat.drain is False:
-        conn.draining = False
+    conn.accepts = accepts
+    conn.arch = arch
+    conn.images = images
+    if draining != conn.draining:
         hub._observe()
+    conn.draining = draining
     return True
