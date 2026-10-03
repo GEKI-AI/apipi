@@ -118,7 +118,9 @@ Pass `authenticate=` on `Gateway.create` to inject the auth callback
 without `APIPI_AUTH`. The callable is the same shape as the plugin in
 [auth](auth.md). Pass `authorize=` the same way for the optional
 authorization hook. `AuthFilter` carries the allowed ids for list
-actions.
+actions. Pass `model_credential=` (type `apipi.ModelCredential`) to turn
+the authenticated identity into the key Pi sends to the model host; see
+[auth](auth.md#model-credential).
 
 ## In-process SessionService
 
@@ -344,7 +346,7 @@ Supported for extenders (also listed on `apipi.__all__`):
 
 | Export | Role |
 | --- | --- |
-| `Gateway` | `create`, `configure`, `startup`, `shutdown`, `ensure_tenant`, `invalidate_auth`, `invalidate_auth_where`, `clear_auth_cache`, `sessions`, `agents`, `vaults`, `usage`, `models`, `routers`, `store`, `event_hub`, `execution`, `workers`, `authenticate`, `authorize`, `settings` |
+| `Gateway` | `create`, `configure`, `startup`, `shutdown`, `ensure_tenant`, `invalidate_auth`, `invalidate_auth_where`, `clear_auth_cache`, `sessions`, `agents`, `vaults`, `usage`, `models`, `routers`, `store`, `event_hub`, `execution`, `workers`, `authenticate`, `authorize`, `model_credentials`, `settings` |
 | `create_app` | Standalone FastAPI app (CLI and tests) |
 | `extend_settings` | `Settings` from arguments only; no env bleed |
 | `Settings` | Operator settings type |
@@ -361,6 +363,7 @@ The worker WebSocket stays `gateway.workers`.
 | `EventHub` | In-process live events |
 | `Authenticate`, `AuthIdentity`, `AuthReject` | Auth callback types |
 | `Authorize`, `AuthFilter` | Authorization hook types |
+| `ModelCredential` | Model credential callback type |
 
 ApiPi-only HTTP routes live under `/v1/apipi/` (templates, uploads, usage, exports, and presigned downloads). An extender that copies `include_router` calls should include the same routers so those paths exist.
 

@@ -42,6 +42,11 @@ from apipi.services.agents import AgentService
 from apipi.services.event_bus import create_event_bus
 from apipi.services.files import FileService
 from apipi.services.lifecycle_export import LifecycleEmitter, create_lifecycle
+from apipi.services.model_credentials import (
+    ModelCredential,
+    ModelCredentials,
+    load_model_credential,
+)
 from apipi.services.models import ModelsService
 from apipi.services.payload_export import load_payload_sinks
 from apipi.services.search import SearchResolver, SearchService
@@ -100,6 +105,7 @@ class Gateway:
         workers: WorkerHub,
         authenticate: Authenticate,
         authorize: Authorize | None = None,
+        model_credential: ModelCredential | None = None,
         lifecycle: LifecycleEmitter | None,
         blobs: ArtifactBlobs,
         objects: ObjectStore,
@@ -113,6 +119,7 @@ class Gateway:
         self.workers = workers
         self.authenticate = authenticate
         self.authorize = authorize
+        self.model_credentials = ModelCredentials(settings, model_credential)
         self.lifecycle = lifecycle
         self.blobs = blobs
         self.objects = objects
@@ -136,6 +143,7 @@ class Gateway:
             tracing=tracing,
             metrics=metrics,
             search=self.search_resolver,
+            model_credentials=self.model_credentials,
         )
         self.agents = AgentService(store, settings, self.search_resolver)
         self.templates = TemplateService(
@@ -196,6 +204,7 @@ class Gateway:
         *,
         authenticate: Authenticate | None = None,
         authorize: Authorize | None = None,
+        model_credential: ModelCredential | None = None,
         event_hub: EventBus | None = None,
         execution: RemoteExecution | None = None,
         workers: WorkerHub | None = None,
@@ -253,6 +262,11 @@ class Gateway:
         resolved_authorize = (
             authorize if authorize is not None else load_authorize(resolved.authorize)
         )
+        resolved_credential = (
+            model_credential
+            if model_credential is not None
+            else load_model_credential(resolved.model_credential)
+        )
         return cls(
             settings=resolved,
             store=resolved_store,
@@ -262,6 +276,7 @@ class Gateway:
             workers=resolved_workers,
             authenticate=auth,
             authorize=resolved_authorize,
+            model_credential=resolved_credential,
             lifecycle=resolved_lifecycle,
             blobs=resolved_blobs,
             objects=resolved_objects,
@@ -306,6 +321,7 @@ class Gateway:
         app.state.search = self.search
         app.state.authenticate = self.authenticate
         app.state.authorize = self.authorize
+        app.state.model_credentials = self.model_credentials
         app.state.auth_cache = self._auth_cache
         app.state.usage_sinks = self._usage_sinks
         app.state.payload_sinks = self._payload_sinks
@@ -402,6 +418,7 @@ def create_app(
     *,
     authenticate: Authenticate | None = None,
     authorize: Authorize | None = None,
+    model_credential: ModelCredential | None = None,
     event_hub: EventBus | None = None,
     execution: RemoteExecution | None = None,
     workers: WorkerHub | None = None,
@@ -414,6 +431,7 @@ def create_app(
         objects=objects,
         authenticate=authenticate,
         authorize=authorize,
+        model_credential=model_credential,
         event_hub=event_hub,
         execution=execution,
         workers=workers,

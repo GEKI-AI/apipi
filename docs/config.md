@@ -87,6 +87,7 @@ hosted files and skills).
 | `APIPI_EVENT_BUS_FALLBACK_POLL` | `event_bus_fallback_poll` | `3s` | How often an SSE stream re-reads the store when no wake arrives. This covers lost notifications and listener reconnects; `2s` to `5s` is the recommended range. An idle stream queries the store no more often than this. |
 | `APIPI_AUTH_CACHE_TTL` | `auth_cache_ttl` | `30s` | Cache success and `401` rejects by SHA-256 of the bearer, never the raw key. `429` rejects are not cached. |
 | `APIPI_AUTH_CACHE_MAX` | `auth_cache_max` | `10000` | Maximum auth cache entries with LRU eviction. `0` disables caching so every request calls the plugin. The tenant lookup memo uses the same bound. |
+| `APIPI_MODEL_CREDENTIAL` | `model_credential` | unset | Import path `package.mod:func` for the model credential callback `model_credential(identity, bearer)`. It returns the key Pi sends to the model host and lets a turn on any API replica reach it. See [auth](auth.md#model-credential). |
 | `APIPI_AUTHORIZE` | `authorize` | unset (allow all) | Import path `package.mod:func` for the optional authorization hook. See [auth](auth.md). |
 | `APIPI_SESSIONS_DIR` | `sessions_dir` | `.apipi/sessions` under cwd | Root for local session workspaces (`openai_hosted`). Each worker keeps its own value. Must be writable by the gateway user. A leftover root-owned tree fails harvest with code `artifact_store`. |
 | `APIPI_DB_POOL_SIZE` | `db_pool_size` | `5` | SQLAlchemy pool size. |
@@ -104,7 +105,7 @@ hosted files and skills).
 | `APIPI_S3_ADDRESSING` | `s3_addressing` | `auto` | `auto` \| `path` \| `virtual`. `auto` is virtual-hosted (`bucket.endpoint/key`). Set `path` for R2 or MinIO on an IP. Guest images fall back to this endpoint, region, and addressing when `APIPI_IMAGE_S3_*` is unset. The image bucket and prefix come from the image URI, not from `s3_bucket` or `s3_prefix`. Artifact credentials come from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` or the instance role, never from TOML. |
 | `APIPI_PRESIGN_TTL` | `presign_ttl` | `15m` | Lifetime of presigned PUT and GET URLs. Worker artifact uploads and turn-context reads use short-lived URLs bound to a key under the session prefix. |
 | `OPENAI_BASE_URL` | `model_base_url` | required for serve | Model host passed to Pi. Not the gateway URL. Put this in `.env`. |
-| `OPENAI_API_KEY_OVERWRITE` | `model_api_key_overwrite` | unset | Optional operator model key. When unset, Pi gets the request bearer. A process `OPENAI_API_KEY` is ignored. |
+| `OPENAI_API_KEY_OVERWRITE` | `model_api_key_overwrite` | unset | Operator model key for tests and single-key setups. It wins over the model credential callback and the request bearer, and it is not a way to run several replicas. When unset, Pi gets the callback credential, or the request bearer. A process `OPENAI_API_KEY` is ignored. |
 | `APIPI_MODEL_ATTRIBUTION_HEADERS` | `model_attribution_headers` | `true` | Stamp `x-apipi-session-id`, `x-apipi-turn-id`, and `x-apipi-agent-id` on every model-host request. Guest-set `x-apipi-*` headers are stripped in both cases. |
 | `APIPI_FORWARD_MODELS` | `forward_models` | on | Proxy `GET /v1/models` to `{OPENAI_BASE_URL}/models` when `APIPI_MODEL_LIST` is `probe` or `turn`. Off returns `400` with code `forward_models`. With `APIPI_MODEL_LIST=off`, the route returns the static `APIPI_MODELS` list instead of calling the host. |
 | `APIPI_MODEL_LIST` | `model_list` | `probe` | `probe` \| `turn` \| `off`. Checked when an agent is created or its model is edited, not on turns. `probe` lists `{OPENAI_BASE_URL}/models` at startup and reuses that list. `turn` lists on each agent write and does not list at startup. `off` never calls `/models`. |
@@ -268,9 +269,9 @@ gateway process that shares the bucket.
 ## Model host
 
 `OPENAI_BASE_URL` is an OpenAI-compatible HTTP host. Pi in the guest
-calls that URL. It is not the gateway URL. The request bearer, or
-`OPENAI_API_KEY_OVERWRITE` when that is set, is sent as
-`Authorization: Bearer`.
+calls that URL. It is not the gateway URL. `OPENAI_API_KEY_OVERWRITE`
+when that is set, otherwise the model credential callback, otherwise the
+request bearer, is sent as `Authorization: Bearer`.
 
 `POST {OPENAI_BASE_URL}/chat/completions` is required. Pi uses
 `api: openai-completions`. A non-streaming response has

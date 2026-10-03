@@ -12,6 +12,7 @@ chat playground. Keys come from the environment, not from these files.
 | [apipi.toml](apipi.toml) | Gateway settings file |
 | [env.example](env.example) | Dotenv template; copy to `.env` at the repo root |
 | [auth_callback.py](auth_callback.py) | Auth callback (`APIPI_AUTH`) |
+| [model_credential.py](model_credential.py) | Model credential callback (`APIPI_MODEL_CREDENTIAL`): an HMAC-signed token and the model host check |
 | [isolation.py](isolation.py) | Custom isolation backend (`APIPI_RUN_MODE`) |
 | [tavily.yaml](tavily.yaml) | Web search (Tavily hosted MCP) |
 | [sessions/browser_screenshot.py](sessions/browser_screenshot.py) | Browser via the guest `browser` skill and `agent-browser` |

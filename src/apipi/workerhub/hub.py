@@ -192,17 +192,6 @@ class WorkerHub:
         if self.metrics is not None:
             self.metrics.observe_worker_forward_failure(reason)
 
-    def _note_dropped_model_key(self, payload: Any) -> None:
-        context = getattr(payload, "context", None)
-        model = context.get("model") if isinstance(context, dict) else None
-        key = model.get("api_key") if isinstance(model, dict) else None
-        if key and key != self.settings.model_api_key_overwrite:
-            self._warnings.warning(
-                "request model key is not forwarded to another replica",
-                event="worker.forward.model_key_dropped",
-                error_code="model_key_dropped",
-            )
-
     def observe_protocol(self, event: str) -> None:
         if self.metrics is not None:
             self.metrics.observe_worker_protocol(event)
@@ -616,7 +605,6 @@ class WorkerHub:
     ) -> dict[str, Any] | None:
         forwarder = self.forwarder
         assert forwarder is not None and chosen.instance is not None
-        self._note_dropped_model_key(payload)
         forward_id = command_id or uuid.uuid4()
         try:
             await forwarder.call(
@@ -751,7 +739,6 @@ class WorkerHub:
     ) -> dict[str, Any]:
         forwarder = self.forwarder
         assert forwarder is not None
-        self._note_dropped_model_key(payload)
         stopping = op == "session.stop"
         forward_id = await forwarder.call(
             target,

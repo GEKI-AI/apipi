@@ -232,7 +232,6 @@ a `count` of the occurrences since the last line.
 | `worker.forward.handled` | info or warning | This replica sent, or refused, a command another replica forwarded. Carries `forward_id`, `op`, `action`, `origin`, `result`, and `duration_seconds`. |
 | `worker.forward.error` | error | A forwarded command failed with an unexpected error on the replica that holds the socket. `error_code` is `forward_failed`. |
 | `worker.forward.replica_stale` | warning | A command needed a worker whose replica stopped heartbeating, so it failed at once with `worker_unreachable`. Carries `worker_id` and `instance`. Rate limited. |
-| `worker.forward.model_key_dropped` | warning | A turn was forwarded and the request bearer was not. Set `OPENAI_API_KEY_OVERWRITE`. Rate limited. |
 | `worker.stop.undelivered` | warning | A delete could not deliver `session.stop` to another replica, so the lease was released anyway. |
 | `worker.lease.revoke_failed` | warning | The reaper could not send `lease.revoke` (timeout or closed socket). The lease is already cleared. Rate limited. |
 | `worker.connection.failed` | error | A task of one worker connection ended with an unexpected exception. The socket closes with the reason `error`. |

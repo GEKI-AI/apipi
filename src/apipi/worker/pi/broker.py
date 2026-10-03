@@ -191,6 +191,10 @@ class SessionBroker:
         self._session_id = session_id
         self._agent_id = agent_id
 
+    def set_model_key(self, key: str | None) -> None:
+        if key:
+            self.model_key = key
+
     def set_turn(self, turn_id: str | None) -> None:
         self._turn_id = turn_id
 

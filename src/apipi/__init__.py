@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     )
     from apipi.services.agents import AgentWrite
     from apipi.services.event_bus import PostgresEventBus
+    from apipi.services.model_credentials import ModelCredential
     from apipi.services.sessions import SessionService
     from apipi.store.engine import Store
 
@@ -41,6 +42,7 @@ _EXPORTS = {
     "EventHub": "apipi.common.event_bus",
     "Gateway": "apipi.gateway",
     "InMemoryEventBus": "apipi.common.event_bus",
+    "ModelCredential": "apipi.services.model_credentials",
     "PostgresEventBus": "apipi.services.event_bus",
     "SessionService": "apipi.services.sessions",
     "Settings": "apipi.config",
@@ -62,6 +64,7 @@ __all__ = [
     "EventHub",
     "Gateway",
     "InMemoryEventBus",
+    "ModelCredential",
     "PostgresEventBus",
     "SessionService",
     "Settings",

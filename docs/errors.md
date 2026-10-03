@@ -103,6 +103,10 @@ worker disconnected. `forward_timeout` is `504`: the API replica that
 holds the worker socket did not answer a forwarded command in 10
 seconds. A cancel that cannot be delivered returns one of them. See
 [commands across API replicas](workers.md#commands-across-api-replicas).
+`model_key_unavailable` is `503`: no model key could be chosen for the
+request, because the `model_credential` callback raised or returned no
+value, or because a forwarded turn had no operator key and no callback.
+The turn does not start. See [auth](auth.md#model-credential).
 `capacity` and `capacity_tenant` are `429`. `payload_too_large` is
 `413`. Auth `unauthorized` is `401`. Their `failure_source` is `user`
 when a worker command logs them. They are warning, not error.

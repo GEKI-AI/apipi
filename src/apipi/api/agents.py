@@ -53,7 +53,7 @@ async def create_saved_agent(
     return await _agents(request).create(
         tenant.id,
         body,
-        api_key=model_key(request),
+        api_key=await model_key(request),
         user_id=_state_str(request, "user_id"),
         org_id=_state_str(request, "org_id"),
     )
@@ -113,7 +113,7 @@ async def update_saved_agent(
         tenant.id,
         agent_id,
         body,
-        api_key=model_key(request),
+        api_key=await model_key(request),
         user_id=_state_str(request, "user_id"),
         org_id=_state_str(request, "org_id"),
     )

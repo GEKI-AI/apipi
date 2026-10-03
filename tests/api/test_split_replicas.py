@@ -26,6 +26,7 @@ from tests.support.split_worker import (
 
 from apipi.config import Settings
 from apipi.gateway import create_app
+from apipi.gateway.auth import AuthIdentity
 from apipi.gateway.tokens import hash_token
 from apipi.services.worker_tokens import create_token
 from apipi.store.engine import Store
@@ -38,6 +39,13 @@ TOKEN = "replicas"
 
 def _auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
+
+
+def _credential(identity: AuthIdentity, bearer: str | None) -> str:
+    return f"model:{identity.key_id}"
+
+
+CREDENTIAL = f"model:{hash_token(TOKEN)}"
 
 
 def _tenant() -> uuid.UUID:
@@ -113,11 +121,13 @@ async def replicas(
         api_settings.model_copy(update={"instance_id": "node-a"}),
         store=store,
         event_hub=network.bus(),
+        model_credential=_credential,
     )
     app_b = create_app(
         api_settings.model_copy(update={"instance_id": "node-b"}),
         store=store,
         event_hub=network.bus(),
+        model_credential=_credential,
     )
     for app in (app_a, app_b):
         await app.state.gateway.startup()
@@ -530,3 +540,85 @@ async def test_cancel_to_a_stale_replica_is_an_error(
             .values(last_seen=utc_now())
         )
     await _finish_held_turn(replicas, session_id, task)
+
+
+async def test_every_forwarded_turn_carries_the_callback_credential(
+    replicas: Replicas,
+    replica_harness: FakeHarness,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(0)
+    replica_harness.function_calls = [
+        {"name": "echo", "arguments": {"text": "hi"}, "call_id": "call_1"}
+    ]
+    session_id = await _new_session(
+        replicas.client_b,
+        agent={
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "echo",
+                    "description": "echo",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ]
+        },
+    )
+    first = await _message(replicas.client_b, session_id, "use echo")
+    assert first.status_code == 200, first.text
+    events = await replicas.client_b.get(
+        f"/v1/agents/sessions/{session_id}/events", headers=_auth()
+    )
+    turn_id = next(
+        event["data"]["turn_id"]
+        for event in events.json()["data"]
+        if event["type"] == "agent.session.requires_action"
+    )
+    resumed = await replicas.client_b.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(),
+        json={
+            "type": "agent.session.input.tool_result",
+            "turn_id": turn_id,
+            "call_id": "call_1",
+            "success": True,
+            "output": "pong",
+        },
+    )
+    assert resumed.status_code == 200, resumed.text
+    follow = await _message(replicas.client_b, session_id, "again")
+    assert follow.status_code == 200, follow.text
+    assert replicas.calls == [
+        ("acquire", "turn.start"),
+        ("command", "turn.continue"),
+        ("command", "turn.start"),
+    ]
+    assert replica_harness.api_keys == [CREDENTIAL] * 3
+    assert CREDENTIAL not in caplog.text
+
+
+async def test_forwarded_turn_without_a_credential_fails_at_once(
+    replicas: Replicas, replica_harness: FakeHarness
+) -> None:
+    replicas.app_a.state.gateway.model_credentials.callback = None
+    session_id = await _new_session(replicas.client_b)
+    posted = await _message(replicas.client_b, session_id, "go")
+    assert posted.status_code == 503, posted.text
+    assert posted.json()["error"]["code"] == "model_key_unavailable"
+    assert replica_harness.api_keys == []
+    await _no_forward_rows(replicas.store)
+
+
+async def test_callback_that_raises_fails_the_turn_without_its_error_text(
+    replicas: Replicas, replica_harness: FakeHarness
+) -> None:
+    def broken(identity: AuthIdentity, bearer: str | None) -> str:
+        raise RuntimeError("hunter2")
+
+    session_id = await _new_session(replicas.client_b)
+    replicas.app_b.state.gateway.model_credentials.callback = broken
+    posted = await _message(replicas.client_b, session_id, "go")
+    assert posted.status_code == 503, posted.text
+    assert posted.json()["error"]["code"] == "model_key_unavailable"
+    assert "hunter2" not in posted.text
+    assert replica_harness.api_keys == []

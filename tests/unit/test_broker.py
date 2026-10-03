@@ -395,3 +395,65 @@ async def test_broker_allowlists_private_mcp_host(tmp_path: Path) -> None:
     finally:
         await broker.stop()
         server.shutdown()
+
+
+async def test_pi_harness_applies_the_model_key_every_turn(tmp_path: Path) -> None:
+    from typing import Any
+
+    from apipi.worker.pi.harness import PiHarness
+
+    seen: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            seen.append(self.headers.get("Authorization", ""))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    settings = _settings(tmp_path, f"http://127.0.0.1:{server.server_address[1]}/v1")
+    settings = settings.model_copy(update={"model_api_key_overwrite": None})
+    broker = await start_broker(
+        settings, api_key="first", mcp_http=None, host="127.0.0.1", port=0
+    )
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.broker = broker
+
+        async def prompt(self, _text: str, **_kwargs: object) -> Any:
+            async with AsyncClient(base_url=broker.openai_base_url) as client:
+                await client.post("/chat/completions", json={"model": "m"})
+            yield {"type": "agent_settled", "success": True}
+
+    proc = _Proc()
+
+    class _Pool:
+        spawned = 0
+
+        async def get(self, *args: object, **kwargs: object) -> Any:
+            return proc
+
+        def touch(self, session_id: object) -> None:
+            del session_id
+
+    harness = PiHarness(_Pool())  # ty: ignore[invalid-argument-type]
+    session_id = uuid.uuid4()
+    try:
+        for key in ("first", "rotated"):
+            [
+                event
+                async for event in harness.generate(
+                    "hi", session_id=session_id, api_key=key
+                )
+            ]
+        assert seen == ["Bearer first", "Bearer rotated"]
+    finally:
+        await broker.stop()
+        server.shutdown()

@@ -270,7 +270,7 @@ async def create_agent_session(
         user_id=_user_id(request),
         org_id=_org_id(request),
         request_id=request_id_of(request),
-        api_key=model_key(request),
+        api_key=await model_key(request),
         wait_turn=not body.stream,
     )
     if body.stream:
@@ -377,7 +377,7 @@ async def post_session_event(
         user_id=_user_id(request),
         org_id=_org_id(request),
         request_id=request_id_of(request),
-        api_key=model_key(request),
+        api_key=await model_key(request),
     )
 
 

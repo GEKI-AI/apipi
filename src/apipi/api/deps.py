@@ -1,18 +1,13 @@
 from fastapi import Request
 
-from apipi.common.errors import ApiError
+from apipi.gateway.auth import identity_of, unauthorized
 
 
-def model_key(request: Request) -> str:
-    overwrite = request.app.state.settings.model_api_key_overwrite
-    if isinstance(overwrite, str) and overwrite:
-        return overwrite
+async def model_key(request: Request) -> str:
+    identity = identity_of(request)
+    if identity is None:
+        unauthorized()
     bearer = getattr(request.state, "bearer", None)
-    if isinstance(bearer, str) and bearer:
-        return bearer
-    raise ApiError(
-        "invalid_request",
-        "Invalid bearer token",
-        code="unauthorized",
-        status_code=401,
+    return await request.app.state.model_credentials.resolve(
+        identity, bearer if isinstance(bearer, str) else None
     )

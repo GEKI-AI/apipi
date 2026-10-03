@@ -440,13 +440,12 @@ decisions, and why:
   presigned URL, or file reference is ever stored in the mailbox or
   sent over `NOTIFY`. The same holds for the model key: the request
   bearer is never written to Postgres (constitution rule 5), so it is
-  not forwarded. A forwarded turn carries `OPENAI_API_KEY_OVERWRITE`
-  when the operator set it, and no key otherwise. A worker that has no
-  key of its own then uses the key its running Pi already holds, and
-  fails with `upstream_unauthorized` when Pi has to start again. The
-  requesting replica logs `worker.forward.model_key_dropped` once per
-  minute in that case, and `docs/production.md` tells multi-replica
-  operators to set the overwrite key.
+  not forwarded. The row keeps `key_id`, `user_id`, `org_id` and the
+  tenant, and the owning replica resolves the key from that identity
+  with the `model_credential` callback (or `OPENAI_API_KEY_OVERWRITE`).
+  With neither, the forward fails with `503` `model_key_unavailable`.
+  The worker applies `context.model.api_key` to the credential broker at
+  the start of every turn, so Pi does not restart when the key changes.
 * **The result is the same as a local send.** A forward asks for one
   wait level: `sent` (the frame is in the writer of the worker's
   connection), `ack` (the worker sent `lease.ack`), `stopped` (a

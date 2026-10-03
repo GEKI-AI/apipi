@@ -731,6 +731,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("APIPI_AUTHORIZE", "authorize"),
     )
+    model_credential: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("APIPI_MODEL_CREDENTIAL", "model_credential"),
+    )
     pi_command: str = Field(
         default="pi",
         validation_alias=AliasChoices("APIPI_PI_COMMAND", "pi_command"),

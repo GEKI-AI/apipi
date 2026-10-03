@@ -280,8 +280,10 @@ endpoints.
 When `APIPI_FORWARD_MODELS` is on (the default) and `APIPI_MODEL_LIST`
 is `probe` or `turn`, this route proxies to `{OPENAI_BASE_URL}/models`
 on the model host. The JSON body is the host's list, unchanged. Auth
-is the usual bearer. The host call uses `OPENAI_API_KEY_OVERWRITE`
-when that is set, otherwise the request bearer: the same key Pi uses.
+is the usual bearer. The host call uses the same model key Pi uses:
+`OPENAI_API_KEY_OVERWRITE` when that is set, otherwise the
+`model_credential` callback, otherwise the request bearer (see
+[auth](auth.md#model-credential)).
 When `APIPI_MODEL_LIST` is `off`, the route returns the static
 `APIPI_MODELS` list and does not call the host. An empty static list
 is `{"object": "list", "data": []}`.
