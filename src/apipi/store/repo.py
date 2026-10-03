@@ -346,12 +346,29 @@ async def create_turn(
     usage: dict[str, Any] | None = None,
     turn_id: uuid.UUID | None = None,
 ) -> Turn:
+    # Turns are ordered by `created_at` (newest turn, turn list). The wall
+    # clock can step back between two turns, or differ between API
+    # replicas, so a new turn never gets a stamp at or before the turn
+    # created before it. Creation is serialized by the session row lock.
+    created_at = utc_now()
+    newest = await db.scalar(
+        select(func.max(Turn.created_at)).where(
+            Turn.tenant_id == tenant_id, Turn.session_id == session_id
+        )
+    )
+    if newest is not None:
+        if newest.tzinfo is None:
+            newest = newest.replace(tzinfo=UTC)
+        if created_at <= newest:
+            created_at = newest + timedelta(microseconds=1)
     turn = Turn(
         id=turn_id if turn_id is not None else uuid.uuid4(),
         tenant_id=tenant_id,
         session_id=session_id,
         status=status,
         usage=usage,
+        created_at=created_at,
+        updated_at=created_at,
     )
     db.add(turn)
     await db.flush()
