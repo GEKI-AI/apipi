@@ -1,9 +1,11 @@
+import logging
 import uuid
 from typing import Any
 
 from starlette.websockets import WebSocket
 
 from apipi.common.event_bus import EventBus
+from apipi.common.logutil import log_event
 from apipi.protocol import (
     HelloReply,
     RegisterMessage,
@@ -21,6 +23,8 @@ from apipi.store.repo import (
 from apipi.workerhub.connection import WorkerConnection, WorkerImage, claimed_leases
 from apipi.workerhub.hub import WorkerHub, heartbeat_interval
 from apipi.workerhub.wire import send_message
+
+log = logging.getLogger("apipi.worker")
 
 
 class TokenBindingError(Exception):
@@ -110,6 +114,7 @@ async def register_worker(
         images=images_for_register(register, run_mode),
         arch=register.arch,
         accepts=accepts_for_register(register),
+        version=register.version or "unknown",
     )
     await hub.attach(conn)
     sessions = await hub.restore_leases(conn, store, register.running)
@@ -129,6 +134,7 @@ async def register_worker(
         HelloReply(
             worker_id=conn.worker_id,
             generation=conn.generation,
+            connection_id=conn.connection_id,
             lease_ttl_seconds=hub.settings.worker_lease_ttl.total_seconds(),
             heartbeat_seconds=heartbeat_interval(hub.settings),
             sessions=sessions,
@@ -139,6 +145,17 @@ async def register_worker(
                 for key, value in ttl.items()
             },
         ),
+        metrics=hub.metrics,
+    )
+    log_event(
+        log,
+        logging.INFO,
+        "worker hello sent",
+        event="worker.hello.sent",
+        worker_id=conn.worker_id,
+        connection_id=conn.connection_id,
+        sessions=len(sessions),
+        revoked=len(revoke),
     )
     await hub.resend_pending(conn)
     return conn

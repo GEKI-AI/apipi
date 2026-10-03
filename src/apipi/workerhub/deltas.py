@@ -147,13 +147,12 @@ async def handle_delta(
         return False
     if len(text) > DELTA_MAX_TEXT:
         hub.observe_protocol("delta.oversize")
-        log.warning(
+        conn.warnings.warning(
             "worker delta oversize",
-            extra={
-                "event": "worker.delta.oversize",
-                "worker_id": str(conn.worker_id),
-                "session_id": str(envelope.session_id),
-            },
+            event="worker.delta.oversize",
+            error_code="delta_oversize",
+            worker_id=conn.worker_id,
+            session_id=envelope.session_id,
         )
         return False
     if not relay_rate_allowed(
@@ -162,13 +161,12 @@ async def handle_delta(
         limit=DELTA_RATE_LIMIT,
     ):
         hub.observe_protocol("delta.rate_limited")
-        log.warning(
+        conn.warnings.warning(
             "worker delta rate limited",
-            extra={
-                "event": "worker.delta.rate_limited",
-                "worker_id": str(conn.worker_id),
-                "session_id": str(envelope.session_id),
-            },
+            event="worker.delta.rate_limited",
+            error_code="delta_rate_limited",
+            worker_id=conn.worker_id,
+            session_id=envelope.session_id,
         )
         return False
     known = hub._delta_leases.get(envelope.session_id)
@@ -182,13 +180,12 @@ async def handle_delta(
         if known is None:
             hub._forget_delta(envelope.session_id)
             hub.observe_protocol("delta.rejected")
-            log.warning(
+            conn.warnings.warning(
                 "worker delta for unleased session",
-                extra={
-                    "event": "worker.delta.rejected",
-                    "worker_id": str(conn.worker_id),
-                    "session_id": str(envelope.session_id),
-                },
+                event="worker.delta.rejected",
+                error_code="delta_not_leased",
+                worker_id=conn.worker_id,
+                session_id=envelope.session_id,
             )
             return False
     if turn_id is not None and str(turn_id) in known.done:

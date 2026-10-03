@@ -1,4 +1,3 @@
-import asyncio
 import io
 import mimetypes
 import tarfile
@@ -8,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from apipi.common.background import run_loop
 from apipi.common.dirs import pi_session_file, sessions_root, wipe_workspace
 from apipi.common.skills import copy_capability_directories
 from apipi.config import ConfigError, DiskLimitError, Settings
@@ -237,13 +237,16 @@ async def reap_workspace_loop(
     *,
     ttl_overrides: Mapping[str, tuple[float | None, float, str | None]] | None = None,
     on_wiped: Callable[[str], None] | None = None,
+    metrics: Any | None = None,
 ) -> None:
     ttl = settings.sandbox_ttl_openai_hosted
     seconds = ttl.total_seconds() if ttl is not None else 15.0
     interval = min(1.0, max(0.02, seconds / 5))
-    while True:
-        await asyncio.sleep(interval)
+
+    async def reap_round() -> None:
         wiped = await reap_workspaces(settings, pool, ttl_overrides=ttl_overrides)
         if on_wiped is not None:
             for session_id in wiped:
                 on_wiped(session_id)
+
+    await run_loop("workspace_reaper", reap_round, interval=interval, metrics=metrics)

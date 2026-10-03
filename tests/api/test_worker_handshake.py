@@ -45,7 +45,7 @@ async def test_v1_register_is_rejected(
     assert app.state.metrics is not None
     body = app.state.metrics.scrape().decode()
     assert metric_line(
-        body, "apipi_worker_protocol_total", event="unsupported_protocol"
+        body, "apipi_worker_connects_total", result="unsupported_protocol"
     ).endswith(" 1.0")
 
 

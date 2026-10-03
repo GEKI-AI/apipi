@@ -27,6 +27,7 @@ from typing import Any
 
 import asyncpg
 
+from apipi.common.background import run_loop
 from apipi.common.event_bus import (
     EventBus,
     InMemoryEventBus,
@@ -35,6 +36,7 @@ from apipi.common.event_bus import (
     message_seq,
     wake_message,
 )
+from apipi.common.logutil import RateLimitedLog
 from apipi.config import ConfigError, Settings, is_sqlite_url, postgres_url
 
 log = logging.getLogger("apipi")
@@ -99,6 +101,7 @@ class PostgresEventBus(LocalFanout):
         self._lock = asyncio.Lock()
         self._tasks: list[asyncio.Task[None]] = []
         self._connect_not_before = 0.0
+        self._warnings = RateLimitedLog(log)
 
     async def start(self) -> None:
         async with self._lock:
@@ -152,7 +155,7 @@ class PostgresEventBus(LocalFanout):
             else:
                 self._buffer_live(session_id, message)
         except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
-            log.warning("event bus notify failed; fallback poll covers: %s", exc)
+            self._note_notify_error(exc)
             self._note_remote_failure()
 
     def _buffer_live(self, session_id: uuid.UUID, message: dict[str, Any]) -> None:
@@ -162,6 +165,16 @@ class PostgresEventBus(LocalFanout):
                 "session_id": str(session_id),
                 "data": message.get("data", {}),
             }
+        )
+
+    def _note_notify_error(self, exc: BaseException) -> None:
+        if self._metrics is not None:
+            self._metrics.observe_event_bus_notify_error()
+        self._warnings.warning(
+            "event bus notify failed; the fallback poll covers it",
+            event="event_bus.notify.failed",
+            error_code="notify_failed",
+            error=type(exc).__name__,
         )
 
     def _note_remote_failure(self) -> None:
@@ -256,10 +269,15 @@ class PostgresEventBus(LocalFanout):
             log.warning("event bus listener reconnected")
 
     async def _flush_live_loop(self) -> None:
-        while self._running:
-            await asyncio.sleep(LIVE_WINDOW)
-            if not self._running:
-                return
+        await run_loop(
+            "delta_flusher",
+            self._flush_live_round,
+            interval=LIVE_WINDOW,
+            metrics=self._metrics,
+        )
+
+    async def _flush_live_round(self) -> None:
+        if self._running:
             await self._flush_live_once()
 
     async def _flush_live_once(self) -> None:
@@ -284,7 +302,7 @@ class PostgresEventBus(LocalFanout):
                         }
                     )
             except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
-                log.warning("event bus live flush failed: %s", exc)
+                self._note_notify_error(exc)
                 self._note_remote_failure()
 
     async def _sample_queue_usage(self) -> None:

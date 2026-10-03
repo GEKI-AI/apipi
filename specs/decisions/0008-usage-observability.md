@@ -17,3 +17,12 @@ of the same non-text facts.
 
 Tokens now, dollar cost later. A setting that would store prompt or
 completion bodies in ApiPi is rejected.
+
+The worker socket is observed the same way, from both processes. The
+shared pieces live in `apipi.common`: one `Metrics` registry per
+process, a rate-limited warning logger, a wrapper for background
+loops, an event loop lag sampler, and a log context that puts
+`worker_id` and `connection_id` on every line of a connection. The
+series and log events are listed in `docs/observability.md` and
+`docs/usage.md`. Labels stay low-cardinality, and only
+`apipi_worker_info` carries a worker id.

@@ -184,7 +184,9 @@ class SearchService:
         settings: Settings,
         resolver: SearchResolver | None = None,
         client: httpx.AsyncClient | None = None,
+        metrics: Any | None = None,
     ) -> None:
+        self.metrics = metrics
         self.store = store
         self.settings = settings
         self.resolver = resolver if resolver is not None else SearchResolver(settings)
@@ -248,7 +250,12 @@ class SearchService:
                 status="error",
                 latency_ms=_ms(started),
             )
+            self._count("none", "search_failed", started)
             return _failure(session_id, request_id, "search_failed", "search failed")
+
+    def _count(self, provider: str, result: str, started: float) -> None:
+        if self.metrics is not None:
+            self.metrics.observe_search(provider, result, time.monotonic() - started)
 
     async def _handle(
         self,
@@ -263,6 +270,7 @@ class SearchService:
         request_id = request.request_id
 
         def denied(reason: str) -> dict[str, Any]:
+            self._count("none", "search_denied", started)
             log_event(
                 log,
                 logging.WARNING,
@@ -318,6 +326,9 @@ class SearchService:
         units = 0
         failure: SearchProviderError | None = None
         hits: list[SearchHit] = []
+        if self.metrics is not None:
+            self.metrics.add_search_inflight(1)
+        call_started = time.monotonic()
         try:
             response = await provider.search(search_query)
         except SearchProviderError as exc:
@@ -327,6 +338,12 @@ class SearchService:
         else:
             hits = response.results
             calls, units = 1, response.units
+        finally:
+            if self.metrics is not None:
+                self.metrics.add_search_inflight(-1)
+        self._count(
+            target.provider, "ok" if failure is None else failure.code, call_started
+        )
         if calls:
             await self._record(
                 tenant_id,

@@ -5,7 +5,6 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from apipi.common.logutil import log_event
 from apipi.protocol import HeartbeatMessage, WorkerImageInfo
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
@@ -74,11 +73,10 @@ def observe_heartbeat(hub: WorkerHub, conn: WorkerConnection) -> None:
         hub.metrics.observe_worker_heartbeat_gap(gap)
     ttl = hub.settings.worker_lease_ttl.total_seconds()
     if gap > ttl / 2:
-        log_event(
-            log,
-            logging.WARNING,
+        conn.warnings.warning(
             "worker heartbeat late",
             event="worker.heartbeat.late",
+            error_code="heartbeat_late",
             worker_id=conn.worker_id,
             source="api",
             gap_seconds=round(gap, 3),

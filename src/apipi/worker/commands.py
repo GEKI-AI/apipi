@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ from apipi.common.otel import (
 from apipi.common.placement import worker_accepts
 from apipi.protocol import (
     COMMAND_CONTEXT_OPS,
+    COMMAND_OPS,
     COMMAND_PAYLOAD_MODELS,
     BaseCommandPayload,
     ContextBytes,
@@ -222,6 +225,44 @@ def _typed_payload(
 async def dispatch_command(
     execution: Any, message: WorkerCommand | dict[str, Any]
 ) -> None:
+    raw_op = message.op if isinstance(message, WorkerCommand) else message.get("op")
+    op_label = (
+        raw_op if isinstance(raw_op, str) and raw_op in COMMAND_OPS else "unknown"
+    )
+    metrics = getattr(execution, "metrics", None)
+    started = time.monotonic()
+    result = "failed"
+    try:
+        result = await _dispatch(execution, message)
+    except asyncio.CancelledError:
+        result = "dispatched"
+        raise
+    finally:
+        if metrics is not None:
+            metrics.observe_worker_command_received(op_label, result)
+            metrics.observe_worker_command_seconds(op_label, time.monotonic() - started)
+
+
+def log_command(command: WorkerCommand) -> None:
+    """Info line for one accepted command, with the secret-free context summary."""
+    request_id = command.payload.get("request_id")
+    traceparent = command.payload.get("traceparent")
+    log_event(
+        log,
+        logging.INFO,
+        "worker command",
+        event="worker.command",
+        op=command.op,
+        session_id=command.session_id,
+        lease_id=command.lease_id,
+        command_id=command.command_id,
+        request_id=request_id if isinstance(request_id, str) else None,
+        traceparent=traceparent if isinstance(traceparent, str) else None,
+        **command_log_context(command),
+    )
+
+
+async def _dispatch(execution: Any, message: WorkerCommand | dict[str, Any]) -> str:
     if isinstance(message, WorkerCommand):
         op: object = message.op
         raw_session: object = message.session_id
@@ -244,10 +285,10 @@ async def dispatch_command(
             "worker command invalid",
             extra={"event": "worker.command.invalid"},
         )
-        return
+        return "rejected"
     tenant_id = payload.tenant_id
     if tenant_id is None:
-        return
+        return "rejected"
     request_id = payload.request_id
     key_id = payload.key_id
     user_id = payload.user_id
@@ -282,7 +323,7 @@ async def dispatch_command(
         )
         if op in _TURN_OPS:
             await _report_escaped_turn(execution, tenant_id, session_id, exc)
-            return
+            return "failed"
         raise
     except Exception as exc:
         internal = failure_for("internal", "Turn failed")
@@ -299,10 +340,11 @@ async def dispatch_command(
         )
         if op in _TURN_OPS:
             await _report_escaped_turn(execution, tenant_id, session_id, exc)
-            return
+            return "failed"
         raise
     finally:
         detach_traceparent(token)
+    return "dispatched"
 
 
 async def _run_command(

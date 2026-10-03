@@ -13,7 +13,14 @@ from urllib.parse import urlparse, urlunparse
 import websockets
 from pydantic import ValidationError
 
-from apipi.common.logutil import log_event
+from apipi import __version__
+from apipi.common.background import spawn_loop, start_event_loop_lag, watch_task
+from apipi.common.logutil import (
+    RateLimitedLog,
+    bind_log_context,
+    log_event,
+    unbind_log_context,
+)
 from apipi.config import (
     ConfigError,
     Settings,
@@ -45,9 +52,10 @@ from apipi.protocol import (
     WorkerCommand,
     WorkerImageInfo,
     parse_api_message,
+    wire_type,
 )
 from apipi.worker.artifact_upload import handle_presign_reply
-from apipi.worker.commands import CommandDedupe, command_log_context, dispatch_command
+from apipi.worker.commands import CommandDedupe, dispatch_command, log_command
 from apipi.worker.deltas import DeltaRelay, LiveRedirectBus
 from apipi.worker.inventory import (
     _apply_inventory_reply,
@@ -217,6 +225,8 @@ async def run_worker(
     bus = InMemoryEventBus()
     relay = DeltaRelay()
     outbox = worker_outbox(settings)
+    outbox.metrics = metrics
+    relay.metrics = metrics
     execution = local_execution(
         settings,
         hub=LiveRedirectBus(bus, relay),
@@ -250,19 +260,38 @@ async def run_worker(
                 "port": settings.worker_metrics_port,
             },
         )
-    tasks.add(asyncio.create_task(execution.observe_loop()))
-    tasks.add(asyncio.create_task(execution.reap_loop()))
-    tasks.add(asyncio.create_task(execution.reap_workspace_loop()))
-    tasks.add(asyncio.create_task(execution.sandbox_seen_loop()))
+    for name, factory in (
+        ("worker_observe", execution.observe_loop),
+        ("session_reaper", execution.reap_loop),
+        ("workspace_reaper", execution.reap_workspace_loop),
+        ("sandbox_seen", execution.sandbox_seen_loop),
+    ):
+        loop_task = asyncio.create_task(factory(), name=name)
+        watch_task(loop_task, name, metrics=metrics)
+        tasks.add(loop_task)
+    tasks.add(start_event_loop_lag(metrics))
+    if metrics is not None:
+
+        async def observe_outbox() -> None:
+            outbox.observe()
+
+        tasks.add(
+            spawn_loop("outbox_metrics", observe_outbox, interval=1.0, metrics=metrics)
+        )
     emitter = getattr(getattr(execution, "pool", None), "lifecycle", None)
     if emitter is not None:
         emitter.start()
     log.info("worker connect", extra={"url": ws_url})
     spooled = outbox.load_spool()
     if spooled:
-        log.info(
-            "worker outbox spool loaded",
-            extra={"sessions": len(spooled)},
+        log_event(
+            log,
+            logging.INFO,
+            "worker outbox spool recovered",
+            event="worker.spool.recovered",
+            sessions=len(spooled),
+            envelopes=outbox.describe()["messages"],
+            bytes=outbox.describe()["bytes"],
         )
     draining = asyncio.Event()
     _install_drain_signals(draining)
@@ -278,10 +307,13 @@ async def run_worker(
     dedupe = CommandDedupe()
     status = 0
     backoff = 0.5
+    attempt = 0
+    warnings = RateLimitedLog(log)
     connect_kwargs = _worker_connect_kwargs(settings, ws_url)
     connect_factory = connect if connect is not None else websockets.connect
     try:
         while True:
+            connect_started = time.monotonic()
             try:
                 async with connect_factory(
                     ws_url,
@@ -302,8 +334,10 @@ async def run_worker(
                         wait,
                         emitter,
                         dedupe,
+                        connect_started=connect_started,
                     )
                 backoff = 0.5
+                attempt = 0
                 if outcome == "drained":
                     break
                 if outcome == "drain_timeout":
@@ -311,12 +345,33 @@ async def run_worker(
                     break
             except ConfigError:
                 raise
-            except Exception:
-                log.warning("worker connection lost, reconnecting", exc_info=True)
+            except Exception as exc:
+                if metrics is not None:
+                    metrics.set_worker_connected(False)
+                reason = _reconnect_reason(exc)
+                warnings.warning(
+                    "worker connection lost, reconnecting",
+                    event="worker.connection.lost",
+                    error_code=reason,
+                    exc_info=True,
+                    reason=reason,
+                )
                 if draining.is_set() and drain_idle(
                     execution.pool.live(), command_tasks
                 ):
                     break
+                attempt += 1
+                if metrics is not None:
+                    metrics.observe_worker_reconnect(reason)
+                log_event(
+                    log,
+                    logging.INFO,
+                    "worker reconnecting",
+                    event="worker.reconnecting",
+                    reason=reason,
+                    attempt=attempt,
+                    delay_s=backoff,
+                )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2.0, 5.0)
                 continue
@@ -329,6 +384,14 @@ async def run_worker(
             execution.tracing.shutdown()
         await bus.close()
     return status
+
+
+def _reconnect_reason(exc: BaseException) -> str:
+    if isinstance(exc, websockets.ConnectionClosed):
+        return "closed"
+    if isinstance(exc, OSError | TimeoutError | websockets.InvalidHandshake):
+        return "connect_error"
+    return "error"
 
 
 def worker_outbox(settings: Settings) -> "Outbox":
@@ -466,6 +529,8 @@ async def _serve_connection(
     wait: float,
     emitter: Any,
     dedupe: CommandDedupe,
+    *,
+    connect_started: float | None = None,
 ) -> tuple[str, float | None]:
     """Serve one socket; returns drained or drain_timeout (loss raises).
 
@@ -481,6 +546,11 @@ async def _serve_connection(
 
     send_lock = asyncio.Lock()
     metrics = getattr(execution, "metrics", None)
+    warnings = RateLimitedLog(log)
+    opened = time.monotonic()
+    if connect_started is None:
+        connect_started = opened
+    context_token: Any = None
 
     async def send_json(payload: dict[str, Any]) -> None:
         async with send_lock:
@@ -499,6 +569,7 @@ async def _serve_connection(
             memory_mb=settings.node_memory_mb(),
             run_mode=settings.run_mode,
             arch=worker_arch(),
+            version=__version__,
             images=[
                 WorkerImageInfo.model_validate(item)
                 for item in _heartbeat_images(settings)
@@ -516,18 +587,26 @@ async def _serve_connection(
         raise ConfigError(f"worker register failed: invalid hello: {exc}") from exc
     heartbeat = welcome.heartbeat_seconds
     lease_ttl = welcome.lease_ttl_seconds
+    context_token = bind_log_context(
+        worker_id=hello.get("worker_id"), connection_id=welcome.connection_id
+    )
+    if metrics is not None:
+        metrics.observe_worker_connect_seconds(time.monotonic() - connect_started)
+        metrics.set_worker_connected(True)
     proof = answer_store_check(settings, hello)
     if proof is not None:
         await send_json(proof)
     hello_sessions = welcome.sessions
-    log.info(
+    log_event(
+        log,
+        logging.INFO,
         "worker hello",
-        extra={
-            "worker_id": hello.get("worker_id"),
-            "sessions": {str(key): value for key, value in hello_sessions.items()},
-            "lease_ttl_seconds": lease_ttl,
-            "heartbeat_seconds": heartbeat,
-        },
+        event="worker.hello.received",
+        sessions={str(key): value for key, value in hello_sessions.items()},
+        lease_ttl_seconds=lease_ttl,
+        heartbeat_seconds=heartbeat,
+        revoked=len(welcome.revoke),
+        connect_s=round(time.monotonic() - connect_started, 3),
     )
     stopping: set[uuid.UUID] = set()
 
@@ -539,11 +618,10 @@ async def _serve_connection(
             active=lambda: session_leases.get(session_id) == lease_id,
         )
         if not flushed:
-            log_event(
-                log,
-                logging.WARNING,
+            warnings.warning(
                 "worker outbox not acked before release",
                 event="worker.release.unflushed",
+                error_code="release_unflushed",
                 session_id=session_id,
                 action=action,
                 acked_seq=outbox.acked_seq(session_id),
@@ -583,6 +661,18 @@ async def _serve_connection(
         settings=settings,
     )
     relay.attach(send_json)
+    replayed = sum(len(outbox.pending(sid)) for sid in outbox.pending_sessions())
+    if replayed:
+        if metrics is not None:
+            metrics.observe_worker_replayed(replayed)
+        log_event(
+            log,
+            logging.INFO,
+            "worker replays unacked envelopes",
+            event="worker.replay",
+            envelopes=replayed,
+            sessions=len(outbox.pending_sessions()),
+        )
     pump = asyncio.create_task(_pump_outbox(outbox, send_json))
 
     async def report_seen(session_ids: list[uuid.UUID]) -> None:
@@ -628,11 +718,10 @@ async def _serve_connection(
             if metrics is not None:
                 metrics.observe_worker_heartbeat_gap(gap)
             if gap > lease_ttl / 2:
-                log_event(
-                    log,
-                    logging.WARNING,
+                warnings.warning(
                     "worker heartbeat late",
                     event="worker.heartbeat.late",
+                    error_code="heartbeat_late",
                     source="worker",
                     gap_seconds=round(gap, 3),
                     lease_ttl_seconds=lease_ttl,
@@ -649,13 +738,38 @@ async def _serve_connection(
         await draining.wait()
         if drain_deadline is None:
             drain_deadline = time.monotonic() + wait
-            log.info("worker drain")
+            if metrics is not None:
+                metrics.set_worker_draining(True)
+            log_event(
+                log,
+                logging.INFO,
+                "worker drain started",
+                event="worker.drain.started",
+                sessions=execution.pool.live(),
+                timeout_s=wait,
+            )
             await send_heartbeat()
         while True:
             await execution.pool.kill_unheld(reason="drain")
             if drain_idle(execution.pool.live(), command_tasks):
+                log_event(
+                    log,
+                    logging.INFO,
+                    "worker drain finished",
+                    event="worker.drain.finished",
+                    result="drained",
+                )
                 return "drained", drain_deadline
             if time.monotonic() >= drain_deadline:
+                log_event(
+                    log,
+                    logging.WARNING,
+                    "worker drain timed out",
+                    event="worker.drain.finished",
+                    error_code="drain_timeout",
+                    result="drain_timeout",
+                    sessions=execution.pool.live(),
+                )
                 return "drain_timeout", drain_deadline
             await asyncio.sleep(0.5)
 
@@ -690,15 +804,25 @@ async def _serve_connection(
             message = json.loads(text)
             if not isinstance(message, dict):
                 continue
+            if metrics is not None:
+                metrics.observe_worker_message("in", wire_type(message), len(text))
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug(
+                    "worker message in",
+                    extra={
+                        "event": "worker.message",
+                        "type": wire_type(message),
+                        "size": len(text),
+                    },
+                )
             try:
                 parsed = parse_api_message(message)
             except ValidationError:
-                log.warning(
+                warnings.warning(
                     "worker message invalid",
-                    extra={
-                        "event": "worker.message.invalid",
-                        "type": str(message.get("type")),
-                    },
+                    event="worker.message.invalid",
+                    error_code="invalid_message",
+                    type=str(wire_type(message)),
                 )
                 continue
             if isinstance(parsed, CumulativeAck):
@@ -745,6 +869,8 @@ async def _serve_connection(
             _adopt_cursor(outbox, command)
             if command.op == "session.stop":
                 if dedupe.duplicate(command.session_id, command_id):
+                    if metrics is not None:
+                        metrics.observe_worker_command_received(command.op, "duplicate")
                     await send_json(ack_command(command))
                     continue
                 task = asyncio.create_task(
@@ -756,17 +882,12 @@ async def _serve_connection(
                 task.add_done_callback(tasks.discard)
                 continue
             if dedupe.duplicate(command.session_id, command_id):
+                if metrics is not None:
+                    metrics.observe_worker_command_received(command.op, "duplicate")
                 await send_json(ack_command(command))
                 continue
             await send_json(ack_command(command))
-            log.info(
-                "worker command",
-                extra={
-                    "op": command.op,
-                    "session_id": str(command.session_id),
-                    **command_log_context(command),
-                },
-            )
+            log_command(command)
             task = asyncio.create_task(dispatch_command(execution, command))
             command_tasks.add(task)
             task.add_done_callback(command_tasks.discard)
@@ -805,3 +926,17 @@ async def _serve_connection(
         pump.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await pump
+        if metrics is not None:
+            metrics.set_worker_connected(False)
+        log_event(
+            log,
+            logging.INFO,
+            "worker disconnected",
+            event="worker.disconnected",
+            duration_s=round(time.monotonic() - opened, 3),
+            unacked_envelopes=outbox.describe()["messages"],
+            unacked_sessions=len(outbox.pending_sessions()),
+            deltas_dropped=getattr(relay, "dropped", 0),
+        )
+        if context_token is not None:
+            unbind_log_context(context_token)

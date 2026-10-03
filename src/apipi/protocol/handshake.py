@@ -42,6 +42,7 @@ class RegisterMessage(ControlMessage):
     run_mode: str
     arch: str = ""
     images: list[WorkerImageInfo] | None = None
+    version: str | None = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -102,8 +103,9 @@ class HelloReply(ControlMessage):
     `sessions` maps each running session to the seq the API already
     persisted, and the worker replays everything after it. `revoke`
     lists leases the worker must drop, and `ttl` carries the reaper
-    idle TTL per session. The API always sets `worker_id` and
-    `generation`; a worker does not need them to run.
+    idle TTL per session. The API always sets `worker_id`,
+    `generation`, and `connection_id`; a worker does not need them to
+    run. `connection_id` names this socket in the logs of both sides.
     """
 
     type: Literal["hello"] = "hello"
@@ -111,6 +113,7 @@ class HelloReply(ControlMessage):
     protocol: Literal[2] = 2
     worker_id: uuid.UUID | None = None
     generation: int | None = None
+    connection_id: str | None = None
     lease_ttl_seconds: float = Field(gt=0)
     heartbeat_seconds: float = Field(gt=0)
     sessions: dict[uuid.UUID, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)

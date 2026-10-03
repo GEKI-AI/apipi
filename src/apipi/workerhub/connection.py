@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from collections.abc import Sequence
@@ -7,6 +8,7 @@ from typing import Any
 from pydantic import ValidationError
 from starlette.websockets import WebSocket
 
+from apipi.common.logutil import RateLimitedLog
 from apipi.protocol import RunningSession
 
 
@@ -37,6 +39,12 @@ class WorkerConnection:
     connected_at: float = field(default_factory=time.monotonic)
     last_heartbeat: float | None = None
     last_renewed: float = field(default_factory=time.monotonic)
+    connection_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    version: str = ""
+    disconnect_reason: str | None = None
+    warnings: RateLimitedLog = field(
+        default_factory=lambda: RateLimitedLog(logging.getLogger("apipi.worker"))
+    )
 
 
 def claimed_leases(

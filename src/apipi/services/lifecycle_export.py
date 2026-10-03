@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import httpx
 
+from apipi.common.background import watch_task
 from apipi.common.logutil import log_event
 from apipi.common.metrics import Metrics
 from apipi.common.timefmt import utc_ts
@@ -104,7 +105,8 @@ class LifecycleEmitter:
     def start(self) -> None:
         if not self.active or self._task is not None or self._queue is None:
             return
-        self._task = asyncio.create_task(self._sender())
+        self._task = asyncio.create_task(self._sender(), name="lifecycle_sender")
+        watch_task(self._task, "lifecycle_sender", metrics=self.metrics)
 
     def emit_start(self, fields: dict[str, Any], *, cause: str) -> int | None:
         if not self.active or not self._allowed(fields):

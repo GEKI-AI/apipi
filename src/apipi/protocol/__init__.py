@@ -34,6 +34,7 @@ from apipi.protocol.constants import (
     DURABLE_MESSAGE_TYPES,
     EPHEMERAL_MESSAGE_TYPES,
     INVALID_REGISTER_REASON,
+    KNOWN_WIRE_TYPES,
     MAX_COMMAND_BYTES,
     MAX_MESSAGE_BYTES,
     OUTBOX_BOUND,
@@ -49,6 +50,7 @@ from apipi.protocol.constants import (
     WORKER_IN,
     WORKER_MESSAGE_TYPES,
     WORKER_OUT,
+    wire_type,
 )
 from apipi.protocol.context import (
     CommandTooLarge,
@@ -140,6 +142,7 @@ __all__ = [
     "DURABLE_MESSAGE_TYPES",
     "EPHEMERAL_MESSAGE_TYPES",
     "INVALID_REGISTER_REASON",
+    "KNOWN_WIRE_TYPES",
     "LIVE_EVENT_TYPES",
     "MAX_COMMAND_BYTES",
     "MAX_MESSAGE_BYTES",
@@ -234,4 +237,5 @@ __all__ = [
     "parse_worker_message",
     "redact_context",
     "summarize_context",
+    "wire_type",
 ]

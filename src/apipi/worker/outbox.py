@@ -18,17 +18,20 @@ per session so buffered envelopes survive a worker restart.
 import asyncio
 import json
 import logging
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from apipi.common.logutil import RateLimitedLog
 from apipi.protocol import EnvelopePayload, WorkerEnvelope
 
 log = logging.getLogger("apipi.worker")
 
 EMERGENCY_BUDGET = 10
+HIGH_WATER_FRACTION = 0.8
 
 
 class OutboxFull(Exception):
@@ -44,6 +47,7 @@ class _SessionBuffer:
     issued: int = 0
     acked: int = 0
     envelopes: deque[dict[str, Any]] = field(default_factory=deque)
+    added: deque[float] = field(default_factory=deque)
     bytes: int = 0
     emergency_used: int = 0
 
@@ -59,6 +63,7 @@ class Outbox:
         max_messages: int = 10_000,
         max_bytes: int = 64 * 1024 * 1024,
         spool_dir: str | Path | None = None,
+        metrics: Any | None = None,
     ) -> None:
         if max_messages < 1:
             raise ValueError("max_messages must be >= 1")
@@ -66,6 +71,8 @@ class Outbox:
             raise ValueError("max_bytes must be >= 1024")
         self.max_messages = max_messages
         self.max_bytes = max_bytes
+        self.metrics = metrics
+        self._warnings = RateLimitedLog(log)
         self.spool_dir = Path(spool_dir) if spool_dir is not None else None
         if self.spool_dir is not None:
             self.spool_dir.mkdir(parents=True, exist_ok=True)
@@ -89,12 +96,7 @@ class Outbox:
         the highest seq ever issued.
         """
         buffer = self._buffer(session_id)
-        while buffer.envelopes and int(buffer.envelopes[0]["seq"]) <= last_seq:
-            dropped = buffer.envelopes.popleft()
-            size = envelope_size(dropped)
-            buffer.bytes -= size
-            self._messages -= 1
-            self._bytes -= size
+        self._trim(buffer, last_seq, observe=False)
         buffer.acked = max(buffer.acked, last_seq)
         buffer.issued = max(buffer.issued, last_seq)
         self._rewrite_spool(session_id)
@@ -148,16 +150,38 @@ class Outbox:
             or self._bytes + size > self.max_bytes
         )
         if over and not (emergency and buffer.emergency_used < EMERGENCY_BUDGET):
+            self._warnings.warning(
+                "worker outbox full",
+                event="worker.outbox.full",
+                error_code="worker_outbox_full",
+                session_id=session_id,
+                messages=self._messages,
+                bytes=self._bytes,
+            )
             raise OutboxFull(session_id)
         if over:
             buffer.emergency_used += 1
         buffer.issued = seq
         buffer.envelopes.append(envelope)
+        buffer.added.append(time.monotonic())
         buffer.bytes += size
         self._messages += 1
         self._bytes += size
         self._spool_append(session_id, envelope)
         self._dirty.set()
+        if (
+            self._messages >= self.max_messages * HIGH_WATER_FRACTION
+            or self._bytes >= self.max_bytes * HIGH_WATER_FRACTION
+        ):
+            self._warnings.warning(
+                "worker outbox above 80 percent",
+                event="worker.outbox.high",
+                error_code="worker_outbox_high",
+                messages=self._messages,
+                max_messages=self.max_messages,
+                bytes=self._bytes,
+                max_bytes=self.max_bytes,
+            )
         return envelope
 
     def acked(self, session_id: uuid.UUID, last_seq: int) -> None:
@@ -165,14 +189,48 @@ class Outbox:
         buffer = self._sessions.get(session_id)
         if buffer is None:
             return
+        self._trim(buffer, last_seq, observe=True)
+        buffer.acked = max(buffer.acked, last_seq)
+        self._rewrite_spool(session_id)
+
+    def _trim(self, buffer: _SessionBuffer, last_seq: int, *, observe: bool) -> None:
+        now = time.monotonic()
         while buffer.envelopes and int(buffer.envelopes[0]["seq"]) <= last_seq:
             dropped = buffer.envelopes.popleft()
+            added = buffer.added.popleft() if buffer.added else now
             size = envelope_size(dropped)
             buffer.bytes -= size
             self._messages -= 1
             self._bytes -= size
-        buffer.acked = max(buffer.acked, last_seq)
-        self._rewrite_spool(session_id)
+            if observe and self.metrics is not None:
+                self.metrics.observe_worker_ack(now - added)
+
+    def spool_size(self) -> int:
+        if self.spool_dir is None:
+            return 0
+        total = 0
+        for path in self.spool_dir.glob("*.jsonl"):
+            try:
+                total += path.stat().st_size
+            except OSError:
+                continue
+        return total
+
+    def oldest_seconds(self) -> float:
+        """Age of the oldest envelope that is not acked yet."""
+        firsts = [buffer.added[0] for buffer in self._sessions.values() if buffer.added]
+        return time.monotonic() - min(firsts) if firsts else 0.0
+
+    def observe(self) -> None:
+        """Publish the outbox gauges."""
+        if self.metrics is not None:
+            self.metrics.set_worker_outbox(
+                messages=self._messages,
+                size=self._bytes,
+                oldest_seconds=self.oldest_seconds(),
+            )
+            if self.spool_dir is not None:
+                self.metrics.set_worker_spool_bytes(self.spool_size())
 
     def pending(
         self, session_id: uuid.UUID, *, after_seq: int = 0
@@ -254,6 +312,7 @@ class Outbox:
                     continue
                 buffer.issued = seq
                 buffer.envelopes.append(envelope)
+                buffer.added.append(time.monotonic())
                 size = envelope_size(envelope)
                 buffer.bytes += size
                 self._messages += 1
@@ -270,10 +329,14 @@ class Outbox:
         path = self._spool_path(session_id)
         if path is None:
             return
+        started = time.monotonic()
         try:
+            line = json.dumps(envelope, separators=(",", ":")) + "\n"
             with path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(envelope, separators=(",", ":")) + "\n")
+                handle.write(line)
                 handle.flush()
+            if self.metrics is not None:
+                self.metrics.observe_worker_spool_write(time.monotonic() - started)
         except OSError:
             log.warning(
                 "worker outbox spool write failed",
@@ -285,6 +348,7 @@ class Outbox:
         if path is None:
             return
         buffer = self._sessions.get(session_id)
+        started = time.monotonic()
         try:
             if not buffer or not buffer.envelopes:
                 path.unlink(missing_ok=True)
@@ -294,6 +358,8 @@ class Outbox:
                 for envelope in buffer.envelopes:
                     handle.write(json.dumps(envelope, separators=(",", ":")) + "\n")
             tmp.replace(path)
+            if self.metrics is not None:
+                self.metrics.observe_worker_spool_write(time.monotonic() - started)
         except OSError:
             log.warning(
                 "worker outbox spool rewrite failed",
