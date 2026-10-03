@@ -44,4 +44,4 @@ def test_real_pi_slash_command_ends_turn() -> None:
     first = messages[0]
     assert isinstance(first, dict)
     assert str(first.get("errorMessage")).startswith("input_handled_by_command")
-    assert PINNED_PI == "0.99.1"
+    assert PINNED_PI == "1.0.0"

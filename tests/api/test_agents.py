@@ -104,6 +104,50 @@ async def test_agent_crud(client: AsyncClient) -> None:
     assert gone.status_code == 404
 
 
+def _mcp(label: str) -> dict[str, str]:
+    return {
+        "type": "mcp",
+        "server_label": label,
+        "server_url": "https://mcp.example.com/mcp",
+    }
+
+
+async def test_mcp_labels_differing_only_in_dash_and_underscore_are_rejected(
+    client: AsyncClient,
+) -> None:
+    token = _token()
+    response = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={"name": "one", "tools": [_mcp("my-docs"), _mcp("my_docs")]},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "mcp_label_collision"
+    created = await client.post(
+        "/v1/agents",
+        headers=_auth(token),
+        json={"name": "two", "tools": [_mcp("my-docs"), _mcp("other")]},
+    )
+    assert created.status_code == 200
+    updated = await client.post(
+        f"/v1/agents/{created.json()['id']}",
+        headers=_auth(token),
+        json={"tools": [_mcp("a-b"), _mcp("a_b")]},
+    )
+    assert updated.status_code == 400
+    assert updated.json()["error"]["code"] == "mcp_label_collision"
+    inline = await client.post(
+        "/v1/agents/sessions",
+        headers=_auth(token),
+        json={
+            "agent": {"name": "inline", "tools": [_mcp("x-y"), _mcp("x_y")]},
+            "environment": {"type": "none"},
+        },
+    )
+    assert inline.status_code == 400
+    assert inline.json()["error"]["code"] == "mcp_label_collision"
+
+
 async def test_nested_mcp_transport_is_rejected(client: AsyncClient) -> None:
     token = _token()
     response = await client.post(

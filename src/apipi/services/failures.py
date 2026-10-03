@@ -4,10 +4,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-FIXTURE_PI = "0.99.1"
+FIXTURE_PI = "1.0.0"
 
 _OVERFLOW = (
-    re.compile(r"prompt is too long", re.I),
+    re.compile(r"prompt (?:is )?too long", re.I),
+    re.compile(r"prompt exceeds max length", re.I),
     re.compile(r"request_too_large", re.I),
     re.compile(r"input is too long for requested model", re.I),
     re.compile(r"exceeds the context window", re.I),

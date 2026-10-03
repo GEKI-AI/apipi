@@ -29,7 +29,11 @@ from apipi.mcp.http import (
     apply_vault_headers,
     mcp_http_tools,
 )
-from apipi.services.agents import AgentWrite, definition_for_session
+from apipi.services.agents import (
+    AgentWrite,
+    definition_for_session,
+    reject_colliding_mcp_labels,
+)
 from apipi.services.env_none import (
     is_env_none,
     reject_builtin_tools_for_env_none,
@@ -588,6 +592,7 @@ class SessionService:
             else:
                 reject_codemode_without_builtin_tools(metadata, agent_metadata)
             if agent is not None and agent.tools is not None:
+                reject_colliding_mcp_labels(raw_tools)
                 await require_search(
                     self.search,
                     raw_tools,

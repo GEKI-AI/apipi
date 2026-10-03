@@ -82,8 +82,11 @@ through the broker when the turn starts, so the gateway never probes the
 server. A thin Pi extension calls `pi.registerMcpServer()` with the broker
 URL, `direct` exposure, and the allowed tools. The guest does not receive
 MCP bearers. Model facing tool names are `mcp__<server>__<tool>`, sanitised
-and hashed when long. API output items still carry the original `server_label`
-and tool name. A server that is down or rejects the call does not fail the
+and hashed when long. Pi writes `-` in the server label as `_`, so a
+label `my-docs` gives `mcp__my_docs__<tool>`. Two labels that differ only in
+`-` and `_` are the same name to Pi, so an agent or an inline session with
+both is rejected with `400` and code `mcp_label_collision`. API output items
+still carry the original `server_label` and tool name. A server that is down or rejects the call does not fail the
 turn. The worker logs `pi.extension_error` with the server label, the phase,
 and the error, and the turn continues without that server's tools.
 
@@ -239,8 +242,8 @@ The model writes JavaScript that runs in a QuickJS sandbox inside the
 Pi process and can only call the other enabled tools, for example in
 parallel with `Promise.allSettled`. It adds no new capabilities or
 privileges; bash remains the boundary. In process run modes it runs on
-the host inside Pi, like the rest of Pi. `models.classify()` is
-unsupported and untested.
+the host inside Pi, like the rest of Pi. `models.classify()` and
+`models.generateImages()` are unsupported and untested.
 
 The `codemode` call itself is one `command_execution` item. Tool calls
 made from scripts carry the parent call id and appear under the parent

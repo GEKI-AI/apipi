@@ -9,14 +9,14 @@ SQLite. Several API processes share Postgres. How isolation and
 workers fit is in [Concepts](concepts.md).
 
 Live turns need the Pi CLI (`pi --mode rpc`) on `PATH` and a model
-host URL. The gateway pins Pi 0.99.1. `apipi install` can install that
+host URL. The gateway pins Pi 1.0.0. `apipi install` can install that
 Pi CLI, a Firecracker microVM, or both. On a TTY with no flags it asks
 what to install (default is Pi). Without a TTY it installs Pi only, so
 scripts and CI keep working. Put the Pi binary on `PATH`, or set
 `APIPI_PI_COMMAND`. You can also install Pi yourself:
 
 ```
-npm i -g --ignore-scripts @earendil-works/pi-coding-agent@0.99.1
+npm i -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.0
 ```
 
 ## From PyPI
@@ -383,7 +383,7 @@ API replicas do not need sticky routing. See
 
 `OPENAI_BASE_URL` is required. It is the model host Pi calls. Clients
 use a different URL for this gateway. On `apipi worker`,
-the process checks that `pi --version` is 0.99.1 and exits before it
+the process checks that `pi --version` is 1.0.0 and exits before it
 connects if that check fails. On `apipi serve` and `apipi worker`, with the default
 `APIPI_MODEL_LIST=probe` it also lists `{OPENAI_BASE_URL}/models` at
 start and exits if that list fails. `turn` and `off` do not call

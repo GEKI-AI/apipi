@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Pi upgraded from 0.99.1 to 1.0.0. All guest images (default, browser, work) are rebuilt as a new store version; mirror or pull them before upgrading workers.
+- MCP: model-facing Pi tool names now use `_` instead of `-` from the server label (`mcp__my_server__tool`). `server_label` in responses is unchanged.
+- MCP tools whose `server_label`s differ only in `-` vs `_` are rejected with `400` and code `mcp_label_collision`, on agent create, agent update, and inline session agents.
+- Codemode: `models.generateImages()` (new in Pi 1.0.0) is unsupported and untested, like `models.classify()`.
+
 ### Fixed
 
 - Artifacts published by a worker keep their guessed content type (`text/plain`, `text/html`, and so on) again. The worker upload sent no content type, so every artifact came back as `application/octet-stream`.
