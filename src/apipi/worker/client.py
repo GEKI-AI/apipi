@@ -91,6 +91,8 @@ from apipi.worker.outbox import SPOOL_FSYNC_SECONDS, Outbox
 log = logging.getLogger("apipi.worker")
 
 INVENTORY_INTERVAL = 60.0
+FIRST_INVENTORY_DELAY = 2.0
+FIRST_INVENTORY_MAX_WAIT = 30.0
 RELEASE_FLUSH_TIMEOUT = 10.0
 HELLO_TIMEOUT = 15.0
 PING_INTERVAL = 5.0
@@ -996,6 +998,16 @@ async def _serve_connection(
             await send_heartbeat()
 
     async def inventory_loop() -> None:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await asyncio.sleep(min(FIRST_INVENTORY_DELAY, INVENTORY_INTERVAL))
+        while (
+            outbox.pending_sessions()
+            and loop.time() - started < FIRST_INVENTORY_MAX_WAIT
+            and loop.time() - started < INVENTORY_INTERVAL
+        ):
+            await asyncio.sleep(0.2)
+        await send_inventory()
         while True:
             await asyncio.sleep(INVENTORY_INTERVAL)
             await send_inventory()

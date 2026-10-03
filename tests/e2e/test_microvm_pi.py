@@ -89,6 +89,7 @@ async def microvm_client(
         # Short hosted TTL: the worker reaps the guest by itself, since
         # the test cannot reach into the worker's pool.
         "APIPI_SANDBOX_TTL_OPENAI_HOSTED": "2s",
+        "APIPI_SANDBOX_EAGER_BOOT": "true",
     }
     async with split_http_client(
         store,

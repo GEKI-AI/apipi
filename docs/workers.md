@@ -178,7 +178,7 @@ Worker to API:
 | `lease.ack` | `id` (command id), `lease_id` | Command was received, and the worker sends it as soon as it has the command. It does not say the command finished. Retransmits of the same id are safe. A worker does not ack a command with an `op` it does not know. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. The worker sends it only after the API acked every envelope the worker buffered for that session (see [Release order](#release-order)). |
 | `store.proof` | `marker`, `nonce` | Proof the worker sees the shared store root (filesystem store only). The worker reads the `hello` `store_check` marker file and echoes its nonce. A wrong proof closes the socket with `shared_store_required`. |
-| `inventory` | `sessions: [{session_id, lease_id, last_seq}]` | The worker live set, sent on hello (as `running`) and every 60s after, from a timer of its own. Drives reconciliation and the lifecycle heartbeat (see [Inventory](#inventory)). |
+| `inventory` | `sessions: [{session_id, lease_id, last_seq}]` | The worker live set, sent on hello (as `running`), again once the outbox of a reconnect is acked (2 to 30 seconds after connecting), and every 60s after, from a timer of its own. Drives reconciliation and the lifecycle heartbeat (see [Inventory](#inventory)). |
 | `sandbox.seen` | `session_ids` | Live sandbox ids, about every 5s. The API applies the same `touch_seen` update the worker used to write itself; ids not leased to this connection are ignored. |
 | `search.request` | `request_id`, `session_id`, `turn_id`, `query`, `max_results` (nullable) | One `web_search` call from the Pi tool, forwarded by the session broker. A synchronous request, not an envelope. See [Search requests](#search-requests). |
 | envelope (`v: 2`) | `session_id`, `turn_id`, `seq`, `type`, `payload` | Ephemeral deltas (`delta.text`, `delta.reasoning`; see [Live deltas](#live-deltas)) and durable envelopes below. Artifact and file bytes never travel here, only ids, paths, sizes, and checksums. |
@@ -574,8 +574,9 @@ The spool still holds the envelopes the API did not ack. When a worker
 registers with an empty claim, the API keeps the leases that the row
 still assigns to that worker and does not orphan them yet. The worker
 replays its spool into those leases, and the API applies it. The first
-`inventory` of the worker, 60 seconds after it connects, no longer lists
-those sessions, so the API then orphans them (`worker_orphaned`), fails
+`inventory` of the worker no longer lists those sessions. The worker
+sends it once its outbox is fully acked, after 2 seconds at the earliest
+and after 30 seconds at the latest, so the API then orphans them (`worker_orphaned`), fails
 their turns, and clears the leases.
 
 What is still lost, exactly:
