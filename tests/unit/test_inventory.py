@@ -12,8 +12,11 @@ from apipi.store.models import utc_now
 from apipi.store.repo import (
     create_session,
     create_tenant,
+    create_turn,
     get_session,
+    get_session_turn,
     set_session_lease,
+    update_session,
 )
 from apipi.worker.commands import CommandDedupe
 from apipi.workerhub.hub import WorkerHub
@@ -75,6 +78,33 @@ async def test_reconcile_orphan_fails_and_clears_lease(store: Store, settings) -
         assert row.lease_id is None
         events = await list_events(db, tenant_id, session_id)
     assert events[-1].type == "agent.session.error"
+
+
+async def test_reconcile_orphan_fails_the_running_turn(store: Store, settings) -> None:
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    async with store.session() as db:
+        await update_session(
+            db, tenant_id, session_id, changes={"status": "in_progress"}
+        )
+        turn = await create_turn(db, tenant_id, session_id, status="in_progress")
+    hub = _hub(settings)
+    bus = create_event_bus(settings, store=store)
+    try:
+        await hub.reconcile_inventory(store, bus, worker_id, {})
+    finally:
+        await bus.close()
+    async with store.session() as db:
+        row = await get_session(db, tenant_id, session_id)
+        failed = await get_session_turn(db, tenant_id, session_id, turn.id)
+        events = await list_events(db, tenant_id, session_id)
+    assert row is not None and row.status == "idle"
+    assert failed is not None and failed.status == "failed"
+    types = [event.type for event in events]
+    assert "agent.session.error" in types
+    assert types[-2:] == ["agent.session.turn.failed", "agent.session.idle"] or (
+        "agent.session.turn.failed" in types and types[-1] == "agent.session.idle"
+    )
 
 
 async def test_reconcile_unknown_session_is_revoked(store: Store, settings) -> None:

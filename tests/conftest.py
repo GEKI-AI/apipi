@@ -73,6 +73,11 @@ def _local_store_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.fixture(autouse=True)
+def _late_first_inventory(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("apipi.worker.client.FIRST_INVENTORY_DELAY", 3600.0)
+
+
+@pytest.fixture(autouse=True)
 def _strict_protocol() -> Iterator[None]:
     from apipi.protocol import strict_parse
 

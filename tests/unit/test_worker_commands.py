@@ -447,6 +447,19 @@ async def test_inventory_runs_on_a_timer_when_the_socket_is_busy(
         task.cancel()
 
 
+async def test_first_inventory_follows_the_outbox_drain_not_the_full_interval(
+    settings, monkeypatch
+) -> None:
+    monkeypatch.setattr("apipi.worker.client.FIRST_INVENTORY_DELAY", 0.05)
+    sock = _BusySock({**HELLO_BASE, "worker_id": str(uuid.uuid4())})
+    task, *_rest = await _start(settings, _Execution(), sock)
+    try:
+        await _wait_for(lambda: len(_sent_types(sock, "inventory")) >= 1)
+        assert len(_sent_types(sock, "inventory")) == 1
+    finally:
+        task.cancel()
+
+
 async def test_drain_runs_when_the_socket_is_busy(settings) -> None:
     from apipi.worker.client import _serve_connection
     from apipi.worker.outbox import Outbox
