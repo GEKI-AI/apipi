@@ -21,6 +21,7 @@ from apipi.common.otel import (
     detach_traceparent,
 )
 from apipi.common.placement import worker_accepts
+from apipi.common.wirewatch import note_unknown_fields
 from apipi.protocol import (
     COMMAND_CONTEXT_OPS,
     COMMAND_OPS,
@@ -32,6 +33,7 @@ from apipi.protocol import (
     TurnContinueCommandPayload,
     TurnStartCommandPayload,
     WorkerCommand,
+    collect_unknown_fields,
     parse_turn_context,
     summarize_context,
 )
@@ -170,7 +172,7 @@ async def _reject_mismatched_turn(
 
 
 def _command_turn_context(
-    op: object, payload: BaseCommandPayload
+    op: object, payload: BaseCommandPayload, metrics: Any | None = None
 ) -> dict[str, Any] | None:
     """Validate the command context on the worker; invalid fails the turn."""
     if op not in COMMAND_CONTEXT_OPS:
@@ -179,7 +181,11 @@ def _command_turn_context(
     if raw is None:
         return None
     try:
-        return parse_turn_context(raw).model_dump()
+        with collect_unknown_fields() as unknown:
+            context = parse_turn_context(raw).model_dump()
+        if unknown:
+            note_unknown_fields(unknown, metrics=metrics, side="worker")
+        return context
     except (ContextBytes, ValidationError) as exc:
         raise ApiError(
             "invalid_request",
@@ -291,9 +297,14 @@ async def _dispatch(execution: Any, message: WorkerCommand | dict[str, Any]) -> 
             if isinstance(raw_session, uuid.UUID)
             else uuid.UUID(str(raw_session))
         )
-        payload = _typed_payload(
-            op, raw_payload if isinstance(raw_payload, dict) else {}
-        )
+        with collect_unknown_fields() as unknown:
+            payload = _typed_payload(
+                op, raw_payload if isinstance(raw_payload, dict) else {}
+            )
+        if unknown:
+            note_unknown_fields(
+                unknown, metrics=getattr(execution, "metrics", None), side="worker"
+            )
     except (ValueError, ValidationError):
         log.warning(
             "worker command invalid",
@@ -309,7 +320,9 @@ async def _dispatch(execution: Any, message: WorkerCommand | dict[str, Any]) -> 
     org_id = payload.org_id
     token = attach_traceparent(payload.traceparent)
     try:
-        turn_context = _command_turn_context(op, payload)
+        turn_context = _command_turn_context(
+            op, payload, getattr(execution, "metrics", None)
+        )
         outcome = await _run_command(
             execution,
             op,

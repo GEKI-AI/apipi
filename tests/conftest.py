@@ -68,6 +68,14 @@ def _local_store_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.fixture(autouse=True)
+def _strict_protocol() -> Iterator[None]:
+    from apipi.protocol import strict_parse
+
+    with strict_parse():
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _clear_model_list_cache() -> Iterator[None]:
     from apipi.common.models import clear_model_cache
 

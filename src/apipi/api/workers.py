@@ -9,6 +9,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from apipi.common.event_bus import EventBus
 from apipi.common.logutil import log_context, log_event
+from apipi.common.wirewatch import note_unknown_fields
 from apipi.protocol import (
     INVALID_REGISTER_REASON,
     PROTOCOL_VERSION,
@@ -20,6 +21,7 @@ from apipi.protocol import (
     WORKER_CLOSE_CODE,
     RejectMessage,
     UnsupportedProtocol,
+    collect_unknown_fields,
     parse_register,
     wire_type,
 )
@@ -99,7 +101,10 @@ async def worker_socket(websocket: WebSocket) -> None:
         await _reject(websocket, "register required", reason=REGISTER_REQUIRED_REASON)
         return
     try:
-        register = parse_register(raw)
+        with collect_unknown_fields() as unknown:
+            register = parse_register(raw)
+        if unknown:
+            note_unknown_fields(unknown, metrics=metrics, side="api")
     except UnsupportedProtocol:
         hub.observe_connect("unsupported_protocol")
         log.warning(
@@ -169,7 +174,7 @@ async def _serve_connection(
         reason = await ConnectionServer(websocket, hub, store, event_hub, conn).run()
     finally:
         reason = conn.disconnect_reason or reason
-        unacked = sum(1 for lease_id in conn.leases if lease_id in hub._unacked)
+        unacked = sum(1 for lease_id in conn.leases if hub.commands.has_lease(lease_id))
         leases = len(conn.leases)
         current = await hub.detach(conn.worker_id, conn)
         hub.observe_disconnect(reason)

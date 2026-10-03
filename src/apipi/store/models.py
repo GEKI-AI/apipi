@@ -678,6 +678,7 @@ class ArtifactUploadRow(Base):
     __tablename__ = "artifact_uploads"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
+        Index("ix_artifact_uploads_session_request", "session_id", "request_id"),
         CheckConstraint(
             "kind IN ('artifact', 'pi_session', 'input_image')",
             name="artifact_uploads_kind_check",
@@ -695,6 +696,9 @@ class ArtifactUploadRow(Base):
         Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
     )
     session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
     artifact_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)

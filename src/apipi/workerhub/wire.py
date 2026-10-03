@@ -1,9 +1,8 @@
-import json
 from typing import Any
 
 from starlette.websockets import WebSocket, WebSocketState
 
-from apipi.protocol import WORKER_CLOSE_CODE, WireModel, wire_type
+from apipi.protocol import WORKER_CLOSE_CODE, WireModel, wire_size, wire_type
 
 
 async def send_frame(
@@ -11,7 +10,7 @@ async def send_frame(
 ) -> None:
     """Send one JSON frame and count it in `apipi_worker_messages_total`."""
     if metrics is not None:
-        size = len(json.dumps(payload, separators=(",", ":")))
+        size = wire_size(payload)
         metrics.observe_worker_message("out", wire_type(payload), size)
     await websocket.send_json(payload)
 

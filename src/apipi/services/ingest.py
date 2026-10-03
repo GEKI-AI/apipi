@@ -33,7 +33,9 @@ from apipi.protocol import (
     UnknownMessageType,
     WorkerEnvelope,
     parse_envelope,
+    wire_size,
 )
+from apipi.services.transient import is_transient
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow, Turn, WorkerIngest, utc_now
 
@@ -47,6 +49,7 @@ LIVE_EVENT = "live_event"
 NOT_IMPLEMENTED = "not_implemented"
 OVERSIZE = "oversize"
 INVALID_ENVELOPE = "invalid_envelope"
+UNKNOWN_TYPE = "unknown_type"
 UNKNOWN_SESSION = "unknown_session"
 
 # Receipts that change nothing on the API. They are acked from any
@@ -104,6 +107,8 @@ class IngestOutcome:
     presign_replies: list[dict[str, Any]] = field(default_factory=list)
     wipes: list[tuple[uuid.UUID, str, uuid.UUID]] = field(default_factory=list)
     lifecycle: list[LifecycleIntent] = field(default_factory=list)
+    retry: list[QueuedEnvelope] = field(default_factory=list)
+    stopped: list[uuid.UUID] = field(default_factory=list)
 
 
 # Worker payload keys the API accepts into a lifecycle export. Identity
@@ -656,8 +661,11 @@ async def _apply(
                 objects=objects if objects is not None else _object_store(settings),
                 blobs=blobs,
                 unchanged=precheck.unchanged if precheck is not None else None,
+                request_id=request_id,
             )
         except Exception as exc:
+            if is_transient(exc):
+                raise
             code, message = _artifact_error(exc)
             _count_presign(
                 metrics,
@@ -748,6 +756,8 @@ async def _apply(
                 verified_size=precheck.verified_size if precheck is not None else None,
             )
         except Exception as exc:
+            if is_transient(exc):
+                raise
             code, _message = _artifact_error(exc)
             raise _Reject(code) from exc
         return
@@ -781,21 +791,26 @@ class _Duplicate(Exception):
     """The ledger claim conflicted: this envelope already applied."""
 
 
-def classify_incoming(data: Any) -> tuple[str, WorkerEnvelope | None, int]:
+def classify_incoming(
+    data: Any, raw_size: int | None = None
+) -> tuple[str, WorkerEnvelope | None, int]:
     """Sort one incoming socket message.
 
     Returns `(kind, envelope, raw_size)` with kind `envelope` (durable,
     ingest it), `ephemeral` (streaming deltas, never persisted), or
-    `other` (not a v2 envelope; the legacy path handles it).
+    `other` (not a v2 envelope; the legacy path handles it). `raw_size`
+    is the frame size in bytes of UTF-8; it is measured here when the
+    caller does not know it.
     """
     if not isinstance(data, dict) or data.get("v") != 2:
         return "other", None, 0
-    import json
-
-    raw_size = len(json.dumps(data, separators=(",", ":")).encode("utf-8"))
+    if raw_size is None:
+        raw_size = wire_size(data)
     try:
         envelope = parse_envelope(data)
-    except (ValidationError, UnknownMessageType, ValueError) as exc:
+    except UnknownMessageType as exc:
+        raise _Reject(UNKNOWN_TYPE) from exc
+    except (ValidationError, ValueError) as exc:
         raise _Reject(INVALID_ENVELOPE) from exc
     if envelope.type in EPHEMERAL_MESSAGE_TYPES:
         return "ephemeral", envelope, raw_size
@@ -969,11 +984,15 @@ async def flush_batch(
     )
     turn_cache = _TurnCache()
     duplicates: dict[uuid.UUID, list[int]] = {}
+    stalled: set[uuid.UUID] = set()
     async with store.session() as db:
         rows: dict[uuid.UUID, SessionRow | None] = {}
         for queued_item in queued:
             envelope = queued_item.envelope
             session_id = envelope.session_id
+            if session_id in stalled:
+                outcome.retry.append(queued_item)
+                continue
             if session_id not in rows:
                 rows[session_id] = await db.scalar(
                     select(SessionRow)
@@ -1036,10 +1055,32 @@ async def flush_batch(
                         )
                         if envelope.type == "session.stopped":
                             outcome.wipes.append((row.tenant_id, row.key_id, row.id))
+                            outcome.stopped.append(session_id)
                     _count_ingest(metrics, envelope.type, "applied")
                 except _Duplicate:
                     duplicates.setdefault(session_id, []).append(envelope.seq)
                     _count_ingest(metrics, envelope.type, "duplicate")
+                    if envelope.type == "session.stopped":
+                        outcome.stopped.append(session_id)
+                    if envelope.type == "artifact.presign":
+                        assert row is not None
+                        async with db.begin_nested():
+                            await _apply(
+                                db,
+                                None,
+                                envelope,
+                                row,
+                                settings=settings,
+                                metrics=metrics,
+                                wakes=outcome.wakes,
+                                turn_cache=turn_cache,
+                                presign_replies=outcome.presign_replies,
+                                objects=objects,
+                                intents=outcome.lifecycle,
+                                run_mode=run_mode,
+                                precheck=prechecks.get((session_id, envelope.seq)),
+                            )
+                        _count_presign_rereply(metrics)
             except _Reject as rejected:
                 del outcome.wakes[wakes_before:]
                 reason = rejected.reason
@@ -1047,8 +1088,27 @@ async def flush_batch(
                 _count_reject(
                     metrics, worker_id, session_id, tenant_id, reason, envelope.type
                 )
-            except Exception:
+            except Exception as exc:
                 del outcome.wakes[wakes_before:]
+                if is_transient(exc):
+                    stalled.add(session_id)
+                    outcome.retry.append(queued_item)
+                    _count_ingest(metrics, envelope.type, "transient_error")
+                    log_event(
+                        log,
+                        logging.WARNING,
+                        "worker envelope not stored; it will be tried again",
+                        event="worker.ingest.transient",
+                        error_code="ingest_transient",
+                        exc_info=exc,
+                        tenant_id=tenant_id,
+                        session_id=session_id,
+                        worker_id=worker_id,
+                        seq=envelope.seq,
+                        type=envelope.type,
+                        error=type(exc).__name__,
+                    )
+                    continue
                 log.exception(
                     "worker ingest apply failed",
                     extra={
@@ -1099,6 +1159,11 @@ async def flush_batch(
 def _count_presign(metrics: Any, kind: str, result: str, started: float) -> None:
     if metrics is not None:
         metrics.observe_worker_presign(kind, result, time.monotonic() - started)
+
+
+def _count_presign_rereply(metrics: Any) -> None:
+    if metrics is not None:
+        metrics.observe_worker_protocol("presign.rereplied")
 
 
 def _count_ingest(metrics: Any, type: str, result: str) -> None:

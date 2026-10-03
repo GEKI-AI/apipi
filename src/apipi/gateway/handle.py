@@ -338,6 +338,12 @@ class Gateway:
                 interval=1,
                 metrics=self.metrics,
             ),
+            spawn_loop(
+                "command_retransmit",
+                self._retransmit_worker_commands,
+                interval=1,
+                metrics=self.metrics,
+            ),
         ]
         if emitter is not None:
             from apipi.services.lifecycle_export import api_heartbeat_loop
@@ -366,6 +372,9 @@ class Gateway:
 
     async def _expire_worker_leases(self) -> None:
         await self.workers.expire(self.store, self.event_hub)
+
+    async def _retransmit_worker_commands(self) -> None:
+        await self.workers.retransmit_due(self.store, self.event_hub)
 
 
 def create_app(

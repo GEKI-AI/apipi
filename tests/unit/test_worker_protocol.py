@@ -395,3 +395,96 @@ def test_extra_policy_follows_the_role() -> None:
         {"type": "ack", "session_id": str(uuid.uuid4()), "last_seq": 1, "extra": 1}
     )
     assert ack.last_seq == 1
+
+
+def test_unknown_fields_are_ignored_and_listed_outside_strict_mode() -> None:
+    from apipi.protocol import (
+        TurnContext,
+        UsagePayload,
+        collect_unknown_fields,
+        parse_envelope,
+        strict_parse,
+    )
+
+    data = {
+        "v": 2,
+        "session_id": str(uuid.uuid4()),
+        "seq": 1,
+        "type": "usage",
+        "payload": {
+            "turn_id": str(uuid.uuid4()),
+            "prompt_tokens": 3,
+            "future_counter": 9,
+            "failure": {"message": "x", "future_nested": 1},
+        },
+    }
+    with pytest.raises(ValidationError):
+        parse_envelope(data)
+    with strict_parse(False), collect_unknown_fields() as found:
+        envelope = parse_envelope(data)
+        context = TurnContext.model_validate(
+            {"session": {"key_id": "k", "later": 1}, "later_section": {}}
+        )
+    assert envelope.payload["prompt_tokens"] == 3
+    assert context.session.key_id == "k"
+    assert sorted(found) == [
+        "ContextSession.later",
+        "TurnContext.later_section",
+        "UsageFailure.future_nested",
+        "UsagePayload.future_counter",
+    ]
+    with pytest.raises(ValidationError):
+        UsagePayload.model_validate({"turn_id": str(uuid.uuid4()), "prompt_tokenz": 1})
+
+
+def test_features_absent_means_the_baseline_set() -> None:
+    from apipi.protocol import (
+        BASELINE_FEATURES,
+        SUPPORTED_FEATURES,
+        HelloReply,
+        RegisterMessage,
+        peer_features,
+    )
+
+    register = RegisterMessage.model_validate({"protocol": 2, "run_mode": "none"})
+    assert register.features is None
+    assert peer_features(register.features) == BASELINE_FEATURES
+    hello = HelloReply.model_validate(
+        {
+            "lease_ttl_seconds": 30,
+            "heartbeat_seconds": 10,
+            "features": ["search", 5, "future"],
+        }
+    )
+    assert peer_features(hello.features) == {"search", "future"}
+    assert BASELINE_FEATURES < SUPPORTED_FEATURES
+
+
+def test_size_limits_are_exact_bytes_of_utf8_wire_json() -> None:
+    from apipi.protocol import (
+        MAX_COMMAND_BYTES,
+        MAX_MESSAGE_BYTES,
+        CommandTooLarge,
+        check_command_size,
+        dumps_wire,
+        wire_size,
+    )
+
+    assert MAX_MESSAGE_BYTES == 1024 * 1024
+    assert MAX_COMMAND_BYTES == 256 * 1024
+    assert wire_size({"a": "é"}) == len(dumps_wire({"a": "é"}).encode("utf-8")) == 10
+    check_command_size({"text": "é" * (MAX_COMMAND_BYTES // 2 - 20)})
+    with pytest.raises(CommandTooLarge):
+        check_command_size({"text": "é" * (MAX_COMMAND_BYTES // 2)})
+    check_command_size({"text": "x" * (MAX_COMMAND_BYTES - 11)})
+    with pytest.raises(CommandTooLarge):
+        check_command_size({"text": "x" * (MAX_COMMAND_BYTES - 10)})
+
+
+def test_a_lone_surrogate_still_goes_on_the_wire() -> None:
+    from apipi.protocol import dumps_wire, wire_size
+
+    text = dumps_wire({"text": "a\ud83dz"})
+    assert text.isascii()
+    text.encode("utf-8")
+    assert wire_size({"text": "a\ud83dz"}) == len(text)

@@ -208,7 +208,14 @@ async def test_reconcile_spares_orphan_with_command_in_flight(
     tenant_id, session_id, lease_id = await _leased(store, worker_id)
     hub = _hub(settings)
     bus = create_event_bus(settings, store=store)
-    hub._unacked[lease_id] = {"id": str(uuid.uuid4()), "op": "turn.start"}
+    pending = hub.commands.push(
+        {
+            "id": str(uuid.uuid4()),
+            "op": "turn.start",
+            "lease_id": str(lease_id),
+            "session_id": str(session_id),
+        }
+    )
     try:
         revoke, _ttl = await hub.reconcile_inventory(store, bus, worker_id, {})
         assert revoke == []
@@ -218,7 +225,7 @@ async def test_reconcile_spares_orphan_with_command_in_flight(
             assert row.lease_id == lease_id
             events = await list_events(db, tenant_id, session_id)
         assert all(event.type != "agent.session.error" for event in events)
-        hub._unacked.pop(lease_id, None)
+        hub.commands.discard(pending)
         revoke, _ttl = await hub.reconcile_inventory(store, bus, worker_id, {})
         assert revoke == []
         async with store.session() as db:

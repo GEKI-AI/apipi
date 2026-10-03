@@ -10,6 +10,7 @@ from apipi.common.logutil import log_event
 from apipi.common.otel import inject_traceparent
 from apipi.config import Settings
 from apipi.protocol import (
+    FEATURE_SESSION_STOPPED,
     SandboxBootCommandPayload,
     SessionStopCommandPayload,
     TurnCancelCommandPayload,
@@ -31,6 +32,9 @@ log = logging.getLogger("apipi.worker")
 # How long a follow-up waits for a worker to acknowledge a cancel with
 # events before treating the stale turn as abandoned.
 CANCEL_GRACE = timedelta(seconds=5)
+
+# How long a stop waits for the durable `session.stopped` envelope.
+STOP_TIMEOUT = 15.0
 
 
 class RemoteExecution:
@@ -397,16 +401,42 @@ class RemoteExecution:
             row = await get_session_by_id(db, session_id)
         if row is None or row.lease_id is None or row.worker_id is None:
             return
-        command = await self.workers.command(
-            store,
-            row.tenant_id,
-            session_id,
-            op="session.stop",
-            payload=SessionStopCommandPayload(tenant_id=row.tenant_id),
-        )
-        if command is not None:
-            await self.workers.wait_ack(row.lease_id, str(command["id"]))
+        stopped = self.workers.expect_stopped(session_id)
+        try:
+            command = await self.workers.command(
+                store,
+                row.tenant_id,
+                session_id,
+                op="session.stop",
+                payload=SessionStopCommandPayload(tenant_id=row.tenant_id),
+            )
+            if command is not None:
+                acked = await self.workers.wait_ack(row.lease_id, str(command["id"]))
+                if acked and FEATURE_SESSION_STOPPED in self.workers.features_of(
+                    row.worker_id
+                ):
+                    await self._wait_stopped(session_id, row.lease_id, stopped)
+        finally:
+            self.workers.forget_stopped(session_id)
         await self.workers.release(store, row.tenant_id, session_id, row.lease_id)
+
+    async def _wait_stopped(
+        self, session_id: uuid.UUID, lease_id: uuid.UUID, stopped: asyncio.Event
+    ) -> None:
+        try:
+            await asyncio.wait_for(stopped.wait(), STOP_TIMEOUT)
+        except TimeoutError:
+            self.workers.observe_protocol("stop_timeout")
+            log_event(
+                log,
+                logging.WARNING,
+                "worker did not report session.stopped in time",
+                event="worker.session.stop_timeout",
+                error_code="stop_timeout",
+                session_id=session_id,
+                lease_id=lease_id,
+                timeout_seconds=STOP_TIMEOUT,
+            )
 
     async def boot_hosted(
         self,

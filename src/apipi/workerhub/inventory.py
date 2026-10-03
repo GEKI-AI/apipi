@@ -38,8 +38,15 @@ async def reconcile_inventory(
     unleased: Collection[uuid.UUID] = (),
     *,
     conn: WorkerConnection | None = None,
+    orphan_missing: bool = True,
 ) -> tuple[list[dict[str, str]], dict[str, dict[str, Any]]]:
     """Compare the worker live set against the lease rows.
+
+    With `orphan_missing` false, leases the worker did not report are left
+    alone. Register does that for a worker that claims no sessions at
+    all: it is a restart, and the spooled results it replays right after
+    `hello` still need their lease. The first inventory then orphans
+    what is really gone.
 
     Sessions leased to this worker but not reported are orphaned:
     the turn (if any) is failed and the lease is cleared, unless a
@@ -77,7 +84,9 @@ async def reconcile_inventory(
                 )
                 continue
             if claimed_lease is None:
-                if row.lease_id in hub._unacked:
+                if not orphan_missing or (
+                    row.lease_id is not None and hub.commands.has_lease(row.lease_id)
+                ):
                     # The command granting this lease is still in
                     # flight: the worker cannot have reported it yet,
                     # so this is not an orphan.

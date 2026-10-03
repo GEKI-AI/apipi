@@ -1548,8 +1548,10 @@ async def create_artifact_upload(
     declared_bytes: int,
     sha256: str | None,
     expires_at: datetime,
+    request_id: uuid.UUID | None = None,
 ) -> ArtifactUploadRow:
     row = ArtifactUploadRow(
+        request_id=request_id,
         tenant_id=tenant_id,
         session_id=session_id,
         artifact_id=artifact_id,
@@ -1564,6 +1566,21 @@ async def create_artifact_upload(
     db.add(row)
     await db.flush()
     return row
+
+
+async def get_artifact_upload_by_request(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    request_id: uuid.UUID,
+) -> ArtifactUploadRow | None:
+    return await db.scalar(
+        select(ArtifactUploadRow).where(
+            ArtifactUploadRow.tenant_id == tenant_id,
+            ArtifactUploadRow.session_id == session_id,
+            ArtifactUploadRow.request_id == request_id,
+        )
+    )
 
 
 async def get_artifact_upload(

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import UTC, timedelta
 
@@ -6,6 +7,7 @@ import pytest
 from apipi.common.errors import ApiError
 from apipi.common.event_bus import EventHub
 from apipi.config import Settings
+from apipi.protocol import BASELINE_FEATURES, SUPPORTED_FEATURES
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import (
@@ -155,27 +157,42 @@ async def test_remote_execution_names_missing_socket_instance(
     assert "node-b" in exc.value.message
 
 
-async def test_remote_teardown_stops_guest_before_release(
-    store: Store, settings: Settings
-) -> None:
-    class _StopHub:
-        def __init__(self) -> None:
-            self.ops: list[str] = []
+class _StopHub:
+    def __init__(self, features: frozenset[str], *, report: bool = True) -> None:
+        self.ops: list[str] = []
+        self.features = features
+        self.report = report
+        self.protocol: list[str] = []
+        self.event = asyncio.Event()
 
-        async def command(self, *_args: object, **kwargs: object) -> dict[str, str]:
-            self.ops.append(str(kwargs.get("op")))
-            return {"id": "cmd-1"}
+    def expect_stopped(self, _session_id: uuid.UUID) -> asyncio.Event:
+        return self.event
 
-        async def wait_ack(self, *_args: object, **_kwargs: object) -> bool:
-            self.ops.append("ack")
-            return True
+    def forget_stopped(self, _session_id: uuid.UUID) -> None:
+        return None
 
-        async def release(self, *_args: object, **_kwargs: object) -> None:
-            self.ops.append("release")
+    def features_of(self, _worker_id: uuid.UUID | None) -> frozenset[str]:
+        return self.features
 
+    def observe_protocol(self, event: str) -> None:
+        self.protocol.append(event)
+
+    async def command(self, *_args: object, **kwargs: object) -> dict[str, str]:
+        self.ops.append(str(kwargs.get("op")))
+        return {"id": "cmd-1"}
+
+    async def wait_ack(self, *_args: object, **_kwargs: object) -> bool:
+        self.ops.append("ack")
+        if self.report:
+            asyncio.get_running_loop().call_later(0.01, self.event.set)
+        return True
+
+    async def release(self, *_args: object, **_kwargs: object) -> None:
+        self.ops.append("stopped" if self.event.is_set() else "release")
+
+
+async def _teardown(store: Store, settings: Settings, hub: _StopHub) -> None:
     worker_id = uuid.uuid4()
-    lease_id = uuid.uuid4()
-    hub = _StopHub()
     async with store.session() as db:
         tenant = await create_tenant(db, name="stop")
         session = await create_session(db, tenant.id)
@@ -185,13 +202,39 @@ async def test_remote_teardown_stops_guest_before_release(
             tenant.id,
             session.id,
             worker_id=worker_id,
-            lease_id=lease_id,
+            lease_id=uuid.uuid4(),
             lease_until=utc_now() + timedelta(hours=1),
         )
         session_id = session.id
     execution = RemoteExecution(settings, workers=hub, store=store, hub=EventHub())
     await execution.teardown(session_id)
+
+
+async def test_remote_teardown_stops_guest_before_release(
+    store: Store, settings: Settings
+) -> None:
+    hub = _StopHub(BASELINE_FEATURES)
+    await _teardown(store, settings, hub)
     assert hub.ops == ["session.stop", "ack", "release"]
+
+
+async def test_teardown_waits_for_session_stopped_before_release(
+    store: Store, settings: Settings
+) -> None:
+    hub = _StopHub(SUPPORTED_FEATURES)
+    await _teardown(store, settings, hub)
+    assert hub.ops == ["session.stop", "ack", "stopped"]
+    assert hub.protocol == []
+
+
+async def test_teardown_releases_when_session_stopped_never_arrives(
+    store: Store, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("apipi.workerhub.execution.STOP_TIMEOUT", 0.05)
+    hub = _StopHub(SUPPORTED_FEATURES, report=False)
+    await _teardown(store, settings, hub)
+    assert hub.ops == ["session.stop", "ack", "release"]
+    assert hub.protocol == ["stop_timeout"]
 
 
 async def test_upsert_worker_records_instance(store: Store) -> None:

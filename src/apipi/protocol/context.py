@@ -9,14 +9,17 @@ Pi session blob travel as references only, either presigned GET URLs
 """
 
 import copy
-import json
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import Field
 
 from apipi.protocol.base import ContextPart
-from apipi.protocol.constants import COMMAND_CONTEXT_OPS, MAX_COMMAND_BYTES
+from apipi.protocol.constants import (
+    COMMAND_CONTEXT_OPS,
+    MAX_COMMAND_BYTES,
+    wire_size,
+)
 
 
 class CommandTooLarge(ValueError):
@@ -113,8 +116,9 @@ def parse_turn_context(raw: Any) -> TurnContext:
     return TurnContext.model_validate(raw)
 
 
-def check_command_size(payload: dict[str, Any]) -> int:
-    size = len(json.dumps(payload, default=str))
+def check_command_size(message: dict[str, Any]) -> int:
+    """Check the wire size of one command frame (or its payload) in bytes."""
+    size = wire_size(message)
     if size > MAX_COMMAND_BYTES:
         raise CommandTooLarge(
             f"worker command is {size} bytes, limit is {MAX_COMMAND_BYTES}"

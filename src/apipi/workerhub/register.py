@@ -7,11 +7,13 @@ from starlette.websockets import WebSocket
 from apipi.common.event_bus import EventBus
 from apipi.common.logutil import log_event
 from apipi.protocol import (
+    SUPPORTED_FEATURES,
     HelloReply,
     RegisterMessage,
     RevokeEntry,
     StoreCheck,
     TtlEntry,
+    peer_features,
 )
 from apipi.store.engine import Store
 from apipi.store.models import WorkerToken
@@ -114,6 +116,7 @@ async def register_worker(
         arch=register.arch,
         accepts=accepts_for_register(register),
         version=register.version or "unknown",
+        features=peer_features(register.features),
     )
     conn.writer.bind(hub.metrics, hub.observe_send_queue)
     conn.writer.start()
@@ -125,7 +128,12 @@ async def register_worker(
         reported = claimed_leases(register.running)
         if event_hub is not None:
             revoke, ttl = await hub.reconcile_inventory(
-                store, event_hub, conn.worker_id, reported, conn=conn
+                store,
+                event_hub,
+                conn.worker_id,
+                reported,
+                conn=conn,
+                orphan_missing=bool(reported),
             )
         else:
             hub.note_inventory(conn.worker_id, reported)
@@ -137,6 +145,7 @@ async def register_worker(
                 connection_id=conn.connection_id,
                 lease_ttl_seconds=hub.settings.worker_lease_ttl.total_seconds(),
                 heartbeat_seconds=heartbeat_interval(hub.settings),
+                features=sorted(SUPPORTED_FEATURES),
                 sessions=sessions,
                 store_check=store_check,
                 revoke=[RevokeEntry.model_validate(entry) for entry in revoke],

@@ -23,6 +23,7 @@ from apipi.common.logutil import (
     log_event,
     unbind_log_context,
 )
+from apipi.common.wirewatch import note_unknown_fields, note_unknown_type
 from apipi.config import (
     ConfigError,
     Settings,
@@ -31,12 +32,16 @@ from apipi.config import (
     reject_worker_database_url,
 )
 from apipi.protocol import (
+    COMMAND_OPS,
     CURSOR_OPS,
+    FEATURE_SEARCH,
+    FEATURE_SESSION_STOPPED,
     INVALID_REGISTER_REASON,
     PROTOCOL_VERSION,
     REGISTER_REQUIRED_REASON,
     REVOKED_REASON,
     SHARED_STORE_REASON,
+    SUPPORTED_FEATURES,
     TOKEN_BOUND_REASON,
     UNAUTHORIZED_REASON,
     UNSUPPORTED_PROTOCOL_REASON,
@@ -61,7 +66,11 @@ from apipi.protocol import (
     WorkerCommand,
     WorkerErrorPayload,
     WorkerImageInfo,
+    collect_unknown_fields,
+    dumps_wire,
     parse_api_message,
+    peer_features,
+    wire_bytes,
     wire_type,
 )
 from apipi.worker.artifact_upload import (
@@ -735,7 +744,7 @@ async def _serve_connection(
 
     async def send_json(payload: dict[str, Any]) -> None:
         async with send_lock:
-            await sock.send(json.dumps(payload))
+            await sock.send(dumps_wire(payload))
 
     async def send_message(message: WireModel) -> None:
         await send_json(message.to_wire())
@@ -752,6 +761,7 @@ async def _serve_connection(
             run_mode=settings.run_mode,
             arch=worker_arch(),
             version=__version__,
+            features=sorted(SUPPORTED_FEATURES),
             images=[
                 WorkerImageInfo.model_validate(item)
                 for item in _heartbeat_images(settings)
@@ -769,6 +779,8 @@ async def _serve_connection(
         raise ConfigError(f"worker register failed: invalid hello: {exc}") from exc
     heartbeat = welcome.heartbeat_seconds
     lease_ttl = welcome.lease_ttl_seconds
+    api_features = peer_features(welcome.features)
+    outbox.peer_features = api_features
     context_token = bind_log_context(
         worker_id=hello.get("worker_id"), connection_id=welcome.connection_id
     )
@@ -790,6 +802,7 @@ async def _serve_connection(
         lease_ttl_seconds=lease_ttl,
         heartbeat_seconds=heartbeat,
         revoked=len(welcome.revoke),
+        features=sorted(api_features),
         connect_s=round(time.monotonic() - connect_started, 3),
     )
     stopping: set[uuid.UUID] = set()
@@ -933,7 +946,7 @@ async def _serve_connection(
         await send_message(SandboxSeenMessage(session_ids=session_ids))
 
     execution.seen_hook = report_seen
-    if hasattr(execution, "search_sender"):
+    if hasattr(execution, "search_sender") and FEATURE_SEARCH in api_features:
         execution.search_sender = send_json
 
     async def send_inventory() -> None:
@@ -1060,6 +1073,9 @@ async def _serve_connection(
         command: WorkerCommand, stop_session: uuid.UUID
     ) -> None:
         raw_lease = str(command.lease_id)
+        ack_first = FEATURE_SESSION_STOPPED in api_features
+        if ack_first:
+            await send_json(ack_command(command))
         await settled(stop_session)
         stopping.add(stop_session)
         try:
@@ -1079,7 +1095,8 @@ async def _serve_connection(
             return
         finally:
             stopping.discard(stop_session)
-        await send_json(ack_command(command))
+        if not ack_first:
+            await send_json(ack_command(command))
 
     def malformed(size: int) -> None:
         if metrics is not None:
@@ -1094,7 +1111,10 @@ async def _serve_connection(
 
     def handle(message: dict[str, Any]) -> None:
         try:
-            parsed = parse_api_message(message)
+            with collect_unknown_fields() as unknown:
+                parsed = parse_api_message(message)
+            if unknown:
+                note_unknown_fields(unknown, metrics=metrics, side="worker")
         except ValidationError:
             warnings.warning(
                 "worker message invalid",
@@ -1137,10 +1157,20 @@ async def _serve_connection(
             )
             schedule_teardown(parsed.session_id, known)
             return
+        if parsed is None:
+            note_unknown_type(
+                "type", message.get("type"), metrics=metrics, side="worker"
+            )
+            return
         if not isinstance(parsed, WorkerCommand):
             return
         command = parsed
         session_id = command.session_id
+        if command.op not in COMMAND_OPS:
+            if metrics is not None:
+                metrics.observe_worker_command_received("unknown", "unknown_op")
+            note_unknown_type("op", command.op, metrics=metrics, side="worker")
+            return
         if dedupe.duplicate(session_id, str(command.command_id)):
             if metrics is not None:
                 metrics.observe_worker_command_received(command.op, "duplicate")
@@ -1162,20 +1192,23 @@ async def _serve_connection(
                 text = incoming if isinstance(incoming, str) else incoming.decode()
                 message = json.loads(text)
             except ValueError:
-                malformed(len(incoming))
+                malformed(
+                    wire_bytes(incoming) if isinstance(incoming, str) else len(incoming)
+                )
                 continue
+            size = wire_bytes(text)
             if not isinstance(message, dict):
-                malformed(len(text))
+                malformed(size)
                 continue
             if metrics is not None:
-                metrics.observe_worker_message("in", wire_type(message), len(text))
+                metrics.observe_worker_message("in", wire_type(message), size)
             if log.isEnabledFor(logging.DEBUG):
                 log.debug(
                     "worker message in",
                     extra={
                         "event": "worker.message",
                         "type": wire_type(message),
-                        "size": len(text),
+                        "size": size,
                     },
                 )
             try:

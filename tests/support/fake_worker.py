@@ -28,6 +28,8 @@ class FakeWorker:
         run_mode: str | None = "none",
         accepts: list[str] | None = None,
         protocol: int | None = PROTOCOL_VERSION,
+        running: list[dict[str, Any]] | None = None,
+        features: list[str] | None = None,
     ) -> dict[str, Any]:
         await self.ws.connect()
         register: dict[str, Any] = {"type": "register", "capacity": capacity}
@@ -43,6 +45,10 @@ class FakeWorker:
             register["accepts"] = ["none", "microvm"]
         elif run_mode is not None:
             register["accepts"] = ["none"]
+        if running is not None:
+            register["running"] = running
+        if features is not None:
+            register["features"] = features
         if self.worker_id is not None:
             register["id"] = self.worker_id
         await self.ws.send_json(register)
