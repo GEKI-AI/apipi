@@ -498,7 +498,7 @@ async def test_the_lease_reaper_loop_survives_a_failed_round(
     gateway.workers.expire = flaky
     metrics: Metrics = app.state.metrics
     await run_loop(
-        "lease_reaper",
+        "lease_reaper_test",
         gateway._expire_worker_leases,
         interval=0,
         metrics=metrics,
@@ -507,5 +507,5 @@ async def test_the_lease_reaper_loop_survives_a_failed_round(
     assert calls == 3
     body = metrics.scrape().decode()
     assert metric_line(
-        body, "apipi_background_loop_errors_total", loop="lease_reaper"
+        body, "apipi_background_loop_errors_total", loop="lease_reaper_test"
     ).endswith(" 1.0")
