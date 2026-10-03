@@ -147,7 +147,7 @@ whether that works:
 | --- | --- | --- |
 | `apipi_worker_heartbeat_gap_seconds` | API and worker | Histogram of the time between two heartbeats. On the API it is measured on receipt, so it includes the network. On the worker it is measured on the sending timer, so a high value there means the worker process was stalled. The gap should sit near the heartbeat interval. A gap above half the lease TTL also logs `worker.heartbeat.late`. |
 | `apipi_worker_lease_events_total{event}` | API | `granted` counts leases handed to a worker with a command. `renewed` counts renewal passes (a heartbeat, an activity renewal, or a reconnect), not leases. `released` counts leases cleared by a release or a session stop. `expired` counts leases the reaper cleared. `orphaned` counts leases the worker did not report in an inventory. `revoked` counts leases the API told a worker to drop (the reaper, or an inventory or `hello` the lease does not match). `taken_over` counts leases that moved from an older socket of the same worker to a new one. |
-| `apipi_worker_ingest_total{type,result}` | API | Durable envelopes by type. `result` is `applied`, `duplicate`, `rejected`, or `transient_error`. `transient_error` is an envelope the API could not store because of a temporary database error and did not ack, so the worker resends it. It stays at zero until ingest retries those errors instead of dropping the socket. Duplicates are normal after a reconnect replay and when the worker resends envelopes whose ack is still in flight. A steady stream of duplicates with no reconnect means a worker is sending sequence numbers the API already holds. |
+| `apipi_worker_ingest_total{type,result}` | API | Durable envelopes by type. `result` is `applied`, `duplicate`, `rejected`, or `transient_error`. `transient_error` is an envelope the API could not store because of a temporary error (a deadlock, a lock or statement timeout, a connection reset, or a temporary object-store error such as a timeout or throttling, also on `artifact.completed`). The API did not ack it or anything after it in that session. It tries the batch again up to three times, and then closes the socket so the worker replays. Duplicates are normal after a reconnect replay and when the worker resends envelopes whose ack is still in flight. A steady stream of duplicates with no reconnect means a worker is sending sequence numbers the API already holds. |
 | `apipi_worker_ingest_rejected_total{reason}` | API | Rejected envelopes by reason. `not_leased` means the worker sent results for a session it no longer holds, so those results were dropped. |
 
 Every lease expiry logs `worker.lease.expired` with
@@ -165,7 +165,7 @@ frame), `message_invalid` (a known message type with invalid fields),
 `message_failed` (a handler raised and the socket stayed open),
 `message_retried`, `heartbeat.field_ignored`, `delta.queue_full`,
 `lane.backpressure` (a full lane made the socket wait), `ingest.retried`,
-`ingest.failed` (the batch failed after retries and the socket closed),
+`ingest.failed` (the batch failed after retries and the socket closed), `unknown_field` (a field the receiver does not know was ignored; it counts each field of a message), `unknown_type` (a message type this side does not know), `unknown_op` (a command op the worker does not know), `presign.rereplied` (a replayed `artifact.presign` got its reply again), `stop_timeout` (`session.stopped` did not arrive in 15 seconds),
 `superseded` (a heartbeat from an older generation), and
 `revoke_failed` (the reaper could not send `lease.revoke`). The register outcomes moved to
 `apipi_worker_connects_total{result}` and the message counts to
@@ -189,7 +189,7 @@ at zero is defined, and it is filled by a later change to that path.
 | `apipi_worker_messages_total`, `apipi_worker_message_bytes` | counter and histogram, `direction` (`in` or `out`), `type` | Messages and frame sizes by the fixed message or envelope type. Anything else is `unknown`. |
 | `apipi_worker_handle_seconds` | histogram, `type` | Time to handle one message in its own lane: the control lane for `heartbeat`, `lease.ack`, `lease.release`, `inventory`, and `sandbox.seen`, the ingest lane for envelopes (measured per batch, so every envelope type in a batch gets the batch time), and the delta lane for deltas. A slow `type` only delays the messages in its own lane. A handler over 1 second also logs `worker.handler.slow`. |
 | `apipi_worker_ingest_batch_seconds`, `apipi_worker_ingest_batch_size` | histograms | Batch commit time and the number of envelopes per batch. |
-| `apipi_worker_commands_total` | counter, `op`, `result` | Command delivery: `sent`, `acked`, `retransmitted` (resent after a reconnect), `timeout` (no `lease.ack` within the wait), `failed` (the send raised). |
+| `apipi_worker_commands_total` | counter, `op`, `result` | Command delivery: `sent`, `acked`, `retransmitted` (resent after a reconnect, or on the 5 second timer), `timeout` (no `lease.ack` within the wait of the caller), `expired` (no `lease.ack` within the lease TTL, so the lease was cleared and the turn failed with `worker_command_timeout`), `failed` (the send raised). |
 | `apipi_worker_command_ack_seconds` | histogram, `op` | Time from sending a command to its `lease.ack`. |
 | `apipi_worker_commands_unacked` | gauge | Commands waiting for `lease.ack`. |
 | `apipi_worker_send_queue_depth` | gauge | Frames waiting in the per-connection writers of this replica, summed over all sockets. It should stay near zero. A value that stays high means a worker reads slower than the API sends. At 1024 frames on one socket, or 10 seconds on one frame, that socket closes with `write_timeout`. |
@@ -212,11 +212,11 @@ These series are exposed by the worker (`apipi worker`) on its
 | `apipi_worker_connect_seconds` | histogram | Dial plus handshake time. |
 | `apipi_worker_outbox_messages`, `apipi_worker_outbox_bytes` | gauges | Unacked envelopes and their size, sampled every second. |
 | `apipi_worker_outbox_oldest_seconds` | gauge | Age of the oldest unacked envelope. This is the main alert for a stuck API or socket. |
-| `apipi_worker_outbox_full_total` | counter | Turns failed with `worker_outbox_full`. |
+| `apipi_worker_outbox_full_total` | counter | Turns failed with `worker_outbox_full`. An envelope over `MAX_MESSAGE_BYTES` fails the turn with `worker_message_too_large` and logs `worker.outbox.oversize`; it has no counter of its own. |
 | `apipi_worker_ack_seconds` | histogram | Time from outbox append to the cumulative ack. |
 | `apipi_worker_replayed_total` | counter | Envelopes resent after a reconnect or a restart (envelopes that were sent before and are still unacked). First sends are not counted. |
 | `apipi_worker_spool_write_seconds`, `apipi_worker_spool_bytes` | histogram, gauge | Disk spool append and compaction cost and spool size, only with `APIPI_WORKER_OUTBOX_DIR`. |
-| `apipi_worker_commands_received_total` | counter, `op`, `result` | Command handling: `dispatched`, `duplicate` (a retransmit that was only acked), `rejected` (invalid or without a tenant), `failed`. |
+| `apipi_worker_commands_received_total` | counter, `op`, `result` | Command handling: `dispatched`, `duplicate` (a retransmit that was only acked), `rejected` (invalid or without a tenant), `failed`, `unknown_op` (an `op` the worker does not know, with `op="unknown"`; it is not acked). |
 | `apipi_worker_command_seconds` | histogram, `op` | Dispatch time. For `turn.start` and `turn.continue` it includes the turn run. |
 | `apipi_worker_waiter_total` | counter, `kind` (`presign`, `search`), `result` (`ok`, `timeout`, `disconnected`) | Waits for a reply from the API. `disconnected` is a wait that ended because the socket closed. A presign wait ends this way only when the API had acked the request, so its reply was lost; otherwise the worker keeps waiting for the replay. |
 | `apipi_worker_deltas_dropped_total` | counter, `reason` | Live deltas the worker did not send: `disconnected` (no socket) or `oversize` (over the message limit). |
@@ -296,7 +296,8 @@ bill. See [usage](usage.md#session-lifecycle-export).
 | `apipi_worker_waiter_total{result="timeout"}` or `result="disconnected"` | A presign or search reply never arrived; artifacts of a turn may be missing |
 | `event=worker.outbox.oversize` and `event=worker.drain.finished` with `error_code=drain_timeout` | A turn failed with `worker_message_too_large`; a worker stopped with results or sessions left |
 | `time() - apipi_background_loop_last_run_timestamp` for `lease_reaper` and `delta_flusher` | A dead or hung background loop. Also alert on `apipi_background_loop_errors_total`. |
-| Rate of `apipi_worker_commands_total{result="timeout"}` and `result="retransmitted"` | Workers that do not ack commands |
+| Rate of `apipi_worker_commands_total{result="timeout"}`, `result="retransmitted"`, and `result="expired"` | Workers that do not ack commands. `expired` means a lease was cleared and a turn failed. |
+| `apipi_worker_protocol_total{event="unknown_field"}`, `{event="unknown_type"}`, `{event="unknown_op"}` | A peer runs another version. Fields are ignored, types and ops are not handled. |
 | `apipi_worker_ingest_total{result="transient_error"}` | The API cannot store worker results |
 | `apipi_search_requests_total{result!="ok"}` | Search provider errors or denials |
 | `apipi_event_bus_notify_errors_total` | `NOTIFY` failures |

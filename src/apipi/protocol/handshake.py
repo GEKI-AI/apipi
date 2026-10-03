@@ -5,8 +5,9 @@ then sends `register` as its first message. Anything else as the first
 message, or a register without `protocol: 2`, is rejected: the API
 answers `{"ok": false, "error": ...}` and closes the socket with code
 1008. A valid register is answered with `hello`, which carries the
-persisted `last_seq` per running session, the lease TTL, and the
-heartbeat interval.
+persisted `last_seq` per running session, the lease TTL, the
+heartbeat interval, and the `features` the API supports. A `register`
+without `features` is a baseline peer; see `peer_features`.
 """
 
 import uuid
@@ -22,6 +23,13 @@ from apipi.protocol.control import (
     WorkerImageInfo,
     keep_valid_images,
 )
+
+
+def keep_features(value: Any) -> Any:
+    """Keep the string items of a `features` list; other shapes count as absent."""
+    if not isinstance(value, list):
+        return None
+    return [item for item in value if isinstance(item, str)]
 
 
 class RunningSession(ControlMessage):
@@ -43,8 +51,14 @@ class RegisterMessage(ControlMessage):
     arch: str = ""
     images: list[WorkerImageInfo] | None = None
     version: str | None = None
+    features: list[str] | None = None
 
     model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("features", mode="before")
+    @classmethod
+    def _valid_features(cls, value: Any) -> Any:
+        return keep_features(value)
 
     @field_validator("run_mode")
     @classmethod
@@ -120,6 +134,12 @@ class HelloReply(ControlMessage):
     store_check: StoreCheck | None = None
     revoke: list[RevokeEntry] = Field(default_factory=list)
     ttl: dict[uuid.UUID, TtlEntry] = Field(default_factory=dict)
+    features: list[str] | None = None
+
+    @field_validator("features", mode="before")
+    @classmethod
+    def _valid_features(cls, value: Any) -> Any:
+        return keep_features(value)
 
 
 class RejectMessage(ControlMessage):

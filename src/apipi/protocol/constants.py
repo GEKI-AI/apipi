@@ -1,5 +1,7 @@
 """Protocol constants: version, close codes, message type sets, limits."""
 
+import json
+from collections.abc import Iterable
 from datetime import timedelta
 
 PROTOCOL_VERSION = 2
@@ -66,13 +68,61 @@ COMMAND_CONTEXT_OPS = frozenset({"turn.start", "turn.continue", "sandbox.boot"})
 CURSOR_OPS = frozenset({"turn.start", "turn.continue", "sandbox.boot"})
 
 OUTBOX_BOUND = 10_000
-MAX_MESSAGE_BYTES = 1_000_000
-MAX_COMMAND_BYTES = 256_000
+MAX_MESSAGE_BYTES = 1_048_576
+MAX_COMMAND_BYTES = 262_144
 DELTA_RATE_LIMIT = 100
 DELTA_MAX_TEXT = 32_768
 SEEN_INTERVAL = timedelta(seconds=5)
 
+FEATURE_SEARCH = "search"
+FEATURE_PRESIGN = "presign"
+FEATURE_LEASE_CURSOR = "lease_cursor"
+FEATURE_SESSION_STOPPED = "session_stopped"
+
+BASELINE_FEATURES = frozenset({FEATURE_SEARCH, FEATURE_PRESIGN, FEATURE_LEASE_CURSOR})
+SUPPORTED_FEATURES = BASELINE_FEATURES | {FEATURE_SESSION_STOPPED}
+
+TYPE_FEATURES: dict[str, str] = {
+    "search.request": FEATURE_SEARCH,
+    "search.reply": FEATURE_SEARCH,
+    "artifact.presign": FEATURE_PRESIGN,
+    "artifact.presign.reply": FEATURE_PRESIGN,
+    "artifact.completed": FEATURE_PRESIGN,
+}
+OP_FEATURES: dict[str, str] = {}
+
 KNOWN_WIRE_TYPES = WORKER_IN | WORKER_OUT | WORKER_MESSAGE_TYPES
+
+
+def peer_features(advertised: Iterable[str] | None) -> frozenset[str]:
+    """The features of a peer; no `features` field means the baseline set."""
+    if advertised is None:
+        return BASELINE_FEATURES
+    return frozenset(item for item in advertised if isinstance(item, str))
+
+
+def dumps_wire(message: object) -> str:
+    """The JSON text of one frame: compact, UTF-8 (not ASCII-escaped).
+
+    A string with a lone surrogate cannot be written as UTF-8, so such a
+    message is escaped as ASCII instead and still goes on the wire.
+    """
+    text = json.dumps(message, separators=(",", ":"), ensure_ascii=False, default=str)
+    if not text.isascii():
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError:
+            return json.dumps(message, separators=(",", ":"), default=str)
+    return text
+
+
+def wire_bytes(text: str) -> int:
+    """The size of one frame in bytes of UTF-8, the unit of every size limit."""
+    return len(text) if text.isascii() else len(text.encode("utf-8"))
+
+
+def wire_size(message: object) -> int:
+    return wire_bytes(dumps_wire(message))
 
 
 def wire_type(message: object) -> str:

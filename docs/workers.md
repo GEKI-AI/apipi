@@ -127,6 +127,7 @@ The first worker message must be `register` with `protocol: 2`:
 | `accepts` | List of session kinds from `none`, `microvm`. What this worker runs. See [Placement](#placement). |
 | `running` | Sessions this worker still holds: `[{session_id, lease_id, last_seq}]`. `last_seq` continues from the API's value on reconnect. |
 | `version` | Optional. The ApiPi version of the worker. The API shows it in the `version` label of `apipi_worker_info`. |
+| `features` | Optional list of the protocol features the worker supports (see [Features and compatibility](#features-and-compatibility)). A register without `features` is a baseline worker. |
 | `capacity`, `memory_mb`, `run_mode`, `arch`, `images` | Placement advertisement, as before. `capacity` is max live sessions. `memory_mb` is the RAM budget in MiB (default `capacity ×` guest `mem_mib`). `run_mode` is the process backend (`none`, `microvm`, or a custom class). `arch` is the worker machine. `images` lists `{id, version, digest, min_size}` for guest images on this host. A v2 worker that accepts `microvm` and omits `images` is treated as having `default` and `browser`, except on aarch64, which is treated as having `default` only. |
 
 The API answers with `hello.reply`:
@@ -142,6 +143,7 @@ The API answers with `hello.reply`:
 | `store_check` | Only with `APIPI_ARTIFACT_STORE=local`: `{marker, nonce}`. The API writes `marker` into the shared store root containing `nonce`; the worker must read it back and answer with `store.proof`. Without the same filesystem the register is rejected with `filesystem store requires a shared path`. |
 | `revoke` | Sessions the worker claimed that hold no matching lease here (`[{session_id, lease_id}]`, each sent as `lease.revoke`). The worker tears those guests down. |
 | `ttl` | `{session_id: {idle_ttl_seconds, env_type, idle_since_epoch}}`: the effective reaper TTL plus the idle baseline per reported session, so a restarted worker learns idle TTLs without reading the database. |
+| `features` | The protocol features the API supports (see [Features and compatibility](#features-and-compatibility)). A `hello` without `features` comes from a baseline API. |
 
 A first message that is not `register` is rejected with
 `register required`. A bad register is rejected with
@@ -163,7 +165,7 @@ Worker to API:
 | --- | --- | --- |
 | `register` | See [Handshake](#handshake) | Create or reconnect the worker. |
 | `heartbeat` | `capacity` (optional), `memory_mb` (optional), `run_mode` (optional), `accepts` (optional), `arch` (optional), `image_store_version` (optional), `drain` (optional bool), `images` (optional list) | Refresh `last_seen` and renew every lease of the worker. Sent every `heartbeat_seconds` from a timer of its own, so a busy socket does not delay it. May update caps, advertised `run_mode` and accepts set, architecture, drain posture, and the image list. |
-| `lease.ack` | `id` (command id), `lease_id` | Command was received. Retransmits of the same id are safe. |
+| `lease.ack` | `id` (command id), `lease_id` | Command was received, and the worker sends it as soon as it has the command. It does not say the command finished. Retransmits of the same id are safe. A worker does not ack a command with an `op` it does not know. |
 | `lease.release` | `session_id`, `lease_id` | Worker dropped the session. The worker sends it only after the API acked every envelope the worker buffered for that session (see [Release order](#release-order)). |
 | `store.proof` | `marker`, `nonce` | Proof the worker sees the shared store root (filesystem store only). The worker reads the `hello` `store_check` marker file and echoes its nonce. A wrong proof closes the socket with `shared_store_required`. |
 | `inventory` | `sessions: [{session_id, lease_id, last_seq}]` | The worker live set, sent on hello (as `running`) and every 60s after, from a timer of its own. Drives reconciliation and the lifecycle heartbeat (see [Inventory](#inventory)). |
@@ -186,7 +188,7 @@ API to worker:
 
 | `type` | Fields | What |
 | --- | --- | --- |
-| `hello` | `ok`, `protocol`, `worker_id`, `generation`, `lease_ttl_seconds`, `heartbeat_seconds`, `sessions`, `store_check` | Register succeeded. `store_check` is present only for the filesystem store. |
+| `hello` | `ok`, `protocol`, `worker_id`, `generation`, `connection_id`, `lease_ttl_seconds`, `heartbeat_seconds`, `sessions`, `store_check`, `revoke`, `ttl`, `features` | Register succeeded. `store_check` is present only for the filesystem store. |
 | `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. `turn.start`, `turn.continue`, and `sandbox.boot` carry `payload.last_seq`, the session sequence cursor (see [Sequence on a new lease](#sequence-on-a-new-lease)). |
 | `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
 | `search.reply` | `session_id`, `request_id`, `ok`, `results`, `code`, `message` | Answer to one `search.request`. `results` is a list of `title`, `url`, `snippet`, and `published_date` (nullable), the same for every provider. On failure `ok` is false, `code` is one of `search_denied`, `search_unavailable`, `search_timeout`, `search_failed`, or `invalid_request`, and `message` is a short text that is safe to show the model. |
@@ -244,8 +246,8 @@ alone. A small emergency budget still reports the failure itself. The
 worker does not pause Pi when the outbox fills up: the turn fails.
 
 The worker checks the size of every envelope before it buffers it. An
-envelope over 1,000,000 bytes (`MAX_MESSAGE_BYTES`, measured as the
-UTF-8 JSON that goes on the wire) can never be sent, so the worker fails the turn
+envelope over 1,048,576 bytes (1 MiB, `MAX_MESSAGE_BYTES`, measured as
+the bytes of the UTF-8 JSON text frame that goes on the wire) can never be sent, so the worker fails the turn
 with `worker_message_too_large` and logs `worker.outbox.oversize`,
 instead of buffering something the API would reject or that would
 close the socket.
@@ -307,7 +309,7 @@ API code.
 | Package | What it holds |
 | --- | --- |
 | `apipi.protocol` | Every wire model, both directions: the handshake, control messages, envelopes and their payloads, commands with one payload model per `op`, the command context, replies, close reasons, and constants such as `PROTOCOL_VERSION` and the size limits. It imports only pydantic and the standard library. The base classes are named by role: `ControlMessage` for messages outside the envelope stream, `EnvelopePayload` for envelope payloads, `CommandPayload` for command payloads, and `ContextPart` for sections of the command context. `parse_worker_message` and `parse_api_message` turn one incoming frame into its model, and every model writes its frame with `to_wire()`. |
-| `apipi.workerhub` | The API side of the socket: `WorkerHub` and its leases, command building and the unacked command table, register and heartbeat handling, delta checks, inventory reconcile, and `RemoteExecution`. The socket route is `apipi.api.workers`, and ingest is `apipi.services.ingest`. |
+| `apipi.workerhub` | The API side of the socket: `WorkerHub` and its leases, command building and the command queue, register and heartbeat handling, delta checks, inventory reconcile, and `RemoteExecution`. The socket route is `apipi.api.workers`, and ingest is `apipi.services.ingest`. |
 | `apipi.worker` | The worker process: the socket client (`run_worker`), command dispatch, the Pi runtime, `LocalExecution`, the outbox, `OutboxSink`, `OutboxLifecycleReporter`, artifact uploads, and the Pi harness and isolation backends under `apipi.worker.pi`. |
 | `apipi.common` | Code both sides use: logging, metrics, tracing, failure codes, the sandbox and agent metadata rules, the in-process event bus, and object store paths. It imports no FastAPI, SQLAlchemy, or store code. |
 
@@ -418,8 +420,9 @@ The worker fetches the bytes at turn start, provisions the workspace,
 and installs skills from it.
 
 Commands with a context are validated before send and on receipt:
-file bytes are rejected, and payloads over 256 KiB are rejected with
-`payload_too_large`. Credentials in the context never appear in logs:
+file bytes are rejected, and a command frame over 262,144 bytes
+(256 KiB, `MAX_COMMAND_BYTES`, measured as the bytes of the UTF-8 JSON
+text frame) is rejected with `payload_too_large`. Credentials in the context never appear in logs:
 the worker command log carries only a secret-free summary (operation,
 environment type, model, MCP labels, file and skill counts).
 
@@ -434,6 +437,146 @@ After the socket comes back, the worker adopts the cursors in
 not ack are sent again by the API, and the worker's dedupe tells such
 a retransmit from a new command. A command that failed in dispatch is
 not recorded as done, so its retransmit runs again.
+
+## Commands
+
+The API keeps every command it sent until the worker acks it with
+`lease.ack`. The commands are kept per lease, in send order, in a small
+queue (at most 16 per lease), so a `turn.cancel` never replaces a
+`turn.start` that the worker has not acked yet. An ack removes only the
+command it names. A command is sent again in three cases:
+
+- When the worker reconnects. The API sends every unacked command of
+  every lease of that worker again, in order. This includes a lease the
+  worker did not claim in `register`, because the worker may never have
+  read the command that granted it: the command is written to a socket
+  that dies before the worker reads it. Such a lease stays attached, and
+  the command arrives on the new socket. Without that, the lease would
+  stay alive on heartbeats and the next turn of the session would be
+  refused as `capacity`.
+- On a timer while the worker is connected. A command that is still
+  unacked after 5 seconds is sent again every 5 seconds.
+- Never after the lease ended (release, expiry, or revoke).
+
+A command that is still unacked after the lease TTL has failed. The API
+logs `worker.command.expired` (`error_code` `worker_command_timeout`),
+counts it in `apipi_worker_commands_total{result="expired"}`, clears the
+lease, stores an `agent.session.error` with code `worker_command_timeout`,
+fails the turn that was in progress, and sends `lease.revoke` to the
+worker. A worker never acks a command whose `op` it does not know, so
+such a command ends the same way, and the failure is visible. The worker
+dedupes by command id, so every retransmit is safe.
+
+The queue lives in the memory of the API replica that holds the worker
+socket. If that process dies, its unacked commands are gone, and the
+leases they granted end by expiry. The queue is the one place that
+sends commands to a worker, so a command from another replica joins it
+by the same call.
+
+## Features and compatibility
+
+A rolling upgrade has old and new peers on the two sides of one socket,
+so the protocol has three rules.
+
+1. **A new field is always allowed.** A receiver ignores the fields it
+   does not know in envelope payloads, control messages, command
+   payloads, and the command context. It counts each one in
+   `apipi_worker_protocol_total{event="unknown_field"}` and logs
+   `worker.protocol.unknown_field`, rate limited per message model. The
+   tests parse strictly, so a typo in a sender of this repository still
+   fails there.
+2. **A new message type or command `op` needs a feature.** A peer sends
+   it only when the other side listed the feature in `register.features`
+   or `hello.features`. A receiver that still gets an unknown `type` or
+   `op` logs `worker.protocol.unknown_type` or `unknown_op`, counts it
+   (`unknown_type`, `unknown_op`), and never acks it as done: the worker
+   does not send `lease.ack` for an unknown `op`, so the API sends it
+   again and finally fails it as described in [Commands](#commands).
+3. **Removing a field or changing its meaning needs a new protocol
+   version.** A `register` with another `protocol` is rejected as
+   `unsupported_protocol`.
+
+A peer that sends no `features` is a baseline peer. The baseline is the
+protocol as it was before features existed, so old peers keep working.
+
+| Feature | What it adds | In the baseline |
+| --- | --- | --- |
+| `search` | `search.request` and `search.reply` | Yes |
+| `presign` | `artifact.presign`, `artifact.completed`, and `artifact.presign.reply` | Yes |
+| `lease_cursor` | `payload.last_seq` in `turn.start`, `turn.continue`, and `sandbox.boot` | Yes |
+| `session_stopped` | The worker acks `session.stop` on receipt, and the durable `session.stopped` envelope is the completion that the API waits for | No |
+
+The worker does not wire web search when the API did not list `search`,
+and it fails an upload with a clear error, instead of sending an
+envelope, when the API did not list `presign`. The API refuses a command
+op that needs a feature the worker did not list. The `hello` of the API
+must carry `lease_ttl_seconds` and `heartbeat_seconds`: a `hello`
+without them still stops the worker with an error, because no later
+version may leave them out and a worker cannot guess a safe heartbeat.
+
+Upgrade the API first and the workers after it. A worker from before
+this change rejects a command context with a field it does not know and
+fails the turn with `invalid_request`, and the API of an older release
+dropped an envelope payload with an unknown field. Both ignore unknown
+fields from this version on, so a release may add a field to a
+context or a payload only after every worker and every API runs this
+version or newer.
+
+## Delivery guarantees
+
+Every kind of message has one guarantee, one party that retries, and a
+known set of failures that lose it.
+
+| Message | Guarantee | Who retries | What is lost, and when |
+| --- | --- | --- | --- |
+| Durable envelope (worker to API) | Applied once, or rejected for a permanent reason. Never acked past a temporary error. | The worker keeps it in the outbox and sends it again after every reconnect until the cumulative `ack`. The API retries a batch that failed for a temporary reason three times, then closes the socket (`ingest_failed`) so that the worker replays. | A permanent reject is acked past: the lease is not the worker's (`not_leased`), the turn does not match, the envelope is over 1,048,576 bytes, the payload is invalid, the event or type is unknown. The reject is logged and counted. After a worker host crash the spool can miss the last second of envelopes. An envelope of a lease that already ended is rejected as `not_leased`. See [A worker restart](#a-worker-restart). |
+| Temporary ingest error | Not acked. The session is not acked past the last applied envelope. | The API, then the worker by replay. | Nothing. Deadlocks, lock and statement timeouts, connection resets, and object-store timeouts or throttling (also on `artifact.completed`) count as temporary. They show as `apipi_worker_ingest_total{result="transient_error"}`. |
+| Ephemeral delta | At most once. | Nobody. | A delta is dropped when the lane is full, over the rate limit, after the turn ended, or when the socket drops. The final item replaces it. |
+| Command (API to worker) | At least once, in order per lease. The worker runs it once (dedupe by `id`). | The API: on reconnect, every 5 seconds while connected. | A command that is not acked within the lease TTL fails visibly (see [Commands](#commands)). An API restart loses the queue of that process, and the lease then ends by expiry. |
+| `session.stop` | Acked on receipt. Completion is the durable `session.stopped`. | As a command. | If `session.stopped` does not arrive within 15 seconds, the API drops the lease anyway and logs it. |
+| `artifact.presign` and its reply | Always gets its reply. The reply is stored with the upload slot (by `request_id`), and a replay of the envelope gets the same reply. The API sends the reply before the ack of the envelope. | The worker, by replay of the envelope. | Nothing, except that the upload fails when the API answers with an error (quota, store). A temporary store error is not answered and not acked: it is tried again. |
+| `search.request` and `search.reply` | One reply, or an error to the model. | Nobody. | A request is lost with the socket and the tool call fails (`search_unavailable` or `search_timeout`). |
+| `lease.release` | Sent after the outbox was acked. | The worker retries after a reconnect. The API retries a failed handler three times. | If it never arrives, the lease expires after the TTL. |
+| `lease.revoke` | Sent when the API drops a lease. | The next `hello` and `inventory.reply` list the revokes again. | A revoke written to a dead socket is not repeated until the next inventory (at most 60 seconds). |
+| `heartbeat`, `inventory`, `sandbox.seen` | Periodic. | The next one. | Any single one, when the socket drops. |
+
+The unit of every size limit is a byte of the UTF-8 JSON text frame
+that goes on the wire. `MAX_MESSAGE_BYTES` is 1,048,576 (1 MiB) for one
+envelope, and `MAX_COMMAND_BYTES` is 262,144 (256 KiB) for one command
+frame, including its context. The worker checks the envelope size before
+it appends to the outbox and fails the turn with
+`worker_message_too_large`. The API checks a command before it sends it
+and answers `413` with `payload_too_large`. A full outbox fails the turn
+with `worker_outbox_full`.
+
+### A worker restart
+
+A worker process that restarts has no memory of its leases, so its
+`register` claims no sessions, and its Pi processes and guests are gone.
+The spool still holds the envelopes the API did not ack. When a worker
+registers with an empty claim, the API keeps the leases that the row
+still assigns to that worker and does not orphan them yet. The worker
+replays its spool into those leases, and the API applies it. The first
+`inventory` of the worker, 60 seconds after it connects, no longer lists
+those sessions, so the API then orphans them (`worker_orphaned`), fails
+their turns, and clears the leases.
+
+What is still lost, exactly:
+
+- Everything that was not durable on the worker disk: deltas, the last
+  second of envelopes after a host crash, and anything the worker had
+  not yet appended.
+- Spooled envelopes of a lease that ended before the worker came back
+  and replayed: the reaper expired the lease because the worker was away
+  longer than the lease TTL, or the lease was released. The API rejects
+  them as `not_leased` and acks past them. The turn was already failed
+  with `worker_lease_expired`, so its `usage` and later artifacts are
+  not recorded.
+- Envelopes of a worker that registers with a non-empty claim of other
+  sessions: those sessions that it does not claim are orphaned at once,
+  as before.
+- The turn itself. A guest or Pi that died with the worker cannot
+  continue, so the turn fails and the client sees the error.
 
 ## Keepalive and reconnect
 
@@ -586,9 +729,15 @@ envelopes, and `session.stopped`.
 
 The worker therefore sends `lease.release` only after the API acked
 every envelope the worker had buffered for the session when the
-release started. The same rule holds for the `lease.ack` of a
-`session.stop` command: it follows the ack of `session.stopped`. The
-wait has a limit (`RELEASE_FLUSH_TIMEOUT`, 10 seconds). When it runs
+release started. `session.stop` follows the same order, but the
+worker acks the command as soon as it has it (when both sides list the
+`session_stopped` feature, see [Features and
+compatibility](#features-and-compatibility)). The completion of a stop
+is the durable `session.stopped` envelope: the API waits until ingest
+applied it (up to 15 seconds, then it logs `worker.session.stop_timeout`)
+and only then drops the lease. A baseline peer keeps the old rule: the
+worker acks the command after `session.stopped` was acked, and the API
+drops the lease on that ack. The wait has a limit (`RELEASE_FLUSH_TIMEOUT`, 10 seconds). When it runs
 out, for example because the socket is down, the worker releases
 anyway and logs `worker.release.unflushed`. The API also ingests the
 batch it still holds before it handles a `lease.release`, so envelopes
@@ -710,8 +859,10 @@ These do not close the socket:
   skipped, logged as `worker.frame.invalid`, and counted as
   `frame_invalid`. A message with a known `type` and invalid fields is
   skipped, logged as `worker.message.invalid`, and counted as
-  `message_invalid`. An unknown `type` is ignored. A durable envelope
-  that fails validation is rejected and acked past, as before.
+  `message_invalid`. An unknown `type` is logged as
+  `worker.protocol.unknown_type` and counted as `unknown_type`. A
+  durable envelope that fails validation is rejected and acked past, as
+  before.
 - A heartbeat with an invalid optional field (`capacity`, `memory_mb`,
   `run_mode`, `images`). The field is ignored and logged as
   `worker.heartbeat.field_ignored`, and the leases are still extended.
@@ -720,7 +871,7 @@ These do not close the socket:
   again one second later.
 
 The API sets the WebSocket frame limit of uvicorn (`ws_max_size`) to
-4 MiB. The 1,000,000 byte limit for one durable envelope is checked
+4 MiB. The 1,048,576 byte limit for one durable envelope is checked
 after parsing and acked past, so the frame limit only has to be
 larger than any envelope a worker may send. A frame over 4 MiB closes
 the socket with code `1009`.
@@ -854,10 +1005,11 @@ RAM. Session count is only a filter and a tie-break.
 
 Session delete sends `session.stop` to the worker that holds the
 lease. The worker kills that guest and deletes host files it owns,
-then acknowledges once the API has acked everything the worker buffered
-for the session, including `session.stopped` (see [Release
-order](#release-order)). The API drops the lease only after that
-acknowledgement. A delete does not wait for idle TTL.
+then reports `session.stopped` as a durable envelope, after the API
+acked everything the worker buffered for the session (see [Release
+order](#release-order)). The worker acks the command itself as soon as it
+receives it. The API drops the lease only after it applied
+`session.stopped`. A delete does not wait for idle TTL.
 
 `SIGTERM` or `SIGINT` on `apipi worker` sends that drain heartbeat,
 kills idle Pi (sessions not in a turn), waits until no live Pi remain

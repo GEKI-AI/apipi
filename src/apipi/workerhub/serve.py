@@ -15,6 +15,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from apipi.common.event_bus import EventBus
 from apipi.common.logutil import log_event
+from apipi.common.wirewatch import note_unknown_fields, note_unknown_type
 from apipi.protocol import (
     REVOKED_REASON,
     SHARED_STORE_REASON,
@@ -34,10 +35,13 @@ from apipi.protocol import (
     TtlEntry,
     WorkerEnvelope,
     WorkerEventMessage,
+    collect_unknown_fields,
     parse_worker_message,
+    wire_bytes,
     wire_type,
 )
 from apipi.services.ingest import (
+    UNKNOWN_TYPE,
     IngestBatcher,
     IngestOutcome,
     QueuedEnvelope,
@@ -81,10 +85,14 @@ class _Envelope:
     raw_size: int
 
 
-def _classify(message: dict[str, Any]) -> tuple[str, WorkerEnvelope | None, int]:
+def _classify(
+    message: dict[str, Any], size: int | None = None
+) -> tuple[str, WorkerEnvelope | None, int]:
     try:
-        return classify_incoming(message)
-    except _Reject:
+        return classify_incoming(message, size)
+    except _Reject as rejected:
+        if rejected.reason == UNKNOWN_TYPE:
+            return "unknown_type", None, 0
         return "garbage", None, 0
 
 
@@ -251,7 +259,7 @@ class ConnectionServer:
             if not isinstance(message, dict):
                 self._invalid_frame("not_an_object")
                 continue
-            await self._dispatch(message, len(text))
+            await self._dispatch(message, wire_bytes(text))
 
     def _invalid_frame(self, why: str) -> None:
         self.hub.observe_protocol("frame_invalid")
@@ -272,7 +280,16 @@ class ConnectionServer:
             "worker message in",
             extra={"event": "worker.message", "type": type_label, "size": size},
         )
-        kind, envelope, raw_size = _classify(message)
+        with collect_unknown_fields() as unknown:
+            kind, envelope, raw_size = _classify(message, size)
+            parsed, invalid = self._parse_control(message, kind, type_label)
+        if unknown:
+            note_unknown_fields(unknown, metrics=self.metrics, side="api")
+        if kind == "unknown_type":
+            note_unknown_type(
+                "type", message.get("type"), metrics=self.metrics, side="api"
+            )
+            return
         if kind == "envelope" and envelope is not None:
             self._unflushed[envelope.session_id] = (
                 self._unflushed.get(envelope.session_id, 0) + 1
@@ -294,18 +311,7 @@ class ConnectionServer:
         if kind == "garbage":
             self._log_garbage(message)
             return
-        msg_type = message.get("type")
-        if msg_type not in WORKER_IN:
-            return
-        if msg_type == "search.request":
-            await self._start_search(message)
-            return
-        try:
-            if msg_type == "heartbeat":
-                parsed: BaseModel | None = parse_heartbeat(self.hub, conn, message)
-            else:
-                parsed = parse_worker_message(message)
-        except ValidationError:
+        if invalid:
             self.hub.observe_protocol("message_invalid")
             conn.warnings.warning(
                 "worker message invalid; skipped",
@@ -315,6 +321,13 @@ class ConnectionServer:
                 worker_id=conn.worker_id,
                 type=type_label,
             )
+            return
+        msg_type = message.get("type")
+        if msg_type not in WORKER_IN:
+            note_unknown_type("type", msg_type, metrics=self.metrics, side="api")
+            return
+        if msg_type == "search.request":
+            await self._start_search(message)
             return
         ordered = isinstance(parsed, WorkerEventMessage) or (
             isinstance(parsed, LeaseRelease)
@@ -332,6 +345,19 @@ class ConnectionServer:
             | LeaseRelease,
         ):
             await self._put(self._control, _Control(type_label, parsed))
+
+    def _parse_control(
+        self, message: dict[str, Any], kind: str, type_label: str
+    ) -> tuple[BaseModel | None, bool]:
+        msg_type = message.get("type")
+        if kind != "other" or msg_type not in WORKER_IN or msg_type == "search.request":
+            return None, False
+        try:
+            if msg_type == "heartbeat":
+                return parse_heartbeat(self.hub, self.conn, message), False
+            return parse_worker_message(message), False
+        except ValidationError:
+            return None, True
 
     async def _put(self, queue: "asyncio.Queue[Any]", item: Any) -> None:
         if queue.full():
@@ -580,9 +606,7 @@ class ConnectionServer:
             return
         started = time.monotonic()
         try:
-            outcome = await self._apply_batch(queued)
-            if outcome is not None:
-                await self._after_flush(outcome)
+            await self._apply_batch(queued)
         finally:
             for item in queued:
                 session_id = item.envelope.session_id
@@ -594,14 +618,22 @@ class ConnectionServer:
             for label in {item.envelope.type for item in queued}:
                 self._finish(label, started)
 
-    async def _apply_batch(self, queued: list[QueuedEnvelope]) -> IngestOutcome | None:
+    async def _apply_batch(self, queued: list[QueuedEnvelope]) -> None:
+        """Apply a batch, then retry what a temporary failure left unapplied.
+
+        An envelope that failed for a temporary reason is not acked, and
+        neither is anything after it in its session. Those envelopes go
+        through again, up to `INGEST_ATTEMPTS` tries in all. If they
+        still fail, the socket closes and the worker replays them.
+        """
         conn = self.conn
+        pending = queued
         started = time.monotonic()
         for attempt in range(INGEST_ATTEMPTS):
             try:
                 outcome = await flush_batch(
                     self.store,
-                    queued,
+                    pending,
                     worker_id=conn.worker_id,
                     settings=self.settings,
                     metrics=self.metrics,
@@ -612,30 +644,32 @@ class ConnectionServer:
                 raise
             except Exception as exc:
                 self._failed("ingest", exc)
-                if attempt + 1 >= INGEST_ATTEMPTS:
-                    self.hub.observe_protocol("ingest.failed")
-                    conn.request_close("ingest_failed", code=1011, text="ingest_failed")
-                    return None
-                self.hub.observe_protocol("ingest.retried")
-                await asyncio.sleep(RETRY_DELAYS[min(attempt, 2)])
-                continue
-            if self.metrics is not None:
-                self.metrics.observe_worker_ingest_batch(
-                    seconds=time.monotonic() - started, size=len(queued)
-                )
-            return outcome
-        return None
+            else:
+                if self.metrics is not None:
+                    self.metrics.observe_worker_ingest_batch(
+                        seconds=time.monotonic() - started, size=len(pending)
+                    )
+                await self._after_flush(outcome)
+                pending = outcome.retry
+                if not pending:
+                    return
+            if attempt + 1 >= INGEST_ATTEMPTS:
+                break
+            self.hub.observe_protocol("ingest.retried")
+            await asyncio.sleep(RETRY_DELAYS[min(attempt, 2)])
+        self.hub.observe_protocol("ingest.failed")
+        conn.request_close("ingest_failed", code=1011, text="ingest_failed")
 
     async def _after_flush(self, outcome: IngestOutcome) -> None:
         conn = self.conn
+        for reply in outcome.presign_replies:
+            conn.writer.send_nowait(reply)
         for session_id, last_seq in sorted(
             outcome.acks.items(), key=lambda item: str(item[0])
         ):
             conn.writer.send_nowait(
                 CumulativeAck(session_id=session_id, last_seq=last_seq).to_wire()
             )
-        for reply in outcome.presign_replies:
-            conn.writer.send_nowait(reply)
         await self._step("renew", self.hub.renew_on_activity(self.store, conn))
         for session_id, body in outcome.wakes:
             self.hub.note_stored_events(session_id, [body])
@@ -655,6 +689,8 @@ class ConnectionServer:
                 await self._step(
                     "wipe", wipe_artifact_store(blobs, tenant_id, key_id, session_id)
                 )
+        for session_id in outcome.stopped:
+            self.hub.note_stopped(session_id)
 
     async def _step(self, label: str, work: Awaitable[object]) -> None:
         try:

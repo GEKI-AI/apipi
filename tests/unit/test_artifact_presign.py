@@ -118,7 +118,7 @@ def test_no_message_schema_carries_bytes() -> None:
                 name,
                 field_name,
             )
-    assert MAX_MESSAGE_BYTES == 1_000_000
+    assert MAX_MESSAGE_BYTES == 1_048_576
 
 
 def test_presign_envelope_has_no_bytes() -> None:

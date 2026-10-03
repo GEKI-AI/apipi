@@ -448,12 +448,13 @@ async def test_command_context_is_validated_and_redacted() -> None:
     with pytest.raises(ApiError) as too_big:
         _check_command_context(
             "turn.start",
-            {"context": {**raw, "agent": {"instructions": "x" * 300_000}}},
+            {"payload": {"context": {**raw, "agent": {"instructions": "x" * 300_000}}}},
         )
     assert too_big.value.code == "payload_too_large"
     with pytest.raises(ApiError) as bad:
         _check_command_context(
-            "turn.start", {"context": {**raw, "files": [{"path": "x", "data": b"y"}]}}
+            "turn.start",
+            {"payload": {"context": {**raw, "files": [{"path": "x", "data": b"y"}]}}},
         )
     assert bad.value.code == "invalid_request"
     redacted = redact_context(raw)

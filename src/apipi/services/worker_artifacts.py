@@ -41,6 +41,7 @@ from apipi.store.repo import (
     create_artifact,
     create_artifact_upload,
     get_artifact_upload,
+    get_artifact_upload_by_request,
     get_session,
     list_artifacts,
 )
@@ -277,11 +278,15 @@ async def issue_artifact_presign(
     objects: ObjectStore | None = None,
     blobs: ArtifactBlobs | None = None,
     unchanged: bool | None = None,
+    request_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Reserve one upload slot; S3 also mints the presigned PUT URL.
 
     `unchanged` is the answer of `precheck_presign` when the caller read
     the store before taking the row lock; without it the check runs here.
+    The slot is stored with the worker's `request_id`. A second call with
+    the same `request_id` (a replayed envelope) answers from that slot
+    and reserves nothing new, so the reply is always the same.
     """
     kind = check_artifact_kind(kind)
     digest = check_sha256(sha256)
@@ -289,6 +294,13 @@ async def issue_artifact_presign(
     if row is None:
         raise _store_error("unknown session", operation="presign")
     name = presign_name(kind, filename)
+    existing_upload = (
+        await get_artifact_upload_by_request(db, tenant_id, session_id, request_id)
+        if request_id is not None
+        else None
+    )
+    if existing_upload is not None:
+        unchanged = False
     if unchanged is None and (
         kind == "artifact" and digest is not None and blobs is not None
     ):
@@ -312,29 +324,40 @@ async def issue_artifact_presign(
             "headers": {},
             "expires_at": None,
         }
-    await check_quota(
-        db, settings, row, kind=kind, declared=size, blobs_used_bytes=used_bytes
-    )
-    if kind == "pi_session" and row.pi_session_id is not None:
-        # Reuse the blob id so every save overwrites the same object
-        # instead of leaking one new object per save.
-        artifact_id = row.pi_session_id
+    if existing_upload is not None:
+        upload = existing_upload
+        artifact_id = upload.artifact_id
+        ctype = upload.content_type
+        expires_at = _aware(upload.expires_at)
+        if expires_at <= utc_now():
+            expires_at = utc_now() + settings.presign_ttl
+            upload.expires_at = expires_at
+            await db.flush()
     else:
-        artifact_id = uuid.uuid4()
-    ctype = (content_type or "").strip() or "application/octet-stream"
-    expires_at = utc_now() + settings.presign_ttl
-    upload = await create_artifact_upload(
-        db,
-        tenant_id,
-        session_id=session_id,
-        artifact_id=artifact_id,
-        kind=kind,
-        filename=name,
-        content_type=ctype,
-        declared_bytes=size,
-        sha256=digest,
-        expires_at=expires_at,
-    )
+        await check_quota(
+            db, settings, row, kind=kind, declared=size, blobs_used_bytes=used_bytes
+        )
+        if kind == "pi_session" and row.pi_session_id is not None:
+            # Reuse the blob id so every save overwrites the same object
+            # instead of leaking one new object per save.
+            artifact_id = row.pi_session_id
+        else:
+            artifact_id = uuid.uuid4()
+        ctype = (content_type or "").strip() or "application/octet-stream"
+        expires_at = utc_now() + settings.presign_ttl
+        upload = await create_artifact_upload(
+            db,
+            tenant_id,
+            session_id=session_id,
+            artifact_id=artifact_id,
+            kind=kind,
+            filename=name,
+            content_type=ctype,
+            declared_bytes=size,
+            sha256=digest,
+            expires_at=expires_at,
+            request_id=request_id,
+        )
     if kind == "input_image":
         file_id = f"file-{artifact_id.hex}"
         namespace: Namespace = NS_FILES

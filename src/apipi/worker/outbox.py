@@ -37,7 +37,15 @@ from pathlib import Path
 from typing import Any
 
 from apipi.common.logutil import RateLimitedLog
-from apipi.protocol import MAX_MESSAGE_BYTES, EnvelopePayload, WorkerEnvelope
+from apipi.config import ConfigError
+from apipi.protocol import (
+    BASELINE_FEATURES,
+    MAX_MESSAGE_BYTES,
+    TYPE_FEATURES,
+    EnvelopePayload,
+    WorkerEnvelope,
+    wire_size,
+)
 
 log = logging.getLogger("apipi.worker")
 
@@ -71,6 +79,10 @@ class EnvelopeTooLarge(OutboxFull):
         self.size = size
 
 
+class FeatureUnsupported(ConfigError):
+    """The API did not advertise the feature an envelope type needs."""
+
+
 @dataclass
 class _SessionBuffer:
     issued: int = 0
@@ -86,7 +98,7 @@ class _SessionBuffer:
 
 
 def envelope_size(envelope: dict[str, Any]) -> int:
-    return len(json.dumps(envelope, separators=(",", ":")).encode("utf-8"))
+    return wire_size(envelope)
 
 
 def _line(envelope: dict[str, Any]) -> str:
@@ -152,6 +164,7 @@ class Outbox:
         self.session_bytes = max(1, int(max_bytes * session_share))
         self.compact_min = compact_min
         self.metrics = metrics
+        self.peer_features: frozenset[str] = BASELINE_FEATURES
         self._warnings = RateLimitedLog(log)
         self.spool_dir = Path(spool_dir) if spool_dir is not None else None
         if self.spool_dir is not None:
@@ -226,6 +239,19 @@ class Outbox:
         small reserved budget so a full outbox can still report the
         `worker_outbox_full` failure itself.
         """
+        feature = TYPE_FEATURES.get(type)
+        if feature is not None and feature not in self.peer_features:
+            self._warnings.warning(
+                "envelope type needs a feature the API did not advertise",
+                event="worker.outbox.feature_missing",
+                error_code="feature_unsupported",
+                session_id=session_id,
+                type=type,
+                feature=feature,
+            )
+            raise FeatureUnsupported(
+                f"the API does not support {feature}, so {type} cannot be sent"
+            )
         buffer = self._buffer(session_id)
         seq = buffer.issued + 1
         envelope = WorkerEnvelope.build(

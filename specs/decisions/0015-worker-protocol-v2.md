@@ -48,8 +48,8 @@ Message classes:
 * **Durable** (`item.added`, `item.done`, `turn.status`, `usage`,
   `artifact.completed`, `error`, `sandbox.status`): the worker keeps an
   outbox until it gets a cumulative `ack{session_id, last_seq}`. The
-  API ingests idempotently (`UNIQUE(session_id, seq)`,
-  `ON CONFLICT DO NOTHING`), in batches, and acks after commit. The
+  API ingests idempotently (`UNIQUE(session_id, seq)`, a savepoint per
+  envelope), in batches, and acks after commit. The
   final item is the source of truth, never the deltas.
 * **Ephemeral** (`delta.text`, `delta.reasoning`): at-most-once, never
   persisted, never acked. Deltas are coalesced before fan-out.
@@ -108,8 +108,8 @@ cursor in the command was preferred. Only the lease holder advances
 but never move the cursor.
 
 **Release waits for the outbox.** The worker sends `lease.release`, and
-the `lease.ack` of `session.stop`, only after the API acked every
-envelope buffered for that session, with a timeout (10 seconds) after
+reports `session.stopped` (see Delivery guarantees), only after the API
+acked every envelope buffered for that session, with a timeout (10 seconds) after
 which it releases anyway and logs. This was chosen over a durable
 `lease.released` envelope and over carrying a lease id in every
 envelope, because both change the envelope schema and the ingest
@@ -133,7 +133,7 @@ the receive loop would block the acks it waits for.
   pause Pi: pausing the output stream would need a backpressure path
   from the outbox into the Pi RPC reader, and a turn that cannot report
   its results is better failed with a clear code than stalled.
-* Messages are capped at `MAX_MESSAGE_BYTES` (1,000,000 bytes), and the
+* Messages are capped at `MAX_MESSAGE_BYTES` (1,048,576 bytes), and the
   API rate limits worker messages per session. The worker checks the
   size before it buffers an envelope and fails the turn with
   `worker_message_too_large`. Oversize or over-rate messages that still
@@ -215,6 +215,95 @@ reconnect; the API side of the reconcile is unchanged here.
 and byte bounds, so a noisy session or an outage fails its own turn and
 not every turn on the worker. The emergency budget for the failure
 itself still applies.
+
+## Delivery guarantees and forward compatibility
+
+The goal is that a durable envelope is either applied or rejected for a
+permanent reason, a command reaches the worker or fails visibly, a
+request with a reply always gets its reply, and a newer peer never
+loses data on an older peer during a rolling upgrade. The per-message
+table is in `docs/workers.md` (Delivery guarantees). These are the rules
+and why each was chosen.
+
+**Permanent and temporary failures.** An error while applying an
+envelope is classified. A deadlock, a lock or statement timeout, a
+connection reset, and a temporary object-store error (timeouts,
+throttling, 5xx, also on `artifact.completed`) are temporary. The API
+does not ack the envelope or anything after it in that session, tries
+the batch again, and after three tries closes the socket so that the
+worker replays. Everything else is a verdict on the envelope and is
+rejected, logged, counted, and acked past, as before. Acking past a
+temporary error was rejected because it turns a database hiccup into
+lost billing data and lost artifacts. Stalling only the affected
+session keeps the other sessions of the socket moving.
+
+**Unknown fields are ignored and counted.** The `extra` policy of every
+model is "ignore", set in `protocol/base.py`. An ignored field is
+counted (`unknown_field`) and logged, so a version skew is visible. A
+test switch (`strict_parse`) makes the models that used to forbid
+extras (envelope payloads and the command context) reject them again,
+and the whole test suite runs with it on, so a typo in a sender of this
+repository still fails there. Ignoring was chosen over forbidding
+because a rolling upgrade always has a newer sender: forbidding lost
+envelopes (the next cumulative ack skips the dropped one) and failed
+turns.
+
+**Features.** `register` and `hello` carry an optional `features` list.
+A peer without it is a baseline peer, so an old peer keeps working. The
+rules:
+
+* An additive field is always allowed and needs no feature.
+* A new message type or command `op` needs a feature. A peer sends it
+  only when the other side listed the feature. A new envelope type that
+  an old API does not know cannot be acked safely, because a later
+  cumulative ack would skip it.
+* Removing a field or changing its meaning needs a new protocol version.
+  The API rejects another `protocol` with `unsupported_protocol`.
+* A change of behavior that an old peer cannot parse is a feature too.
+  `session_stopped` is one: it moves the ack of `session.stop` to the
+  receipt and makes the durable `session.stopped` envelope the
+  completion. A baseline peer keeps the old behavior on both sides.
+
+The features today are `search`, `presign`, and `lease_cursor`, which
+describe the protocol that existed before features and are in the
+baseline, and `session_stopped`, which is not. The `hello` of the API
+must carry `lease_ttl_seconds` and `heartbeat_seconds`: a worker cannot
+guess a safe heartbeat, so a `hello` without them stays an error. A
+receiver does not ack an unknown `op` as done, so the API sends it again
+and finally fails it.
+
+**Commands are a queue.** The API keeps unacked commands per lease in
+send order (a small queue) instead of one slot per lease, sends them
+again on every reconnect for every lease of the worker, including a
+lease the worker did not claim, and on a 5 second timer while connected,
+and fails a command that stays unacked for the lease TTL by clearing the
+lease and failing the turn. The queue is held by the replica that holds
+the socket. The case that made a lease live forever was a command written
+to a socket that died before the worker read it. The worker reconnected
+with a claim that lacked the lease, the API skipped the lease, and
+heartbeats kept it alive.
+
+**Presign replies.** The upload slot stores the worker `request_id`. A
+replayed `artifact.presign` is answered from that slot, so the reply is
+the same. The API sends the reply before the ack of the envelope, so a
+worker that got the ack always got the reply before it.
+
+**Stop.** All commands are acked on receipt. The completion of
+`session.stop` is the durable `session.stopped` envelope, and the API
+drops the lease when ingest applied it (or after 15 seconds).
+
+**Sizes are bytes.** Limits are bytes of the UTF-8 JSON text frame as
+sent: `MAX_MESSAGE_BYTES` is 1,048,576 and `MAX_COMMAND_BYTES` is
+262,144 (binary units, so that the docs and the constants agree). The
+worker checks before it buffers, and the API checks a command before it
+sends it.
+
+**A worker restart.** A restarted worker has no lease claims. A register
+with an empty claim no longer orphans the leases of that worker at once,
+so the spooled envelopes are applied. The first inventory orphans what
+is really gone. What a restart can still lose is listed in
+`docs/workers.md`: envelopes of a lease that expired or was released
+before the worker came back are rejected as `not_leased`.
 
 ## Serving a socket on the API
 

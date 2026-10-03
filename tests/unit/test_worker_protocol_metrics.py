@@ -181,8 +181,9 @@ async def test_hub_command_ack_and_retransmit(
     lease = uuid.UUID(str(wire["lease_id"]))
     conn.leases.add(lease)
     hub._conns[conn.worker_id] = conn
-    hub._set_unacked(lease, wire)
-    hub._note_sent(wire)
+    entry = hub.commands.push(wire, worker_id=conn.worker_id)
+    hub._note_sent(entry)
+    hub._observe_unacked()
     body = metrics.scrape().decode()
     assert "apipi_worker_commands_unacked 1.0" in body
     caplog.set_level(logging.WARNING, logger="apipi.worker")
@@ -224,8 +225,8 @@ async def test_hub_command_ack_timeout(caplog: pytest.LogCaptureFixture) -> None
     hub = WorkerHub(_settings(), metrics=metrics)
     wire = _wire("session.stop")
     lease = uuid.UUID(str(wire["lease_id"]))
-    hub._set_unacked(lease, wire)
-    hub._note_sent(wire)
+    entry = hub.commands.push(wire)
+    hub._note_sent(entry)
     assert await hub.wait_ack(lease, str(wire["id"]), timeout=0.05) is False
     assert any(
         getattr(record, "event", None) == "worker.command.ack_timeout"

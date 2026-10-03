@@ -75,22 +75,22 @@ def command_payload(
     return model.model_copy(update=update)
 
 
-def _check_command_context(op: str, payload: dict[str, Any]) -> None:
-    """Validate the turn context on worker commands before sending."""
+def _check_command_context(op: str, wire: dict[str, Any]) -> None:
+    """Validate the turn context and the byte size of a command before sending."""
+    payload = wire["payload"]
     raw = payload.get("context")
-    if raw is None:
-        return
+    if raw is not None:
+        try:
+            parse_turn_context(raw)
+        except (ContextBytes, ValidationError) as exc:
+            raise ApiError(
+                "invalid_request",
+                f"invalid turn context: {exc}",
+                code="invalid_request",
+                status_code=400,
+            ) from exc
     try:
-        parse_turn_context(raw)
-    except (ContextBytes, ValidationError) as exc:
-        raise ApiError(
-            "invalid_request",
-            f"invalid turn context: {exc}",
-            code="invalid_request",
-            status_code=400,
-        ) from exc
-    try:
-        check_command_size(payload)
+        check_command_size(wire)
     except CommandTooLarge as exc:
         raise ApiError(
             "invalid_request",

@@ -24,8 +24,10 @@ from apipi.config import (
     Settings,
 )
 from apipi.protocol import (
+    BASELINE_FEATURES,
     COMMAND_OPS,
     CURSOR_OPS,
+    OP_FEATURES,
     PUBLIC_EVENT_TYPES,
     BaseCommandPayload,
     LeaseRevoke,
@@ -34,6 +36,7 @@ from apipi.protocol import (
     WorkerEnvelope,
 )
 from apipi.services.session_events import persist_event
+from apipi.services.turn_state import fail_stale_in_progress
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import (
@@ -48,6 +51,11 @@ from apipi.store.repo import (
 )
 from apipi.workerhub import deltas as delta_gate
 from apipi.workerhub import inventory as inventory_gate
+from apipi.workerhub.command_queue import (
+    CommandQueue,
+    CommandQueueFull,
+    PendingCommand,
+)
 from apipi.workerhub.commands import (
     _check_command_context,
     command_payload,
@@ -60,6 +68,7 @@ from apipi.workerhub.deltas import DeltaLease
 log = logging.getLogger("apipi.worker")
 
 REVOKE_TIMEOUT = 5.0
+COMMAND_RETRANSMIT_SECONDS = 5.0
 MAX_HEARTBEAT_SECONDS = 10.0
 MIN_HEARTBEAT_SECONDS = 0.05
 
@@ -88,8 +97,9 @@ class WorkerHub:
         self.metrics = metrics
         self.tracing = tracing
         self._conns: dict[uuid.UUID, WorkerConnection] = {}
-        self._unacked: dict[uuid.UUID, dict[str, Any]] = {}
-        self._sent_at: dict[str, float] = {}
+        self.commands = CommandQueue()
+        self._stopped: dict[uuid.UUID, asyncio.Event] = {}
+        self.retransmit_seconds = COMMAND_RETRANSMIT_SECONDS
         self._warnings = RateLimitedLog(log)
         self._delta_hits: dict[uuid.UUID, list[float]] = {}
         self._delta_leases: dict[uuid.UUID, DeltaLease] = {}
@@ -131,34 +141,52 @@ class WorkerHub:
         if self.metrics is not None:
             self.metrics.observe_worker_command(op, result)
 
-    def _set_unacked(self, lease_id: uuid.UUID, wire: dict[str, Any]) -> None:
-        previous = self._unacked.get(lease_id)
-        if previous is not None and previous.get("id") != wire.get("id"):
-            self._sent_at.pop(str(previous.get("id")), None)
-        self._unacked[lease_id] = wire
+    def _enqueue(self, wire: dict[str, Any], conn: WorkerConnection) -> PendingCommand:
+        feature = OP_FEATURES.get(str(wire.get("op")))
+        if feature is not None and feature not in conn.features:
+            raise ApiError(
+                "api_error",
+                f"The worker does not support {wire.get('op')}",
+                code="unsupported_op",
+                status_code=501,
+            )
+        try:
+            entry = self.commands.push(wire, worker_id=conn.worker_id)
+        except CommandQueueFull:
+            raise ApiError(
+                "invalid_request",
+                "The worker has too many unacked commands for this session",
+                code="capacity",
+                status_code=429,
+            ) from None
         self._observe_unacked()
+        return entry
 
-    def _drop_unacked(self, lease_id: uuid.UUID) -> dict[str, Any] | None:
-        pending = self._unacked.pop(lease_id, None)
-        if pending is not None:
-            self._sent_at.pop(str(pending.get("id")), None)
+    def _drop_lease_commands(self, lease_id: uuid.UUID) -> list[PendingCommand]:
+        dropped = self.commands.drop_lease(lease_id)
+        if dropped:
             self._observe_unacked()
-        return pending
+        return dropped
 
     def _observe_unacked(self) -> None:
         if self.metrics is not None:
-            self.metrics.set_worker_commands_unacked(len(self._unacked))
+            self.metrics.set_worker_commands_unacked(len(self.commands))
 
-    def _note_sent(self, wire: dict[str, Any]) -> None:
-        self._sent_at[str(wire.get("id"))] = time.monotonic()
-        self.observe_command(str(wire.get("op")), "sent")
+    def _note_sent(self, entry: PendingCommand) -> None:
+        self.commands.mark_sent(entry)
+        self.observe_command(entry.op, "sent")
 
-    def _note_send_failed(self, lease_id: uuid.UUID, wire: dict[str, Any]) -> None:
-        self._drop_unacked(lease_id)
-        self.observe_command(str(wire.get("op")), "failed")
+    def _note_send_failed(self, entry: PendingCommand) -> None:
+        self.commands.discard(entry)
+        self._observe_unacked()
+        self.observe_command(entry.op, "failed")
 
     def get(self, worker_id: uuid.UUID) -> WorkerConnection | None:
         return self._conns.get(worker_id)
+
+    def features_of(self, worker_id: uuid.UUID | None) -> frozenset[str]:
+        conn = self._conns.get(worker_id) if worker_id is not None else None
+        return conn.features if conn is not None else BASELINE_FEATURES
 
     async def renew_on_activity(self, store: Store, conn: WorkerConnection) -> None:
         """Renew the worker's leases when it showed life without a heartbeat.
@@ -399,11 +427,11 @@ class WorkerHub:
         body = command_payload(op, payload, run_mode=required, image=image)
         command = WorkerCommand.build(command_id, session_id, lease_id, op, body)
         wire = command.to_wire()
-        _check_command_context(op, wire["payload"])
+        _check_command_context(op, wire)
         # Mark the command unacked before the grant commits, so an
         # inventory arriving between the grant and the send does not
         # orphan a lease whose command is still in flight.
-        self._set_unacked(lease_id, wire)
+        entry = self._enqueue(wire, conn)
         async with store.session() as db:
             row = await set_session_lease(
                 db,
@@ -414,7 +442,7 @@ class WorkerHub:
                 lease_until=until,
             )
             if row is None:
-                self._drop_unacked(lease_id)
+                self._drop_lease_commands(lease_id)
                 return None
             cursor = row.worker_seq
         if op in CURSOR_OPS:
@@ -422,8 +450,7 @@ class WorkerHub:
             wire = WorkerCommand.build(
                 command_id, session_id, lease_id, op, body
             ).to_wire()
-            if lease_id in self._unacked:
-                self._unacked[lease_id] = wire
+            entry.wire = wire
         conn.leases.add(lease_id)
         self.observe_lease_event("granted")
         log_event(
@@ -448,9 +475,9 @@ class WorkerHub:
         try:
             await self._send(conn, wire)
         except Exception:
-            self._note_send_failed(lease_id, wire)
+            self._note_send_failed(entry)
             raise
-        self._note_sent(wire)
+        self._note_sent(entry)
         metrics = self.metrics
         if metrics is not None:
             metrics.worker_assign.observe(time.monotonic() - started)
@@ -502,27 +529,26 @@ class WorkerHub:
         wire = WorkerCommand.build(
             uuid.uuid4(), session_id, lease_id, op, body
         ).to_wire()
-        _check_command_context(op, wire["payload"])
-        self._set_unacked(lease_id, wire)
+        _check_command_context(op, wire)
+        entry = self._enqueue(wire, conn)
         try:
             await self._send(conn, wire)
         except Exception:
-            self._note_send_failed(lease_id, wire)
+            self._note_send_failed(entry)
             raise
-        self._note_sent(wire)
+        self._note_sent(entry)
         return wire
 
     async def ack(self, lease_id: uuid.UUID, command_id: str) -> bool:
-        pending = self._unacked.get(lease_id)
-        if pending is None or pending.get("id") != command_id:
+        entry = self.commands.ack(lease_id, command_id)
+        if entry is None:
             return False
-        sent = self._sent_at.get(command_id)
-        self._drop_unacked(lease_id)
-        if self.metrics is not None and sent is not None:
+        self._observe_unacked()
+        if self.metrics is not None and entry.sent_at is not None:
             self.metrics.observe_worker_command_ack(
-                str(pending.get("op")), time.monotonic() - sent
+                entry.op, time.monotonic() - entry.sent_at
             )
-        self.observe_command(str(pending.get("op")), "acked")
+        self.observe_command(entry.op, "acked")
         return True
 
     async def wait_ack(
@@ -530,22 +556,37 @@ class WorkerHub:
     ) -> bool:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            pending = self._unacked.get(lease_id)
-            if pending is None or pending.get("id") != command_id:
+            if self.commands.get(lease_id, command_id) is None:
                 return True
             await asyncio.sleep(0.05)
-        pending = self._unacked.get(lease_id)
-        op = str(pending.get("op")) if pending is not None else "unknown"
-        self.observe_command(op, "timeout")
+        entry = self.commands.get(lease_id, command_id)
+        if entry is None:
+            return True
+        self.observe_command(entry.op, "timeout")
         self._warnings.warning(
             "worker command ack timed out",
             event="worker.command.ack_timeout",
             error_code="command_ack_timeout",
             lease_id=str(lease_id),
             command_id=command_id,
-            op=op,
+            op=entry.op,
         )
         return False
+
+    def expect_stopped(self, session_id: uuid.UUID) -> "asyncio.Event":
+        """Register to be told when the worker reports `session.stopped`."""
+        event = self._stopped.setdefault(session_id, asyncio.Event())
+        event.clear()
+        return event
+
+    def note_stopped(self, session_id: uuid.UUID) -> None:
+        """Ingest applied a durable `session.stopped` for the session."""
+        event = self._stopped.get(session_id)
+        if event is not None:
+            event.set()
+
+    def forget_stopped(self, session_id: uuid.UUID) -> None:
+        self._stopped.pop(session_id, None)
 
     async def release(
         self,
@@ -554,7 +595,7 @@ class WorkerHub:
         session_id: uuid.UUID,
         lease_id: uuid.UUID,
     ) -> None:
-        self._drop_unacked(lease_id)
+        self._drop_lease_commands(lease_id)
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:
@@ -652,7 +693,7 @@ class WorkerHub:
             expired.append(session_id)
             self._forget_delta(session_id)
             if lease_id is not None:
-                self._drop_unacked(lease_id)
+                self._drop_lease_commands(lease_id)
                 if conn is not None:
                     conn.leases.discard(lease_id)
                     conn.lease_mem.pop(lease_id, None)
@@ -720,7 +761,11 @@ class WorkerHub:
         for row in rows:
             if row.lease_id is None:
                 continue
-            if claimed and claimed.get(row.id) != row.lease_id:
+            if (
+                claimed
+                and claimed.get(row.id) != row.lease_id
+                and not self.commands.has_lease(row.lease_id)
+            ):
                 continue
             conn.leases.add(row.lease_id)
             conn.lease_mem[row.lease_id] = mem_mib_for_size(
@@ -751,21 +796,111 @@ class WorkerHub:
         return sessions
 
     async def resend_pending(self, conn: WorkerConnection) -> None:
-        for lease_id in conn.leases:
-            pending = self._unacked.get(lease_id)
-            if pending is not None:
-                await self._send(conn, pending)
-                op = str(pending.get("op"))
-                self.observe_command(op, "retransmitted")
-                conn.warnings.warning(
-                    "worker command retransmitted",
-                    event="worker.command.retransmitted",
-                    error_code="command_retransmitted",
+        """Send every unacked command of the worker's leases again, in order."""
+        for lease_id in list(conn.leases):
+            for entry in self.commands.for_lease(lease_id):
+                await self._resend(conn, entry, reason="reconnect")
+
+    async def _resend(
+        self, conn: WorkerConnection, entry: PendingCommand, *, reason: str
+    ) -> None:
+        await self._send(conn, entry.wire)
+        self.commands.mark_sent(entry)
+        self.observe_command(entry.op, "retransmitted")
+        conn.warnings.warning(
+            "worker command retransmitted",
+            event="worker.command.retransmitted",
+            error_code="command_retransmitted",
+            worker_id=conn.worker_id,
+            lease_id=entry.lease_id,
+            command_id=entry.command_id,
+            op=entry.op,
+            reason=reason,
+            sends=entry.sends,
+        )
+
+    async def retransmit_due(self, store: Store, bus: EventBus) -> None:
+        """Send unacked commands again on a timer and age out the old ones.
+
+        A command that is still unacked after the lease TTL fails: the
+        lease is cleared, the turn fails, and the worker is told to drop
+        the lease. Every other unacked command is sent again every
+        `retransmit_seconds` while its worker is connected.
+        """
+        ttl = self.settings.worker_lease_ttl.total_seconds()
+        failed: set[uuid.UUID] = set()
+        for entry in self.commands.expired(ttl):
+            if entry.lease_id not in failed:
+                failed.add(entry.lease_id)
+                await self._expire_command(store, bus, entry)
+        for entry in self.commands.due(self.retransmit_seconds):
+            if entry.lease_id in failed or entry.worker_id is None:
+                continue
+            conn = self._conns.get(entry.worker_id)
+            if conn is None or entry.lease_id not in conn.leases:
+                continue
+            try:
+                await self._resend(conn, entry, reason="timer")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._warnings.warning(
+                    "worker command retransmit failed",
+                    event="worker.command.retransmit_failed",
+                    error_code="command_retransmit_failed",
                     worker_id=conn.worker_id,
-                    lease_id=lease_id,
-                    command_id=pending.get("id"),
-                    op=op,
+                    lease_id=entry.lease_id,
+                    error=type(exc).__name__,
                 )
+
+    async def _expire_command(
+        self, store: Store, bus: EventBus, entry: PendingCommand
+    ) -> None:
+        dropped = self._drop_lease_commands(entry.lease_id)
+        for item in dropped:
+            self.observe_command(item.op, "expired")
+        log_event(
+            log,
+            logging.ERROR,
+            "worker command expired without an ack",
+            event="worker.command.expired",
+            error_code="worker_command_timeout",
+            worker_id=entry.worker_id,
+            session_id=entry.session_id,
+            lease_id=entry.lease_id,
+            command_id=entry.command_id,
+            op=entry.op,
+            sends=entry.sends,
+            age_seconds=round(self.commands.clock() - entry.created, 3),
+            queued=len(dropped),
+        )
+        failure = failure_for(
+            "worker_command_timeout", "The worker did not acknowledge a command"
+        )
+        async with store.session() as db:
+            row = await get_session_by_lease(db, entry.lease_id)
+            if row is None:
+                return
+            tenant_id = row.tenant_id
+            await clear_session_lease(db, tenant_id, row.id)
+            await persist_event(
+                db,
+                bus,
+                tenant_id,
+                row.id,
+                type="agent.session.error",
+                data=session_error_data(failure, mode="legacy"),
+            )
+            await fail_stale_in_progress(db, bus, tenant_id, row.id)
+        self._forget_delta(entry.session_id)
+        conn = self._conns.get(entry.worker_id) if entry.worker_id else None
+        if conn is not None:
+            conn.leases.discard(entry.lease_id)
+            conn.lease_mem.pop(entry.lease_id, None)
+            await self._send_revoke(
+                conn, LeaseRevoke(session_id=entry.session_id, lease_id=entry.lease_id)
+            )
+        self._observe()
 
     def _note_delta_lease(
         self,
@@ -808,10 +943,18 @@ class WorkerHub:
         unleased: Collection[uuid.UUID] = (),
         *,
         conn: WorkerConnection | None = None,
+        orphan_missing: bool = True,
     ) -> tuple[list[dict[str, str]], dict[str, dict[str, Any]]]:
         """Compare the worker live set against the lease rows."""
         return await inventory_gate.reconcile_inventory(
-            self, store, bus, worker_id, reported, unleased, conn=conn
+            self,
+            store,
+            bus,
+            worker_id,
+            reported,
+            unleased,
+            conn=conn,
+            orphan_missing=orphan_missing,
         )
 
     def note_stored_events(
