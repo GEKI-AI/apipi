@@ -76,6 +76,20 @@ def _strict_protocol() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _wire_frames_match_schema() -> Iterator[None]:
+    from tests.support import wire_schema
+
+    wire_schema.start_capture()
+    yield
+    errors = wire_schema.capture_errors(wire_schema.stop_capture())
+    if errors:
+        pytest.fail(
+            "frames do not match docs/worker-protocol/schema:\n"
+            + "\n".join(errors[:10])
+        )
+
+
+@pytest.fixture(autouse=True)
 def _clear_model_list_cache() -> Iterator[None]:
     from apipi.common.models import clear_model_cache
 

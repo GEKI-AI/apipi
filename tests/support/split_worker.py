@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from apipi.config import Settings
+from tests.support import wire_schema
 from tests.support.fake_runner import AsgiWebsocket
 
 
@@ -56,6 +57,7 @@ class _AsgiWorkerSocket:
 
     async def send(self, data: str | bytes) -> None:
         text = data if isinstance(data, str) else data.decode()
+        wire_schema.record(wire_schema.WORKER_TO_API, text)
         if self._sent is not None:
             self._sent.append(text)
         await self._ws._incoming.put({"type": "websocket.receive", "text": text})

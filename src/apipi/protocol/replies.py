@@ -26,8 +26,8 @@ class ArtifactPresignReply(ControlMessage):
     item part. When the latest stored bytes already match the presigned
     digest the reply carries `unchanged` instead: no URL, no path, and
     no `upload_id`; the worker skips the upload. Quota failures arrive
-    as `ok: False` with today's store codes (`artifact_store`,
-    `artifact_too_large`, `workspace_too_large`).
+    as `ok: False` with a store code (`artifact_store`,
+    `artifact_too_large`, `workspace_too_large`, `payload_too_large`).
     """
 
     type: Literal["artifact.presign.reply"] = "artifact.presign.reply"

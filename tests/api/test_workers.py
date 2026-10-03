@@ -109,12 +109,17 @@ async def test_worker_register_lease_command_event_and_expiry(
             tenant_id,
             session_id,
             op="turn.start",
-            payload={"text": "hi"},
+            payload={"text": "hi", "tenant_id": tenant_id},
         )
         assert command is not None
         assert command["type"] == "command"
         assert command["op"] == "turn.start"
-        assert command["payload"] == {"text": "hi", "run_mode": "none", "last_seq": 0}
+        assert command["payload"] == {
+            "text": "hi",
+            "tenant_id": str(tenant_id),
+            "run_mode": "none",
+            "last_seq": 0,
+        }
         incoming = await worker.receive_json()
         assert incoming["id"] == command["id"]
         assert incoming["lease_id"] == command["lease_id"]
@@ -127,15 +132,19 @@ async def test_worker_register_lease_command_event_and_expiry(
         )
         await worker.send_json(
             {
-                "type": "event",
-                "lease_id": incoming["lease_id"],
-                "event_type": "agent.session.error",
-                "data": {"message": "from worker", "code": "worker_test"},
+                "v": 2,
+                "session_id": str(session_id),
+                "turn_id": None,
+                "seq": 1,
+                "type": "error",
+                "payload": {"message": "from worker", "code": "worker_test"},
             }
         )
         events = await _wait_events(store, tenant_id, session_id, "agent.session.error")
         types = [event.type for event in events]
         assert "agent.session.error" in types
+        ack = await worker.receive_json()
+        assert ack["type"] == "ack" and ack["last_seq"] == 1
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             assert row is not None

@@ -36,12 +36,13 @@ Code comments stay omitted unless asked.
 | `src/apipi/store/` | Durable store and object blobs |
 | `src/apipi/env/` | Computer and hosted/self_hosted environments |
 | `src/apipi/mcp/` | HTTP and stdio MCP |
-| `docs/` | Product and operator docs. Read the page for the part you are changing. |
+| `docs/` | Product and operator docs. Read the page for the part you are changing. `docs/worker-protocol.md` is the worker protocol specification and `docs/worker-protocol/schema/` its generated JSON Schema (`uv run python scripts/gen_worker_schema.py`). |
 | `specs/decisions/` | ADRs. Read when the architecture changes. |
 | `tests/api/` | Public HTTP |
 | `tests/unit/` | Internals, mocks |
 | `tests/e2e/` | Live Pi |
-| `tests/support/` | FakeHarness, fakes |
+| `tests/support/` | FakeHarness, fakes, and the worker protocol transcript player |
+| `tests/fixtures/worker-protocol/` | Golden transcripts (JSON Lines) of the worker protocol |
 
 Before code, read the `docs/` page for the part you are changing.
 

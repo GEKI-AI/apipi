@@ -1,0 +1,117 @@
+{
+  "$defs": {
+    "RevokeEntry": {
+      "description": "One revocation inside `hello` or `inventory.reply`.\n\nA missing `lease_id` means the worker holds no lease for the\nsession: the API found no session row, so the worker wipes the\nleftover workspace directory.",
+      "properties": {
+        "lease_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lease Id"
+        },
+        "session_id": {
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "lease.revoke",
+          "default": "lease.revoke",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "type"
+      ],
+      "title": "RevokeEntry",
+      "type": "object"
+    },
+    "TtlEntry": {
+      "description": "The effective reaper TTL of one session.\n\n`idle_since_epoch` is the idle baseline (the session row's last\ntouch), so the worker reaper clock does not restart on every reply.",
+      "properties": {
+        "env_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env Type"
+        },
+        "idle_since_epoch": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idle Since Epoch"
+        },
+        "idle_ttl_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idle Ttl Seconds"
+        }
+      },
+      "title": "TtlEntry",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "API to worker. Revocations plus TTLs for the reaper.",
+  "properties": {
+    "revoke": {
+      "items": {
+        "$ref": "#/$defs/RevokeEntry"
+      },
+      "title": "Revoke",
+      "type": "array"
+    },
+    "ttl": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TtlEntry"
+      },
+      "propertyNames": {
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      },
+      "title": "Ttl",
+      "type": "object"
+    },
+    "type": {
+      "const": "inventory.reply",
+      "default": "inventory.reply",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "title": "inventory.reply message",
+  "type": "object"
+}

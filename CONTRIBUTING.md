@@ -143,6 +143,11 @@ If docs changed, `./scripts/check --docs`. Fast like GitHub:
 
 Do not commit if checks fail.
 
+If you change a model in `src/apipi/protocol/`, regenerate the JSON
+Schema with `uv run python scripts/gen_worker_schema.py` and update
+`docs/worker-protocol.md` and the transcripts in
+`tests/fixtures/worker-protocol/` in the same change.
+
 GitHub: `Check` (format, lint, types), `Tests` (`pytest -m "not slow"`),
 `Docs`.
 

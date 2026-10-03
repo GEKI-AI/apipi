@@ -1,0 +1,152 @@
+{
+  "$defs": {
+    "WorkerImageInfo": {
+      "description": "One sandbox image a worker can start.",
+      "properties": {
+        "digest": {
+          "default": "",
+          "title": "Digest",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "min_size": {
+          "default": "S",
+          "title": "Min Size",
+          "type": "string"
+        },
+        "version": {
+          "default": "",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "WorkerImageInfo",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Worker to API. Renews the leases and refreshes the worker's capacity.\n\nEvery field except `type` is optional. `accepts` lists the run\nmodes the worker takes, `image_store_version` identifies its image\nstore, and `drain` marks a worker that takes no new sessions.",
+  "properties": {
+    "accepts": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Accepts"
+    },
+    "arch": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Arch"
+    },
+    "capacity": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Capacity"
+    },
+    "drain": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Drain"
+    },
+    "image_store_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Image Store Version"
+    },
+    "images": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/WorkerImageInfo"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Images"
+    },
+    "memory_mb": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Memory Mb"
+    },
+    "run_mode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Mode"
+    },
+    "type": {
+      "const": "heartbeat",
+      "default": "heartbeat",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "title": "heartbeat message",
+  "type": "object"
+}

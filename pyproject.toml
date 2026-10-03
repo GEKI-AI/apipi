@@ -55,6 +55,7 @@ Issues = "https://github.com/GEKI-AI/apipi/issues"
 dev = [
     "boto3>=1.35,<2",
     "httpx>=0.28,<1",
+    "jsonschema>=4.26.0",
     "pytest>=9,<10",
     "pytest-asyncio>=1.0,<2",
     "pytest-xdist>=3.6,<4",

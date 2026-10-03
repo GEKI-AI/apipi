@@ -38,6 +38,12 @@ class UsageFailure(EnvelopePayload):
 
 
 class WorkerEnvelope(ControlMessage):
+    """One worker to API envelope: `{v, session_id, turn_id, seq, type, payload}`.
+
+    A frame with `v` is an envelope, a frame without it is a control
+    message. `turn_id` is set for turn-scoped types and null otherwise.
+    """
+
     v: Literal[2] = 2
     session_id: uuid.UUID
     turn_id: uuid.UUID | None = None

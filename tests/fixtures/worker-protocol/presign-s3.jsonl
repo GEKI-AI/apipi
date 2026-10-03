@@ -1,0 +1,12 @@
+{"fixture": "presign-s3", "format": 1, "title": "An artifact upload with the S3 store and a presigned PUT URL", "description": "Upload with the S3 store. artifact.presign returns a presigned PUT URL, the worker uploads with a plain PUT, and artifact.completed reports size and checksum. The hello has no store_check because the store is not the filesystem.", "api": {"artifact_store": "s3"}}
+{"step": "connect"}
+{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "revoke": [], "ttl": {}, "features": ["lease_cursor", "presign", "search", "session_stopped"]}}
+{"step": "action", "for": "api", "name": "create_session"}
+{"step": "action", "for": "api", "name": "lease_session"}
+{"step": "action", "for": "worker", "name": "upload", "args": {"kind": "artifact", "filename": "out.txt", "content_type": "text/plain", "text": "hello"}}
+{"from": "worker", "frame": {"v": 2, "session_id": "<uuid:session>", "turn_id": null, "seq": 1, "type": "artifact.presign", "payload": {"request_id": "<uuid:presign>", "kind": "artifact", "filename": "out.txt", "content_type": "text/plain", "size": 5, "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}}
+{"from": "api", "frame": {"type": "artifact.presign.reply", "session_id": "<uuid:session>", "request_id": "<var:presign>", "ok": true, "upload_id": "<uuid:upload>", "artifact_id": "<uuid:artifact>", "url": "<string:url>", "headers": {}, "expires_at": "<ts>", "object_id": "<string:object>"}}
+{"step": "action", "for": "api", "name": "store_bytes", "args": {"text": "hello"}}
+{"from": "worker", "frame": {"v": 2, "session_id": "<uuid:session>", "turn_id": null, "seq": 2, "type": "artifact.completed", "payload": {"upload_id": "<var:upload>", "name": "out.txt", "size": 5, "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}}
+{"from": "api", "frame": {"type": "ack", "session_id": "<uuid:session>", "last_seq": 2}}

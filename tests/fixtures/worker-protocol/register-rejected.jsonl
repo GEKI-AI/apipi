@@ -1,0 +1,9 @@
+{"fixture": "register-rejected", "format": 1, "title": "A wrong protocol and a first message that is not register are rejected", "description": "A register with another protocol version and a first message that is not register are both answered with the error object and closed with code 1008.", "modes": ["api"]}
+{"step": "connect"}
+{"from": "worker", "frame": {"type": "register", "protocol": 1, "run_mode": "none", "capacity": 4}}
+{"from": "api", "frame": {"type": "error", "ok": false, "error": "unsupported_protocol", "code": "unsupported_protocol"}}
+{"step": "close", "code": 1008, "reason": "unsupported_protocol"}
+{"step": "connect"}
+{"from": "worker", "frame": {"type": "heartbeat"}}
+{"from": "api", "frame": {"type": "error", "ok": false, "error": "register required", "code": "register_required"}}
+{"step": "close", "code": 1008, "reason": "register_required"}

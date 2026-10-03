@@ -14,6 +14,7 @@ from apipi.protocol import (
     INVALID_REGISTER_REASON,
     PROTOCOL_VERSION,
     REGISTER_REQUIRED_REASON,
+    REGISTER_TIMEOUT_REASON,
     REVOKED_REASON,
     TOKEN_BOUND_REASON,
     UNAUTHORIZED_REASON,
@@ -57,7 +58,7 @@ def _bearer(websocket: WebSocket) -> str | None:
 async def _reject(websocket: WebSocket, error: str, *, reason: str) -> None:
     await send_frame(
         websocket,
-        RejectMessage(error=error).to_wire(),
+        RejectMessage(error=error, code=reason).to_wire(),
         metrics=getattr(websocket.app.state, "metrics", None),
     )
     await websocket.close(code=WORKER_CLOSE_CODE, reason=reason)
@@ -89,7 +90,7 @@ async def worker_socket(websocket: WebSocket) -> None:
         raw: Any = await asyncio.wait_for(websocket.receive_json(), timeout=15)
     except TimeoutError:
         hub.observe_connect("register_timeout")
-        await websocket.close(code=WORKER_CLOSE_CODE)
+        await _reject(websocket, "register timeout", reason=REGISTER_TIMEOUT_REASON)
         return
     except WebSocketDisconnect:
         hub.observe_connect("closed")

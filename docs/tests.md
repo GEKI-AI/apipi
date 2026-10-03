@@ -43,7 +43,8 @@ requires the mode it asked for.
 | `tests/e2e/test_metrics_scrape.py` | `e2e` | `/metrics` scrape from the same two-process setup | yes |
 | `tests/e2e/test_pi_live.py` | `slow` | `pi` is on `PATH` | no |
 | `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against the same two-process setup | no |
-| `tests/support/` | — | FakeHarness helpers, fake Pi, fake worker. Not a suite | — |
+| `tests/unit/test_worker_protocol_schema.py`, `tests/api/test_conformance_api.py`, `tests/unit/test_conformance_worker.py` | none | The worker protocol contract: the committed JSON Schema matches the models and every frame the API and the worker send validates against it, and the real API and the real worker each play the golden transcripts in `tests/fixtures/worker-protocol/` (see [worker protocol](worker-protocol.md#json-schema-and-golden-transcripts)) | yes |
+| `tests/support/` | — | FakeHarness helpers, fake Pi, fake worker, and the transcript player (`conformance.py`). Not a suite | — |
 
 GitHub runs `pytest -n auto -m "not slow"` (pytest-xdist; drop `-n` to debug one test or when `APIPI_TEST_DATABASE_URL` is set). That is unit, API, and `e2e`.
 Microvm tests skip if KVM, Firecracker, images, or net tools cannot

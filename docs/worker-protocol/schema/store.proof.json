@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Worker to API. Proof it sees the shared store root.",
+  "properties": {
+    "marker": {
+      "title": "Marker",
+      "type": "string"
+    },
+    "nonce": {
+      "title": "Nonce",
+      "type": "string"
+    },
+    "type": {
+      "const": "store.proof",
+      "default": "store.proof",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "marker",
+    "nonce",
+    "type"
+  ],
+  "title": "store.proof message",
+  "type": "object"
+}

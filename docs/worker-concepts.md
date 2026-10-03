@@ -7,7 +7,9 @@ any non-loopback API URL, with optional mutual TLS, and the worker
 holds no database or object-store credentials: it gets everything it
 needs in the command context and reports back over the socket.
 Message shapes are in
-[sandbox workers](workers.md), and the contract is in
+[the worker protocol specification](worker-protocol.md); operator
+settings are in [sandbox workers](workers.md). The decision and its
+reasons are in
 [ADR 0015](https://github.com/GEKI-AI/apipi/blob/main/specs/decisions/0015-worker-protocol-v2.md).
 
 This page explains why the API and the workers are separate processes,
@@ -68,15 +70,19 @@ holds the context in memory only and prepares the turn from it, without
 reading the database. The worker then runs the turn and reports back in v2 envelopes: durable results (`item.added`,
 `turn.status`, `usage`, `event`, `session.status`, `session.stopped`,
 `workspace.reaped`, `lifecycle.start`, `lifecycle.stop`, `error`,
-`sandbox.status`, plus `artifact.completed` for a later step) that the
-API ingests idempotently, sandbox seen summaries and inventory live
+`sandbox.status`, `artifact.presign`, and `artifact.completed`) that
+the API ingests idempotently, sandbox seen summaries and inventory live
 sets on the same socket, and ephemeral
 streaming deltas (`delta.text`, `delta.reasoning`) that are never
 persisted. Only the API writes to Postgres: the worker buffers
 results in a bounded outbox (with an optional disk spool) until the
-cumulative ack, and replays after `hello.reply` on reconnect, so a
+cumulative ack, and replays after `hello` on reconnect, so a
 dropped socket or an API restart mid-turn loses nothing and duplicates
-nothing. Public events land in the store before the client sees them
+nothing. The worker holds no object-store credentials, so it asks the
+API for an upload slot with `artifact.presign`. The API answers with
+`artifact.presign.reply` on the same socket: a presigned PUT URL for
+S3, or a store-root relative path for the filesystem store. The worker
+uploads the bytes and then reports `artifact.completed`. Public events land in the store before the client sees them
 on SSE. If the SSE connection sits on another API replica, that
 replica wakes over the event bus. Pi does not have to live on the API
 node.

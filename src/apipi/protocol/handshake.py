@@ -3,8 +3,8 @@
 Every worker opens `/internal/worker` with a per-worker bearer token,
 then sends `register` as its first message. Anything else as the first
 message, or a register without `protocol: 2`, is rejected: the API
-answers `{"ok": false, "error": ...}` and closes the socket with code
-1008. A valid register is answered with `hello`, which carries the
+sends the error object (`RejectMessage`) and closes the socket with
+code 1008. A valid register is answered with `hello`, which carries the
 persisted `last_seq` per running session, the lease TTL, the
 heartbeat interval, and the `features` the API supports. A `register`
 without `features` is a baseline peer; see `peer_features`.
@@ -13,7 +13,7 @@ without `features` is a baseline peer; see `peer_features`.
 import uuid
 from typing import Annotated, Any, Literal
 
-from pydantic import ConfigDict, Field, ValidationError, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from apipi.protocol.base import ControlMessage
 from apipi.protocol.constants import PROTOCOL_VERSION, UNSUPPORTED_PROTOCOL_REASON
@@ -143,10 +143,16 @@ class HelloReply(ControlMessage):
 
 
 class RejectMessage(ControlMessage):
-    """API to worker. A rejected handshake, sent just before the close."""
+    """API to worker. The error object, sent just before a close.
 
+    `error` is a short text for a person. `code` is the machine value
+    and equals the reason of the WebSocket close that follows it.
+    """
+
+    type: Literal["error"] = "error"
     ok: Literal[False] = False
     error: str
+    code: str
 
 
 class UnsupportedProtocol(ValueError):
@@ -165,7 +171,4 @@ def parse_register(data: dict[str, Any]) -> RegisterMessage:
     protocol = data.get("protocol")
     if protocol != PROTOCOL_VERSION:
         raise UnsupportedProtocol()
-    try:
-        return RegisterMessage.model_validate(data)
-    except ValidationError:
-        raise
+    return RegisterMessage.model_validate(data)

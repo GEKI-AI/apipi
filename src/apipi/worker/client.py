@@ -690,10 +690,12 @@ def _parse_hello(raw: Any) -> dict[str, Any]:
     if not isinstance(hello, dict):
         raise BadHello("first frame is not an object")
     if not hello.get("ok"):
+        code = hello.get("code")
         error = hello.get("error")
-        if isinstance(error, str) and error in FATAL_REJECTIONS:
-            raise ConfigError(f"worker register failed: {error}")
-        raise BadHello(f"first frame is not hello: {error or 'no ok'}")
+        reason = code if isinstance(code, str) else error
+        if isinstance(reason, str) and reason in FATAL_REJECTIONS:
+            raise ConfigError(f"worker register failed: {reason}")
+        raise BadHello(f"first frame is not hello: {reason or 'no ok'}")
     return hello
 
 

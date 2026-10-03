@@ -1,0 +1,238 @@
+{
+  "$defs": {
+    "RevokeEntry": {
+      "description": "One revocation inside `hello` or `inventory.reply`.\n\nA missing `lease_id` means the worker holds no lease for the\nsession: the API found no session row, so the worker wipes the\nleftover workspace directory.",
+      "properties": {
+        "lease_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lease Id"
+        },
+        "session_id": {
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "lease.revoke",
+          "default": "lease.revoke",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "type"
+      ],
+      "title": "RevokeEntry",
+      "type": "object"
+    },
+    "StoreCheck": {
+      "description": "Shared-filesystem proof the API issues in `hello`.\n\nOnly present with `APIPI_ARTIFACT_STORE=local`. The API writes\n`marker` under the shared store root containing `nonce`; the worker\nmust read it back and answer with `store.proof`. Without the same\nfilesystem the worker cannot prove it and the register is rejected.",
+      "properties": {
+        "marker": {
+          "title": "Marker",
+          "type": "string"
+        },
+        "nonce": {
+          "title": "Nonce",
+          "type": "string"
+        }
+      },
+      "required": [
+        "marker",
+        "nonce"
+      ],
+      "title": "StoreCheck",
+      "type": "object"
+    },
+    "TtlEntry": {
+      "description": "The effective reaper TTL of one session.\n\n`idle_since_epoch` is the idle baseline (the session row's last\ntouch), so the worker reaper clock does not restart on every reply.",
+      "properties": {
+        "env_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env Type"
+        },
+        "idle_since_epoch": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idle Since Epoch"
+        },
+        "idle_ttl_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idle Ttl Seconds"
+        }
+      },
+      "title": "TtlEntry",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "API to worker. Answer to a valid `register`.\n\n`sessions` maps each running session to the seq the API already\npersisted, and the worker replays everything after it. `revoke`\nlists leases the worker must drop, and `ttl` carries the reaper\nidle TTL per session. The API always sets `worker_id`,\n`generation`, and `connection_id`; a worker does not need them to\nrun. `connection_id` names this socket in the logs of both sides.",
+  "properties": {
+    "connection_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Connection Id"
+    },
+    "features": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Features"
+    },
+    "generation": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Generation"
+    },
+    "heartbeat_seconds": {
+      "exclusiveMinimum": 0,
+      "title": "Heartbeat Seconds",
+      "type": "number"
+    },
+    "lease_ttl_seconds": {
+      "exclusiveMinimum": 0,
+      "title": "Lease Ttl Seconds",
+      "type": "number"
+    },
+    "ok": {
+      "const": true,
+      "default": true,
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "protocol": {
+      "const": 2,
+      "default": 2,
+      "title": "Protocol",
+      "type": "integer"
+    },
+    "revoke": {
+      "items": {
+        "$ref": "#/$defs/RevokeEntry"
+      },
+      "title": "Revoke",
+      "type": "array"
+    },
+    "sessions": {
+      "additionalProperties": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "propertyNames": {
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      },
+      "title": "Sessions",
+      "type": "object"
+    },
+    "store_check": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StoreCheck"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "ttl": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TtlEntry"
+      },
+      "propertyNames": {
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      },
+      "title": "Ttl",
+      "type": "object"
+    },
+    "type": {
+      "const": "hello",
+      "default": "hello",
+      "title": "Type",
+      "type": "string"
+    },
+    "worker_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Worker Id"
+    }
+  },
+  "required": [
+    "heartbeat_seconds",
+    "lease_ttl_seconds",
+    "ok",
+    "protocol",
+    "type"
+  ],
+  "title": "hello message",
+  "type": "object"
+}

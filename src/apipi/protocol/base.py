@@ -1,7 +1,6 @@
 """Base classes for the worker protocol models, named by role.
 
-The `extra` policy of each role is set here and nowhere else, so a
-later change of the policy is one line per role.
+The `extra` policy of each role is set here and nowhere else.
 """
 
 import contextlib
