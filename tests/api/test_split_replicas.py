@@ -175,6 +175,18 @@ async def _message(client: AsyncClient, session_id: uuid.UUID, text: str) -> Any
     )
 
 
+async def _finish_held_turn(
+    replicas: Replicas, session_id: uuid.UUID, task: asyncio.Task[Any]
+) -> None:
+    cancelled = await replicas.client_b.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(),
+        json={"type": "agent.session.input.cancel"},
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    await asyncio.wait_for(task, timeout=20)
+
+
 async def _in_progress(replicas: Replicas, session_id: uuid.UUID) -> None:
     async def running() -> bool:
         got = await replicas.client_b.get(
@@ -387,8 +399,7 @@ async def test_cancel_that_cannot_reach_the_worker_is_an_error(
     assert cancelled.json()["error"]["code"] == "forward_timeout"
     await _no_forward_rows(replicas.store)
     replicas.network.dropped.clear()
-    replica_harness.hold = False
-    task.cancel()
+    await _finish_held_turn(replicas, session_id, task)
 
 
 async def test_stale_replica_fails_fast_with_a_clear_code(
@@ -512,5 +523,10 @@ async def test_cancel_to_a_stale_replica_is_an_error(
     )
     assert cancelled.status_code == 503, cancelled.text
     assert cancelled.json()["error"]["code"] == "worker_unreachable"
-    replica_harness.hold = False
-    task.cancel()
+    async with replicas.store.session() as db:
+        await db.execute(
+            update(WorkerRow)
+            .where(WorkerRow.id == worker_id)
+            .values(last_seen=utc_now())
+        )
+    await _finish_held_turn(replicas, session_id, task)
