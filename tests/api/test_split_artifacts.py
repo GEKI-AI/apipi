@@ -474,7 +474,7 @@ async def _pump_until_done(
     worker_id: uuid.UUID,
     session_id: uuid.UUID,
     api_settings: Settings,
-    task: asyncio.Task[None],
+    task: asyncio.Task[Any],
     api_objects: Any,
 ) -> None:
     """Flush worker outbox envelopes through API ingest until `task` ends."""
@@ -628,7 +628,7 @@ async def _pump_until_done(
     worker_id: uuid.UUID,
     session_id: uuid.UUID,
     api_settings: Settings,
-    task: asyncio.Task[None],
+    task: asyncio.Task[Any],
     api_objects: Any,
 ) -> None:
     """Flush worker outbox envelopes through API ingest until `task` ends."""

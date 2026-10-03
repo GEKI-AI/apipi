@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from apipi.common.background import run_loop
 from apipi.common.errors import ApiError
 from apipi.common.event_bus import EventBus, InMemoryEventBus, request_cancel
-from apipi.common.logutil import RateLimitedLog
+from apipi.common.logutil import RateLimitedLog, log_event
 from apipi.common.metrics import Metrics
 from apipi.common.otel import Tracing
 from apipi.config import Settings
@@ -88,6 +88,7 @@ class LocalExecution:
         self.presign_waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
         self.search_waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
         self.search_sender: SearchSender | None = None
+        self.socket_open = True
         self.search_timeout = SEARCH_TIMEOUT
         self._warnings = RateLimitedLog(log)
         self._sinks: dict[tuple[uuid.UUID, uuid.UUID], ResultSink] = {}
@@ -646,6 +647,15 @@ class LocalExecution:
                 tenant_id = tenant
                 break
         if tenant_id is None:
+            return
+        if not self.socket_open:
+            log_event(
+                log,
+                logging.INFO,
+                "worker harvest skipped, no socket",
+                event="worker.harvest.skipped",
+                session_id=session_id,
+            )
             return
         dest: Any | None = None
         raw_dir = self._session_dirs.get(str(session_id))

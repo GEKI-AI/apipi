@@ -196,7 +196,8 @@ async def test_release_does_not_overtake_buffered_envelopes(
         worker,
     ):
         session_id = await _new_session(client)
-        await _lease_command(app, store, session_id)
+        command = await _lease_command(app, store, session_id)
+        worker.session_leases[session_id] = command["lease_id"]
         stop = worker.outbox.append(
             session_id, "lifecycle.stop", {"reason": "idle", "live_ms": 5}
         )

@@ -33,6 +33,40 @@ from apipi.protocol import (
 _warnings = RateLimitedLog(logging.getLogger("apipi.worker"))
 
 
+class PresignDisconnected(ConfigError):
+    """The socket closed while an upload waited for its presign reply."""
+
+
+class PresignFuture(asyncio.Future[dict[str, Any]]):
+    """A presign waiter that knows which envelope it is waiting on."""
+
+    def __init__(self, session_id: uuid.UUID, *, loop: asyncio.AbstractEventLoop):
+        super().__init__(loop=loop)
+        self.session_id = session_id
+        self.seq = 0
+
+
+def fail_lost_presign_waiters(
+    waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]], outbox: Any
+) -> int:
+    """Fail the waiters whose reply was lost with the socket.
+
+    A reply can only be lost once the API acked the `artifact.presign`
+    envelope. A waiter whose envelope is still unacked keeps waiting:
+    the reconnect replays the envelope and the reply follows.
+    """
+    failed = 0
+    for future in list(waiters.values()):
+        if not isinstance(future, PresignFuture) or future.done():
+            continue
+        if future.seq and outbox.acked_seq(future.session_id) >= future.seq:
+            future.set_exception(
+                PresignDisconnected("artifact upload failed: worker connection lost")
+            )
+            failed += 1
+    return failed
+
+
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -180,32 +214,35 @@ async def upload_via_presign(
         data=data,
         turn_id=turn_id,
     )
-    loop = asyncio.get_running_loop()
-    future: asyncio.Future[dict[str, Any]] = loop.create_future()
+    future = PresignFuture(session_id, loop=asyncio.get_running_loop())
     waiters[request_id] = future
     try:
-        outbox.append(
+        envelope = outbox.append(
             session_id,
             "artifact.presign",
             presign_payload,
             turn_id=turn_id,
         )
+        future.seq = int(envelope["seq"])
         metrics = getattr(outbox, "metrics", None)
         try:
-            reply_message = await asyncio.wait_for(asyncio.shield(future), timeout)
-        except (TimeoutError, asyncio.CancelledError) as exc:
-            if isinstance(exc, TimeoutError):
-                if metrics is not None:
-                    metrics.observe_worker_waiter("presign", "timeout")
-                _warnings.warning(
-                    "presign reply timed out",
-                    event="worker.waiter.timeout",
-                    error_code="waiter_timeout",
-                    kind="presign",
-                    session_id=session_id,
-                    timeout_seconds=timeout,
-                )
+            reply_message = await asyncio.wait_for(future, timeout)
+        except TimeoutError as exc:
+            if metrics is not None:
+                metrics.observe_worker_waiter("presign", "timeout")
+            _warnings.warning(
+                "presign reply timed out",
+                event="worker.waiter.timeout",
+                error_code="waiter_timeout",
+                kind="presign",
+                session_id=session_id,
+                timeout_seconds=timeout,
+            )
             raise ConfigError("artifact upload timed out") from exc
+        except PresignDisconnected:
+            if metrics is not None:
+                metrics.observe_worker_waiter("presign", "disconnected")
+            raise
         if metrics is not None:
             metrics.observe_worker_waiter("presign", "ok")
         reply = ArtifactPresignReply.model_validate(reply_message)

@@ -127,12 +127,94 @@ the receive loop would block the acks it waits for.
   after the lease TTL, and the turn is not moved to another worker:
   the guest and workspace were on the expired host.
 * A reconnect may go to any replica. It replays after `hello.reply`.
-* The outbox is bounded (`OUTBOX_BOUND`, 10,000 messages). When it is
-  full the worker pauses Pi output; if the turn cannot proceed it fails
-  with `worker_outbox_full`.
-* Messages are capped at `MAX_MESSAGE_BYTES` (1 MiB), and the API rate
-  limits worker messages per session. Oversize or over-rate messages
-  are rejected and counted.
+* The outbox is bounded (`OUTBOX_BOUND`, 10,000 messages, and a byte
+  bound). One session may use at most half of each bound. When a bound
+  is hit the turn fails with `worker_outbox_full`. The worker does not
+  pause Pi: pausing the output stream would need a backpressure path
+  from the outbox into the Pi RPC reader, and a turn that cannot report
+  its results is better failed with a clear code than stalled.
+* Messages are capped at `MAX_MESSAGE_BYTES` (1,000,000 bytes), and the
+  API rate limits worker messages per session. The worker checks the
+  size before it buffers an envelope and fails the turn with
+  `worker_message_too_large`. Oversize or over-rate messages that still
+  reach the API are rejected and counted.
+
+## Worker robustness
+
+These choices keep the worker side of the socket responsive and make
+it recover cleanly. They were made for #487 and change nothing on the
+wire.
+
+**The receive loop only parses and dispatches.** Anything that can wait
+for a reply from the API (a command, a guest teardown with its artifact
+harvest, a revoke, a lease release) runs as a task. The reply that such
+work waits for can only be delivered by the receive loop, and the
+WebSocket library stops answering pings once its read queue is full, so
+a loop that waits can deadlock itself and then lose the socket. Tasks
+for the same session run in order: a command waits for a pending
+teardown of its session. The cheap local part of a revoke (forgetting
+the lease and the dedupe entries) still happens at once.
+
+**Liveness.** The worker pings every 5 seconds and closes after 10
+seconds without a pong, and it waits 15 seconds for `hello.reply`. A
+half-open socket is then noticed within 15 seconds, half of the default
+30 second lease TTL. A first frame that is not a usable `hello.reply`
+leads to a reconnect, except for an explicit rejection (`unauthorized`,
+`revoked`, `unsupported_protocol`, `token_bound`, `register required`,
+`invalid register`, `shared_store_required`), which stops the process
+with a clear message because retrying cannot help.
+
+**Reconnect.** Exponential backoff with full jitter: a random delay up
+to 0.5 seconds, doubling to a cap of 10 seconds, reset after a
+connection that stayed up for 30 seconds. Full jitter was chosen over a
+fixed step so that workers do not reconnect and replay together after
+an API restart. The TLS context is built for every attempt, so a
+rotated client certificate is used without a restart.
+
+**The outbox sends each envelope once per connection.** A per-session
+"sent" mark replaces the old rule of sending the whole unacked buffer
+on every append, which made a replay quadratic and cost the API one
+conflict per duplicate. A reconnect resets the mark, so everything
+unacked is sent once more. The ingest stays idempotent, which makes the
+resend safe.
+
+**The disk spool is append-only.** An ack no longer rewrites the file.
+An append reaches the operating system at once, so a killed process
+loses nothing. The worker fsyncs the touched files once a second and at
+shutdown, in a thread, which bounds the loss on a host crash to the
+last second and keeps the disk off the event loop. Compaction of the
+acked prefix runs in the same pass and thread. fsync on every append
+was rejected because it costs a disk flush per envelope, and the lease
+and the guest are lost with the host anyway.
+
+**Drain and shutdown.** A drain ends when no Pi is live and the API
+acked every buffered envelope, so the final `turn.status`, `usage`,
+and `lifecycle.stop` are not lost. `--drain-timeout` bounds the whole
+wait, also while the worker is disconnected. The killed-session harvest
+needs the socket: it runs while the socket is open and is skipped with
+a log line (`worker.harvest.skipped`) when it is not, instead of
+waiting 60 seconds for a reply that cannot arrive. A presign waiter
+fails at once when the socket closes after the API acked its request,
+because the reply was most likely lost with the socket; a waiter whose
+request is still unacked keeps waiting, because the replay delivers
+both. Cancelling a turn passes through the upload code unchanged.
+
+**Poison messages.** A malformed frame is logged, counted, and skipped.
+A command that raises is answered with an `error` envelope and is not
+recorded in the dedupe, so the retransmit runs it again; a stop that
+raised is never acked as a duplicate. The worker tracks a lease only
+for a command it accepted. A rejected `turn.start` releases its lease
+after its failure is acked, and a `turn.cancel` for a session the
+worker does not hold creates none. A lease the worker lets go while no
+socket is open is released after the next `hello.reply`, so the claim
+in `register` never drops a lease the API still holds. That was the one
+worker side cause found for a spurious `worker_orphaned` after a
+reconnect; the API side of the reconcile is unchanged here.
+
+**Per-session outbox share.** One session may use half of the message
+and byte bounds, so a noisy session or an outage fails its own turn and
+not every turn on the worker. The emergency budget for the failure
+itself still applies.
 
 ## Auth
 

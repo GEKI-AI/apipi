@@ -237,11 +237,54 @@ state](#lifecycle-export)).
 
 The outbox is bounded (`APIPI_WORKER_OUTBOX_MAX_MESSAGES`, default
 10,000 messages, and `APIPI_WORKER_OUTBOX_MAX_BYTES`, default 64
-MiB). When it is full the worker fails the turn with
-`worker_outbox_full` (a small emergency budget still reports that
-failure itself). Envelopes are capped at 1 MiB. A bounded disk spool
-(`APIPI_WORKER_OUTBOX_DIR`) keeps a write-through copy of buffered
-envelopes so they survive a worker restart.
+MiB). One session may use at most half of each bound, so a noisy
+session or a long API outage fails that session's turn with
+`worker_outbox_full` and leaves the other sessions on the worker
+alone. A small emergency budget still reports the failure itself. The
+worker does not pause Pi when the outbox fills up: the turn fails.
+
+The worker checks the size of every envelope before it buffers it. An
+envelope over 1,000,000 bytes (`MAX_MESSAGE_BYTES`, measured as the
+UTF-8 JSON that goes on the wire) can never be sent, so the worker fails the turn
+with `worker_message_too_large` and logs `worker.outbox.oversize`,
+instead of buffering something the API would reject or that would
+close the socket.
+
+The outbox keeps a "sent" mark per session. The pump sends each
+envelope once per connection, so a new envelope never makes the worker
+send the whole backlog again. After a reconnect the mark starts over
+and everything that is still unacked is sent once more, in order.
+`apipi_worker_replayed_total` counts those real resends. The API
+ingests idempotently, so a resend is safe.
+
+An empty buffer of a session that ended is removed when the lease is
+released, and so are the command dedupe entries of that session. The
+worker remembers only the last sequence number of the most recent
+4,096 ended sessions, so a later append continues the numbering.
+
+### Disk spool
+
+A bounded disk spool (`APIPI_WORKER_OUTBOX_DIR`) keeps a copy of the
+buffered envelopes so they survive a worker restart. It is one
+append-only JSONL file per session. An append writes one line and
+returns, so a killed worker process loses nothing: the operating
+system already has the line. Acks do not touch the file. Once a second
+the worker fsyncs the files it appended to (group commit), in a thread
+and not on the event loop, and it fsyncs once more at shutdown. A host
+crash or power loss can therefore lose at most the last second of
+envelopes. The same pass compacts a file in a thread when at least 512
+of its lines are acked and the acked lines are at least as many as the
+live ones, and it deletes the file as soon as the session has nothing
+unacked. A torn last line, such as one from a kill during a write, is
+skipped when the file is read again.
+
+On start the worker reads the spool, logs one `worker.spool.recovered`
+line (sessions, envelopes, bytes, and skipped lines), and sends the
+envelopes after the next `hello.reply`. After a restart the worker no
+longer holds the leases, so the API may have orphaned them already.
+The API then rejects the envelopes as `not_leased`, acks past them,
+and the worker drops them. The spool exists so results are not lost
+while a lease is still valid, for example after a quick restart.
 
 ## Monitoring
 
@@ -250,6 +293,7 @@ carry `worker_id` and `connection_id`. The series, the log events, and
 the suggested alerts are in [observability](observability.md#worker-socket-metrics)
 and in the event table of [usage](usage.md#logs). The most useful
 signals are `apipi_worker_outbox_oldest_seconds` on the worker,
+`apipi_worker_reconnects_total` by `reason`,
 `apipi_worker_heartbeat_gap_seconds` and `apipi_worker_handle_seconds`
 on the API, and the `worker.disconnected` line, whose `reason` tells you
 why a socket closed.
@@ -379,6 +423,67 @@ environment type, model, MCP labels, file and skill counts).
 
 Losing the socket does not abort a turn. A session is orphaned only
 after the lease TTL, and the turn is not moved to another worker.
+
+After the socket comes back, the worker adopts the cursors in
+`hello.reply` and sends every envelope that is still unacked once
+(see [Messages](#messages)). Commands the API sent but the worker did
+not ack are sent again by the API, and the worker's dedupe tells such
+a retransmit from a new command. A command that failed in dispatch is
+not recorded as done, so its retransmit runs again.
+
+## Keepalive and reconnect
+
+The worker sends a WebSocket ping every 5 seconds and closes the
+connection when no pong arrives within 10 seconds, so a half-open
+socket is noticed within 15 seconds, well inside the default 30 second
+lease TTL. Pings are only answered while the worker reads its socket.
+For that reason the receive loop never waits: it parses a message and
+hands the work to a task. A `session.stop`, a `lease.revoke`, a revoke
+in an `inventory.reply`, a command, and the guest teardown and artifact
+harvest behind them all run as tasks, so heartbeats, acks, presign
+replies, and pongs keep flowing while they wait for a reply. Commands
+and teardowns for the same session still run in order.
+
+The worker waits at most 15 seconds for `hello.reply` after it sends
+`register`. If the API accepted the socket but does not answer, the
+worker closes it and reconnects (`hello_timeout`). A first frame that
+is not a usable `hello.reply` also leads to a reconnect. Only an
+explicit rejection stops the process with a clear message:
+`unauthorized`, `revoked`, `unsupported_protocol`, `token_bound`,
+`register required`, `invalid register`, and `shared_store_required`.
+A `hello.reply` without positive `heartbeat_seconds` and
+`lease_ttl_seconds` also stops the worker.
+
+After a lost connection the worker waits a random time before it
+dials again (exponential backoff with full jitter): up to 0.5 seconds
+after the first failure, then up to 1, 2, 4, 8, and at most 10
+seconds. The random delay spreads the workers out after an API
+restart, so they do not all reconnect and replay together. The attempt
+counter starts over after a connection that stayed up for at least 30
+seconds. The TLS context, with the client certificate for mTLS, is
+built again for every attempt, so a rotated certificate is used
+without a restart; a certificate that cannot be read during a
+reconnect is retried with the same backoff.
+
+A malformed frame (not JSON, not an object, or not a known message) is
+logged as a rate limited warning (`worker.message.invalid`), counted in
+`apipi_worker_messages_total{type="unknown"}`, and skipped. It does not
+drop the connection. A command that raises while it runs is answered
+with an `error` envelope (code `internal`, shown as an
+`agent.session.error` event) and is not recorded as done. The worker
+tracks a lease only for a command it accepted: a `turn.start` that the
+worker rejects (wrong run mode or missing image) releases its lease
+again after the failure is acked, and a `turn.cancel` for a session
+the worker does not hold does not create a lease.
+
+When the worker lets a lease go while no socket is open (an idle Pi
+exits, for example), it remembers the release and sends `lease.release`
+after the next `hello.reply`, once the API acked the envelopes of that
+session. Without that the claim in the next `register` would be missing
+a lease the API still holds, and the API would orphan an idle session.
+Every background task of the worker has a done callback that logs an
+exception, and every loop catches an error per round and goes on (see
+`apipi_background_loop_errors_total`).
 
 ## Artifacts
 
@@ -664,10 +769,20 @@ order](#release-order)). The API drops the lease only after that
 acknowledgement. A delete does not wait for idle TTL.
 
 `SIGTERM` or `SIGINT` on `apipi worker` sends that drain heartbeat,
-kills idle Pi (sessions not in a turn), waits until no live Pi remain,
-then exits 0. In-flight turns finish first. If live Pi remain after
-`--drain-timeout` (default idle TTL, 15 minutes), the process exits 1
-and systemd may then SIGKILL the cgroup. `systemctl stop` and
+kills idle Pi (sessions not in a turn), waits until no live Pi remain
+and the API acked every envelope in the outbox, then exits 0. In-flight
+turns finish first. The idle kills run while the socket is open, so
+their artifact harvest can upload. If live Pi or unacked envelopes
+remain after `--drain-timeout` (default idle TTL, 15 minutes), the
+worker kills the rest while the socket is still open (the harvest gets
+at most 30 seconds), logs `worker.drain.finished` with `error_code`
+`drain_timeout` and the unacked counts, and the process exits 1, and
+systemd may then SIGKILL the cgroup. The timeout is enforced while the
+worker is disconnected too: it keeps trying to reconnect, so it can
+still deliver the outbox, but it gives up at the deadline. While no
+socket is open a killed session does not harvest its files; the worker
+logs `worker.harvest.skipped` instead of waiting 60 seconds for a reply
+that cannot arrive. `systemctl stop` and
 `systemctl restart` send SIGTERM. Raise `TimeoutStopSec` so stop can
 wait; the example drop-in is `deploy/systemd/apipi-worker-drain.conf`
 (`TimeoutStopSec=16min`). Copy it to

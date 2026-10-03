@@ -19,7 +19,8 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from apipi.common.event_bus import EventBus
-from apipi.protocol import PAYLOAD_MODELS, WorkerEnvelope
+from apipi.protocol import MAX_MESSAGE_BYTES, PAYLOAD_MODELS, WorkerEnvelope
+from apipi.worker.outbox import envelope_size
 
 log = logging.getLogger("apipi.worker")
 
@@ -138,11 +139,14 @@ class DeltaRelay:
             payload = PAYLOAD_MODELS[kind].model_validate(
                 {"turn_id": turn_id, "text": text}
             )
-            await send(
-                WorkerEnvelope.build(
-                    session_id, last, kind, payload, turn_id=turn_id
-                ).to_wire()
-            )
+            wire = WorkerEnvelope.build(
+                session_id, last, kind, payload, turn_id=turn_id
+            ).to_wire()
+            if envelope_size(wire) > MAX_MESSAGE_BYTES:
+                self._note_dropped("oversize")
+                log.debug("delta relay fragment over the message limit; dropping")
+                return
+            await send(wire)
         except Exception:
             # At-most-once: a dead socket drops the batch. Never let
             # a send error escape into the turn via the flush task.

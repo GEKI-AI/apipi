@@ -62,8 +62,17 @@ class CommandDedupe:
         del known[: max(len(known) - self.limit, 0)]
         return False
 
+    def discard(self, session_id: uuid.UUID, command_id: str) -> None:
+        """Forget one command id, so a retransmit runs the command again."""
+        known = self._seen.get(session_id)
+        if known is not None and command_id in known:
+            known.remove(command_id)
+
     def forget(self, session_id: uuid.UUID) -> None:
         self._seen.pop(session_id, None)
+
+    def __len__(self) -> int:
+        return len(self._seen)
 
 
 def _sink_for_execution(
@@ -224,7 +233,11 @@ def _typed_payload(
 
 async def dispatch_command(
     execution: Any, message: WorkerCommand | dict[str, Any]
-) -> None:
+) -> str:
+    """Run one command; returns `dispatched`, `rejected`, or `failed`.
+
+    An exception that is not a turn failure propagates to the caller.
+    """
     raw_op = message.op if isinstance(message, WorkerCommand) else message.get("op")
     op_label = (
         raw_op if isinstance(raw_op, str) and raw_op in COMMAND_OPS else "unknown"
@@ -241,6 +254,7 @@ async def dispatch_command(
         if metrics is not None:
             metrics.observe_worker_command_received(op_label, result)
             metrics.observe_worker_command_seconds(op_label, time.monotonic() - started)
+    return result
 
 
 def log_command(command: WorkerCommand) -> None:
@@ -296,7 +310,7 @@ async def _dispatch(execution: Any, message: WorkerCommand | dict[str, Any]) -> 
     token = attach_traceparent(payload.traceparent)
     try:
         turn_context = _command_turn_context(op, payload)
-        await _run_command(
+        outcome = await _run_command(
             execution,
             op,
             tenant_id,
@@ -344,7 +358,7 @@ async def _dispatch(execution: Any, message: WorkerCommand | dict[str, Any]) -> 
         raise
     finally:
         detach_traceparent(token)
-    return "dispatched"
+    return outcome
 
 
 async def _run_command(
@@ -360,7 +374,7 @@ async def _run_command(
     api_key: str | None = None,
     org_id: str | None = None,
     turn_context: dict[str, Any] | None = None,
-) -> None:
+) -> str:
     body = _typed_payload(op, payload)
     if op == "turn.start" and isinstance(body, TurnStartCommandPayload):
         required = body.run_mode
@@ -378,7 +392,7 @@ async def _run_command(
                     worker_mode=",".join(sorted(accepts)),
                     request_id=request_id,
                 )
-                return
+                return "rejected"
         wanted = body.sandbox_image
         worker_mode = (
             getattr(settings, "run_mode", None) if settings is not None else None
@@ -399,7 +413,7 @@ async def _run_command(
                     image=wanted,
                     request_id=request_id,
                 )
-                return
+                return "rejected"
         await execution.run_turn(
             tenant_id,
             session_id,
@@ -414,10 +428,10 @@ async def _run_command(
             turn_context=turn_context,
             sink=_sink_for_execution(execution, tenant_id, session_id),
         )
-        return
+        return "dispatched"
     if op == "turn.continue" and isinstance(body, TurnContinueCommandPayload):
         if body.turn_id is None or body.call_id is None or body.success is None:
-            return
+            return "rejected"
         await execution.continue_turn(
             tenant_id,
             session_id,
@@ -434,16 +448,18 @@ async def _run_command(
             turn_context=turn_context,
             sink=_sink_for_execution(execution, tenant_id, session_id),
         )
-        return
+        return "dispatched"
     if op == "turn.cancel":
         await execution.cancel(session_id, status="in_progress")
-        return
+        return "dispatched"
     if op == "session.stop":
         await execution.teardown(session_id)
         await _wipe_stopped_session(execution, tenant_id, session_id)
-        return
+        return "dispatched"
     if op == "sandbox.boot":
         await execution.boot_hosted(tenant_id, session_id, turn_context=turn_context)
+        return "dispatched"
+    return "rejected"
 
 
 async def _wipe_stopped_session(

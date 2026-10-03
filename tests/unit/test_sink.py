@@ -149,7 +149,7 @@ async def test_outbox_full_fails_turn_with_code(
 ) -> None:
     tenant_id, session_id = await new_session(store)
     context = await build_turn_context(store, settings, tenant_id, session_id)
-    outbox = Outbox(max_messages=10)
+    outbox = Outbox(max_messages=10, session_share=1.0)
     harness = FakeHarness()
     harness.mcp_calls = [{"call_id": f"c{n}", "name": f"tool_{n}"} for n in range(3)]
     await run_turn(
@@ -173,6 +173,34 @@ async def test_outbox_full_fails_turn_with_code(
     assert len(usages) == 1
     assert usages[0]["payload"]["error_code"] == "worker_outbox_full"
     assert usages[0]["payload"]["failure"]["code"] == "worker_outbox_full"
+
+
+async def test_oversize_envelope_fails_turn_with_its_own_code(
+    store: Store, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tenant_id, session_id = await new_session(store)
+    context = await build_turn_context(store, settings, tenant_id, session_id)
+    outbox = Outbox()
+    harness = FakeHarness()
+    harness.mcp_calls = [{"call_id": "c0", "name": "tool_" + "x" * 900}]
+    monkeypatch.setattr("apipi.worker.outbox.MAX_MESSAGE_BYTES", 800)
+    await run_turn(
+        EventHub(),
+        cast(Harness, harness),
+        tenant_id,
+        session_id,
+        "hello",
+        settings=settings,
+        turn_context=context,
+        sink=_sink(outbox, tenant_id, session_id),
+    )
+    failed = [
+        item
+        for item in outbox.pending(session_id)
+        if item["type"] == "turn.status" and item["payload"].get("status") == "failed"
+    ]
+    assert len(failed) == 1
+    assert failed[0]["payload"]["code"] == "worker_message_too_large"
 
 
 async def test_worker_emits_no_deferred_envelopes(
