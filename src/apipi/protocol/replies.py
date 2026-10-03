@@ -31,7 +31,7 @@ class ArtifactPresignReply(ControlMessage):
     """
 
     type: Literal["artifact.presign.reply"] = "artifact.presign.reply"
-    session_id: uuid.UUID
+    session_id: uuid.UUID | None = None
     request_id: uuid.UUID
     ok: bool = True
     unchanged: bool = False

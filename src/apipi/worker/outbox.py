@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from apipi.protocol import EnvelopePayload, WorkerEnvelope
+
 log = logging.getLogger("apipi.worker")
 
 EMERGENCY_BUDGET = 10
@@ -124,7 +126,7 @@ class Outbox:
         self,
         session_id: uuid.UUID,
         type: str,
-        payload: dict[str, Any],
+        payload: EnvelopePayload | dict[str, Any],
         *,
         turn_id: uuid.UUID | None = None,
         emergency: bool = False,
@@ -137,14 +139,9 @@ class Outbox:
         """
         buffer = self._buffer(session_id)
         seq = buffer.issued + 1
-        envelope = {
-            "v": 2,
-            "session_id": str(session_id),
-            "turn_id": str(turn_id) if turn_id is not None else None,
-            "seq": seq,
-            "type": type,
-            "payload": payload,
-        }
+        envelope = WorkerEnvelope.build(
+            session_id, seq, type, payload, turn_id=turn_id
+        ).to_wire()
         size = envelope_size(envelope)
         over = (
             self._messages + 1 > self.max_messages

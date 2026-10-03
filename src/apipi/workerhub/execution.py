@@ -9,6 +9,13 @@ from apipi.common.event_bus import EventBus, is_wake, request_cancel
 from apipi.common.logutil import log_event
 from apipi.common.otel import inject_traceparent
 from apipi.config import Settings
+from apipi.protocol import (
+    SandboxBootCommandPayload,
+    SessionStopCommandPayload,
+    TurnCancelCommandPayload,
+    TurnContinueCommandPayload,
+    TurnStartCommandPayload,
+)
 from apipi.services.turn_state import fail_stale_in_progress, lease_live
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -54,30 +61,26 @@ class RemoteExecution:
             return "capacity"
         return None
 
-    def _payload(
+    def _attribution(
         self,
         tenant_id: uuid.UUID,
-        extra: dict[str, Any],
         *,
         request_id: str | None,
-        api_key: str | None,
         key_id: str | None,
-        user_id: str | None = None,
-        org_id: str | None = None,
+        user_id: str | None,
+        org_id: str | None,
     ) -> dict[str, Any]:
-        payload = {
-            "tenant_id": str(tenant_id),
+        values: dict[str, Any] = {
+            "tenant_id": tenant_id,
             "request_id": request_id,
-            "api_key": api_key,
             "key_id": key_id,
             "user_id": user_id,
             "org_id": org_id,
-            **extra,
         }
         parent = inject_traceparent()
         if parent is not None:
-            payload["traceparent"] = parent
-        return payload
+            values["traceparent"] = parent
+        return values
 
     def _context_extra(self, turn_context: dict[str, Any] | None) -> dict[str, Any]:
         if turn_context is None:
@@ -176,46 +179,27 @@ class RemoteExecution:
         async with store.session() as _db:
             _existing = await list_events(_db, tenant_id, session_id)
         _baseline = _existing[-1].seq if _existing else 0
-        sent = await self.workers.command(
-            store,
-            tenant_id,
-            session_id,
-            op="turn.start",
-            payload=self._payload(
-                tenant_id,
-                {
-                    "text": text,
-                    "images": images or [],
-                    "parts": parts or [],
-                    **self._context_extra(turn_context),
-                },
-                request_id=request_id,
-                api_key=api_key,
-                key_id=key_id,
-                user_id=user_id,
-                org_id=org_id,
-            ),
-        )
-        if sent is None:
-            sent = await self.workers.acquire(
-                store,
-                tenant_id,
-                session_id,
-                op="turn.start",
-                payload=self._payload(
+        body = TurnStartCommandPayload.model_validate(
+            {
+                **self._attribution(
                     tenant_id,
-                    {
-                        "text": text,
-                        "images": images or [],
-                        "parts": parts or [],
-                        **self._context_extra(turn_context),
-                    },
                     request_id=request_id,
-                    api_key=api_key,
                     key_id=key_id,
                     user_id=user_id,
                     org_id=org_id,
                 ),
+                "text": text,
+                "images": images or [],
+                "parts": parts or [],
+                **self._context_extra(turn_context),
+            }
+        )
+        sent = await self.workers.command(
+            store, tenant_id, session_id, op="turn.start", payload=body
+        )
+        if sent is None:
+            sent = await self.workers.acquire(
+                store, tenant_id, session_id, op="turn.start", payload=body
             )
         if sent is None:
             await self._raise_no_worker(tenant_id, session_id)
@@ -244,27 +228,25 @@ class RemoteExecution:
         async with store.session() as _db:
             _existing = await list_events(_db, tenant_id, session_id)
         _baseline = _existing[-1].seq if _existing else 0
+        body = TurnContinueCommandPayload.model_validate(
+            {
+                **self._attribution(
+                    tenant_id,
+                    request_id=request_id,
+                    key_id=key_id,
+                    user_id=user_id,
+                    org_id=org_id,
+                ),
+                "turn_id": turn_id,
+                "call_id": call_id,
+                "success": success,
+                "output": output,
+                "error": error,
+                **self._context_extra(turn_context),
+            }
+        )
         sent = await self.workers.command(
-            store,
-            tenant_id,
-            session_id,
-            op="turn.continue",
-            payload=self._payload(
-                tenant_id,
-                {
-                    "turn_id": str(turn_id),
-                    "call_id": call_id,
-                    "success": success,
-                    "output": output,
-                    "error": error,
-                    **self._context_extra(turn_context),
-                },
-                request_id=request_id,
-                api_key=api_key,
-                key_id=key_id,
-                user_id=user_id,
-                org_id=org_id,
-            ),
+            store, tenant_id, session_id, op="turn.continue", payload=body
         )
         if sent is None:
             await self._raise_no_worker(tenant_id, session_id)
@@ -345,7 +327,7 @@ class RemoteExecution:
             # dispatch_command keys the worker side on payload tenant_id;
             # without it the worker silently drops the cancel and a held
             # turn never aborts.
-            payload={"tenant_id": str(row.tenant_id)},
+            payload=TurnCancelCommandPayload(tenant_id=row.tenant_id),
         )
         return command is not None
 
@@ -420,7 +402,7 @@ class RemoteExecution:
             row.tenant_id,
             session_id,
             op="session.stop",
-            payload={"tenant_id": str(row.tenant_id)},
+            payload=SessionStopCommandPayload(tenant_id=row.tenant_id),
         )
         if command is not None:
             await self.workers.wait_ack(row.lease_id, str(command["id"]))
@@ -439,7 +421,9 @@ class RemoteExecution:
             return
         from apipi.services.turn_state import fail_environment
 
-        payload = {"tenant_id": str(tenant_id), **self._context_extra(turn_context)}
+        payload = SandboxBootCommandPayload.model_validate(
+            {"tenant_id": tenant_id, **self._context_extra(turn_context)}
+        )
         sent = await self.workers.command(
             store,
             tenant_id,

@@ -16,13 +16,16 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from apipi.common.dirs import store_root
 from apipi.common.objects import NS_ARTIFACTS, NS_FILES, local_object_path
+from apipi.common.store_check import SHARED_STORE_ERROR
 from apipi.config import ConfigError, Settings
-
-SHARED_STORE_ERROR = (
-    "filesystem store requires a shared path: mount the same "
-    "APIPI_LOCAL_STORE_DIR on the API and every worker"
+from apipi.protocol import (
+    ArtifactCompletedPayload,
+    ArtifactPresignPayload,
+    ArtifactPresignReply,
 )
 
 
@@ -42,8 +45,8 @@ def presign_envelope(
 ) -> tuple[uuid.UUID, dict[str, Any]]:
     """Build an `artifact.presign` payload for `data` (metadata only)."""
     resolved = request_id if request_id is not None else uuid.uuid4()
-    payload: dict[str, Any] = {
-        "request_id": str(resolved),
+    values: dict[str, Any] = {
+        "request_id": resolved,
         "kind": kind,
         "filename": filename or "artifact",
         "content_type": content_type or "application/octet-stream",
@@ -51,8 +54,8 @@ def presign_envelope(
         "sha256": sha256_hex(data),
     }
     if turn_id is not None:
-        payload["turn_id"] = str(turn_id)
-    return resolved, payload
+        values["turn_id"] = turn_id
+    return resolved, ArtifactPresignPayload.model_validate(values).to_wire()
 
 
 def completed_envelope(
@@ -65,18 +68,16 @@ def completed_envelope(
     turn_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Build an `artifact.completed` payload (metadata only, no bytes)."""
-    payload: dict[str, Any] = {
-        "upload_id": str(upload_id),
-        "size": len(data),
-        "sha256": sha256_hex(data),
-    }
+    payload = ArtifactCompletedPayload(
+        upload_id=upload_id, size=len(data), sha256=sha256_hex(data)
+    )
     if path is not None:
-        payload["path"] = path
+        payload.path = path
     if name is not None:
-        payload["name"] = name
+        payload.name = name
     if turn_id is not None:
-        payload["turn_id"] = str(turn_id)
-    return payload
+        payload.turn_id = turn_id
+    return payload.to_wire()
 
 
 def write_shared_object(settings: Settings, object_id: str, data: bytes) -> str:
@@ -120,17 +121,14 @@ def handle_presign_reply(
     message: dict[str, Any],
 ) -> bool:
     """Resolve one `artifact.presign.reply`; True when it matched a waiter."""
-    if message.get("type") != "artifact.presign.reply":
-        return False
-    raw = message.get("request_id")
     try:
-        request_id = uuid.UUID(str(raw))
-    except (ValueError, TypeError):
+        reply = ArtifactPresignReply.model_validate(message)
+    except ValidationError:
         return False
-    future = waiters.get(request_id)
+    future = waiters.get(reply.request_id)
     if future is None or future.done():
         return False
-    future.set_result(message)
+    future.set_result(reply.to_wire())
     return True
 
 
@@ -189,16 +187,17 @@ async def upload_via_presign(
             turn_id=turn_id,
         )
         try:
-            reply = await asyncio.wait_for(asyncio.shield(future), timeout)
+            reply_message = await asyncio.wait_for(asyncio.shield(future), timeout)
         except (TimeoutError, asyncio.CancelledError) as exc:
             raise ConfigError("artifact upload timed out") from exc
-        if not reply.get("ok", False):
-            code = str(reply.get("code") or "artifact_store")
-            message = str(reply.get("message") or "Cannot write artifacts")
+        reply = ArtifactPresignReply.model_validate(reply_message)
+        if not reply.ok:
+            code = reply.code or "artifact_store"
+            message = reply.message or "Cannot write artifacts"
             if code == "payload_too_large":
                 raise ApiError("invalid_request", message, code=code, status_code=413)
             raise DiskLimitError(message, code=code)
-        if reply.get("unchanged") is True:
+        if reply.unchanged:
             # The API already holds these bytes; skip the PUT and the
             # completed envelope.
             return {
@@ -206,23 +205,16 @@ async def upload_via_presign(
                 "size": len(data),
                 "sha256": sha256_hex(data),
             }
-        raw_upload = reply.get("upload_id")
-        if not isinstance(raw_upload, str) or not raw_upload:
+        upload_id = reply.upload_id
+        if upload_id is None:
             raise ConfigError("artifact presign reply is missing upload_id")
-        try:
-            upload_id = uuid.UUID(raw_upload)
-        except ValueError as exc:
-            raise ConfigError("artifact presign reply is invalid") from exc
-        url = reply.get("url")
-        if isinstance(url, str) and url:
-            headers = reply.get("headers")
-            await put_via_url(url, data, headers if isinstance(headers, dict) else {})
+        if reply.url:
+            await put_via_url(reply.url, data, reply.headers)
             completed_path: str | None = None
         else:
-            rel = reply.get("path")
-            if not isinstance(rel, str) or not rel:
+            if not reply.path:
                 raise ConfigError(SHARED_STORE_ERROR)
-            completed_path = write_shared_path(settings, rel, data)
+            completed_path = write_shared_path(settings, reply.path, data)
         completed = completed_envelope(
             session_id,
             upload_id=upload_id,
@@ -242,13 +234,11 @@ async def upload_via_presign(
             "size": len(data),
             "sha256": sha256_hex(data),
         }
-        file_id = reply.get("file_id")
-        if isinstance(file_id, str) and file_id:
-            result["file_id"] = file_id
-            result["id"] = file_id
-        artifact_id = reply.get("artifact_id")
-        if isinstance(artifact_id, str) and artifact_id:
-            result["artifact_id"] = artifact_id
+        if reply.file_id:
+            result["file_id"] = reply.file_id
+            result["id"] = reply.file_id
+        if reply.artifact_id is not None:
+            result["artifact_id"] = str(reply.artifact_id)
         return result
     finally:
         waiters.pop(request_id, None)

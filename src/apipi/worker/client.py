@@ -6,10 +6,12 @@ import os
 import signal
 import time
 import uuid
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 import websockets
+from pydantic import ValidationError
 
 from apipi.common.logutil import log_event
 from apipi.config import (
@@ -21,7 +23,30 @@ from apipi.config import (
 )
 from apipi.protocol import (
     CURSOR_OPS,
+    PROTOCOL_VERSION,
+    ArtifactPresignReply,
+    ContextCommandPayload,
+    CumulativeAck,
+    HeartbeatMessage,
+    HelloReply,
+    InventoryEntry,
+    InventoryMessage,
+    InventoryReply,
+    LeaseAck,
+    LeaseRelease,
+    LeaseRevoke,
+    RegisterMessage,
+    RunningSession,
+    SandboxSeenMessage,
+    SearchReply,
+    StoreCheck,
+    StoreProof,
+    WireModel,
+    WorkerCommand,
+    WorkerImageInfo,
+    parse_api_message,
 )
+from apipi.worker.artifact_upload import handle_presign_reply
 from apipi.worker.commands import CommandDedupe, command_log_context, dispatch_command
 from apipi.worker.deltas import DeltaRelay, LiveRedirectBus
 from apipi.worker.inventory import (
@@ -37,7 +62,7 @@ INVENTORY_INTERVAL = 60.0
 RELEASE_FLUSH_TIMEOUT = 10.0
 
 
-def answer_store_check(settings: Any, hello: dict[str, Any]) -> dict[str, str] | None:
+def answer_store_check(settings: Any, hello: dict[str, Any]) -> dict[str, Any] | None:
     """Build the `store.proof` reply for a hello challenge, if any.
 
     Raises ConfigError with the documented shared-path message when the
@@ -47,16 +72,13 @@ def answer_store_check(settings: Any, hello: dict[str, Any]) -> dict[str, str] |
     from apipi.common.store_check import SHARED_STORE_ERROR, read_store_check
     from apipi.config import ConfigError
 
-    raw = hello.get("store_check")
-    if not isinstance(raw, dict):
+    try:
+        check = StoreCheck.model_validate(hello.get("store_check"))
+    except ValidationError:
         return None
-    marker = raw.get("marker")
-    nonce = raw.get("nonce")
-    if not isinstance(marker, str) or not isinstance(nonce, str):
-        return None
-    if not read_store_check(store_root(settings), marker, nonce):
+    if not read_store_check(store_root(settings), check.marker, check.nonce):
         raise ConfigError(SHARED_STORE_ERROR)
-    return {"type": "store.proof", "marker": marker, "nonce": nonce}
+    return StoreProof(marker=check.marker, nonce=check.nonce).to_wire()
 
 
 def worker_ws_url(base: str) -> str:
@@ -108,19 +130,20 @@ def _heartbeat_images(settings: Settings) -> list[dict[str, str]]:
 def worker_heartbeat(settings: Settings, *, drain: bool = False) -> dict[str, object]:
     from apipi.worker.accepts import resolved_worker_accepts
 
-    payload: dict[str, object] = {
-        "type": "heartbeat",
-        "capacity": settings.max_sessions,
-        "memory_mb": settings.node_memory_mb(),
-        "run_mode": settings.run_mode,
-        "accepts": sorted(resolved_worker_accepts(settings)),
-        "arch": worker_arch(),
-        "image_store_version": settings.image_store_version or "",
-        "images": _heartbeat_images(settings),
-    }
+    heartbeat = HeartbeatMessage(
+        capacity=settings.max_sessions,
+        memory_mb=settings.node_memory_mb(),
+        run_mode=settings.run_mode,
+        accepts=sorted(resolved_worker_accepts(settings)),
+        arch=worker_arch(),
+        image_store_version=settings.image_store_version or "",
+        images=[
+            WorkerImageInfo.model_validate(item) for item in _heartbeat_images(settings)
+        ],
+    )
     if drain:
-        payload["drain"] = True
-    return payload
+        heartbeat.drain = True
+    return heartbeat.to_wire()
 
 
 def drain_idle(live: int, command_tasks: set[asyncio.Task[None]]) -> bool:
@@ -330,17 +353,15 @@ async def _pump_outbox(outbox: "Outbox", send: Any) -> None:
 
 def _running_claim(
     session_leases: dict[uuid.UUID, str], outbox: "Outbox"
-) -> list[dict[str, Any]]:
-    claimed = []
-    for session_id, lease_id in session_leases.items():
-        claimed.append(
-            {
-                "session_id": str(session_id),
-                "lease_id": lease_id,
-                "last_seq": outbox.high_water(session_id),
-            }
+) -> list[RunningSession]:
+    return [
+        RunningSession(
+            session_id=session_id,
+            lease_id=uuid.UUID(lease_id),
+            last_seq=outbox.high_water(session_id),
         )
-    return claimed
+        for session_id, lease_id in session_leases.items()
+    ]
 
 
 async def _reconcile_hello(
@@ -348,7 +369,7 @@ async def _reconcile_hello(
     outbox: "Outbox",
     relay: Any,
     session_leases: dict[uuid.UUID, str],
-    sessions: dict[str, Any],
+    sessions: Mapping[Any, Any],
     hello: dict[str, Any] | None = None,
     dedupe: "CommandDedupe | None" = None,
     settings: Any | None = None,
@@ -389,34 +410,26 @@ async def _reconcile_hello(
     outbox.mark_dirty()
 
 
-def _hello_seconds(hello: dict[str, Any], key: str) -> float:
-    value = hello.get(key)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-        raise ConfigError(f"worker register failed: hello has no valid {key}")
-    return float(value)
-
-
-def _adopt_cursor(outbox: "Outbox", message: dict[str, Any]) -> None:
+def _adopt_cursor(outbox: "Outbox", command: WorkerCommand) -> None:
     """Continue the session sequence from the cursor the API put in a command."""
-    if message.get("op") not in CURSOR_OPS:
+    if command.op not in CURSOR_OPS:
         return
-    payload = message.get("payload")
-    raw = payload.get("last_seq") if isinstance(payload, dict) else None
     try:
-        session_id = uuid.UUID(str(message.get("session_id")))
-    except (ValueError, TypeError):
-        return
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        payload = command.parsed_payload()
+    except ValidationError:
+        payload = None
+    cursor = payload.last_seq if isinstance(payload, ContextCommandPayload) else None
+    if cursor is None:
         log_event(
             log,
             logging.WARNING,
             "worker command has no sequence cursor",
             event="worker.command.cursor_missing",
-            session_id=session_id,
-            op=message.get("op"),
+            session_id=command.session_id,
+            op=command.op,
         )
         return
-    outbox.set_base(session_id, raw)
+    outbox.set_base(command.session_id, cursor)
 
 
 async def _outbox_flushed(
@@ -464,7 +477,6 @@ async def _serve_connection(
     timers, so a socket that never goes quiet cannot starve them. The
     heartbeat interval and the lease TTL come from the API in `hello`.
     """
-    from apipi.protocol import PROTOCOL_VERSION
     from apipi.worker.accepts import resolved_worker_accepts
 
     send_lock = asyncio.Lock()
@@ -474,37 +486,45 @@ async def _serve_connection(
         async with send_lock:
             await sock.send(json.dumps(payload))
 
-    await send_json(
-        {
-            "type": "register",
-            "protocol": PROTOCOL_VERSION,
-            "capabilities": {},
-            "accepts": sorted(resolved_worker_accepts(settings)),
-            "running": _running_claim(session_leases, outbox),
-            "capacity": settings.max_sessions,
-            "memory_mb": settings.node_memory_mb(),
-            "run_mode": settings.run_mode,
-            "arch": worker_arch(),
-            "images": _heartbeat_images(settings),
-        }
+    async def send_message(message: WireModel) -> None:
+        await send_json(message.to_wire())
+
+    await send_message(
+        RegisterMessage(
+            protocol=PROTOCOL_VERSION,
+            capabilities={},
+            accepts=sorted(resolved_worker_accepts(settings)),
+            running=_running_claim(session_leases, outbox),
+            capacity=settings.max_sessions,
+            memory_mb=settings.node_memory_mb(),
+            run_mode=settings.run_mode,
+            arch=worker_arch(),
+            images=[
+                WorkerImageInfo.model_validate(item)
+                for item in _heartbeat_images(settings)
+            ],
+        )
     )
     raw = await sock.recv()
     hello = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode())
     if not isinstance(hello, dict) or not hello.get("ok"):
         error = hello.get("error") if isinstance(hello, dict) else "unauthorized"
         raise ConfigError(f"worker register failed: {error}")
-    heartbeat = _hello_seconds(hello, "heartbeat_seconds")
-    lease_ttl = _hello_seconds(hello, "lease_ttl_seconds")
-    proof = answer_store_check(settings, hello if isinstance(hello, dict) else {})
+    try:
+        welcome = HelloReply.model_validate(hello)
+    except ValidationError as exc:
+        raise ConfigError(f"worker register failed: invalid hello: {exc}") from exc
+    heartbeat = welcome.heartbeat_seconds
+    lease_ttl = welcome.lease_ttl_seconds
+    proof = answer_store_check(settings, hello)
     if proof is not None:
         await send_json(proof)
-    sessions = hello.get("sessions")
-    hello_sessions = sessions if isinstance(sessions, dict) else {}
+    hello_sessions = welcome.sessions
     log.info(
         "worker hello",
         extra={
             "worker_id": hello.get("worker_id"),
-            "sessions": hello_sessions,
+            "sessions": {str(key): value for key, value in hello_sessions.items()},
             "lease_ttl_seconds": lease_ttl,
             "heartbeat_seconds": heartbeat,
         },
@@ -542,12 +562,8 @@ async def _serve_connection(
             return
         session_leases.pop(session_id, None)
         try:
-            await send_json(
-                {
-                    "type": "lease.release",
-                    "session_id": str(session_id),
-                    "lease_id": lease_id,
-                }
+            await send_message(
+                LeaseRelease(session_id=session_id, lease_id=uuid.UUID(lease_id))
             )
         except Exception:
             log.exception("lease release failed")
@@ -572,12 +588,7 @@ async def _serve_connection(
     async def report_seen(session_ids: list[uuid.UUID]) -> None:
         if getattr(execution, "seen_hook", None) is not report_seen:
             return
-        await send_json(
-            {
-                "type": "sandbox.seen",
-                "session_ids": [str(session_id) for session_id in session_ids],
-            }
-        )
+        await send_message(SandboxSeenMessage(session_ids=session_ids))
 
     execution.seen_hook = report_seen
     if hasattr(execution, "search_sender"):
@@ -587,22 +598,21 @@ async def _serve_connection(
         unleased = _unleased_session_dirs(
             settings, session_leases, getattr(execution, "pool", None)
         )
-        await send_json(
-            {
-                "type": "inventory",
-                "sessions": [
-                    {
-                        "session_id": str(session_id),
-                        "lease_id": lease_id,
-                        "last_seq": outbox.high_water(session_id),
-                    }
+        await send_message(
+            InventoryMessage(
+                sessions=[
+                    InventoryEntry(
+                        session_id=session_id,
+                        lease_id=uuid.UUID(lease_id),
+                        last_seq=outbox.high_water(session_id),
+                    )
                     for session_id, lease_id in session_leases.items()
                 ]
                 + [
-                    {"session_id": str(session_id), "last_seq": 0}
+                    InventoryEntry(session_id=session_id, last_seq=0)
                     for session_id in unleased
-                ],
-            }
+                ]
+            )
         )
 
     async def send_heartbeat() -> None:
@@ -649,37 +659,29 @@ async def _serve_connection(
                 return "drain_timeout", drain_deadline
             await asyncio.sleep(0.5)
 
-    def ack_command(message: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "type": "lease.ack",
-            "id": message.get("id"),
-            "lease_id": message.get("lease_id"),
-        }
+    def ack_command(command: WorkerCommand) -> dict[str, Any]:
+        return LeaseAck(id=command.command_id, lease_id=command.lease_id).to_wire()
 
     async def stop_session_command(
-        message: dict[str, Any], stop_session: uuid.UUID | None
+        command: WorkerCommand, stop_session: uuid.UUID
     ) -> None:
-        raw_lease = message.get("lease_id")
-        if stop_session is not None:
-            stopping.add(stop_session)
+        raw_lease = str(command.lease_id)
+        stopping.add(stop_session)
         try:
-            await dispatch_command(execution, message)
-            if stop_session is not None:
-                dedupe.forget(stop_session)
-                if isinstance(raw_lease, str):
-                    await flush_outbox(stop_session, raw_lease, "session.stop")
-                if session_leases.get(stop_session) == raw_lease:
-                    session_leases.pop(stop_session, None)
+            await dispatch_command(execution, command)
+            dedupe.forget(stop_session)
+            await flush_outbox(stop_session, raw_lease, "session.stop")
+            if session_leases.get(stop_session) == raw_lease:
+                session_leases.pop(stop_session, None)
         except Exception:
             log.exception(
                 "worker session stop failed",
-                extra={"session_id": str(message.get("session_id"))},
+                extra={"session_id": str(command.session_id)},
             )
             return
         finally:
-            if stop_session is not None:
-                stopping.discard(stop_session)
-        await send_json(ack_command(message))
+            stopping.discard(stop_session)
+        await send_json(ack_command(command))
 
     async def receive_loop() -> None:
         while True:
@@ -688,29 +690,31 @@ async def _serve_connection(
             message = json.loads(text)
             if not isinstance(message, dict):
                 continue
-            if message.get("type") == "ack":
-                raw_session = message.get("session_id")
-                last_seq = message.get("last_seq")
-                try:
-                    ack_session = uuid.UUID(str(raw_session))
-                    ack_seq = int(last_seq)  # type: ignore[arg-type]
-                except (ValueError, TypeError):
-                    continue
-                outbox.acked(ack_session, ack_seq)
+            try:
+                parsed = parse_api_message(message)
+            except ValidationError:
+                log.warning(
+                    "worker message invalid",
+                    extra={
+                        "event": "worker.message.invalid",
+                        "type": str(message.get("type")),
+                    },
+                )
                 continue
-            if message.get("type") == "artifact.presign.reply":
-                from apipi.worker.artifact_upload import handle_presign_reply
-
+            if isinstance(parsed, CumulativeAck):
+                outbox.acked(parsed.session_id, parsed.last_seq)
+                continue
+            if isinstance(parsed, ArtifactPresignReply):
                 waiters = getattr(execution, "presign_waiters", None)
                 if isinstance(waiters, dict):
                     handle_presign_reply(waiters, message)
                 continue
-            if message.get("type") == "search.reply":
+            if isinstance(parsed, SearchReply):
                 handle_search_reply = getattr(execution, "handle_search_reply", None)
                 if callable(handle_search_reply):
                     handle_search_reply(message)
                 continue
-            if message.get("type") == "inventory.reply":
+            if isinstance(parsed, InventoryReply):
                 await _apply_inventory_reply(
                     execution,
                     message,
@@ -721,76 +725,53 @@ async def _serve_connection(
                     settings=settings,
                 )
                 continue
-            if message.get("type") == "command":
-                raw_lease = message.get("lease_id")
-                raw_session = message.get("session_id")
-                if isinstance(raw_lease, str) and isinstance(raw_session, str):
-                    session_leases[uuid.UUID(raw_session)] = raw_lease
-                _adopt_cursor(outbox, message)
-            if message.get("type") == "command" and message.get("op") == "session.stop":
-                command_id = message.get("id")
-                try:
-                    stop_session = uuid.UUID(str(message.get("session_id")))
-                except (ValueError, TypeError):
-                    stop_session = None
-                if (
-                    stop_session is not None
-                    and isinstance(command_id, str)
-                    and dedupe.duplicate(stop_session, command_id)
-                ):
-                    await send_json(ack_command(message))
-                    continue
-                task = asyncio.create_task(stop_session_command(message, stop_session))
-                command_tasks.add(task)
-                task.add_done_callback(command_tasks.discard)
-                tasks.add(task)
-                task.add_done_callback(tasks.discard)
+            if isinstance(parsed, LeaseRevoke):
+                dedupe.forget(parsed.session_id)
+                known = parsed.session_id in session_leases
+                session_leases.pop(parsed.session_id, None)
+                relay.forget(parsed.session_id)
+                await execution.teardown(parsed.session_id)
+                outbox.drop_session(parsed.session_id)
+                if not known:
+                    await wipe_unknown_workspace(
+                        settings, execution, outbox, parsed.session_id
+                    )
                 continue
-            if message.get("type") == "lease.revoke":
-                revoked = message.get("session_id")
-                if isinstance(revoked, str):
-                    try:
-                        revoked_id = uuid.UUID(revoked)
-                    except ValueError:
-                        continue
-                    dedupe.forget(revoked_id)
-                    known = revoked_id in session_leases
-                    session_leases.pop(revoked_id, None)
-                    relay.forget(revoked_id)
-                    await execution.teardown(revoked_id)
-                    outbox.drop_session(revoked_id)
-                    if not known:
-                        await wipe_unknown_workspace(
-                            settings, execution, outbox, revoked_id
-                        )
+            if not isinstance(parsed, WorkerCommand):
                 continue
-            if message.get("type") == "command":
-                command_id = message.get("id")
-                try:
-                    command_session = uuid.UUID(str(message.get("session_id")))
-                except (ValueError, TypeError):
-                    command_session = None
-                if (
-                    command_session is not None
-                    and isinstance(command_id, str)
-                    and dedupe.duplicate(command_session, command_id)
-                ):
-                    await send_json(ack_command(message))
+            command = parsed
+            command_id = str(command.command_id)
+            session_leases[command.session_id] = str(command.lease_id)
+            _adopt_cursor(outbox, command)
+            if command.op == "session.stop":
+                if dedupe.duplicate(command.session_id, command_id):
+                    await send_json(ack_command(command))
                     continue
-                await send_json(ack_command(message))
-                log.info(
-                    "worker command",
-                    extra={
-                        "op": message.get("op"),
-                        "session_id": message.get("session_id"),
-                        **command_log_context(message),
-                    },
+                task = asyncio.create_task(
+                    stop_session_command(command, command.session_id)
                 )
-                task = asyncio.create_task(dispatch_command(execution, message))
                 command_tasks.add(task)
                 task.add_done_callback(command_tasks.discard)
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
+                continue
+            if dedupe.duplicate(command.session_id, command_id):
+                await send_json(ack_command(command))
+                continue
+            await send_json(ack_command(command))
+            log.info(
+                "worker command",
+                extra={
+                    "op": command.op,
+                    "session_id": str(command.session_id),
+                    **command_log_context(command),
+                },
+            )
+            task = asyncio.create_task(dispatch_command(execution, command))
+            command_tasks.add(task)
+            task.add_done_callback(command_tasks.discard)
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
 
     runners = {
         "recv": asyncio.create_task(receive_loop()),

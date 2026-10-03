@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from apipi.common.event_bus import EventBus
+from apipi.protocol import PAYLOAD_MODELS, WorkerEnvelope
 
 log = logging.getLogger("apipi.worker")
 
@@ -126,15 +127,13 @@ class DeltaRelay:
         last = self._seq.get(session_id, 0) + 1
         self._seq[session_id] = last
         try:
+            payload = PAYLOAD_MODELS[kind].model_validate(
+                {"turn_id": turn_id, "text": text}
+            )
             await send(
-                {
-                    "v": 2,
-                    "session_id": str(session_id),
-                    "turn_id": str(turn_id),
-                    "seq": last,
-                    "type": kind,
-                    "payload": {"turn_id": str(turn_id), "text": text},
-                }
+                WorkerEnvelope.build(
+                    session_id, last, kind, payload, turn_id=turn_id
+                ).to_wire()
             )
         except Exception:
             # At-most-once: a dead socket drops the batch. Never let

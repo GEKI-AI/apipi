@@ -18,7 +18,15 @@ from typing import Any, Protocol
 
 from apipi.common.logutil import log_event
 from apipi.common.usage import tally
-from apipi.protocol import PUBLIC_EVENT_TYPES
+from apipi.protocol import (
+    PUBLIC_EVENT_TYPES,
+    ItemAddedPayload,
+    SessionStatusPayload,
+    TurnStatusPayload,
+    UsageFailure,
+    UsagePayload,
+    WorkerEventPayload,
+)
 
 log = logging.getLogger("apipi")
 
@@ -233,10 +241,10 @@ class OutboxSink:
         self.outbox.append(
             session_id,
             "session.status",
-            {
-                "status": changes.get("status"),
-                "required_actions": changes.get("required_actions", []),
-            },
+            SessionStatusPayload(
+                status=changes.get("status"),
+                required_actions=changes.get("required_actions", []),
+            ),
             emergency=self._emergency,
         )
         return None
@@ -261,10 +269,12 @@ class OutboxSink:
             self.outbox.append(
                 session_id,
                 "turn.status",
-                {
-                    "turn_id": str(resolved),
-                    "status": "started" if status == "in_progress" else status,
-                },
+                TurnStatusPayload.model_validate(
+                    {
+                        "turn_id": resolved,
+                        "status": "started" if status == "in_progress" else status,
+                    }
+                ),
                 turn_id=resolved,
                 emergency=self._emergency,
             )
@@ -288,12 +298,12 @@ class OutboxSink:
         self.outbox.append(
             session_id,
             "item.added",
-            {
-                "item_id": str(resolved),
-                "item_type": type,
-                "turn_id": str(turn_id) if turn_id is not None else None,
-                "data": data if data is not None else {},
-            },
+            ItemAddedPayload(
+                item_id=resolved,
+                item_type=type,
+                turn_id=turn_id,
+                data=data if data is not None else {},
+            ),
             turn_id=turn_id,
             emergency=self._emergency,
         )
@@ -323,7 +333,7 @@ class OutboxSink:
         self.outbox.append(
             session_id,
             "event",
-            {"type": type, "data": body, "turn_id": str(turn_id) if turn_id else None},
+            WorkerEventPayload(type=type, data=body, turn_id=turn_id),
             turn_id=turn_id,
             emergency=self._emergency,
         )
@@ -341,14 +351,16 @@ class OutboxSink:
     ) -> None:
         del usage
         self._check(tenant_id, session_id)
-        payload: dict[str, Any] = {"turn_id": str(turn_id), "status": status}
+        status_payload = TurnStatusPayload.model_validate(
+            {"turn_id": turn_id, "status": status}
+        )
         if failure is not None:
-            payload["code"] = failure.code
-            payload["message"] = failure.message
+            status_payload.code = failure.code
+            status_payload.message = failure.message
         self.outbox.append(
             session_id,
             "turn.status",
-            payload,
+            status_payload,
             turn_id=turn_id,
             emergency=self._emergency or status in {"failed", "cancelled"},
         )
@@ -381,30 +393,34 @@ class OutboxSink:
         tools, tool_counts, mcp_names, mcp_counts = self._tally.snapshot()
         started = self._turn_started.get(turn_id)
         latency_ms = max(int((time.monotonic() - started) * 1000), 0) if started else 0
-        payload: dict[str, Any] = {
-            "turn_id": str(turn_id),
-            "status": status,
-            "prompt_tokens": stored["prompt_tokens"],
-            "completion_tokens": stored["completion_tokens"],
-            "cache_read_tokens": stored["cache_read_tokens"],
-            "cache_write_tokens": stored["cache_write_tokens"],
-            "total_tokens": stored["total_tokens"],
-            "latency_ms": latency_ms,
-            "request_id": request_id,
-            "user_id": user_id,
-            "error_code": error_code,
-            "artifact_bytes": artifact_bytes,
-            "tool_names": tools,
-            "tool_counts": tool_counts,
-            "mcp_names": mcp_names,
-            "mcp_counts": mcp_counts,
-            "failure": failure_dict(failure) if failure is not None else None,
-        }
+        usage_payload = UsagePayload(
+            turn_id=turn_id,
+            status=status,
+            prompt_tokens=stored["prompt_tokens"],
+            completion_tokens=stored["completion_tokens"],
+            cache_read_tokens=stored["cache_read_tokens"],
+            cache_write_tokens=stored["cache_write_tokens"],
+            total_tokens=stored["total_tokens"],
+            latency_ms=latency_ms,
+            request_id=request_id,
+            user_id=user_id,
+            error_code=error_code,
+            artifact_bytes=artifact_bytes,
+            tool_names=tools,
+            tool_counts=tool_counts,
+            mcp_names=mcp_names,
+            mcp_counts=mcp_counts,
+            failure=(
+                UsageFailure.model_validate(failure_dict(failure))
+                if failure is not None
+                else None
+            ),
+        )
         try:
             self.outbox.append(
                 session_id,
                 "usage",
-                payload,
+                usage_payload,
                 turn_id=turn_id,
                 emergency=self._emergency or status == "failed",
             )

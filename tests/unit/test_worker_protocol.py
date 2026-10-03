@@ -309,3 +309,89 @@ def test_register_and_hello_reply_round_trip() -> None:
         }
     )
     assert event.event_type == "agent.session.error"
+
+
+def test_to_wire_writes_what_the_sender_set() -> None:
+    from apipi.protocol import HeartbeatMessage
+
+    assert HeartbeatMessage(capacity=2).to_wire() == {
+        "type": "heartbeat",
+        "capacity": 2,
+    }
+    explicit = HeartbeatMessage(capacity=2, drain=None).to_wire()
+    assert explicit == {"type": "heartbeat", "capacity": 2, "drain": None}
+
+
+def test_heartbeat_has_every_field_the_worker_sends() -> None:
+    from apipi.protocol import HeartbeatMessage
+
+    message = HeartbeatMessage.model_validate(
+        {
+            "type": "heartbeat",
+            "capacity": 4,
+            "memory_mb": 2048,
+            "run_mode": "microvm",
+            "accepts": ["none", "microvm"],
+            "arch": "x86_64",
+            "image_store_version": "v1",
+            "images": [
+                {"id": "default", "version": "1", "digest": "d", "min_size": "S"}
+            ],
+            "drain": True,
+        }
+    )
+    assert message.accepts == ["none", "microvm"]
+    assert message.image_store_version == "v1"
+    assert message.images is not None and message.images[0].id == "default"
+    assert HeartbeatMessage.model_validate(message.to_wire()) == message
+
+
+def test_revoke_entry_allows_a_missing_lease_id() -> None:
+    from apipi.protocol import InventoryReply
+
+    session_id = uuid.uuid4()
+    reply = InventoryReply.model_validate(
+        {"type": "inventory.reply", "revoke": [{"session_id": str(session_id)}]}
+    )
+    assert reply.revoke[0].lease_id is None
+    assert reply.to_wire()["revoke"] == [
+        {"type": "lease.revoke", "session_id": str(session_id)}
+    ]
+
+
+def test_every_command_op_has_a_payload_model() -> None:
+    from apipi.protocol import COMMAND_PAYLOAD_MODELS, BaseCommandPayload
+
+    assert set(COMMAND_PAYLOAD_MODELS) == COMMAND_OPS
+    tenant_id = uuid.uuid4()
+    for op, model in COMMAND_PAYLOAD_MODELS.items():
+        command = WorkerCommand.build(
+            uuid.uuid4(),
+            uuid.uuid4(),
+            uuid.uuid4(),
+            op,
+            model(tenant_id=tenant_id),
+        )
+        wire = command.to_wire()
+        assert wire["payload"] == {"tenant_id": str(tenant_id)}
+        parsed = WorkerCommand.model_validate(wire).parsed_payload()
+        assert isinstance(parsed, model)
+        assert isinstance(parsed, BaseCommandPayload)
+
+
+def test_command_payload_has_no_model_key_field() -> None:
+    from apipi.protocol import TurnStartCommandPayload
+
+    assert "api_key" not in TurnStartCommandPayload.model_fields
+
+
+def test_extra_policy_follows_the_role() -> None:
+    from apipi.protocol import EnvelopePayload, SessionStatusPayload
+
+    assert issubclass(SessionStatusPayload, EnvelopePayload)
+    with pytest.raises(ValidationError):
+        SessionStatusPayload.model_validate({"status": "idle", "typo": 1})
+    ack = CumulativeAck.model_validate(
+        {"type": "ack", "session_id": str(uuid.uuid4()), "last_seq": 1, "extra": 1}
+    )
+    assert ack.last_seq == 1

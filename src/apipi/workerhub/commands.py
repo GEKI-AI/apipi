@@ -7,6 +7,9 @@ from pydantic import ValidationError
 from apipi.common.errors import ApiError
 from apipi.common.sandbox import sandbox_size_of
 from apipi.protocol import (
+    COMMAND_PAYLOAD_MODELS,
+    CURSOR_OPS,
+    BaseCommandPayload,
     CommandTooLarge,
     ContextBytes,
     check_command_size,
@@ -44,21 +47,32 @@ def image_unavailable_message(hub: WorkerHub, image: str) -> str:
     return f'No worker has sandbox_image "{image}". Run apipi images pull on a worker.'
 
 
-def payload_with_image(payload: dict[str, Any], image: str | None) -> dict[str, Any]:
-    if image is None:
-        return payload
-    out = dict(payload)
-    out["sandbox_image"] = image
-    return out
+def command_payload(
+    op: str,
+    payload: BaseCommandPayload | dict[str, Any] | None,
+    *,
+    run_mode: str | None,
+    image: str | None,
+    cursor: int | None = None,
+) -> BaseCommandPayload:
+    """The payload model of one command, with the placement fields filled in.
 
-
-def payload_with_run_mode(
-    payload: dict[str, Any] | None, required: str | None
-) -> dict[str, Any]:
-    out = dict(payload) if payload is not None else {}
-    if required is not None:
-        out["run_mode"] = required
-    return out
+    `payload` is the caller's model or its fields as a dict. `image` is
+    set only for microvm sessions, and `cursor` only on the ops that
+    carry the session sequence cursor.
+    """
+    if isinstance(payload, BaseCommandPayload):
+        model = payload
+    else:
+        model = COMMAND_PAYLOAD_MODELS[op].model_validate(payload or {})
+    update: dict[str, Any] = {}
+    if run_mode is not None:
+        update["run_mode"] = run_mode
+    if image is not None:
+        update["sandbox_image"] = image
+    if cursor is not None and op in CURSOR_OPS:
+        update["last_seq"] = cursor
+    return model.model_copy(update=update)
 
 
 def _check_command_context(op: str, payload: dict[str, Any]) -> None:

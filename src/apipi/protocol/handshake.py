@@ -102,14 +102,15 @@ class HelloReply(ControlMessage):
     `sessions` maps each running session to the seq the API already
     persisted, and the worker replays everything after it. `revoke`
     lists leases the worker must drop, and `ttl` carries the reaper
-    idle TTL per session.
+    idle TTL per session. The API always sets `worker_id` and
+    `generation`; a worker does not need them to run.
     """
 
     type: Literal["hello"] = "hello"
     ok: Literal[True] = True
     protocol: Literal[2] = 2
-    worker_id: uuid.UUID
-    generation: int
+    worker_id: uuid.UUID | None = None
+    generation: int | None = None
     lease_ttl_seconds: float = Field(gt=0)
     heartbeat_seconds: float = Field(gt=0)
     sessions: dict[uuid.UUID, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)

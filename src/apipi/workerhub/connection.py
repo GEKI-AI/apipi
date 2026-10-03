@@ -1,8 +1,13 @@
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
+from pydantic import ValidationError
 from starlette.websockets import WebSocket
+
+from apipi.protocol import RunningSession
 
 
 @dataclass
@@ -32,3 +37,21 @@ class WorkerConnection:
     connected_at: float = field(default_factory=time.monotonic)
     last_heartbeat: float | None = None
     last_renewed: float = field(default_factory=time.monotonic)
+
+
+def claimed_leases(
+    running: Sequence[RunningSession | dict[str, Any]] | None,
+) -> dict[uuid.UUID, uuid.UUID]:
+    """The worker's claim as session_id to lease_id; invalid entries are skipped."""
+    claimed: dict[uuid.UUID, uuid.UUID] = {}
+    for entry in running or []:
+        try:
+            parsed = (
+                entry
+                if isinstance(entry, RunningSession)
+                else RunningSession.model_validate(entry)
+            )
+        except ValidationError:
+            continue
+        claimed[parsed.session_id] = parsed.lease_id
+    return claimed

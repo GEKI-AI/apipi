@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from apipi.common.timefmt import utc_ts
+from apipi.protocol import LifecycleStartPayload, LifecycleStopPayload
 
 
 class LifecycleReporter(Protocol):
@@ -82,7 +83,7 @@ class OutboxLifecycleReporter:
         # Only the envelope payload keys travel: identity comes from the
         # session row on the API, and anything else would fail the
         # strict payload validation there.
-        payload = {"cause": cause}
+        values: dict[str, Any] = {"cause": cause}
         for key in (
             "environment_type",
             "sandbox_size",
@@ -92,9 +93,13 @@ class OutboxLifecycleReporter:
             "run_mode",
             "started_at",
         ):
-            payload[key] = _jsonable(fields.get(key))
+            values[key] = _jsonable(fields.get(key))
         try:
-            envelope = self.outbox.append(session_id, "lifecycle.start", payload)
+            envelope = self.outbox.append(
+                session_id,
+                "lifecycle.start",
+                LifecycleStartPayload.model_validate(values),
+            )
         except Exception:
             return None
         return int(envelope.get("seq") or 0) or None
@@ -111,16 +116,20 @@ class OutboxLifecycleReporter:
             )
         except (ValueError, TypeError):
             return None
-        payload: dict[str, Any] = {
+        values: dict[str, Any] = {
             "reason": reason,
             "live_ms": max(live_ms, 0),
             "started_at": _jsonable(fields.get("started_at")),
         }
         start_seq = fields.get("start_seq")
         if isinstance(start_seq, int) and start_seq >= 1:
-            payload["start_seq"] = start_seq
+            values["start_seq"] = start_seq
         try:
-            envelope = self.outbox.append(session_id, "lifecycle.stop", payload)
+            envelope = self.outbox.append(
+                session_id,
+                "lifecycle.stop",
+                LifecycleStopPayload.model_validate(values),
+            )
         except Exception:
             return None
         return int(envelope.get("seq") or 0) or None

@@ -21,7 +21,14 @@ from apipi.common.otel import (
 from apipi.common.placement import worker_accepts
 from apipi.protocol import (
     COMMAND_CONTEXT_OPS,
+    COMMAND_PAYLOAD_MODELS,
+    BaseCommandPayload,
     ContextBytes,
+    ContextCommandPayload,
+    SessionStoppedPayload,
+    TurnContinueCommandPayload,
+    TurnStartCommandPayload,
+    WorkerCommand,
     parse_turn_context,
     summarize_context,
 )
@@ -150,11 +157,13 @@ async def _reject_mismatched_turn(
     )
 
 
-def _command_turn_context(op: object, payload: dict[str, Any]) -> dict[str, Any] | None:
+def _command_turn_context(
+    op: object, payload: BaseCommandPayload
+) -> dict[str, Any] | None:
     """Validate the command context on the worker; invalid fails the turn."""
     if op not in COMMAND_CONTEXT_OPS:
         return None
-    raw = payload.get("context")
+    raw = payload.context if isinstance(payload, ContextCommandPayload) else None
     if raw is None:
         return None
     try:
@@ -168,12 +177,9 @@ def _command_turn_context(op: object, payload: dict[str, Any]) -> dict[str, Any]
         ) from exc
 
 
-def command_log_context(message: dict[str, Any]) -> dict[str, Any]:
+def command_log_context(command: WorkerCommand) -> dict[str, Any]:
     """Secret-free context summary for the worker command log."""
-    payload = message.get("payload")
-    if not isinstance(payload, dict):
-        return {}
-    raw = payload.get("context")
+    raw = command.payload.get("context")
     if not isinstance(raw, dict):
         return {}
     return {"context": summarize_context(raw)}
@@ -204,28 +210,49 @@ async def _report_escaped_turn(
     )
 
 
-async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
-    op = message.get("op")
-    payload = message.get("payload")
-    if not isinstance(payload, dict):
-        payload = {}
+def _typed_payload(
+    op: object, payload: BaseCommandPayload | dict[str, Any]
+) -> BaseCommandPayload:
+    if isinstance(payload, BaseCommandPayload):
+        return payload
+    model = COMMAND_PAYLOAD_MODELS.get(op if isinstance(op, str) else "")
+    return (model or BaseCommandPayload).model_validate(payload)
+
+
+async def dispatch_command(
+    execution: Any, message: WorkerCommand | dict[str, Any]
+) -> None:
+    if isinstance(message, WorkerCommand):
+        op: object = message.op
+        raw_session: object = message.session_id
+        raw_payload: object = message.payload
+    else:
+        op = message.get("op")
+        raw_session = message.get("session_id")
+        raw_payload = message.get("payload")
     try:
-        session_id = uuid.UUID(str(message.get("session_id")))
-        tenant_id = uuid.UUID(str(payload.get("tenant_id")))
-    except (ValueError, TypeError):
+        session_id = (
+            raw_session
+            if isinstance(raw_session, uuid.UUID)
+            else uuid.UUID(str(raw_session))
+        )
+        payload = _typed_payload(
+            op, raw_payload if isinstance(raw_payload, dict) else {}
+        )
+    except (ValueError, ValidationError):
+        log.warning(
+            "worker command invalid",
+            extra={"event": "worker.command.invalid"},
+        )
         return
-    request_id = payload.get("request_id")
-    api_key = payload.get("api_key")
-    key_id = payload.get("key_id")
-    user_id = payload.get("user_id")
-    org_id = payload.get("org_id")
-    request_id = request_id if isinstance(request_id, str) else None
-    api_key = api_key if isinstance(api_key, str) else None
-    key_id = key_id if isinstance(key_id, str) else None
-    user_id = user_id if isinstance(user_id, str) else None
-    org_id = org_id if isinstance(org_id, str) else None
-    raw_parent = payload.get("traceparent")
-    token = attach_traceparent(raw_parent if isinstance(raw_parent, str) else None)
+    tenant_id = payload.tenant_id
+    if tenant_id is None:
+        return
+    request_id = payload.request_id
+    key_id = payload.key_id
+    user_id = payload.user_id
+    org_id = payload.org_id
+    token = attach_traceparent(payload.traceparent)
     try:
         turn_context = _command_turn_context(op, payload)
         await _run_command(
@@ -235,7 +262,6 @@ async def dispatch_command(execution: Any, message: dict[str, Any]) -> None:
             session_id,
             payload,
             request_id=request_id,
-            api_key=api_key,
             key_id=key_id,
             user_id=user_id,
             org_id=org_id,
@@ -284,17 +310,18 @@ async def _run_command(
     op: object,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
-    payload: dict[str, Any],
+    payload: BaseCommandPayload | dict[str, Any],
     *,
     request_id: str | None,
-    api_key: str | None,
     key_id: str | None,
     user_id: str | None,
+    api_key: str | None = None,
     org_id: str | None = None,
     turn_context: dict[str, Any] | None = None,
 ) -> None:
-    if op == "turn.start":
-        required = payload.get("run_mode")
+    body = _typed_payload(op, payload)
+    if op == "turn.start" and isinstance(body, TurnStartCommandPayload):
+        required = body.run_mode
         settings = getattr(execution, "settings", None)
         if isinstance(required, str) and settings is not None:
             from apipi.worker.accepts import resolved_worker_accepts
@@ -310,7 +337,7 @@ async def _run_command(
                     request_id=request_id,
                 )
                 return
-        wanted = payload.get("sandbox_image")
+        wanted = body.sandbox_image
         worker_mode = (
             getattr(settings, "run_mode", None) if settings is not None else None
         )
@@ -331,17 +358,12 @@ async def _run_command(
                     request_id=request_id,
                 )
                 return
-        text = payload.get("text")
-        raw_images = payload.get("images")
-        images = raw_images if isinstance(raw_images, list) else None
-        raw_parts = payload.get("parts")
-        parts = raw_parts if isinstance(raw_parts, list) else None
         await execution.run_turn(
             tenant_id,
             session_id,
-            text if isinstance(text, str) else "",
-            images=images,
-            parts=parts,
+            body.text if body.text is not None else "",
+            images=body.images,
+            parts=body.parts,
             request_id=request_id,
             api_key=api_key,
             key_id=key_id,
@@ -351,24 +373,17 @@ async def _run_command(
             sink=_sink_for_execution(execution, tenant_id, session_id),
         )
         return
-    if op == "turn.continue":
-        raw_turn = payload.get("turn_id")
-        call_id = payload.get("call_id")
-        success = payload.get("success")
-        if not isinstance(raw_turn, str) or not isinstance(call_id, str):
+    if op == "turn.continue" and isinstance(body, TurnContinueCommandPayload):
+        if body.turn_id is None or body.call_id is None or body.success is None:
             return
-        if not isinstance(success, bool):
-            return
-        output = payload.get("output")
-        error = payload.get("error")
         await execution.continue_turn(
             tenant_id,
             session_id,
-            turn_id=uuid.UUID(raw_turn),
-            call_id=call_id,
-            success=success,
-            output=output if isinstance(output, str) else None,
-            error=error if isinstance(error, str) else None,
+            turn_id=body.turn_id,
+            call_id=body.call_id,
+            success=body.success,
+            output=body.output,
+            error=body.error,
             request_id=request_id,
             api_key=api_key,
             key_id=key_id,
@@ -401,7 +416,9 @@ async def _wipe_stopped_session(
     root = Path(base) if base else Path.cwd() / ".apipi" / "sessions"
     wipe_workspace(root / str(tenant_id) / str(session_id))
     try:
-        execution.outbox.append(session_id, "session.stopped", {"reason": "stop"})
+        execution.outbox.append(
+            session_id, "session.stopped", SessionStoppedPayload(reason="stop")
+        )
     except Exception:
         log.exception(
             "session stopped report failed",

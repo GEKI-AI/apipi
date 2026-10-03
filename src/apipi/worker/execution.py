@@ -7,12 +7,19 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
+from pydantic import ValidationError
+
 from apipi.common.errors import ApiError
 from apipi.common.event_bus import EventBus, InMemoryEventBus, request_cancel
 from apipi.common.metrics import Metrics
 from apipi.common.otel import Tracing
 from apipi.config import Settings
-from apipi.protocol import SearchRequest
+from apipi.protocol import (
+    SandboxStatusPayload,
+    SearchReply,
+    SearchRequest,
+    WorkspaceReapedPayload,
+)
 from apipi.worker.pi.artifacts import reap_workspace_loop
 from apipi.worker.pi.broker import SearchHookError
 from apipi.worker.pi.harness import PiHarness
@@ -176,7 +183,7 @@ class LocalExecution:
                 max_results=max_results,
             )
             try:
-                await sender(request.model_dump(mode="json"))
+                await sender(request.to_wire())
             except Exception as exc:
                 raise SearchHookError(
                     "search_unavailable", "Web search is not available right now"
@@ -190,12 +197,12 @@ class LocalExecution:
 
     def handle_search_reply(self, message: dict[str, Any]) -> None:
         try:
-            request_id = uuid.UUID(str(message.get("request_id")))
-        except ValueError:
+            reply = SearchReply.model_validate(message)
+        except ValidationError:
             return
-        future = self.search_waiters.get(request_id)
+        future = self.search_waiters.get(reply.request_id)
         if future is not None and not future.done():
-            future.set_result(message)
+            future.set_result(reply.to_wire())
 
     def fail_search_waiters(self, message: str = "Worker connection lost") -> None:
         for future in list(self.search_waiters.values()):
@@ -353,7 +360,9 @@ class LocalExecution:
             self._forget_context(session_id)
             try:
                 self.outbox.append(
-                    uuid.UUID(session_id), "workspace.reaped", {"reason": "idle"}
+                    uuid.UUID(session_id),
+                    "workspace.reaped",
+                    WorkspaceReapedPayload(reason="idle"),
                 )
             except Exception:
                 log.exception(
@@ -496,12 +505,18 @@ class LocalExecution:
     ) -> None:
         payload: dict[str, Any] = {"status": phase}
         for key, value in fields.items():
+            if key not in SandboxStatusPayload.model_fields:
+                continue
             if isinstance(value, uuid.UUID):
                 payload[key] = str(value)
             elif isinstance(value, (str, int, float, bool)) or value is None:
                 payload[key] = value
         try:
-            self.outbox.append(session_id, "sandbox.status", payload)
+            self.outbox.append(
+                session_id,
+                "sandbox.status",
+                SandboxStatusPayload.model_validate(payload),
+            )
         except Exception:
             log.exception(
                 "sandbox status report failed",

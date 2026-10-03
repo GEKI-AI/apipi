@@ -28,6 +28,7 @@ from apipi.common.logutil import log_event
 from apipi.protocol import (
     EPHEMERAL_MESSAGE_TYPES,
     MAX_MESSAGE_BYTES,
+    ArtifactPresignReply,
     UnknownMessageType,
     WorkerEnvelope,
     parse_envelope,
@@ -637,42 +638,39 @@ async def _apply(
         except Exception as exc:
             code, message = _artifact_error(exc)
             replies.append(
-                {
-                    "type": "artifact.presign.reply",
-                    "session_id": str(session_id),
-                    "request_id": str(request_id),
-                    "ok": False,
-                    "code": code,
-                    "message": message,
-                }
+                ArtifactPresignReply(
+                    session_id=session_id,
+                    request_id=request_id,
+                    ok=False,
+                    code=code,
+                    message=message,
+                ).to_wire()
             )
             raise _Reject(code) from exc
         if issued.get("unchanged") is True:
             replies.append(
-                {
-                    "type": "artifact.presign.reply",
-                    "session_id": str(session_id),
-                    "request_id": str(request_id),
-                    "ok": True,
-                    "unchanged": True,
-                }
+                ArtifactPresignReply(
+                    session_id=session_id,
+                    request_id=request_id,
+                    ok=True,
+                    unchanged=True,
+                ).to_wire()
             )
             return
         replies.append(
-            {
-                "type": "artifact.presign.reply",
-                "session_id": str(session_id),
-                "request_id": str(request_id),
-                "ok": True,
-                "upload_id": str(issued["upload_id"]),
-                "artifact_id": str(issued["artifact_id"]),
-                "url": issued.get("url"),
-                "headers": issued.get("headers") or {},
-                "expires_at": issued.get("expires_at"),
-                "path": issued.get("path"),
-                "object_id": issued.get("object_id"),
-                "file_id": issued.get("file_id"),
-            }
+            ArtifactPresignReply(
+                session_id=session_id,
+                request_id=request_id,
+                ok=True,
+                upload_id=issued["upload_id"],
+                artifact_id=issued["artifact_id"],
+                url=issued.get("url"),
+                headers=issued.get("headers") or {},
+                expires_at=issued.get("expires_at"),
+                path=issued.get("path"),
+                object_id=issued.get("object_id"),
+                file_id=issued.get("file_id"),
+            ).to_wire()
         )
         return
     if envelope.type == "artifact.completed":

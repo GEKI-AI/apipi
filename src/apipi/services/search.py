@@ -137,9 +137,10 @@ def _failure(
         session_id=session_id,
         request_id=request_id,
         ok=False,
+        results=[],
         code=code,
         message=message,
-    ).model_dump(mode="json")
+    ).to_wire()
 
 
 def _success(
@@ -158,7 +159,9 @@ def _success(
             )
             for hit in hits
         ],
-    ).model_dump(mode="json")
+        code=None,
+        message=None,
+    ).to_wire()
 
 
 class SearchService:

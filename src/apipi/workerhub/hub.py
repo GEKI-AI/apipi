@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from datetime import UTC
 from typing import Any
 
@@ -23,7 +23,16 @@ from apipi.common.sandbox import mem_mib_for_size, sandbox_size_of
 from apipi.config import (
     Settings,
 )
-from apipi.protocol import COMMAND_OPS, CURSOR_OPS, PUBLIC_EVENT_TYPES, WorkerEnvelope
+from apipi.protocol import (
+    COMMAND_OPS,
+    CURSOR_OPS,
+    PUBLIC_EVENT_TYPES,
+    BaseCommandPayload,
+    LeaseRevoke,
+    RunningSession,
+    WorkerCommand,
+    WorkerEnvelope,
+)
 from apipi.services.session_events import persist_event
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
@@ -41,19 +50,24 @@ from apipi.workerhub import deltas as delta_gate
 from apipi.workerhub import inventory as inventory_gate
 from apipi.workerhub.commands import (
     _check_command_context,
+    command_payload,
     image_unavailable_message,
-    payload_with_image,
-    payload_with_run_mode,
     session_image,
 )
-from apipi.workerhub.connection import WorkerConnection
+from apipi.workerhub.connection import WorkerConnection, claimed_leases
 from apipi.workerhub.deltas import DeltaLease
-from apipi.workerhub.wire import close_socket, send_wire
+from apipi.workerhub.wire import close_socket, send_message, send_wire
 
 log = logging.getLogger("apipi.worker")
 
 MAX_HEARTBEAT_SECONDS = 10.0
 MIN_HEARTBEAT_SECONDS = 0.05
+
+
+def _request_id(payload: BaseCommandPayload | dict[str, Any] | None) -> Any:
+    if isinstance(payload, BaseCommandPayload):
+        return payload.request_id
+    return payload.get("request_id") if isinstance(payload, dict) else None
 
 
 def heartbeat_interval(settings: Settings) -> float:
@@ -240,12 +254,12 @@ class WorkerHub:
         session_id: uuid.UUID,
         *,
         op: str,
-        payload: dict[str, Any] | None = None,
+        payload: BaseCommandPayload | dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         if op not in COMMAND_OPS:
             raise ValueError(op)
         started = time.monotonic()
-        request_id = payload.get("request_id") if isinstance(payload, dict) else None
+        request_id = _request_id(payload)
         with start_span(
             self.tracing,
             "worker.assign",
@@ -268,7 +282,7 @@ class WorkerHub:
         session_id: uuid.UUID,
         *,
         op: str,
-        payload: dict[str, Any] | None,
+        payload: BaseCommandPayload | dict[str, Any] | None,
         started: float,
     ) -> dict[str, Any] | None:
         async with store.session() as db:
@@ -291,9 +305,7 @@ class WorkerHub:
             )
         conn = self.pick(session_mem, kind=required, image=image)
         if conn is None:
-            request_id = (
-                payload.get("request_id") if isinstance(payload, dict) else None
-            )
+            request_id = _request_id(payload)
             log_event(
                 log,
                 logging.WARNING,
@@ -308,21 +320,14 @@ class WorkerHub:
         lease_id = uuid.uuid4()
         command_id = uuid.uuid4()
         until = utc_now() + self.settings.worker_lease_ttl
-        command = {
-            "type": "command",
-            "id": str(command_id),
-            "session_id": str(session_id),
-            "lease_id": str(lease_id),
-            "op": op,
-            "payload": payload_with_image(
-                payload_with_run_mode(payload, required), image
-            ),
-        }
-        _check_command_context(op, command["payload"])
+        body = command_payload(op, payload, run_mode=required, image=image)
+        command = WorkerCommand.build(command_id, session_id, lease_id, op, body)
+        wire = command.to_wire()
+        _check_command_context(op, wire["payload"])
         # Mark the command unacked before the grant commits, so an
         # inventory arriving between the grant and the send does not
         # orphan a lease whose command is still in flight.
-        self._unacked[lease_id] = command
+        self._unacked[lease_id] = wire
         async with store.session() as db:
             row = await set_session_lease(
                 db,
@@ -337,7 +342,12 @@ class WorkerHub:
                 return None
             cursor = row.worker_seq
         if op in CURSOR_OPS:
-            command["payload"]["last_seq"] = cursor
+            body = command_payload(op, body, run_mode=None, image=None, cursor=cursor)
+            wire = WorkerCommand.build(
+                command_id, session_id, lease_id, op, body
+            ).to_wire()
+            if lease_id in self._unacked:
+                self._unacked[lease_id] = wire
         conn.leases.add(lease_id)
         conn.lease_mem[lease_id] = session_mem
         self._note_delta_lease(
@@ -347,7 +357,7 @@ class WorkerHub:
             tenant_id=tenant_id,
         )
         try:
-            await send_wire(conn.websocket, command)
+            await send_wire(conn.websocket, wire)
         except Exception:
             self._unacked.pop(lease_id, None)
             raise
@@ -355,7 +365,7 @@ class WorkerHub:
         if metrics is not None:
             metrics.worker_assign.observe(time.monotonic() - started)
         self._observe()
-        return command
+        return wire
 
     async def command(
         self,
@@ -364,7 +374,7 @@ class WorkerHub:
         session_id: uuid.UUID,
         *,
         op: str,
-        payload: dict[str, Any] | None = None,
+        payload: BaseCommandPayload | dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         if op not in COMMAND_OPS:
             raise ValueError(op)
@@ -396,27 +406,20 @@ class WorkerHub:
                     status_code=503,
                     session_id=str(session_id),
                 )
-        command_id = uuid.uuid4()
-        command = {
-            "type": "command",
-            "id": str(command_id),
-            "session_id": str(session_id),
-            "lease_id": str(lease_id),
-            "op": op,
-            "payload": payload_with_image(
-                payload_with_run_mode(payload, required), follow_image
-            ),
-        }
-        if op in CURSOR_OPS:
-            command["payload"]["last_seq"] = cursor
-        _check_command_context(op, command["payload"])
-        self._unacked[lease_id] = command
+        body = command_payload(
+            op, payload, run_mode=required, image=follow_image, cursor=cursor
+        )
+        wire = WorkerCommand.build(
+            uuid.uuid4(), session_id, lease_id, op, body
+        ).to_wire()
+        _check_command_context(op, wire["payload"])
+        self._unacked[lease_id] = wire
         try:
-            await send_wire(conn.websocket, command)
+            await send_wire(conn.websocket, wire)
         except Exception:
             self._unacked.pop(lease_id, None)
             raise
-        return command
+        return wire
 
     async def ack(self, lease_id: uuid.UUID, command_id: str) -> bool:
         pending = self._unacked.get(lease_id)
@@ -520,13 +523,9 @@ class WorkerHub:
                     if conn is not None:
                         conn.leases.discard(lease_id)
                         conn.lease_mem.pop(lease_id, None)
-                        await send_wire(
+                        await send_message(
                             conn.websocket,
-                            {
-                                "type": "lease.revoke",
-                                "session_id": str(row.id),
-                                "lease_id": str(lease_id),
-                            },
+                            LeaseRevoke(session_id=row.id, lease_id=lease_id),
                         )
         self._observe()
         return expired
@@ -535,14 +534,17 @@ class WorkerHub:
         self,
         conn: WorkerConnection,
         store: Store,
-        running: list[Any] | None = None,
+        running: Sequence[RunningSession | dict[str, Any]] | None = None,
     ) -> dict[uuid.UUID, int]:
         sessions = await self.restore_leases(conn, store, running)
         await self.resend_pending(conn)
         return sessions
 
     async def restore_leases(
-        self, conn: WorkerConnection, store: Store, running: list[Any] | None = None
+        self,
+        conn: WorkerConnection,
+        store: Store,
+        running: Sequence[RunningSession | dict[str, Any]] | None = None,
     ) -> dict[uuid.UUID, int]:
         """Reattach the worker's leases and report persisted seq cursors.
 
@@ -554,22 +556,9 @@ class WorkerHub:
         cursor is `sessions.worker_seq` so the worker replays exactly
         what ingest has not persisted.
         """
-        from apipi.protocol import RunningSession
-
         async with store.session() as db:
             rows = await list_worker_leases(db, conn.worker_id)
-        claimed: dict[uuid.UUID, uuid.UUID] = {}
-        if running:
-            for entry in running:
-                try:
-                    parsed = (
-                        entry
-                        if isinstance(entry, RunningSession)
-                        else RunningSession.model_validate(entry)
-                    )
-                except Exception:
-                    continue
-                claimed[parsed.session_id] = parsed.lease_id
+        claimed = claimed_leases(running)
         sessions: dict[uuid.UUID, int] = {}
         renewed: list[uuid.UUID] = []
         for row in rows:

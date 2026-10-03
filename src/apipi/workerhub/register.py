@@ -7,6 +7,9 @@ from apipi.common.event_bus import EventBus
 from apipi.protocol import (
     HelloReply,
     RegisterMessage,
+    RevokeEntry,
+    StoreCheck,
+    TtlEntry,
 )
 from apipi.store.engine import Store
 from apipi.store.models import WorkerToken
@@ -15,9 +18,9 @@ from apipi.store.repo import (
     get_worker_token,
     upsert_worker,
 )
-from apipi.workerhub.connection import WorkerConnection, WorkerImage
+from apipi.workerhub.connection import WorkerConnection, WorkerImage, claimed_leases
 from apipi.workerhub.hub import WorkerHub, heartbeat_interval
-from apipi.workerhub.wire import send_wire
+from apipi.workerhub.wire import send_message
 
 
 class TokenBindingError(Exception):
@@ -36,7 +39,7 @@ def accepts_for_register(register: RegisterMessage) -> frozenset[str]:
     return frozenset({"none"})
 
 
-def _store_check_for(settings: Any) -> dict[str, str] | None:
+def _store_check_for(settings: Any) -> StoreCheck | None:
     """Issue a shared-root challenge for filesystem stores, else None."""
     if getattr(settings, "artifact_store", "local") != "local":
         return None
@@ -45,7 +48,7 @@ def _store_check_for(settings: Any) -> dict[str, str] | None:
 
     root = store_root(settings)
     marker, nonce = write_store_check(root)
-    return {"marker": marker, "nonce": nonce}
+    return StoreCheck(marker=marker, nonce=nonce)
 
 
 def verify_store_proof(
@@ -112,8 +115,8 @@ async def register_worker(
     sessions = await hub.restore_leases(conn, store, register.running)
     store_check = _store_check_for(hub.settings)
     if store_check is not None:
-        conn.store_proof = (store_check["marker"], store_check["nonce"])
-    reported = _reported_leases(register.running)
+        conn.store_proof = (store_check.marker, store_check.nonce)
+    reported = claimed_leases(register.running)
     if event_hub is not None:
         revoke, ttl = await hub.reconcile_inventory(
             store, event_hub, conn.worker_id, reported
@@ -121,7 +124,7 @@ async def register_worker(
     else:
         hub.note_inventory(conn.worker_id, reported)
         revoke, ttl = [], {}
-    await send_wire(
+    await send_message(
         websocket,
         HelloReply(
             worker_id=conn.worker_id,
@@ -130,30 +133,15 @@ async def register_worker(
             heartbeat_seconds=heartbeat_interval(hub.settings),
             sessions=sessions,
             store_check=store_check,
-            revoke=[{**entry, "type": "lease.revoke"} for entry in revoke],
-            ttl={uuid.UUID(key): value for key, value in ttl.items()},
-        ).to_wire(),
+            revoke=[RevokeEntry.model_validate(entry) for entry in revoke],
+            ttl={
+                uuid.UUID(key): TtlEntry.model_validate(value)
+                for key, value in ttl.items()
+            },
+        ),
     )
     await hub.resend_pending(conn)
     return conn
-
-
-def _reported_leases(running: list[Any] | None) -> dict[uuid.UUID, uuid.UUID]:
-    """The register live set as session_id to lease_id."""
-    from apipi.protocol import RunningSession
-
-    reported: dict[uuid.UUID, uuid.UUID] = {}
-    for entry in running or []:
-        try:
-            parsed = (
-                entry
-                if isinstance(entry, RunningSession)
-                else RunningSession.model_validate(entry)
-            )
-        except Exception:
-            continue
-        reported[parsed.session_id] = parsed.lease_id
-    return reported
 
 
 def legacy_images(arch: str | None = None) -> dict[str, WorkerImage]:

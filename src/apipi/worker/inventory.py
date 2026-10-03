@@ -3,6 +3,9 @@ import time
 import uuid
 from typing import Any
 
+from pydantic import ValidationError
+
+from apipi.protocol import RevokeEntry, TtlEntry, WorkspaceReapedPayload
 from apipi.worker.commands import CommandDedupe
 
 log = logging.getLogger("apipi.worker")
@@ -19,16 +22,16 @@ def _seed_reaper_ttl(execution: Any, ttl: Any) -> None:
             session_id = str(uuid.UUID(str(raw_id)))
         except (ValueError, TypeError):
             continue
-        if not isinstance(entry, dict):
+        try:
+            parsed = TtlEntry.model_validate(entry)
+        except ValidationError:
             continue
-        raw_seconds = entry.get("idle_ttl_seconds")
+        raw_seconds = parsed.idle_ttl_seconds
         seconds = (
-            float(raw_seconds)
-            if isinstance(raw_seconds, (int, float)) and raw_seconds >= 0
-            else None
+            float(raw_seconds) if raw_seconds is not None and raw_seconds >= 0 else None
         )
-        raw_since = entry.get("idle_since_epoch")
-        if isinstance(raw_since, (int, float)) and 0 < raw_since <= now:
+        raw_since = parsed.idle_since_epoch
+        if raw_since is not None and 0 < raw_since <= now:
             last_seen = float(raw_since)
         else:
             last_seen = now
@@ -38,12 +41,7 @@ def _seed_reaper_ttl(execution: Any, ttl: Any) -> None:
             # turn activity (`refresh_context_seen`) is newer than the
             # row touch whenever the row is not updated per turn.
             last_seen = max(last_seen, known[1])
-        env_type = entry.get("env_type")
-        remember[session_id] = (
-            seconds,
-            last_seen,
-            env_type if isinstance(env_type, str) else None,
-        )
+        remember[session_id] = (seconds, last_seen, parsed.env_type)
 
 
 async def _apply_inventory_reply(
@@ -62,12 +60,9 @@ async def _apply_inventory_reply(
     if not isinstance(revoke, list):
         return
     for entry in revoke:
-        if not isinstance(entry, dict):
-            continue
-        raw_session = entry.get("session_id")
         try:
-            session_id = uuid.UUID(str(raw_session))
-        except (ValueError, TypeError):
+            session_id = RevokeEntry.model_validate(entry).session_id
+        except ValidationError:
             continue
         if dedupe is not None:
             dedupe.forget(session_id)
@@ -144,7 +139,11 @@ async def wipe_unknown_workspace(
         append = getattr(outbox, "append", None)
         if callable(append):
             try:
-                append(session_id, "workspace.reaped", {"reason": "revoked"})
+                append(
+                    session_id,
+                    "workspace.reaped",
+                    WorkspaceReapedPayload(reason="revoked"),
+                )
             except Exception:
                 log.exception(
                     "revoked workspace report failed",
