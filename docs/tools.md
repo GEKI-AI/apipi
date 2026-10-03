@@ -240,7 +240,11 @@ built-ins are always off.
 
 The model writes JavaScript that runs in a QuickJS sandbox inside the
 Pi process and can only call the other enabled tools, for example in
-parallel with `Promise.allSettled`. It adds no new capabilities or
+parallel with `Promise.allSettled`. Those are `read`, `bash`, `edit`,
+`write`, the MCP tools of the agent (`tools.mcp__<server>__<tool>`, with
+`-` written as `_`), and `web_search` when the agent has it. With
+`only`, the model sees just `codemode` and reaches all of them through
+scripts. It adds no new capabilities or
 privileges; bash remains the boundary. In process run modes it runs on
 the host inside Pi, like the rest of Pi. `models.classify()` and
 `models.generateImages()` are unsupported and untested.

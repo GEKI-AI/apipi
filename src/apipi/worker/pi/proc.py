@@ -414,11 +414,6 @@ def pi_command_args(
     if not effective_tools:
         has_custom = bool(mcp_http) or bool(function_tools) or web_search
         args.append("--no-builtin-tools" if has_custom else "--no-tools")
-    if codemode_on and effective_tools:
-        names = "read,bash,edit,write,codemode"
-        if web_search:
-            names += ",web_search"
-        args.extend(["--tools", names])
     if effective_skills is not None:
         args.append("--no-skills")
         for path in effective_skills:
