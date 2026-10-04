@@ -357,6 +357,9 @@ class EgressGateway:
             if decision.action == "reject":
                 conn.reason = decision.reason
                 return
+            if decision.action == "intercept" and not tls:
+                conn.reason = "credential_host_plain_http"
+                return
             owns_name = conn.host is not None and (
                 restricted or decision.action == "intercept"
             )

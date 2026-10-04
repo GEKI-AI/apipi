@@ -354,10 +354,13 @@ session's stored `environment.network` does not show the added hosts.
 
 A credential host on a private network, such as a self-hosted Forgejo
 at `10.0.0.5`, works only when the operator lists it on the worker in
-`APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` (`[sandbox.network].private_hosts`,
-hostnames or CIDRs). The gateway uses that list only for hostnames the
-session names itself, which credential hosts always are, so listing a
-private host does not open it for every session. If the server
+`APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` (`[sandbox.network].private_hosts`)
+by hostname. The gateway allows a private address only for a hostname
+that is listed there by name and that the session names itself, which
+credential hosts always are. So listing a private host does not open it
+for every session, and no session can reach it by IP address. CIDR
+entries in the same list open nothing on their own; they only limit the
+private addresses that the named hosts may resolve to. If the server
 certificate comes from an internal certificate authority, the operator
 also sets `APIPI_MICROVM_EGRESS_UPSTREAM_CA`
 (`[sandbox.network].upstream_ca`) to a PEM bundle with that authority.
@@ -634,7 +637,9 @@ private_hosts = ["git.example.com"]
 upstream_ca = "/etc/apipi/internal-ca.pem"
 ```
 
-`private_hosts` also accepts a CIDR such as `10.0.0.0/24`. The worker
+You can add a CIDR such as `10.0.0.0/24` to `private_hosts` to limit
+the private addresses `git.example.com` may resolve to. A CIDR alone
+allows nothing. The worker
 fails at startup if the `upstream_ca` file is missing. Forgejo must
 serve HTTPS on port 443 or 8443, because only those ports go through
 the gateway.

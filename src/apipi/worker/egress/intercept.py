@@ -3,7 +3,7 @@ import contextlib
 import inspect
 import socket
 import ssl
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -87,16 +87,24 @@ def has_body(head: RequestHead, status: int) -> bool:
     return head.method != "HEAD" and status >= 200 and status not in (204, 304)
 
 
-def filtered(filters: list[BodyFilter], data: bytes, *, end: bool) -> list[bytes]:
-    pieces = [data] if data else []
-    for item in filters:
-        out: list[bytes] = []
-        for piece in pieces:
-            out.extend(item.feed(piece))
-        if end:
-            out.extend(item.end())
-        pieces = [piece for piece in out if piece]
-    return pieces
+def filtered(filters: list[BodyFilter], data: bytes, *, end: bool) -> Iterator[bytes]:
+    def stage(index: int, source: Iterable[bytes]) -> Iterator[bytes]:
+        if index == len(filters):
+            yield from source
+            return
+        item = filters[index]
+
+        def run() -> Iterator[bytes]:
+            for piece in source:
+                yield from item.feed(piece)
+            if end:
+                yield from item.end()
+
+        yield from stage(index + 1, run())
+
+    for piece in stage(0, [data] if data else []):
+        if piece:
+            yield piece
 
 
 class InterceptError(Exception):
@@ -461,7 +469,8 @@ class Interceptor:
             elif isinstance(event, h11.EndOfMessage):
                 for piece in filtered(filters, b"", end=True):
                     await guest.send(h11.Data(data=piece))
-                await guest.send(h11.EndOfMessage(headers=event.headers))
+                trailers = [] if filters else event.headers
+                await guest.send(h11.EndOfMessage(headers=trailers))
                 return False
             else:
                 raise InterceptError("upstream_closed", 502)

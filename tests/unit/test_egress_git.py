@@ -19,22 +19,33 @@ PORT = 8443
 SECRET = "ghp_real_secret_value"
 PLACEHOLDER = "apipi-secret-" + "d" * 32
 HELPER = Path(__file__).parents[2] / "src/apipi/worker/pi/git-credential.sh"
-BACKEND = Path("/usr/lib/git-core/git-http-backend")
+
+
+def _backend() -> Path | None:
+    if shutil.which("git") is None:
+        return None
+    found = subprocess.run(
+        ["git", "--exec-path"], capture_output=True, text=True, check=False
+    )
+    path = Path(found.stdout.strip()) / "git-http-backend"
+    return path if found.returncode == 0 and path.is_file() else None
+
+
+BACKEND = _backend()
 
 pytestmark = pytest.mark.skipif(
-    shutil.which("git") is None or not BACKEND.is_file(),
-    reason="needs git and git-http-backend",
+    BACKEND is None, reason="needs git and git-http-backend"
 )
 
 
-def _free(host: str, port: int) -> bool:
+def _bind_error(host: str, port: int) -> str | None:
     with socket.socket() as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
-        except OSError:
-            return False
-    return True
+        except OSError as exc:
+            return f"cannot bind {host}:{port}: {exc.strerror or exc}"
+    return None
 
 
 @dataclass
@@ -196,8 +207,10 @@ def _bare_repo(root: Path) -> None:
 
 
 async def test_git_clone_and_push_through_gateway(tmp_path: Path) -> None:
-    if not (_free("127.0.0.1", PORT) and _free("127.0.0.2", PORT)):
-        pytest.skip(f"port {PORT} is busy")
+    for host in ("127.0.0.1", "127.0.0.2"):
+        error = _bind_error(host, PORT)
+        if error is not None:
+            pytest.skip(error)
     _bare_repo(tmp_path)
     worker_ca = WorkerCA()
     upstream_ca = WorkerCA()
@@ -220,7 +233,7 @@ async def test_git_clone_and_push_through_gateway(tmp_path: Path) -> None:
         policy=EgressPolicy.build(
             "restricted",
             allowed_hosts=(HOST,),
-            private_hosts=("127.0.0.0/8",),
+            private_hosts=(HOST, "127.0.0.0/8"),
             intercept_hosts=(HOST,),
         ),
         ca=worker_ca,

@@ -1,11 +1,14 @@
 import base64
 import binascii
+import json
 import logging
 import re
 import secrets
 import zlib
-from collections.abc import Iterable, Iterator
+from collections import OrderedDict
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 from apipi.common.logutil import log_event
 from apipi.common.metrics import Metrics
@@ -28,7 +31,13 @@ PLACEHOLDER_PREFIX = "apipi-secret-"
 GIT_USERNAME_DEFAULTS = {"gitlab.com": "oauth2"}
 GIT_USERNAME_FALLBACK = "x-access-token"
 GIT_PORTS = (443, 8443)
-DECODE_CHUNK = 1 << 20
+DECODE_CHUNK = 256 * 1024
+DECODE_FREE = 10 * 1024 * 1024
+DECODE_RATIO = 100
+MAX_BASIC_TOKENS = 64
+NO_UPGRADE = frozenset({"upgrade", "connection"})
+
+Masks = list[tuple[bytes, bytes]]
 
 
 def new_placeholder() -> str:
@@ -54,19 +63,24 @@ def git_username(injection: Injection, host: str) -> str:
     return GIT_USERNAME_DEFAULTS.get(norm_host(host), GIT_USERNAME_FALLBACK)
 
 
-def _basic(value: str, injection: Injection) -> str | None:
-    scheme, _, token = value.strip().partition(" ")
-    if scheme.lower() != "basic" or not token.strip():
-        return None
-    try:
-        decoded = base64.b64decode(token.strip(), validate=True)
-    except (binascii.Error, ValueError):
-        return None
-    placeholder = injection.placeholder.encode()
-    if placeholder not in decoded:
-        return None
-    replaced = decoded.replace(placeholder, injection.value.encode())
-    return f"{scheme} {base64.b64encode(replaced).decode('ascii')}"
+def secret_forms(value: str) -> list[str]:
+    escaped = json.dumps(value)[1:-1]
+    forms = [
+        value,
+        escaped,
+        escaped.replace("/", "\\/"),
+        quote(value, safe=""),
+        quote(value, safe="/"),
+    ]
+    return list(dict.fromkeys(forms))
+
+
+def ordered_masks(pairs: Iterable[tuple[bytes, bytes]]) -> Masks:
+    unique: dict[bytes, bytes] = {}
+    for needle, replacement in pairs:
+        if needle and needle not in unique:
+            unique[needle] = replacement
+    return sorted(unique.items(), key=lambda pair: len(pair[0]), reverse=True)
 
 
 def _header(headers: Headers, name: str) -> list[str]:
@@ -77,52 +91,100 @@ def _header(headers: Headers, name: str) -> list[str]:
 class _Decoder:
     def __init__(self, coding: str) -> None:
         self.coding = coding
-        wbits = zlib.MAX_WBITS | 16 if coding == "gzip" else zlib.MAX_WBITS
-        self.inner = zlib.decompressobj(wbits)
-        self.started = False
+        self.inner: zlib._Decompress | None = None
+        self.pending = b""
 
-    def _switch_raw(self, data: bytes) -> bytes:
-        self.inner = zlib.decompressobj(-zlib.MAX_WBITS)
-        return self.inner.decompress(data, DECODE_CHUNK)
+    def _start(self, data: bytes) -> bytes | None:
+        if self.coding == "gzip":
+            self.inner = zlib.decompressobj(zlib.MAX_WBITS | 16)
+            return data
+        self.pending += data
+        if len(self.pending) < 2:
+            return None
+        data, self.pending = self.pending, b""
+        wrapped = data[0] & 0x0F == 8 and ((data[0] << 8) | data[1]) % 31 == 0
+        self.inner = zlib.decompressobj(zlib.MAX_WBITS if wrapped else -zlib.MAX_WBITS)
+        return data
 
     def decode(self, data: bytes) -> Iterator[bytes]:
-        try:
-            out = self.inner.decompress(data, DECODE_CHUNK)
-        except zlib.error:
-            if self.coding != "deflate" or self.started:
-                raise
-            out = self._switch_raw(data)
-        self.started = True
-        yield out
-        while self.inner.unconsumed_tail:
-            yield self.inner.decompress(self.inner.unconsumed_tail, DECODE_CHUNK)
+        if self.inner is None:
+            started = self._start(data)
+            if started is None:
+                return
+            data = started
+        inner = self.inner
+        assert inner is not None
+        while True:
+            if inner.eof:
+                if not data:
+                    return
+                if self.coding != "gzip":
+                    raise zlib.error("data after the end of the deflate stream")
+                inner = self.inner = zlib.decompressobj(zlib.MAX_WBITS | 16)
+            out = inner.decompress(data, DECODE_CHUNK)
+            if out:
+                yield out
+            if inner.eof:
+                data = inner.unused_data
+                continue
+            data = inner.unconsumed_tail
+            if not data and len(out) < DECODE_CHUNK:
+                return
 
-    def flush(self) -> bytes:
-        return self.inner.flush()
+    def finish(self) -> bytes:
+        if self.inner is None:
+            if self.pending:
+                raise zlib.error("truncated compressed body")
+            return b""
+        tail = self.inner.flush()
+        if not self.inner.eof:
+            raise zlib.error("truncated compressed body")
+        return tail
 
 
 class SecretMask:
     def __init__(
-        self, pairs: list[tuple[bytes, bytes]], decoder: _Decoder | None = None
+        self,
+        masks: Masks,
+        decoder: _Decoder | None = None,
+        *,
+        limit: tuple[int, int] | None = (DECODE_FREE, DECODE_RATIO),
+        on_limit: Callable[[int, int], None] | None = None,
     ) -> None:
-        ordered = sorted(pairs, key=lambda pair: len(pair[0]), reverse=True)
-        self.replacements = dict(ordered)
-        self.pattern = re.compile(b"|".join(re.escape(value) for value, _ in ordered))
-        self.keep = max(len(value) for value, _ in ordered) - 1
+        self.masks = ordered_masks(masks)
+        self.replacements = dict(self.masks)
+        self.pattern = re.compile(
+            b"|".join(re.escape(needle) for needle, _ in self.masks)
+        )
         self.carry = b""
         self.decoder = decoder
+        self.limit = limit
+        self.on_limit = on_limit
+        self.encoded = 0
+        self.decoded = 0
 
     def _sub(self, match: re.Match[bytes]) -> bytes:
         return self.replacements[match.group(0)]
+
+    def _hold(self, buf: bytes) -> int:
+        size = len(buf)
+        best = 0
+        for needle, _ in self.masks:
+            start = max(0, size - len(needle) + 1)
+            first = needle[:1]
+            index = buf.find(first, start)
+            while index != -1 and size - index > best:
+                if needle.startswith(buf[index:]):
+                    best = size - index
+                    break
+                index = buf.find(first, index + 1)
+        return best
 
     def _emit(self, data: bytes) -> bytes:
         if not data:
             return b""
         buf = self.carry + data
-        cut = len(buf) - self.keep
-        if cut <= 0:
-            self.carry = buf
-            return b""
+        cut = len(buf) - self._hold(buf)
         out: list[bytes] = []
         pos = 0
         for match in self.pattern.finditer(buf):
@@ -136,12 +198,24 @@ class SecretMask:
         self.carry = buf[end:]
         return b"".join(out)
 
+    def _check(self, piece: bytes) -> None:
+        self.decoded += len(piece)
+        if self.limit is None:
+            return
+        free, ratio = self.limit
+        if self.decoded > free and self.decoded > ratio * max(self.encoded, 1):
+            if self.on_limit is not None:
+                self.on_limit(self.encoded, self.decoded)
+            raise InterceptError("decode_limit")
+
     def feed(self, data: bytes) -> Iterator[bytes]:
         if self.decoder is None:
             yield self._emit(data)
             return
+        self.encoded += len(data)
         try:
             for piece in self.decoder.decode(data):
+                self._check(piece)
                 yield self._emit(piece)
         except zlib.error as exc:
             raise InterceptError("content_decode") from exc
@@ -149,12 +223,21 @@ class SecretMask:
     def end(self) -> Iterator[bytes]:
         if self.decoder is not None:
             try:
-                yield self._emit(self.decoder.flush())
+                tail = self.decoder.finish()
             except zlib.error as exc:
-                raise InterceptError("content_decode") from exc
-        tail = self.pattern.sub(self._sub, self.carry)
+                raise InterceptError("content_truncated") from exc
+            self._check(tail)
+            yield self._emit(tail)
+        rest = self.pattern.sub(self._sub, self.carry)
         self.carry = b""
-        yield tail
+        yield rest
+
+
+def mask_text(masks: Masks, text: str) -> str:
+    raw = text.encode("latin-1", "replace")
+    for needle, replacement in masks:
+        raw = raw.replace(needle, replacement)
+    return raw.decode("latin-1")
 
 
 class SecretInjector:
@@ -165,6 +248,7 @@ class SecretInjector:
         session_id: str | None = None,
         metrics: Metrics | None = None,
         ports: Iterable[int] = TLS_PORTS,
+        decode_limit: tuple[int, int] | None = (DECODE_FREE, DECODE_RATIO),
     ) -> None:
         self.injections = tuple(
             sorted(injections, key=lambda item: len(item.value), reverse=True)
@@ -172,6 +256,8 @@ class SecretInjector:
         self.session_id = session_id
         self.metrics = metrics
         self.ports = frozenset(ports)
+        self.decode_limit = decode_limit
+        self.basic_tokens: OrderedDict[tuple[str, bytes], bytes] = OrderedDict()
 
     @property
     def hosts(self) -> tuple[str, ...]:
@@ -224,6 +310,38 @@ class SecretInjector:
             return []
         return [item for item in self.injections if item.applies(head.host)]
 
+    def _masks(self, head: RequestHead, applying: list[Injection]) -> Masks:
+        pairs: list[tuple[bytes, bytes]] = []
+        for injection in applying:
+            placeholder = injection.placeholder.encode()
+            for form in secret_forms(injection.value):
+                pairs.append((form.encode(), placeholder))
+        host = norm_host(head.host)
+        for (token_host, real), guest in self.basic_tokens.items():
+            if token_host == host:
+                pairs.append((real, guest))
+        return ordered_masks(pairs)
+
+    def _basic(self, value: str, injection: Injection, host: str) -> str | None:
+        scheme, _, token = value.strip().partition(" ")
+        if scheme.lower() != "basic" or not token.strip():
+            return None
+        guest = token.strip()
+        try:
+            decoded = base64.b64decode(guest, validate=True)
+        except (binascii.Error, ValueError):
+            return None
+        placeholder = injection.placeholder.encode()
+        if placeholder not in decoded:
+            return None
+        real = base64.b64encode(decoded.replace(placeholder, injection.value.encode()))
+        key = (norm_host(host), real)
+        self.basic_tokens[key] = guest.encode()
+        self.basic_tokens.move_to_end(key)
+        while len(self.basic_tokens) > MAX_BASIC_TOKENS:
+            self.basic_tokens.popitem(last=False)
+        return f"{scheme} {real.decode('ascii')}"
+
     def request(self, head: RequestHead) -> RequestHead | None:
         applying = self._applying(head)
         if not applying:
@@ -231,7 +349,7 @@ class SecretInjector:
         headers = [
             (name, value)
             for name, value in head.headers
-            if name.lower() != "accept-encoding"
+            if name.lower() != "accept-encoding" and name.lower() not in NO_UPGRADE
         ]
         headers.append(("Accept-Encoding", "identity"))
         used: list[Injection] = []
@@ -240,7 +358,7 @@ class SecretInjector:
             for index, (name, value) in enumerate(headers):
                 new = value.replace(injection.placeholder, injection.value)
                 if name.lower() == "authorization":
-                    basic = _basic(new, injection)
+                    basic = self._basic(new, injection, head.host)
                     if basic is not None:
                         new = basic
                 if new != value:
@@ -264,12 +382,10 @@ class SecretInjector:
         applying = self._applying(head)
         if not applying:
             return None
-        headers: Headers = response.headers
-        for injection in applying:
-            headers = tuple(
-                (name, value.replace(injection.value, injection.placeholder))
-                for name, value in headers
-            )
+        masks = self._masks(head, applying)
+        headers: Headers = tuple(
+            (name, mask_text(masks, value)) for name, value in response.headers
+        )
         if headers == response.headers:
             return None
         return ResponseHead(
@@ -311,12 +427,30 @@ class SecretInjector:
                 for name, value in headers
                 if name.lower() != "content-encoding"
             )
-        pairs = [(item.value.encode(), item.placeholder.encode()) for item in applying]
+        host = norm_host(head.host)
+
+        def on_limit(encoded: int, decoded: int) -> None:
+            log_event(
+                log,
+                logging.WARNING,
+                "egress response decode limit",
+                event="egress.decode_limit",
+                session_id=self.session_id,
+                host=host,
+                encoded_bytes=encoded,
+                decoded_bytes=decoded,
+            )
+
         return (
             ResponseHead(
                 status=response.status, reason=response.reason, headers=headers
             ),
-            SecretMask(pairs, decoder),
+            SecretMask(
+                self._masks(head, applying),
+                decoder,
+                limit=self.decode_limit,
+                on_limit=on_limit,
+            ),
         )
 
     def _record(self, injection: Injection, host: str) -> None:

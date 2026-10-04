@@ -1,9 +1,12 @@
+import asyncio
 import base64
+import contextlib
 import gzip
 import logging
 import re
 import time
 import zlib
+from typing import Any, cast
 
 import pytest
 from tests.unit.test_egress_gateway import (
@@ -401,3 +404,245 @@ async def test_masked_body_throughput(env: Env) -> None:
     rate = total * 8 / 1_000_000 / wall
     print(f"\nmasked body throughput over 64 MiB: {rate:.0f} Mbit/s")
     assert rate >= 50
+
+
+def _mask(masks: list[tuple[bytes, bytes]], chunks: list[bytes]) -> bytes:
+    from apipi.worker.egress.inject import SecretMask
+
+    mask = SecretMask(masks)
+    out = bytearray()
+    for chunk in chunks:
+        for piece in mask.feed(chunk):
+            out.extend(piece)
+    for piece in mask.end():
+        out.extend(piece)
+    return bytes(out)
+
+
+def test_mask_holds_back_only_secret_prefixes() -> None:
+    from apipi.worker.egress.inject import SecretMask
+
+    mask = SecretMask([(b"s3cr3t-value", b"[ph]")])
+    event = b'data: {"delta": "hello"}\n\n'
+    assert b"".join(mask.feed(event)) == event
+    assert b"".join(mask.feed(b"tail s3cr")) == b"tail "
+    assert b"".join(mask.feed(b"3t-value done")) == b"[ph] done"
+    assert b"".join(mask.end()) == b""
+
+
+def test_mask_chunked_equals_one_shot() -> None:
+    import random
+
+    masks = [
+        (b"abcdefgh", b"<A>"),
+        (b"abcdefgh-longer", b"<B>"),
+        (b"xyzxyzxy", b"<C>"),
+        (b"Basic dXNlcjpzZWNyZXQ=", b"<D>"),
+    ]
+    rng = random.Random(519)
+    alphabet = [b"a", b"b", b"c", b"abcdefgh", b"abcdefgh-longer", b"xyz", b"-", b" "]
+    for _ in range(300):
+        data = b"".join(rng.choice(alphabet) for _ in range(rng.randint(0, 60)))
+        expected = _mask(masks, [data])
+        cuts = sorted(rng.sample(range(len(data) + 1), min(len(data), 5)))
+        chunks = [
+            data[a:b] for a, b in zip([0, *cuts], [*cuts, len(data)], strict=True)
+        ]
+        assert _mask(masks, chunks) == expected
+        for needle, _ in masks:
+            assert needle not in expected
+
+
+def test_body_masks_escaped_forms_and_basic_tokens() -> None:
+    secret = 'ab/cd"ef\\gh+ij'
+    injector = SecretInjector([Injection("cred", "TOKEN", PH, secret, (API,))])
+    sent = injector.request(_head([("Authorization", _basic(f"bot:{PH}"))]))
+    assert sent is not None
+    real_basic = base64.b64encode(f"bot:{secret}".encode())
+    guest_basic = base64.b64encode(f"bot:{PH}".encode())
+    json_form = 'ab\\/cd\\"ef\\\\gh+ij'
+    body = (
+        f"raw={secret} json={json_form} pct=ab%2Fcd%22ef%5Cgh%2Bij "
+        f"pct2=ab/cd%22ef%5Cgh%2Bij basic={real_basic.decode()}"
+    ).encode()
+    _, out = _body(injector, (), [body])
+    assert secret.encode() not in out
+    assert real_basic not in out
+    assert guest_basic in out
+    assert out.count(PH.encode()) == 4
+    header = injector.response(
+        _head([]),
+        ResponseHead(
+            status=200,
+            reason="OK",
+            headers=(("X-Echo", f"Basic {real_basic.decode()}"),),
+        ),
+    )
+    assert header is not None
+    assert header.headers == (("X-Echo", f"Basic {guest_basic.decode()}"),)
+
+
+def test_request_strips_upgrade_for_credential_hosts() -> None:
+    result = _injector().request(
+        _head([("Connection", "Upgrade"), ("Upgrade", "websocket")])
+    )
+    assert result is not None
+    names = {name.lower() for name, _ in result.headers}
+    assert "upgrade" not in names
+    assert "connection" not in names
+
+
+def test_gzip_multi_member_truncation_and_short_deflate() -> None:
+    from apipi.worker.egress.intercept import InterceptError
+
+    payload = b"one ghp_real " * 100
+    two = gzip.compress(payload) + gzip.compress(payload)
+    _, out = _body(_injector(), (("Content-Encoding", "gzip"),), [two])
+    assert out == (payload * 2).replace(b"ghp_real", PH.encode())
+    packed = gzip.compress(payload * 50)
+    with pytest.raises(InterceptError, match="content_truncated"):
+        _body(_injector(), (("Content-Encoding", "gzip"),), [packed[:-20]])
+    raw = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+    deflated = raw.compress(payload) + raw.flush()
+    pieces = [deflated[:1], deflated[1:2], deflated[2:]]
+    _, out = _body(_injector(), (("Content-Encoding", "deflate"),), pieces)
+    assert out == payload.replace(b"ghp_real", PH.encode())
+    wrapped = zlib.compress(payload)
+    pieces = [wrapped[:1], wrapped[1:]]
+    _, out = _body(_injector(), (("Content-Encoding", "deflate"),), pieces)
+    assert out == payload.replace(b"ghp_real", PH.encode())
+
+
+def test_decode_limit_stops_gzip_bombs(caplog: pytest.LogCaptureFixture) -> None:
+    from apipi.worker.egress.intercept import InterceptError
+
+    caplog.set_level(logging.WARNING, logger="apipi.egress")
+    bomb = gzip.compress(b"\0" * (64 * 1024 * 1024))
+    with pytest.raises(InterceptError, match="decode_limit"):
+        _body(_injector(), (("Content-Encoding", "gzip"),), [bomb])
+    assert any(
+        getattr(record, "event", "") == "egress.decode_limit"
+        for record in caplog.records
+    )
+    normal = gzip.compress(bytes(range(256)) * 4096)
+    _, out = _body(_injector(), (("Content-Encoding", "gzip"),), [normal])
+    assert len(out) == 256 * 4096
+
+
+class Canned:
+    def __init__(self, env: Env, response: bytes) -> None:
+        self.env = env
+        self.response = response
+        self.port = 0
+        self.server: asyncio.Server | None = None
+
+    async def start(self) -> None:
+        self.server = await asyncio.start_server(
+            self._serve, "127.0.0.1", 0, ssl=self.env.upstream_ca.server_context(HOST)
+        )
+        self.port = int(self.server.sockets[0].getsockname()[1])
+
+    async def _serve(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        with contextlib.suppress(Exception):
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(self.response)
+            await writer.drain()
+            await asyncio.sleep(30)
+        writer.close()
+
+    def close(self) -> None:
+        if self.server is not None:
+            self.server.close()
+
+
+async def _canned_gateway(
+    env: Env, response: bytes, *, limit: tuple[int, int] | None = (10 << 20, 100)
+) -> tuple[Canned, object]:
+    upstream = Canned(env, response)
+    await upstream.start()
+    injector = SecretInjector(
+        [Injection("cred", "SECRET", PH, "real-secret-value", (HOST,))],
+        ports=(upstream.port,),
+        decode_limit=limit,
+    )
+    gateway = await env.gateway(
+        "restricted", port=upstream.port, intercept=(HOST,), hooks=injector.hooks()
+    )
+    return upstream, gateway
+
+
+async def test_gzip_bomb_memory_stays_bounded_with_a_slow_client(env: Env) -> None:
+    import tracemalloc
+
+    body = gzip.compress(b"\0" * (256 * 1024 * 1024), compresslevel=9)
+    response = (
+        b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n"
+        + f"Content-Length: {len(body)}\r\n\r\n".encode()
+        + body
+    )
+    upstream, gateway = await _canned_gateway(env, response, limit=None)
+    tracemalloc.start()
+    try:
+        writers = []
+        for _ in range(4):
+            reader, writer = await tls_connect(cast(Any, gateway), trust(env.worker_ca))
+            writer.write(f"GET /bomb HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode())
+            await writer.drain()
+            await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+            writers.append(writer)
+        await asyncio.sleep(1.5)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+        for writer in writers:
+            await close(writer)
+        upstream.close()
+    print(f"\ngzip bomb peak traced memory: {peak / 1048576:.1f} MiB")
+    assert peak < 48 * 1024 * 1024
+
+
+async def test_gateway_aborts_truncated_gzip_and_drops_trailers(env: Env) -> None:
+    payload = b"secret real-secret-value here " * 1000
+    packed = gzip.compress(payload)
+    truncated = (
+        b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n"
+        + f"Content-Length: {len(packed) - 10}\r\n\r\n".encode()
+        + packed[:-10]
+    )
+    upstream, gateway = await _canned_gateway(env, truncated)
+    reader, writer = await tls_connect(cast(Any, gateway), trust(env.worker_ca))
+    writer.write(f"GET /t HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode())
+    await writer.drain()
+    data = b""
+    with contextlib.suppress(Exception):
+        while chunk := await asyncio.wait_for(reader.read(65536), timeout=5):
+            data += chunk
+    await close(writer)
+    upstream.close()
+    assert data.startswith(b"HTTP/1.1 200")
+    assert b"real-secret-value" not in data
+    assert not data.endswith(b"0\r\n\r\n")
+    trailer = (
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: X-Sig\r\n\r\n"
+        b"5\r\nhello\r\n0\r\nX-Sig: real-secret-value\r\n\r\n"
+    )
+    upstream, gateway = await _canned_gateway(env, trailer)
+    reader, writer = await tls_connect(cast(Any, gateway), trust(env.worker_ca))
+    status, headers, body = await HttpClient(reader, writer).request("GET", "/x")
+    await close(writer)
+    upstream.close()
+    assert status == 200
+    assert body == b"hello"
+    assert "x-sig" not in headers
+
+
+async def test_plain_http_to_credential_host_is_rejected(env: Env) -> None:
+    gateway = await env.gateway("enabled", port=18080, intercept=(HOST,), http=True)
+    reader, writer = await asyncio.open_connection("127.0.0.1", gateway.port)
+    writer.write(f"GET / HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode())
+    await writer.drain()
+    reply = await asyncio.wait_for(reader.read(1024), timeout=5)
+    await close(writer)
+    assert reply.startswith(b"HTTP/1.1 403")

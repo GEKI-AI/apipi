@@ -266,3 +266,41 @@ def test_hub_refuses_credentials_for_workers_without_microvm(run_mode: str) -> N
     assert run_mode in refused.value.message
     require_credential_isolation(_credential_wire(), "microvm")
     require_credential_isolation({"op": "turn.start", "payload": {}}, "none")
+
+
+def test_credentials_prefer_microvm_workers() -> None:
+    from unittest.mock import MagicMock
+
+    from apipi.protocol import FEATURE_ENV_CREDENTIALS, SUPPORTED_FEATURES
+    from apipi.workerhub.connection import WorkerConnection
+    from apipi.workerhub.fleet import Candidate
+    from apipi.workerhub.hub import able_candidates
+
+    def candidate(run_mode: str) -> Candidate:
+        conn = WorkerConnection(
+            worker_id=uuid.uuid4(),
+            generation=1,
+            websocket=MagicMock(),
+            capacity=8,
+            memory_mb=8192,
+            run_mode=run_mode,
+            accepts=frozenset({"microvm"}),
+            features=SUPPORTED_FEATURES,
+        )
+        return Candidate(
+            worker_id=conn.worker_id,
+            accepts=conn.accepts,
+            images=frozenset(),
+            arch="x86_64",
+            draining=False,
+            capacity=8,
+            memory_mb=8192,
+            leases=0,
+            used_mem=0,
+            conn=conn,
+        )
+
+    custom = candidate("package.mod:Class")
+    microvm = candidate("microvm")
+    assert able_candidates([custom, microvm], [FEATURE_ENV_CREDENTIALS]) == [microvm]
+    assert able_candidates([custom, microvm], []) == [custom, microvm]
