@@ -96,5 +96,32 @@ def test_input_keeps_later_text_parts() -> None:
     )
     assert parsed.text == "first\nsecond"
     assert len(parsed.images) == 1
-    assert parsed.wire_parts()[0]["text"] == "first"
-    assert parsed.wire_parts()[2]["text"] == "second"
+    ref = {"type": "image", "file_id": "file-1"}
+    parts = parsed.wire_parts([ref])
+    assert parts[0]["text"] == "first"
+    assert parts[1] == ref
+    assert parts[2]["text"] == "second"
+
+
+def test_input_image_takes_file_id_or_image_url() -> None:
+    settings = Settings(
+        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
+        run_mode="none",
+    )
+    parsed = parse_user_content(
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_image", "file_id": "file-abc", "detail": "low"}
+            ],
+        },
+        settings=settings,
+    )
+    assert parsed.images[0].file_id == "file-abc"
+    assert parsed.images[0].data == b""
+    for part in (
+        {"type": "input_image"},
+        {"type": "input_image", "file_id": "file-abc", "image_url": "data:x"},
+    ):
+        with pytest.raises(ApiError, match="image_url or file_id"):
+            parse_user_content({"role": "user", "content": [part]}, settings=settings)

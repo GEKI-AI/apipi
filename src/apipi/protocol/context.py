@@ -23,7 +23,10 @@ from apipi.protocol.constants import (
 
 
 class CommandTooLarge(ValueError):
-    pass
+    def __init__(self, size: int, limit: int = MAX_COMMAND_BYTES) -> None:
+        super().__init__(f"worker command is {size} bytes, limit is {limit}")
+        self.size = size
+        self.limit = limit
 
 
 class ContextBytes(ValueError):
@@ -120,9 +123,7 @@ def check_command_size(message: dict[str, Any]) -> int:
     """Check the wire size of one command frame (or its payload) in bytes."""
     size = wire_size(message)
     if size > MAX_COMMAND_BYTES:
-        raise CommandTooLarge(
-            f"worker command is {size} bytes, limit is {MAX_COMMAND_BYTES}"
-        )
+        raise CommandTooLarge(size)
     return size
 
 

@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Workspace restore writes only missing files (#514). Files from `environment.files` (Files API ids and inline content) are fetched and written before a turn only when their path does not exist in the session directory. Agent edits to `inputs/` are no longer overwritten on the next turn; they last until the workspace is rebuilt (TTL wipe in isolation `none`, guest stop in `microvm`), and then the original files come back. A turn on a running microvm guest fetches no file bytes.
 
+### Fixed
+
+- Images no longer travel as base64 in the worker command, so an image up to `APIPI_MAX_IMAGE_BYTES` no longer fails with `413` because the command is over 256 KiB (#512). The gateway stores each `input_image` data URL as a file before the turn, and `turn.start` carries image references (`file_id`, `object_id`, `url` or `local_path`, `mime_type`, `size_bytes`) in `parts`, which the worker fetches like the context files. The worker no longer uploads input images. This needs the new worker protocol feature `image_refs`: a message with images placed on a worker without it fails with `501` `unsupported_op`, so upgrade the API first and then the workers. `input_image` also accepts `file_id` (a file of the tenant with an allowed image type within the image size limit) and ignores `detail`. A command that is still too large fails before the turn with a message that says so.
+
 ## [0.14.1] - 2026-10-03
 
 ### Fixed

@@ -1,7 +1,7 @@
 {"fixture": "new-lease", "format": 1, "title": "A new lease continues the session sequence on a fresh worker", "description": "The session already has 12 persisted envelopes. A fresh worker gets turn.start with payload.last_seq 12 and starts its envelopes at seq 13."}
 {"step": "connect"}
-{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["lease_cursor", "presign", "search", "session_stopped"]}}
-{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "store_check": "<store_check>", "revoke": [], "ttl": {}, "features": ["lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "store_check": "<store_check>", "revoke": [], "ttl": {}, "features": ["image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
 {"from": "worker", "frame": {"type": "store.proof", "marker": "<var:marker>", "nonce": "<var:nonce>"}}
 {"step": "action", "for": "api", "name": "create_session"}
 {"step": "action", "for": "api", "name": "seed_cursor", "args": {"last_seq": 12}}

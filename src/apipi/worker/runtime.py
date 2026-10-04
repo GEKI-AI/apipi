@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -61,6 +60,7 @@ from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.settings_json import resolve_system_prompt
 from apipi.worker.sink import ResultSink
 from apipi.worker.turn_context import (
+    fetch_input_images,
     fetch_pi_session_bytes,
     materialize_skill_zips,
     materialize_workspace_files,
@@ -492,6 +492,20 @@ def _model_span_attrs(
     }
 
 
+def _user_item_content(
+    text: str, parts: list[dict[str, Any]]
+) -> str | list[dict[str, Any]]:
+    if not any(part.get("type") == "image" for part in parts):
+        return text
+    stored: list[dict[str, Any]] = []
+    for part in parts:
+        if part.get("type") == "input_text":
+            stored.append({"type": "input_text", "text": str(part.get("text") or "")})
+        elif part.get("type") == "image":
+            stored.append({"type": "input_image", "file_id": part.get("file_id")})
+    return stored
+
+
 def _spawn_identity_empty(user_id: str | None, org_id: str | None) -> dict[str, Any]:
     return {"agent_id": None, "user_id": user_id, "org_id": org_id}
 
@@ -516,8 +530,7 @@ async def run_turn(
     session_id: uuid.UUID,
     text: str,
     *,
-    images: list[dict[str, str]] | None = None,
-    parts: list[dict[str, str]] | None = None,
+    parts: list[dict[str, Any]] | None = None,
     mcp_http: list[Any] | None = None,
     request_id: str | None = None,
     metrics: Metrics | None = None,
@@ -537,35 +550,22 @@ async def run_turn(
         pool.hold(session_id)
     try:
         ctx = _require_turn_context(turn_context)
-        item_content: str | list[dict[str, Any]] = text
         ordered = parts or []
-        has_image = any(part.get("type") == "image" for part in ordered)
-        if has_image and settings is not None:
-            stored_parts: list[dict[str, Any]] = []
-            for part in ordered:
-                if part.get("type") == "input_text":
-                    stored_parts.append(
-                        {"type": "input_text", "text": str(part.get("text") or "")}
-                    )
-                    continue
-                if part.get("type") != "image":
-                    continue
-                mime = str(part.get("mimeType") or "application/octet-stream")
-                data = base64.b64decode(str(part.get("data") or ""))
-                created = await sink.store_input_image(
+        item_content = _user_item_content(text, ordered)
+        images: list[dict[str, str]] | None = None
+        if settings is not None and isinstance(item_content, list):
+            try:
+                images = await fetch_input_images(ordered, settings)
+            except ObjectStoreError:
+                await report_environment_failed(
+                    sink,
+                    hub,
                     tenant_id,
                     session_id,
-                    data=data,
-                    filename="image",
-                    content_type=mime,
-                    settings=settings,
+                    "Cannot read input images",
+                    code="artifact_store",
                 )
-                file_id = created.get("file_id") or created.get("id")
-                stored_parts.append({"type": "input_image", "file_id": file_id})
-            if len(stored_parts) == 1 and stored_parts[0].get("type") == "input_text":
-                item_content = str(stored_parts[0].get("text") or text)
-            elif stored_parts:
-                item_content = stored_parts
+                return
         resolved_key = api_key if api_key is not None else ctx.model.api_key
         resolved_mcp = (
             mcp_http

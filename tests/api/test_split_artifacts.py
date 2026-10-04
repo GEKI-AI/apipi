@@ -22,6 +22,7 @@ import pytest
 from apipi.common.objects import NS_ARTIFACTS
 from apipi.config import Settings
 from apipi.services.ingest import IngestBatcher, flush_batch
+from apipi.services.turn_context import input_image_ref
 from apipi.store.blobs import S3Store
 from apipi.store.engine import Store
 from apipi.store.repo import (
@@ -29,6 +30,7 @@ from apipi.store.repo import (
     create_tenant,
     get_file,
     list_artifacts,
+    list_items,
     set_session_lease,
 )
 from apipi.worker.artifact_upload import (
@@ -722,6 +724,14 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
         )
         assert uploaded.status_code == 200
         file_id = str(uploaded.json()["id"])
+        image_upload = await client.post(
+            "/v1/files",
+            headers=_auth(token),
+            data={"purpose": "user_data"},
+            files={"file": ("photo.png", b"\x89PNG-turn", "image/png")},
+        )
+        assert image_upload.status_code == 200
+        image_id = str(image_upload.json()["id"])
         created = await client.post(
             "/v1/agents/sessions",
             headers=_auth(token),
@@ -896,14 +906,23 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
             return _FakeResponse(data, 200)
 
     outbox = Outbox()
-    execution = local_execution(worker_settings, harness=FakeHarness(), outbox=outbox)
+    harness = FakeHarness()
+    execution = local_execution(worker_settings, harness=harness, outbox=outbox)
     waiters = execution.presign_waiters
+    image_ref = input_image_ref(
+        api_settings,
+        tenant_id,
+        image_id,
+        mime_type="image/png",
+        size_bytes=len(b"\x89PNG-turn"),
+        objects=api_objects,
+    )
+    assert "url" in image_ref and "local_path" not in image_ref
 
     def _turn_message(text: str, with_image: bool) -> dict[str, Any]:
-        parts: list[dict[str, str]] = [{"type": "input_text", "text": text}]
+        parts: list[dict[str, Any]] = [{"type": "input_text", "text": text}]
         if with_image:
-            image = base64.b64encode(b"\x89PNG-turn").decode()
-            parts.append({"type": "image", "mimeType": "image/png", "data": image})
+            parts.append(image_ref)
         return {
             "op": "turn.start",
             "session_id": str(session_id),
@@ -957,7 +976,28 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
         from apipi.store.repo import list_files
 
         image_files = await list_files(db, tenant_id)
-        assert "image" in [row.filename for row in image_files]
+        assert sorted(row.filename for row in image_files) == [
+            "notes.txt",
+            "photo.png",
+        ]
+        user_items = [
+            item
+            for item in (await list_items(db, tenant_id, session_id)) or []
+            if item.data.get("role") == "user"
+        ]
+    assert user_items[0].data["content"] == [
+        {"type": "input_text", "text": "hi"},
+        {"type": "input_image", "file_id": image_id},
+    ]
+    assert harness.images == [
+        [
+            {
+                "type": "image",
+                "data": base64.b64encode(b"\x89PNG-turn").decode(),
+                "mimeType": "image/png",
+            }
+        ]
+    ]
     assert put_headers, "expected presigned PUTs"
     assert all("Authorization" not in headers for headers in put_headers)
 

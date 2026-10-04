@@ -202,8 +202,8 @@ API to worker:
 | `type` | Fields | What |
 | --- | --- | --- |
 | `hello` | `ok`, `protocol`, `worker_id`, `generation`, `connection_id`, `lease_ttl_seconds`, `heartbeat_seconds`, `sessions`, `store_check`, `revoke`, `ttl`, `features` | Register succeeded. `store_check` is present only for the filesystem store. |
-| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. `turn.start`, `turn.continue`, and `sandbox.boot` carry `payload.last_seq`, the session sequence cursor (see [Sequence on a new lease](#sequence-on-a-new-lease)). |
-| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. `expires_at` is an RFC 3339 UTC time with `Z` and milliseconds, for example `2026-01-02T03:04:05.678Z`. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
+| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. `turn.start`, `turn.continue`, and `sandbox.boot` carry `payload.last_seq`, the session sequence cursor (see [Sequence on a new lease](#sequence-on-a-new-lease)). `turn.start` carries input images in `payload.parts` as store references (`file_id`, `object_id`, `url` or `local_path`, `mime_type`, `size_bytes`), never as bytes, and only to a worker that listed the feature `image_refs`. |
+| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part; only workers without the feature `image_refs` send it); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. `expires_at` is an RFC 3339 UTC time with `Z` and milliseconds, for example `2026-01-02T03:04:05.678Z`. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
 | `search.reply` | `session_id`, `request_id`, `ok`, `results`, `code`, `message` | Answer to one `search.request`. `results` is a list of `title`, `url`, `snippet`, and `published_date` (nullable), the same for every provider. On failure `ok` is false, `code` is one of `search_denied`, `search_unavailable`, `search_timeout`, `search_failed`, or `invalid_request`, and `message` is a short text that is safe to show the model. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
 | `inventory.reply` | `revoke: [lease.revoke]`, `ttl: {session_id: {...}}` | Answer to `inventory` (and part of `hello`): sessions to tear down plus reaper TTLs. A revoke entry for an on-disk workspace the worker holds no lease for has no `lease_id`. |
@@ -232,8 +232,9 @@ for the filesystem store) and verifies the object (S3 `HEAD` size and
 checksum, or the shared-root file size and checksum) before writing
 rows. Artifacts are stored with the presigned `artifact_id`, so the
 object and the row stay bound; Pi sessions update the session pointer
-the turn context uses for cold restore; input images create file rows
-with the returned `file_id`. A `completed` with a foreign `upload_id`,
+the turn context uses for cold restore; input images from workers
+without the feature `image_refs` create file rows with the returned
+`file_id`. A `completed` with a foreign `upload_id`,
 a path outside the expected key, or a checksum or size mismatch is
 rejected.
 `sandbox.status` carries a sandbox phase (`starting`, `ready`,
@@ -432,12 +433,14 @@ a short TTL. With the filesystem store each reference becomes a path
 relative to the shared store root (`APIPI_LOCAL_STORE_DIR`, default `.apipi/store`), which the worker
 reads directly; the API and the worker must see the same filesystem.
 The worker fetches the bytes at turn start, provisions the workspace,
-and installs skills from it.
+and installs skills from it. Input images in `turn.start` use the same
+references and are fetched at turn start too.
 
 Commands with a context are validated before send and on receipt:
 file bytes are rejected, and a command frame over 262,144 bytes
 (256 KiB, `MAX_COMMAND_BYTES`, measured as the bytes of the UTF-8 JSON
-text frame) is rejected with `payload_too_large`. Credentials in the context never appear in logs:
+text frame) is rejected with `payload_too_large`. Images are references,
+so only text, instructions, tools, and metadata count toward that limit. Credentials in the context never appear in logs:
 the worker command log carries only a secret-free summary (operation,
 environment type, model, MCP labels, file and skill counts).
 
@@ -522,11 +525,14 @@ protocol as it was before features existed, so old peers keep working.
 | `presign` | `artifact.presign`, `artifact.completed`, and `artifact.presign.reply` | Yes |
 | `lease_cursor` | `payload.last_seq` in `turn.start`, `turn.continue`, and `sandbox.boot` | Yes |
 | `session_stopped` | The worker acks `session.stop` on receipt, and the durable `session.stopped` envelope is the completion that the API waits for | No |
+| `image_refs` | `turn.start` carries input images as store references in `parts`, and the worker no longer uploads them as `input_image` | No |
 
 The worker does not wire web search when the API did not list `search`,
 and it fails an upload with a clear error, instead of sending an
 envelope, when the API did not list `presign`. The API refuses a command
-op that needs a feature the worker did not list. The `hello` of the API
+op that needs a feature the worker did not list, and a `turn.start` with
+images for a worker that did not list `image_refs` (`501`,
+`unsupported_op`). The `hello` of the API
 must carry `lease_ttl_seconds` and `heartbeat_seconds`: a `hello`
 without them still stops the worker with an error, because no later
 version may leave them out and a worker cannot guess a safe heartbeat.
@@ -655,13 +661,16 @@ exception, and every loop catches an error per round and goes on (see
 
 Artifact, input-image, workspace-file, skill, and Pi session bytes always
 go through the configured store; the socket carries only control and
-metadata messages. The worker holds no object-store credentials
+metadata messages. The gateway stores input images as files before the
+turn, and the worker reads them through the image references of
+`turn.start`, so it does not upload them. The worker holds no object-store credentials
 and performs no artifact or file database writes: `LocalExecution` runs
 with no blobs or objects, and `OutboxSink` uploads through
 `artifact.presign` (outbox) -> reply -> PUT (S3, plain HTTPS with no
 credentials) or shared-root write (filesystem, to the reply `path`) ->
-`artifact.completed` (outbox) for `artifact`, `pi_session`, and
-`input_image` kinds, including the killed-process harvest. Quota
+`artifact.completed` (outbox) for the `artifact` and `pi_session`
+kinds, including the killed-process harvest. The API still accepts the
+`input_image` kind from workers without the feature `image_refs`. Quota
 failures raise the usual codes so the turn fails
 (`artifact_store` fails the turn, other quota codes emit the session
 error event). The worker uploads every changed file; the API keeps the latest

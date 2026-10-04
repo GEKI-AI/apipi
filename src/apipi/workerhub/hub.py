@@ -28,7 +28,6 @@ from apipi.protocol import (
     BASELINE_FEATURES,
     COMMAND_OPS,
     CURSOR_OPS,
-    OP_FEATURES,
     BaseCommandPayload,
     LeaseRevoke,
     RunningSession,
@@ -60,6 +59,7 @@ from apipi.workerhub.command_queue import (
 )
 from apipi.workerhub.commands import (
     _check_command_context,
+    command_features,
     command_payload,
     image_unavailable_message,
     session_image,
@@ -224,11 +224,12 @@ class WorkerHub:
             self.metrics.observe_worker_command(op, result)
 
     def _enqueue(self, wire: dict[str, Any], conn: WorkerConnection) -> PendingCommand:
-        feature = OP_FEATURES.get(str(wire.get("op")))
-        if feature is not None and feature not in conn.features:
+        for feature in command_features(wire):
+            if feature in conn.features:
+                continue
             raise ApiError(
                 "api_error",
-                f"The worker does not support {wire.get('op')}",
+                f"The worker does not support {feature}. Upgrade the worker.",
                 code="unsupported_op",
                 status_code=501,
             )

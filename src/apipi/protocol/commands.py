@@ -8,11 +8,11 @@ travels only in `context.model.api_key`.
 """
 
 import uuid
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import ConfigDict, Field
 
-from apipi.protocol.base import CommandPayload, ControlMessage
+from apipi.protocol.base import CommandPayload, ContextPart, ControlMessage
 from apipi.protocol.context import TurnContext, parse_turn_context
 
 
@@ -47,10 +47,37 @@ class ContextCommandPayload(BaseCommandPayload):
         return parse_turn_context(self.context)
 
 
+class InputTextPart(ContextPart):
+    type: Literal["input_text"] = "input_text"
+    text: str = ""
+
+
+class InputImageRef(ContextPart):
+    """One input image as a store reference, like a context file reference.
+
+    `url` is a presigned GET URL (S3 store) and `local_path` a path
+    relative to the shared store root (filesystem store). The bytes
+    never travel in the command.
+    """
+
+    type: Literal["image"] = "image"
+    file_id: str
+    object_id: str
+    url: str | None = None
+    local_path: str | None = None
+    mime_type: str
+    size_bytes: int | None = Field(default=None, ge=0)
+
+
+TurnInputPart = Annotated[InputTextPart | InputImageRef, Field(discriminator="type")]
+
+
 class TurnStartCommandPayload(ContextCommandPayload):
+    """`images` is always empty; image parts travel in `parts` as references."""
+
     text: str | None = None
     images: list[dict[str, Any]] | None = None
-    parts: list[dict[str, Any]] | None = None
+    parts: list[TurnInputPart] | None = None
 
 
 class TurnContinueCommandPayload(ContextCommandPayload):

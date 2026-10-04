@@ -1,7 +1,7 @@
 {"fixture": "turn-text", "format": 1, "title": "A turn with streamed text", "description": "turn.start runs a turn that streams text. The worker acks the command, then reports the turn in durable envelopes with seq 1 to 17. The delta is ephemeral and optional. One cumulative ack covers all durable envelopes."}
 {"step": "connect"}
-{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["lease_cursor", "presign", "search", "session_stopped"]}}
-{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "store_check": "<store_check>", "revoke": [], "ttl": {}, "features": ["lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "store_check": "<store_check>", "revoke": [], "ttl": {}, "features": ["image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
 {"from": "worker", "frame": {"type": "store.proof", "marker": "<var:marker>", "nonce": "<var:nonce>"}}
 {"step": "action", "for": "api", "name": "create_session"}
 {"step": "action", "for": "api", "name": "start_turn", "args": {"text": "hi"}}

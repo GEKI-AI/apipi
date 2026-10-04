@@ -278,7 +278,7 @@ waiter.
 | `expires_at` | time | S3 only. When the URL stops working. |
 | `path` | string | Filesystem only. The store-root relative path the worker MUST write. |
 | `object_id` | string | The object key of the upload. |
-| `file_id` | string | For kind `input_image`: the id of the file row, for the `input_image` item part. |
+| `file_id` | string | For kind `input_image`: the id of the file row, for the `input_image` item part. Only workers without the feature `image_refs` upload input images. |
 | `code`, `message` | string | The refusal. See [Errors and close codes](#errors-and-close-codes). |
 
 ## Command ops
@@ -330,8 +330,32 @@ Rules for the worker:
 | `context` | object | The [command context](#command-context). |
 | `last_seq` | integer, 0 or more | The session cursor. See [Sequencing and delivery](#sequencing-and-delivery). |
 | `text` | string | The user input as text. |
-| `images` | list | Input images: `{type: "image", data: <base64>, mimeType: <string>}`. |
-| `parts` | list | The input in order: `{type: "input_text", text}` and image parts as above. |
+| `images` | list | Always an empty list. Images travel in `parts`. The field stays so that the payload does not change for older workers. |
+| `parts` | list | The input in order: `{type: "input_text", text}` and [image references](#image-references). |
+
+#### Image references
+
+An image part is a reference to a file in the store, like a
+[file reference](#file-references) of the context. Image bytes never
+travel in a command, so the size of an image does not count toward the
+command size limit. The API stores every input image as a file before it
+sends `turn.start`. The API sends image parts only to a worker that listed
+the feature `image_refs`.
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `type` | string | yes | `image`. |
+| `file_id` | string | yes | The id of the file. The worker puts it in the user message item as `{type: "input_image", file_id}`. |
+| `object_id` | string | yes | The object key of the file in the store. |
+| `url` | string | S3 store | A presigned GET URL with a short TTL. |
+| `local_path` | string | Filesystem store | The path relative to the store root. |
+| `mime_type` | string | yes | The image type, for example `image/png`. |
+| `size_bytes` | integer, 0 or more | no | The size of the file. |
+
+The worker fetches the bytes the same way as a file reference, before it
+reports the turn, and passes them to the model as images in the order of
+`parts`. A worker that cannot fetch an image reports the turn as failed
+with code `artifact_store`. A worker does not upload input images.
 
 ### `turn.continue`
 
@@ -520,7 +544,7 @@ turn is rejected as `turn_mismatch`.
 | `usage` | `turn_id`, `status`, `model`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `cache_read_tokens`, `cache_write_tokens` (integers, 0 or more), `latency_ms`, `request_id`, `user_id`, `error_code`, `artifact_bytes`, `tool_names`, `tool_counts`, `mcp_names`, `mcp_counts`, and `failure` (`{message, code, failure_source, retryable, upstream_status, legacy_code, upstream_attempts}`). One per turn. |
 | `session.status` | `status` (`idle`, `in_progress`, `requires_action`, `failed`), `required_actions` (list). At least one is set. |
 | `error` | `code`, `message`, `turn_id`. The API stores an `agent.session.error` event. |
-| `artifact.presign` | `request_id` (UUID), `kind` (`artifact`, `pi_session`, `input_image`), `filename`, `content_type`, `size` (integer, 1 or more), `sha256` (hex), `turn_id`. |
+| `artifact.presign` | `request_id` (UUID), `kind` (`artifact`, `pi_session`, `input_image`), `filename`, `content_type`, `size` (integer, 1 or more), `sha256` (hex), `turn_id`. The kind `input_image` is sent only by workers without the feature `image_refs`. The API still accepts it from them. |
 | `artifact.completed` | `upload_id` (UUID from the reply), `path` (filesystem only), `name`, `size`, `sha256`, `turn_id`. |
 | `session.stopped` | `reason` (`stop`). Completes `session.stop`. The API deletes the session blobs when it applies it. |
 | `workspace.reaped` | `reason` (`idle`). A receipt that the idle reaper wiped a workspace. It changes nothing on the API. |
@@ -723,7 +747,7 @@ need exactly that value, but the text says what breaks when a worker differs.
 | Revoke send | 5 s | API | The revoke is not repeated until the next inventory. |
 | Outbox | 10,000 messages and 64 MiB, and half of each per session (defaults) | Worker (settings) | The turn fails with `worker_outbox_full`. |
 | Envelope size | 1,048,576 bytes | Protocol constant | The worker fails the turn with `worker_message_too_large` instead of sending. The API rejects it and acks past. |
-| Command size | 262,144 bytes | Protocol constant | The API answers the HTTP request with `413` and `payload_too_large`. |
+| Command size | 262,144 bytes | Protocol constant | The API does not send the command and answers the HTTP request with `413` and `payload_too_large`, with a message that says the message and the session context are too large. Images are references and do not count. |
 | Frame size | 4,194,304 bytes | API | The API closes the socket with code `1009`. |
 | Delta text | At most 32,768 characters per envelope. The reference worker sends at most 4,000. | Protocol constant | The API rejects the delta. |
 | Delta rate | 100 per second per session | Protocol constant | The API drops the excess and counts it. |
@@ -830,18 +854,23 @@ names the receiver does not know: it ignores them.
 | `presign` | `artifact.presign`, `artifact.presign.reply`, and `artifact.completed`. | Yes |
 | `lease_cursor` | `payload.last_seq` in `turn.start`, `turn.continue`, and `sandbox.boot`. | Yes |
 | `session_stopped` | The worker acks `session.stop` on receipt. The durable `session.stopped` envelope completes it, and the API waits up to 15 seconds for it. | No |
+| `image_refs` | `turn.start` carries input images as [image references](#image-references) in `parts`, and the worker no longer uploads them with the kind `input_image`. | No |
 
 A worker does not wire web search when the API did not list `search`, and it
 fails an upload with a clear error, without sending an envelope, when the API
 did not list `presign`. The API refuses a command op that needs a feature the
-worker did not list.
+worker did not list. It also refuses a `turn.start` with image parts for a
+worker that did not list `image_refs`: the HTTP request fails with `501` and
+code `unsupported_op`, and the message names the feature.
 
 **Upgrade order.** Upgrade the API first and the workers after it. A new API
 tolerates old workers. An old worker rejects a command context with a field
 it does not know. A release may add a field to a context or a payload only
 after every worker and every API runs a version that ignores unknown fields.
 `hello` MUST carry `lease_ttl_seconds` and `heartbeat_seconds` in every
-version, because a worker cannot guess a safe heartbeat.
+version, because a worker cannot guess a safe heartbeat. While some workers
+do not list `image_refs` yet, a message with images that is placed on one of
+them fails with `501`. Text turns are not affected.
 
 ## Security rules for a worker
 
@@ -854,13 +883,14 @@ version, because a worker cannot guess a safe heartbeat.
   presigned URL with its query string.
 * The worker holds no database credentials and no object-store credentials,
   and no search provider name or key. It reads and writes files only through
-  the references of the context and the replies of `artifact.presign.reply`.
+  the references of the context, the image references of `turn.start`, and
+  the replies of `artifact.presign.reply`.
 * The hosts a worker may call are these and no others: the API socket; the
   model host in `context.model.base_url` (in a sandbox, through the broker of
   the session, so the key does not enter the guest); the HTTP MCP servers in
-  `context.mcp`; the presigned URLs of the context (GET) and of presign
-  replies (PUT); and, for an operator, the image store that holds guest
-  images.
+  `context.mcp`; the presigned URLs of the context and of image references
+  (GET) and of presign replies (PUT); and, for an operator, the image store
+  that holds guest images.
 * The worker applies an SSRF guard to every MCP `server_url`. It resolves the
   host name and refuses loopback, private (RFC 1918), link-local, carrier-grade
   NAT, multicast, and reserved addresses, including cloud metadata addresses

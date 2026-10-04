@@ -56,7 +56,11 @@ from apipi.env.setup import (
 )
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.gateway.auth import AuthIdentity, not_found
-from apipi.gateway.content import parse_user_content, require_image_model
+from apipi.gateway.content import (
+    UserContent,
+    parse_user_content,
+    require_image_model,
+)
 from apipi.gateway.errors import gone
 from apipi.gateway.tokens import hash_token
 from apipi.mcp.guard import check_mcp_url, split_allow_hosts
@@ -82,7 +86,7 @@ from apipi.services.search import SearchResolver, require_search
 from apipi.services.session_defaults import merge_session_create, require_default_refs
 from apipi.services.session_events import event_body, persist_event
 from apipi.services.skill_store import SkillService
-from apipi.services.turn_context import build_turn_context
+from apipi.services.turn_context import build_turn_context, input_image_ref
 from apipi.services.turn_state import fail_session, fail_stale_in_progress
 from apipi.services.vault_crypto import (
     VaultCryptoError,
@@ -382,6 +386,27 @@ class SessionService:
                 )
             return servers
 
+    async def _turn_parts(
+        self,
+        tenant_id: uuid.UUID,
+        content: UserContent,
+        known: dict[str, tuple[str, int]],
+    ) -> list[dict[str, Any]]:
+        """The `turn.start` parts, with each image as a store reference."""
+        images = await self.files.input_images(tenant_id, content.images, known)
+        refs = [
+            input_image_ref(
+                self.settings,
+                tenant_id,
+                file_id,
+                mime_type=mime,
+                size_bytes=size,
+                objects=self.files.objects,
+            )
+            for file_id, mime, size in images
+        ]
+        return content.wire_parts(refs)
+
     async def _turn_context(
         self,
         tenant_id: uuid.UUID,
@@ -585,6 +610,8 @@ class SessionService:
                     code="artifact_store",
                     status_code=503,
                 ) from exc
+        turn_content = parse_user_content(input, settings=self.settings)
+        image_files = await self.files.image_files(tenant_id, turn_content.images)
         raw_tools: list[Any] = []
         model: str | None = None
         instructions: str | None = None
@@ -674,7 +701,6 @@ class SessionService:
             require_known_image(self.settings, image)
             require_image_size(image, size)
             env = {**env, "sandbox_size": size, "sandbox_image": image}
-            turn_content = parse_user_content(input, settings=self.settings)
             require_image_model(self.settings, model, turn_content)
             try:
                 reject_microvm_system_packages(env, run_mode="microvm")
@@ -796,14 +822,16 @@ class SessionService:
                     tenant_id,
                     session_mem_mib=mem_mib_for_size(self.settings, size),
                 )
+                turn_parts = await self._turn_parts(
+                    tenant_id, turn_content, image_files
+                )
 
                 if wait_turn:
                     await self.execution.run_turn(
                         tenant_id,
                         session_id,
                         text,
-                        images=[image.rpc() for image in turn_content.images],
-                        parts=turn_content.wire_parts(),
+                        parts=turn_parts,
                         mcp_http=servers,
                         request_id=request_id,
                         api_key=api_key,
@@ -829,8 +857,7 @@ class SessionService:
                                 tenant_id,
                                 session_id,
                                 text,
-                                images=[image.rpc() for image in turn_content.images],
-                                parts=turn_content.wire_parts(),
+                                parts=turn_parts,
                                 mcp_http=servers,
                                 request_id=request_id,
                                 api_key=api_key,
@@ -1151,8 +1178,10 @@ class SessionService:
                     )
                     if isinstance(raw_model, str):
                         follow_model = raw_model
+        image_files: dict[str, tuple[str, int]] = {}
         if action == "message":
             require_image_model(self.settings, follow_model, parsed)
+            image_files = await self.files.image_files(tenant_id, parsed.images)
         turn_servers: list[McpHttpServer] | None = None
         if action in ("tool", "message"):
             try:
@@ -1219,12 +1248,12 @@ class SessionService:
                     tenant_id,
                     session_mem_mib=mem_mib_for_size(self.settings, follow_size),
                 )
+                turn_parts = await self._turn_parts(tenant_id, parsed, image_files)
                 await self.execution.run_turn(
                     tenant_id,
                     session_id,
                     message,
-                    images=[image.rpc() for image in parsed.images],
-                    parts=parsed.wire_parts(),
+                    parts=turn_parts,
                     mcp_http=turn_servers,
                     request_id=request_id,
                     api_key=api_key,

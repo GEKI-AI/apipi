@@ -210,6 +210,10 @@ New extension fields are grouped. Older flat fields stay flat.
 | Known image, no worker has it | `api_error` | `image_unavailable` (`503`) |
 | Nested `events` length not 1, or mixed flat+nested body | `invalid_request` | `validation_error` |
 | `input_image` with an `http` or `https` URL | `invalid_request` | `invalid_request` |
+| `input_image` with neither `image_url` nor `file_id`, or with both | `invalid_request` | `validation_error` (nested body) or `invalid_request` |
+| `input_image.file_id` of another tenant or unknown | `invalid_request` | `not_found` (`404`) |
+| `input_image.file_id` that is not an allowed image type | `invalid_request` | `invalid_request` |
+| Image larger than `APIPI_MAX_IMAGE_BYTES` | `invalid_request` | `payload_too_large` (`413`) |
 | Image sent to a model that does not list `image` in its registry `input` | `invalid_request` | `unsupported_input` |
 | Other non-text input parts | `not_implemented` | The part type |
 
@@ -244,6 +248,14 @@ That is what `client.beta.agents.sessions.events.create` sends. Cancel
 and tool_result use the same `events` list with one object. The flat
 body `{ "type": "agent.session.input.message", "text": "…" }` is the
 other supported form.
+
+An `input_image` part takes the two forms of the OpenAI Responses API:
+`{"type": "input_image", "image_url": "data:image/png;base64,…"}` or
+`{"type": "input_image", "file_id": "file-…"}` for a file uploaded with
+`POST /v1/files`. `detail` is accepted and ignored. Remote `http` and
+`https` image URLs are not supported. Both forms are stored as Files API
+objects, and the user item lists the image as `{"type": "input_image",
+"file_id"}`. See [API](api.md#events) for the limits.
 
 SSE events use ApiPi public types (`agent.session.created`,
 `agent.session.turn.output_text.done`, and the rest listed on

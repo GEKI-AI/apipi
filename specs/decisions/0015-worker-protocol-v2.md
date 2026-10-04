@@ -303,7 +303,10 @@ rules:
 
 The features today are `search`, `presign`, and `lease_cursor`, which
 describe the protocol that existed before features and are in the
-baseline, and `session_stopped`, which is not. The `hello` of the API
+baseline, and `session_stopped` and `image_refs`, which are not.
+`image_refs` sends input images in `turn.start` as store references
+instead of base64 bytes, so an image no longer counts toward the command
+size limit. The `hello` of the API
 must carry `lease_ttl_seconds` and `heartbeat_seconds`: a worker cannot
 guess a safe heartbeat, so a `hello` without them stays an error. A
 receiver does not ack an unknown `op` as done, so the API sends it again

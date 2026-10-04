@@ -97,6 +97,8 @@ class OpenAIInputText(StrictModel):
     type: str
     text: str | None = None
     image_url: str | None = None
+    file_id: str | None = None
+    detail: str | None = None
 
     @model_validator(mode="after")
     def known_part(self) -> Self:
@@ -105,8 +107,8 @@ class OpenAIInputText(StrictModel):
                 raise ValueError("input_text needs text")
             return self
         if self.type == "input_image":
-            if not self.image_url:
-                raise ValueError("input_image needs image_url")
+            if bool(self.image_url) == bool(self.file_id):
+                raise ValueError("input_image needs image_url or file_id")
             return self
         raise PydanticCustomError(
             "not_implemented",

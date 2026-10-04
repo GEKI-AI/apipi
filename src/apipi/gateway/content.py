@@ -11,15 +11,9 @@ _DEFAULT_MIMES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"
 
 @dataclass(frozen=True)
 class ImagePart:
-    mime: str
-    data: bytes
-
-    def rpc(self) -> dict[str, str]:
-        return {
-            "type": "image",
-            "data": base64.b64encode(self.data).decode(),
-            "mimeType": self.mime,
-        }
+    mime: str = ""
+    data: bytes = b""
+    file_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -28,36 +22,19 @@ class UserContent:
     images: tuple[ImagePart, ...]
     parts: tuple[dict[str, Any], ...]
 
-    def wire_parts(self) -> list[dict[str, str]]:
-        out: list[dict[str, str]] = []
+    def wire_parts(self, refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
         index = 0
         for part in self.parts:
             if part.get("type") == "input_text":
                 out.append({"type": "input_text", "text": str(part.get("text") or "")})
             else:
-                out.append(self.images[index].rpc())
+                out.append(refs[index])
                 index += 1
         return out
 
-    def item_content(self, file_ids: list[str]) -> str | list[dict[str, Any]]:
-        if not self.images and len(self.parts) <= 1 and self.text:
-            return self.text
-        if not self.images and not self.parts:
-            return self.text
-        out: list[dict[str, Any]] = []
-        image_at = 0
-        for part in self.parts:
-            if part.get("type") == "input_image":
-                out.append({"type": "input_image", "file_id": file_ids[image_at]})
-                image_at += 1
-            else:
-                out.append(dict(part))
-        if not out and self.text:
-            return self.text
-        return out
 
-
-def _mimes(settings: Settings) -> frozenset[str]:
+def image_mimes(settings: Settings) -> frozenset[str]:
     raw = settings.image_mimes
     if not raw:
         return _DEFAULT_MIMES
@@ -80,7 +57,7 @@ def _decode_data_url(value: str, *, settings: Settings) -> ImagePart:
         )
     header, encoded = text.split(";base64,", 1)
     mime = header[5:].strip().lower()
-    if mime not in _mimes(settings):
+    if mime not in image_mimes(settings):
         raise ApiError(
             "invalid_request",
             f"input_image mime {mime} is not allowed",
@@ -108,6 +85,22 @@ def _decode_data_url(value: str, *, settings: Settings) -> ImagePart:
             status_code=413,
         )
     return ImagePart(mime=mime, data=data)
+
+
+def _image_part(item: dict[str, Any], settings: Settings) -> ImagePart:
+    url = item.get("image_url")
+    file_id = item.get("file_id")
+    has_url = isinstance(url, str) and bool(url.strip())
+    has_file = isinstance(file_id, str) and bool(file_id.strip())
+    if has_url == has_file:
+        raise ApiError(
+            "invalid_request",
+            "input_image needs image_url or file_id",
+            code="invalid_request",
+        )
+    if isinstance(file_id, str) and has_file:
+        return ImagePart(file_id=file_id.strip())
+    return _decode_data_url(str(url), settings=settings)
 
 
 def _parts_from_content(content: object, *, settings: Settings) -> list[dict[str, Any]]:
@@ -138,21 +131,7 @@ def _parts_from_content(content: object, *, settings: Settings) -> list[dict[str
                 )
             parts.append({"type": "input_text", "text": text})
         elif kind == "input_image":
-            url = item.get("image_url")
-            if not isinstance(url, str) or not url.strip():
-                raise ApiError(
-                    "invalid_request",
-                    "input_image needs image_url",
-                    code="invalid_request",
-                )
-            image = _decode_data_url(url, settings=settings)
-            parts.append(
-                {
-                    "type": "input_image",
-                    "mime": image.mime,
-                    "data": image.data,
-                }
-            )
+            parts.append({"type": "input_image", "image": _image_part(item, settings)})
         else:
             raise ApiError(
                 "not_implemented",
@@ -216,9 +195,7 @@ def parse_user_content(value: object, *, settings: Settings) -> UserContent:
         parts.extend(_parts_from_content(message.get("content"), settings=settings))
     texts = [str(part["text"]) for part in parts if part.get("type") == "input_text"]
     images = tuple(
-        ImagePart(mime=str(part["mime"]), data=part["data"])
-        for part in parts
-        if part.get("type") == "input_image" and isinstance(part.get("data"), bytes)
+        part["image"] for part in parts if isinstance(part.get("image"), ImagePart)
     )
     if len(images) > settings.max_images:
         raise ApiError(

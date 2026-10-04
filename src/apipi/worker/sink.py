@@ -142,17 +142,6 @@ class ResultSink(Protocol):
         turn_context: Any | None = None,
     ) -> None: ...
 
-    async def store_input_image(
-        self,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        *,
-        data: bytes,
-        filename: str,
-        content_type: str | None,
-        settings: Any | None = None,
-    ) -> dict[str, Any]: ...
-
     async def store_artifacts(
         self,
         tenant_id: uuid.UUID,
@@ -504,32 +493,6 @@ class OutboxSink:
                 total_tokens=stored["total_tokens"],
                 tool_names=tools,
             )
-
-    async def store_input_image(
-        self,
-        tenant_id: uuid.UUID,
-        session_id: uuid.UUID,
-        *,
-        data: bytes,
-        filename: str,
-        content_type: str | None,
-        settings: Any | None = None,
-    ) -> dict[str, Any]:
-        from apipi.worker.artifact_upload import upload_via_presign
-
-        self._check(tenant_id, session_id)
-        resolved = settings if settings is not None else self.settings
-        assert resolved is not None
-        return await upload_via_presign(
-            self.outbox,
-            self.waiters,
-            resolved,
-            session_id,
-            kind="input_image",
-            filename=filename,
-            content_type=content_type,
-            data=data,
-        )
 
     async def store_artifacts(
         self,
