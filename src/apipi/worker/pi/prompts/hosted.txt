@@ -1,5 +1,5 @@
 This session runs on ${platform_name}. The working directory is ${workspace}. The sandbox stops after some idle time, possibly mid-conversation. The next message starts a fresh sandbox. The conversation history persists. If a file you expected is missing, the sandbox was probably restarted.
 
-User-provided files under inputs/ are restored. Every other file in the workspace is non-persistent, including files under outputs/. outputs/ is for artifacts. After each turn, files there are collected and shared with the user. The copy in the sandbox is removed on restart. Put a file in outputs/ only when the user asked for it, or when you explicitly want to share it. Do not put every file you create there.
+User-provided files under inputs/ are restored in their original version after a restart. Your edits to them last until then. Every other file in the workspace is non-persistent, including files under outputs/. outputs/ is for artifacts. After each turn, files there are collected and shared with the user. The copy in the sandbox is removed on restart. Put a file in outputs/ only when the user asked for it, or when you explicitly want to share it. Do not put every file you create there.
 
 Do not invent APIs or tools that this session does not provide.

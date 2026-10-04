@@ -45,7 +45,10 @@ row stores a `file://` or `s3://` URI for that cache). The next turn
 creates an empty `/workspace`, re-applies skills, packages, setup
 commands, files, env, and network policy, and reloads the cached
 session file so Pi continues the
-conversation. Published files are not copied back into `/workspace`.
+conversation. Files from `environment.files` are the starting state of
+the workspace, not a copy that is kept in sync: an agent edit to such a
+file stays until the workspace is wiped, and after the wipe the
+original comes back. Published files are not copied back into `/workspace`.
 There is no pause. A TTL stop kills Pi and deletes the workspace. The public state is `stopped` with `reason: idle`. A client may label that "paused" or "sleeping", but must not imply that files survive.
 
 The directory is bounded by `APIPI_MAX_WORKSPACE_BYTES` (default 1GiB).
@@ -214,7 +217,11 @@ session. The merged values are what the session stores. Prep runs
 before the first
 agent turn that needs the computer:
 
-1. Write `files` into the session directory. Paths use the same
+1. Write `files` into the session directory. A file is written only
+   when its path does not exist in the session directory yet. A path
+   that exists is left as it is, even when the agent changed or
+   replaced the file, and the worker does not fetch its bytes from the
+   store. Paths use the same
    `/workspace` and `/tmp/workspace` mapping as setup `cwd`. Other
    absolute paths, `..` escapes, and writes under `.apipi/` are
    rejected. `type: "inline"` uses standard base64 `data`.
@@ -252,7 +259,11 @@ agent turn that needs the computer:
 Hosted workspaces include an `inputs/` directory. Put files the user
 provided there, including `environment.files` paths under `inputs/`.
 Existing paths still work. `inputs/` is not published. Only `outputs/`
-is.
+is. The agent may edit or delete files under `inputs/`. Edits and
+deletions last until the workspace is rebuilt. In isolation `none` a
+deleted file is written again from the store before the next turn. In
+`microvm` it stays missing until the guest stops, and the next boot
+starts from the original files. See the restore rules below.
 
 `network.access` is `enabled`, `disabled`, or `restricted`.
 `restricted` requires `allowed_domains` (1–100 exact hostnames).
@@ -267,7 +278,21 @@ go through the host broker, so they still work when TAP is locked.
 
 After a sandbox TTL wipe, the next turn recreates `/workspace` and
 re-applies the stored files (inline and Files API ids), env, packages,
-setup commands, and network policy.
+setup commands, and network policy. The wipe deletes the session
+directory, so every file is missing and the worker fetches and writes
+all of them again in their original version.
+
+The check for a missing file runs against the session directory on the
+worker host before each turn. In isolation `none` that directory is the
+workspace Pi uses, so an agent edit stays there until the TTL wipe. In
+`microvm` the session directory is only the seed of the guest: it is
+packed into the workspace drive when the guest boots, and the guest
+does not write back to it. The first boot after a wipe finds the
+directory empty and writes every file before the drive is packed. A
+turn on a running guest finds the files that were written for its
+boot, so it fetches no file bytes. Agent edits live on the guest tmpfs
+and last until the guest stops. The next boot starts from the original
+files that are still in the session directory.
 
 Isolation `none` runs that script in the session directory on the host
 (`uv` or `python3 -m pip` into `.venv`, `apt-get` if present, `npm`

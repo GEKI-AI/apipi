@@ -405,9 +405,11 @@ two forms is used, depending on the store of the API.
 | Filesystem | `local_path` | Read the file at that path, relative to the store root, which the API and the worker mount at the same place. `url` is absent. The worker MUST NOT leave the store root: it rejects a path with `..` or an absolute path. |
 
 `object_id` names the object in the store and is the same in both forms.
-`path` of a file is the path in the workspace. The worker fetches the bytes
-at the start of the turn, provisions the workspace, and installs the
-skills from them.
+`path` of a file is the path in the workspace. At the start of the turn
+the worker fetches the bytes of a file only when `path` does not exist in
+the session directory, and writes it there. A file that exists is left as
+it is and is not fetched. The worker then provisions the workspace and
+installs the skills from their bytes.
 
 ## Events and items
 

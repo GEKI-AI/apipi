@@ -541,24 +541,35 @@ def write_user_env(workspace: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
+def workspace_file_path(workspace: Path, raw_path: str) -> Path:
+    root = workspace.resolve()
+    apipi = (root / ".apipi").resolve()
+    dest = resolve_workspace_path(workspace, raw_path, kind="file")
+    if dest == root:
+        raise SetupError("file path must be a file inside the workspace")
+    if dest == apipi or _is_under(dest, apipi):
+        raise SetupError("file path must be inside the workspace")
+    return dest
+
+
+def workspace_file_missing(workspace: Path, raw_path: str) -> bool:
+    return not workspace_file_path(workspace, raw_path).exists()
+
+
 def write_inline_files(
     workspace: Path,
     files: list[tuple[str, bytes]],
     *,
     max_bytes: int | None = None,
 ) -> None:
-    root = workspace.resolve()
-    apipi = (root / ".apipi").resolve()
     total = 0
     for raw_path, data in files:
+        dest = workspace_file_path(workspace, raw_path)
+        if dest.exists():
+            continue
         total += len(data)
         if max_bytes is not None and total > max_bytes:
             raise SetupError("inline files exceed workspace size")
-        dest = resolve_workspace_path(workspace, raw_path, kind="file")
-        if dest == root:
-            raise SetupError("file path must be a file inside the workspace")
-        if dest == apipi or _is_under(dest, apipi):
-            raise SetupError("file path must be inside the workspace")
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
 
@@ -639,6 +650,15 @@ def run_host_setup(workspace: Path, *, extra_env: dict[str, str] | None = None) 
     done.write_text("ok\n")
 
 
+def hosted_workspace(environment: dict[str, Any]) -> Path | None:
+    if environment.get("type") != "openai_hosted":
+        return None
+    directory = environment.get("directory")
+    if not isinstance(directory, str) or directory == "":
+        return None
+    return Path(directory)
+
+
 async def provision_hosted_async(
     environment: dict[str, Any],
     *,
@@ -675,12 +695,9 @@ def provision_hosted(
     gateway_hosts: tuple[str, ...] = (),
     extra_files: list[tuple[str, bytes]] | None = None,
 ) -> None:
-    if environment.get("type") != "openai_hosted":
+    workspace = hosted_workspace(environment)
+    if workspace is None:
         return
-    directory = environment.get("directory")
-    if not isinstance(directory, str) or directory == "":
-        return
-    workspace = Path(directory)
     reject_microvm_system_packages(environment, run_mode=run_mode)
     prepare_workspace(
         workspace, environment, max_bytes=max_bytes, extra_files=extra_files
