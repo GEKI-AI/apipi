@@ -97,6 +97,7 @@ class TurnContext(ContextPart):
     model: ContextModel = Field(default_factory=ContextModel)
     mcp: list[ContextMcpServer] = Field(default_factory=list)
     files: list[ContextFileRef] = Field(default_factory=list)
+    session_files: list[ContextFileRef] = Field(default_factory=list)
     skills: list[ContextSkillRef] = Field(default_factory=list)
     pi_session: ContextPiSession = Field(default_factory=ContextPiSession)
 
@@ -164,7 +165,7 @@ def redact_context(raw: Any) -> Any:
             url = server.get("server_url")
             if isinstance(url, str) and url:
                 server["server_url"] = redact_url(url)
-    for key in ("files", "skills"):
+    for key in ("files", "session_files", "skills"):
         refs = redacted.get(key)
         if isinstance(refs, list):
             for ref in refs:
@@ -190,6 +191,7 @@ def summarize_context(raw: dict[str, Any]) -> dict[str, Any]:
             if isinstance(server, dict) and isinstance(server.get("server_label"), str):
                 labels.append(server["server_label"])
     files = raw.get("files") if isinstance(raw, dict) else None
+    session_files = raw.get("session_files") if isinstance(raw, dict) else None
     skills = raw.get("skills") if isinstance(raw, dict) else None
     model: str | None = None
     if isinstance(agent, dict) and isinstance(agent.get("model"), str):
@@ -199,5 +201,8 @@ def summarize_context(raw: dict[str, Any]) -> dict[str, Any]:
         "model": model,
         "mcp_servers": labels,
         "file_count": len(files) if isinstance(files, list) else 0,
+        "session_file_count": (
+            len(session_files) if isinstance(session_files, list) else 0
+        ),
         "skill_count": len(skills) if isinstance(skills, list) else 0,
     }

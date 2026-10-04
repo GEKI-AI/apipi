@@ -36,7 +36,7 @@ from apipi.common.sandbox import (
 )
 from apipi.common.skills import discover_skill_dirs, unpack_skill_zip
 from apipi.common.usage import add_usage, empty_usage, mcp_name, usage_from
-from apipi.config import CapacityError, Settings
+from apipi.config import CapacityError, ConfigError, Settings
 from apipi.env.setup import (
     SetupError,
     hosted_workspace,
@@ -60,6 +60,7 @@ from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.settings_json import resolve_system_prompt
 from apipi.worker.sink import ResultSink
 from apipi.worker.turn_context import (
+    attached_line,
     fetch_input_files,
     fetch_input_images,
     fetch_pi_session_bytes,
@@ -405,7 +406,7 @@ async def load_boot_kwargs(
 
         gateway_hosts = tuple(microvm_egress_hosts(settings))
     extra_files = await materialize_workspace_files(
-        [ref.model_dump() for ref in ctx.files],
+        [ref.model_dump() for ref in [*ctx.files, *ctx.session_files]],
         settings,
         hosted_workspace(row.environment),
     )
@@ -505,19 +506,21 @@ def _user_item_content(
         elif part.get("type") == "image":
             stored.append({"type": "input_image", "file_id": part.get("file_id")})
         elif part.get("type") == "file":
-            stored.append(
-                {
-                    "type": "input_file",
-                    "file_id": part.get("file_id"),
-                    "filename": part.get("filename"),
-                }
-            )
+            entry = {
+                "type": "input_file",
+                "file_id": part.get("file_id"),
+                "filename": part.get("filename"),
+            }
+            if part.get("model_input") == "workspace":
+                entry["path"] = part.get("path")
+            stored.append(entry)
     return stored
 
 
 def _prompt_text(text: str, parts: list[dict[str, Any]], blocks: list[str]) -> str:
-    """The prompt with each text file block at the place of its part."""
-    if not blocks:
+    """The prompt with each file block or `Attached:` line at the place of its part."""
+    workspace = any(part.get("model_input") == "workspace" for part in parts)
+    if not blocks and not workspace:
         return text
     pending = iter(blocks)
     out: list[str] = []
@@ -526,7 +529,33 @@ def _prompt_text(text: str, parts: list[dict[str, Any]], blocks: list[str]) -> s
             out.append(str(part.get("text") or ""))
         elif part.get("type") == "file" and part.get("model_input") == "text":
             out.append(next(pending))
+        elif part.get("type") == "file" and part.get("model_input") == "workspace":
+            out.append(attached_line(part))
     return "\n".join(out)
+
+
+async def _push_attachments(
+    pool: PiPool | None, session_id: uuid.UUID, files: list[tuple[str, bytes]]
+) -> None:
+    """Copy new session files into a running guest.
+
+    A microvm guest sees the session directory only at boot. When the
+    push fails, the guest is stopped, and the turn boots a new one from
+    the session directory, which has the files.
+    """
+    if pool is None or not files:
+        return
+    proc = await pool.settled(session_id)
+    if proc is None or proc.push_files is None:
+        return
+    try:
+        await proc.push_files(files)
+    except (OSError, TimeoutError, ConfigError):
+        log.warning(
+            "attachment push failed, restarting the sandbox",
+            extra={"session_id": str(session_id)},
+        )
+        await pool.kill(session_id, reason="respawn")
 
 
 def _spawn_identity_empty(user_id: str | None, org_id: str | None) -> dict[str, Any]:
@@ -636,16 +665,21 @@ async def run_turn(
             gateway_allowlist = False
             gateway_hosts: tuple[str, ...] = ()
             extra_files: list[tuple[str, bytes]] = []
+            attachments: list[tuple[str, bytes]] = []
             if settings is not None:
                 gateway_allowlist = settings.microvm_egress_allowlist
                 if settings.run_mode == "microvm":
                     from apipi.worker.pi.microvm import microvm_egress_hosts
 
                     gateway_hosts = tuple(microvm_egress_hosts(settings))
+                workspace_dir = hosted_workspace(row.environment)
                 extra_files = await materialize_workspace_files(
-                    [ref.model_dump() for ref in ctx.files],
+                    [ref.model_dump() for ref in ctx.files], settings, workspace_dir
+                )
+                attachments = await materialize_workspace_files(
+                    [ref.model_dump() for ref in ctx.session_files],
                     settings,
-                    hosted_workspace(row.environment),
+                    workspace_dir,
                 )
             await provision_hosted_async(
                 row.environment,
@@ -655,13 +689,14 @@ async def run_turn(
                 ),
                 gateway_allowlist=gateway_allowlist,
                 gateway_hosts=gateway_hosts,
-                extra_files=extra_files,
+                extra_files=[*extra_files, *attachments],
                 timeout=(
                     settings.turn_timeout.total_seconds()
                     if settings is not None
                     else None
                 ),
             )
+            await _push_attachments(pool, session_id, attachments)
             if settings is not None:
                 directory = row.environment.get("directory")
                 if isinstance(directory, str) and directory:

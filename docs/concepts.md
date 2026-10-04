@@ -75,8 +75,9 @@ harness. Computer sessions say they run in a sandbox.
 stays. `environment.type=none` sessions do not get sandbox or `/workspace` text in the
 main prompt. The hosted prompt does not state how long the sandbox
 stays up. It says the sandbox stops after some idle time, that
-user-provided files under `inputs/` are restored in their original
-version after a restart, that edits to them last until then, and that other
+user-provided files under `inputs/` and files the user attached to a
+message under `attachments/` are restored in their original version
+after a restart, that edits to them last until then, and that other
 workspace files, including `outputs/`, do not survive a restart.
 Empty or omitted agent instructions skip only that last block. The platform prompt is operator config, not a
 transcript item. A replacement system prompt is

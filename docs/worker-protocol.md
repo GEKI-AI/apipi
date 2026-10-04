@@ -331,7 +331,7 @@ Rules for the worker:
 | `last_seq` | integer, 0 or more | The session cursor. See [Sequencing and delivery](#sequencing-and-delivery). |
 | `text` | string | The user input as text. |
 | `images` | list | Always an empty list. Images travel in `parts`. The field stays so that the payload does not change for older workers. |
-| `parts` | list | The input in order: `{type: "input_text", text}`, [image references](#image-references), and [file references](#input-file-references). |
+| `parts` | list | The input in order: `{type: "input_text", text}`, [image references](#image-references), [file references](#input-file-references), and [workspace files](#workspace-files). |
 
 #### Image references
 
@@ -395,6 +395,45 @@ as `{type: "input_file", file_id, filename}`. A worker that cannot fetch
 a file reports the turn as failed with code `artifact_store`, and one
 whose text file is not UTF-8 with code `invalid_request`.
 
+#### Workspace files
+
+In a session with a computer (`openai_hosted`) an `input_file` goes to
+the workspace, not to the model. Its part is a `file` part with
+`model_input` `workspace` and the `path` the API bound the file to in
+the session, for example `attachments/report.xlsx`. It has no
+`object_id`, `url`, or `local_path`: the bytes come from the
+[`session_files`](#command-context) of the context, which lists the same
+path. The API sends workspace parts, and a context with a non-empty
+`session_files` list, only to a worker that listed the feature
+`session_files`.
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `type` | string | yes | `file`. |
+| `file_id` | string | yes | The id of the file. |
+| `filename` | string | yes | The file name the user item keeps. |
+| `mime_type` | string | yes | The content type of the file, `application/octet-stream` when it has none. |
+| `size_bytes` | integer, 0 or more | no | The size of the file. |
+| `model_input` | string | yes | `workspace`. |
+| `path` | string | yes | The path of the file in the workspace. |
+
+Before Pi starts the turn, the worker writes the missing session files
+into the session directory (see [file references](#file-references)).
+On a `microvm` guest that is already running, it also copies the files
+it wrote into the guest, because the guest sees the session directory
+only at boot. If that copy fails, the worker stops the guest, and the
+turn boots a new one from the session directory. The worker puts one
+line per workspace part in the prompt, at the place of the part, joined
+to the other parts by a newline:
+
+```
+Attached: attachments/report.xlsx (xlsx, 240 KB)
+```
+
+The type is the extension of the path, or the content type when the
+name has no extension. The worker puts the part in the user message item
+as `{type: "input_file", file_id, filename, path}`.
+
 ### `turn.continue`
 
 | Field | Type | Meaning |
@@ -442,6 +481,7 @@ File bytes never travel in a command.
 | `model` | object | `{base_url, api_key}`: the model host override (or `null`) and the model key. This is the only place the key travels. |
 | `mcp` | list | HTTP MCP servers: `{server_label, server_url, headers, allowed_tools}`. `headers` is a map of strings with the vault credentials applied. |
 | `files` | list | Workspace files: `{path, object_id, url, local_path, size_bytes, content_type}`. |
+| `session_files` | list | The files bound to the session with a workspace path, in the same shape as `files`: the attachments of earlier and current user messages. Empty for a session without a computer. A file deleted from the Files API is no longer in the list. |
 | `skills` | list | Installed skills: `{skill_id, object_id, url, local_path}`. |
 | `pi_session` | object | `{present, object_id, url, local_path}`: the saved Pi session for a cold restore. |
 
@@ -458,7 +498,7 @@ It carries no provider, no key, and no domain list.
 
 #### File references
 
-Each of `files`, `skills`, and `pi_session` is a reference. Exactly one of
+Each of `files`, `session_files`, `skills`, and `pi_session` is a reference. Exactly one of
 two forms is used, depending on the store of the API.
 
 | Store | Fields | What the worker does |
@@ -468,8 +508,9 @@ two forms is used, depending on the store of the API.
 
 `object_id` names the object in the store and is the same in both forms.
 `path` of a file is the path in the workspace. At the start of the turn
-the worker fetches the bytes of a file only when `path` does not exist in
-the session directory, and writes it there. A file that exists is left as
+the worker fetches the bytes of a file of `files` or `session_files`
+only when `path` does not exist in the session directory, and writes it
+there. A file that exists is left as
 it is and is not fetched. The worker then provisions the workspace and
 installs the skills from their bytes.
 
@@ -894,13 +935,16 @@ names the receiver does not know: it ignores them.
 | `session_stopped` | The worker acks `session.stop` on receipt. The durable `session.stopped` envelope completes it, and the API waits up to 15 seconds for it. | No |
 | `image_refs` | `turn.start` carries input images as [image references](#image-references) in `parts`, and the worker no longer uploads them with the kind `input_image`. | No |
 | `file_refs` | `turn.start` carries the `input_file` parts of a session without a computer as [file references](#input-file-references) in `parts`. | No |
+| `session_files` | `turn.start` carries the `input_file` parts of a session with a computer as [workspace files](#workspace-files), and the context carries `session_files`. | No |
 
 A worker does not wire web search when the API did not list `search`, and it
 fails an upload with a clear error, without sending an envelope, when the API
 did not list `presign`. The API refuses a command op that needs a feature the
 worker did not list. It also refuses a `turn.start` with image parts for a
-worker that did not list `image_refs`, and a `turn.start` with file parts
-for a worker that did not list `file_refs`: the HTTP request fails with
+worker that did not list `image_refs`, a `turn.start` with file parts
+for a worker that did not list `file_refs`, and a `turn.start` with
+workspace parts, or any command whose context has `session_files`, for a
+worker that did not list `session_files`: the HTTP request fails with
 `501` and code `unsupported_op`, and the message names the feature.
 
 **Upgrade order.** Upgrade the API first and the workers after it. A new API
@@ -912,7 +956,9 @@ version, because a worker cannot guess a safe heartbeat. While some workers
 do not list `image_refs` yet, the API places a message with images on a
 worker that lists it when one has room. A message with images that still
 lands on an older worker fails with `501`. The same holds for `file_refs`
-and a message with `input_file` parts. Text turns are not affected.
+and a message with `input_file` parts, and for `session_files` and every
+turn of a session with attachments. Text turns of other sessions are not
+affected.
 
 **Rollback order.** Roll back in the reverse order: the workers first, then
 the API. A worker with `image_refs` accepts only image references and

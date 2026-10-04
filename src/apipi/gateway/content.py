@@ -54,7 +54,7 @@ TEXT_FILE_EXTENSIONS = frozenset(
         "swift",
     }
 )
-ModelInput = Literal["text", "image"]
+ModelInput = Literal["text", "image", "workspace"]
 
 
 @dataclass(frozen=True)
@@ -72,13 +72,18 @@ class FilePart:
 
 @dataclass(frozen=True)
 class InputFile:
-    """An `input_file` after its checks: how it goes to the model."""
+    """An `input_file` after its checks: how it goes to the model.
+
+    `workspace` is a file of a session with a computer. Its `path` in the
+    workspace is set when the file is bound to the session.
+    """
 
     file_id: str
     filename: str
     mime: str
     size: int
     model_input: ModelInput
+    path: str = ""
 
 
 @dataclass(frozen=True)
@@ -116,7 +121,7 @@ def image_mimes(settings: Settings) -> frozenset[str]:
 
 def file_model_input(
     settings: Settings, content_type: str | None, filename: str
-) -> ModelInput | None:
+) -> Literal["text", "image"] | None:
     """How a file goes to the model without a computer, or None.
 
     An allowed image type is an image. `text/*` and the text types of

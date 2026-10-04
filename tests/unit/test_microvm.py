@@ -794,6 +794,7 @@ async def test_spawn_pi_microvm_uses_jailer_and_vsock(
     assert captured["kwargs"]["stderr"] is asyncio.subprocess.PIPE
     assert captured["kwargs"].get("start_new_session") in (None, False)
     assert proc.process_group is False
+    assert proc.push_files is not None
     await proc.send({"type": "prompt", "message": "hi"})
     assert b'"type": "prompt"' in writer.buf
     assert proc._stdin is writer

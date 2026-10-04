@@ -16,6 +16,8 @@ ARTIFACT_PORT = 53
 WORKSPACE_PORT = 54
 SESSION_PORT = 55
 METRICS_PORT = 56
+PUSH_PORT = 57
+MAX_PUSH_HEADER = 32
 PUBLISH_DIRS = ("outputs",)
 SESSION_REL = ".apipi/pi-session.jsonl"
 RNDADDENTROPY = 0x40085203
@@ -96,6 +98,75 @@ def workspace_tar_bytes(root: Path) -> bytes:
                 continue
             tar.add(str(path), arcname=rel)
     return buf.getvalue()
+
+
+def unpack_push_tar(data: bytes, root: Path) -> int:
+    """Write each file of a pushed tar that is missing under `root`.
+
+    A file that exists stays as it is. Names outside `root` and names
+    under `.apipi/` are skipped. Returns the number of written files.
+    """
+    written = 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r") as tar:
+        for info in tar.getmembers():
+            if not info.isfile() or info.name.startswith("/"):
+                continue
+            parts = Path(info.name).parts
+            if not parts or ".." in parts or parts[0] == ".apipi":
+                continue
+            target = root / info.name
+            if target.exists():
+                continue
+            handle = tar.extractfile(info)
+            if handle is None:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(handle.read())
+            written += 1
+    return written
+
+
+def read_push(conn: socket.socket) -> bytes:
+    """Read one push: a line with the size and then that many tar bytes."""
+    header = b""
+    while not header.endswith(b"\n"):
+        chunk = conn.recv(1)
+        if not chunk or len(header) >= MAX_PUSH_HEADER:
+            raise OSError("bad push header")
+        header += chunk
+    size = int(header)
+    data = bytearray()
+    while len(data) < size:
+        chunk = conn.recv(min(65536, size - len(data)))
+        if not chunk:
+            raise OSError("push ended early")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def handle_push(conn: socket.socket, root: Path) -> None:
+    try:
+        unpack_push_tar(read_push(conn), root)
+    except (OSError, ValueError, tarfile.TarError) as exc:
+        conn.sendall(f"ERR {type(exc).__name__}\n".encode())
+        return
+    conn.sendall(b"OK\n")
+
+
+def _serve_push(port: int) -> None:
+    sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((socket.VMADDR_CID_ANY, port))
+    sock.listen(8)
+    root = Path(os.environ.get("HOME", "/workspace"))
+    while True:
+        conn, _ = sock.accept()
+        try:
+            handle_push(conn, root)
+        except OSError:
+            pass
+        finally:
+            conn.close()
 
 
 def _serve_tar(port: int, build: Callable[[Path], bytes]) -> None:
@@ -248,6 +319,7 @@ def main(argv: list[str] | None = None) -> None:
     threading.Thread(
         target=_serve_tar, args=(METRICS_PORT, guest_sample_bytes), daemon=True
     ).start()
+    threading.Thread(target=_serve_push, args=(PUSH_PORT,), daemon=True).start()
     _serve_rpc(_pi_args(), port)
 
 

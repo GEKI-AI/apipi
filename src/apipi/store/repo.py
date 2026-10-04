@@ -1704,6 +1704,54 @@ async def bind_session_file(
     return row
 
 
+async def lock_session(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> SessionRow | None:
+    """Read a session row and lock it until the transaction ends (Postgres)."""
+    return await db.scalar(
+        select(SessionRow)
+        .where(SessionRow.tenant_id == tenant_id, SessionRow.id == session_id)
+        .with_for_update()
+    )
+
+
+async def lock_file(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    file_id: str,
+    *,
+    user_id: str | None = None,
+) -> FileRow | None:
+    """Read a file row the caller can see and lock it (Postgres)."""
+    return await db.scalar(
+        select(FileRow)
+        .where(
+            FileRow.tenant_id == tenant_id,
+            FileRow.id == file_id,
+            *file_visible(user_id),
+        )
+        .with_for_update()
+    )
+
+
+async def unbind_files(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    file_ids: Collection[str],
+) -> None:
+    """Delete the bindings of these files to one session; the files stay."""
+    if not file_ids:
+        return
+    await db.execute(
+        delete(SessionFileRow).where(
+            SessionFileRow.tenant_id == tenant_id,
+            SessionFileRow.session_id == session_id,
+            SessionFileRow.file_id.in_(list(file_ids)),
+        )
+    )
+
+
 async def link_session_file_item(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1844,7 +1892,11 @@ async def unbind_session_files(
 async def delete_unbound_attachments(
     db: AsyncSession, *, before: datetime, limit: int
 ) -> list[tuple[uuid.UUID, str]]:
-    """Delete attachments created before `before` that no session uses."""
+    """Delete attachments created before `before` that no session uses.
+
+    Each row is locked before its delete, so on Postgres the delete waits
+    for a bind that holds the row and then sees the new binding.
+    """
     unbound = ~exists().where(
         SessionFileRow.tenant_id == FileRow.tenant_id,
         SessionFileRow.file_id == FileRow.id,
@@ -1863,6 +1915,11 @@ async def delete_unbound_attachments(
     ).all()
     deleted: list[tuple[uuid.UUID, str]] = []
     for tenant_id, file_id in found:
+        await db.execute(
+            select(FileRow.id)
+            .where(FileRow.tenant_id == tenant_id, FileRow.id == file_id)
+            .with_for_update()
+        )
         result = await db.execute(
             delete(FileRow).where(
                 FileRow.tenant_id == tenant_id, FileRow.id == file_id, unbound

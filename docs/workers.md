@@ -202,7 +202,7 @@ API to worker:
 | `type` | Fields | What |
 | --- | --- | --- |
 | `hello` | `ok`, `protocol`, `worker_id`, `generation`, `connection_id`, `lease_ttl_seconds`, `heartbeat_seconds`, `sessions`, `store_check`, `revoke`, `ttl`, `features` | Register succeeded. `store_check` is present only for the filesystem store. |
-| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. `turn.start`, `turn.continue`, and `sandbox.boot` carry `payload.last_seq`, the session sequence cursor (see [Sequence on a new lease](#sequence-on-a-new-lease)). `turn.start` carries input images in `payload.parts` as store references (`file_id`, `object_id`, `url` or `local_path`, `mime_type`, `size_bytes`), never as bytes, and only to a worker that listed the feature `image_refs`. In a session without a computer it carries `input_file` parts the same way (`type: "file"`, plus `filename` and `model_input` `text` or `image`), only to a worker that listed the feature `file_refs`. |
+| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. `turn.start`, `turn.continue`, and `sandbox.boot` carry `payload.last_seq`, the session sequence cursor (see [Sequence on a new lease](#sequence-on-a-new-lease)). `turn.start` carries input images in `payload.parts` as store references (`file_id`, `object_id`, `url` or `local_path`, `mime_type`, `size_bytes`), never as bytes, and only to a worker that listed the feature `image_refs`. In a session without a computer it carries `input_file` parts the same way (`type: "file"`, plus `filename` and `model_input` `text` or `image`), only to a worker that listed the feature `file_refs`. In a session with a computer an `input_file` part has `model_input` `workspace` and a `path`, and the context lists every attachment of the session in `session_files`; the API sends both only to a worker that listed the feature `session_files`. |
 | `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part; only workers without the feature `image_refs` send it); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. `expires_at` is an RFC 3339 UTC time with `Z` and milliseconds, for example `2026-01-02T03:04:05.678Z`. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
 | `search.reply` | `session_id`, `request_id`, `ok`, `results`, `code`, `message` | Answer to one `search.request`. `results` is a list of `title`, `url`, `snippet`, and `published_date` (nullable), the same for every provider. On failure `ok` is false, `code` is one of `search_denied`, `search_unavailable`, `search_timeout`, `search_failed`, or `invalid_request`, and `message` is a short text that is safe to show the model. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
@@ -527,15 +527,18 @@ protocol as it was before features existed, so old peers keep working.
 | `session_stopped` | The worker acks `session.stop` on receipt, and the durable `session.stopped` envelope is the completion that the API waits for | No |
 | `image_refs` | `turn.start` carries input images as store references in `parts`, and the worker no longer uploads them as `input_image` | No |
 | `file_refs` | `turn.start` carries the `input_file` parts of a session without a computer as store references in `parts` | No |
+| `session_files` | `turn.start` carries the `input_file` parts of a session with a computer as workspace files, and the context carries `session_files` | No |
 
 The worker does not wire web search when the API did not list `search`,
 and it fails an upload with a clear error, instead of sending an
 envelope, when the API did not list `presign`. The API refuses a command
 op that needs a feature the worker did not list, and a `turn.start` with
-images for a worker that did not list `image_refs`, or with files for a
-worker that did not list `file_refs` (`501`, `unsupported_op`). Placement
-prefers a worker on the same replica that lists `image_refs` for a turn
-with images, and `file_refs` for a turn with files. A worker on another replica is
+images for a worker that did not list `image_refs`, with files for a
+worker that did not list `file_refs`, or with attachments of a session
+with a computer for a worker that did not list `session_files`
+(`501`, `unsupported_op`). Placement prefers a worker on the same
+replica that lists `image_refs` for a turn with images, `file_refs` for
+a turn with files, and `session_files` for a turn with attachments. A worker on another replica is
 not filtered, because its features are known only to the replica that
 holds its socket.
 
@@ -960,16 +963,18 @@ it does this:
 1. It stores one row in `worker_forwards`: the command and its
    arguments, without the turn context, and the id of the replica that
    holds the socket. The row id is the command id. An image part of
-   `turn.start` keeps only its `file_id`, never a presigned URL, a store
-   path, or an object key.
+   `turn.start` keeps only its `file_id`, and a file part its `file_id`
+   and `filename` (and the workspace `path` of a session with a
+   computer), never a presigned URL, a store path, or an object key.
 2. It sends that replica a small `forward` message with the row id,
    over the event bus. On Postgres this is `NOTIFY` on a channel of its
    own for that replica. The body never travels on the bus, because a
    command can be up to 262,144 bytes and `NOTIFY` carries 8000.
 3. The replica that holds the socket claims the row, builds the turn
    context itself from the database, the vault, and the object store,
-   checks each image `file_id` for the tenant again and builds its
-   image reference, and sends the command through its own writer and queue. From there it
+   checks each image and file `file_id` for the tenant again and builds
+   its reference (the `session_files` of the context come from the
+   database there too), and sends the command through its own writer and queue. From there it
    is an ordinary command: it is retransmitted, acked, and expires with
    the lease like a local one.
 4. It writes the outcome to the row and sends a `forward_result`

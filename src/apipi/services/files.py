@@ -1,13 +1,17 @@
 import contextlib
+import dataclasses
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from datetime import datetime
 from typing import Any
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.common.errors import ApiError
 from apipi.common.objects import NS_FILES
 from apipi.config import Settings
-from apipi.env.setup import SetupError, file_id_refs_from
+from apipi.env.setup import SetupError, file_id_refs_from, inline_files_from
 from apipi.gateway.auth import not_found
 from apipi.gateway.content import (
     FilePart,
@@ -29,7 +33,10 @@ from apipi.store.repo import (
     get_file,
     list_files,
     list_session_files,
+    lock_file,
+    lock_session,
     session_file_cursor,
+    unbind_files,
 )
 
 FILE_PURPOSES = frozenset({"user_data", "assistants", "vision"})
@@ -38,6 +45,10 @@ FILE_KINDS = ("file", "attachment", "image")
 MAX_LIST_LIMIT = 100
 DEFAULT_LIST_LIMIT = 20
 SWEEP_BATCH = 500
+ATTACHMENTS_DIR = "attachments"
+MAX_NAME_BYTES = 200
+ATTACH_ATTEMPTS = 3
+_WORKSPACE_PREFIXES = ("/workspace/", "/tmp/workspace/", "./")
 
 
 def new_file_id() -> str:
@@ -130,6 +141,139 @@ def page_body(data: list[dict[str, Any]], has_more: bool, key: str) -> dict[str,
         "last_id": data[-1][key] if data else None,
         "has_more": has_more,
     }
+
+
+def attachment_name(filename: str) -> str:
+    """A safe file name for `attachments/`: the last path segment, no controls.
+
+    An empty name, `.`, or `..` becomes `file`. A name longer than 200
+    bytes is cut and keeps its extension.
+    """
+    name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(ch for ch in name if ch >= " " and ch != "\x7f").strip()
+    if name in ("", ".", ".."):
+        name = "file"
+    if len(name.encode()) <= MAX_NAME_BYTES:
+        return name
+    stem, dot, extension = name.rpartition(".")
+    tail = dot + extension if stem and len(extension.encode()) <= 16 else ""
+    head = name[: len(name) - len(tail)]
+    while len((head + tail).encode()) > MAX_NAME_BYTES:
+        head = head[:-1]
+    return head + tail
+
+
+def free_attachment_path(filename: str, taken: Collection[str]) -> str:
+    """`attachments/<name>`, or `attachments/<stem> (n).<ext>` when it is taken."""
+    name = attachment_name(filename)
+    stem, dot, extension = name.rpartition(".")
+    if not stem:
+        stem, dot, extension = name, "", ""
+    path = f"{ATTACHMENTS_DIR}/{name}"
+    number = 2
+    while path in taken:
+        path = f"{ATTACHMENTS_DIR}/{stem} ({number}){dot}{extension}"
+        number += 1
+    return path
+
+
+def _workspace_relative(path: str) -> str:
+    text = path.strip()
+    for prefix in _WORKSPACE_PREFIXES:
+        if text.startswith(prefix):
+            return text[len(prefix) :]
+    return text
+
+
+async def _agent_inputs(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    environment: dict[str, Any],
+    *,
+    user_id: str | None,
+) -> tuple[set[str], int]:
+    """The workspace paths and the total size of the agent input files."""
+    try:
+        inline = inline_files_from(environment)
+        refs = file_id_refs_from(environment)
+    except SetupError as exc:
+        raise ApiError("invalid_request", exc.message, code="invalid_request") from exc
+    paths = {_workspace_relative(path) for path, _data in inline}
+    total = sum(len(data) for _path, data in inline)
+    for path, file_id in refs:
+        paths.add(_workspace_relative(path))
+        row = await get_file(db, tenant_id, file_id, user_id=user_id)
+        if row is not None:
+            total += row.size
+    return paths, total
+
+
+async def attach_session_files(
+    db: AsyncSession,
+    settings: Settings,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    files: Sequence[InputFile],
+    *,
+    environment: dict[str, Any],
+    user_id: str | None = None,
+) -> tuple[list[InputFile], list[str]]:
+    """Bind the `input_file` parts of a session with a computer to their paths.
+
+    Runs in the caller's transaction. The session row and each file row
+    are locked (Postgres), so two messages of one session cannot take the
+    same path, and a file the sweep or a delete removed is `404`. A file
+    bound to the session with a path keeps that path. Any other file gets
+    `attachments/<name>`, or a free name like `report (2).xlsx` when the
+    session or an agent input already uses that path. Returns the files
+    with their paths, and the ids of the files bound by this call.
+    """
+    if not files:
+        return [], []
+    if await lock_session(db, tenant_id, session_id) is None:
+        not_found()
+    rows, _more = await list_session_files(db, tenant_id, session_id)
+    bindings = {binding.file_id: binding for binding, _row in rows}
+    sizes = {
+        binding.file_id: row.size for binding, row in rows if binding.path is not None
+    }
+    taken, agent_bytes = await _agent_inputs(
+        db, tenant_id, environment, user_id=user_id
+    )
+    taken.update(binding.path for binding in bindings.values() if binding.path)
+    paths: dict[str, str] = {}
+    bound: list[str] = []
+    for item in files:
+        if item.file_id in paths:
+            continue
+        if await lock_file(db, tenant_id, item.file_id, user_id=user_id) is None:
+            not_found()
+        binding = bindings.get(item.file_id)
+        if binding is not None and binding.path:
+            paths[item.file_id] = binding.path
+            continue
+        path = free_attachment_path(item.filename, taken)
+        taken.add(path)
+        if binding is None:
+            await bind_session_file(db, tenant_id, session_id, item.file_id, path=path)
+            bound.append(item.file_id)
+        else:
+            binding.path = path
+            await db.flush()
+        paths[item.file_id] = path
+        sizes[item.file_id] = item.size
+    total = agent_bytes + sum(sizes.values())
+    limit = int(settings.max_workspace_bytes)
+    if total > limit:
+        raise ApiError(
+            "invalid_request",
+            f"The agent inputs and the session files need {total} bytes, more "
+            f"than the {limit} bytes of the workspace (APIPI_MAX_WORKSPACE_BYTES)",
+            code="payload_too_large",
+            status_code=413,
+        )
+    attached = [dataclasses.replace(item, path=paths[item.file_id]) for item in files]
+    return attached, bound
 
 
 class FileService:
@@ -227,14 +371,17 @@ class FileService:
         files: tuple[FilePart, ...],
         *,
         user_id: str | None = None,
+        workspace: bool = False,
     ) -> list[InputFile]:
-        """Check the `input_file` parts of a session without a computer.
+        """Check the `input_file` parts of a message.
 
         Each must be a file of the tenant that the caller with `user_id`
-        can see. An allowed image type within
-        `APIPI_MAX_IMAGE_BYTES` goes to the model as an image. A text type
-        within `APIPI_MAX_INLINE_FILE_BYTES` whose bytes are UTF-8 goes to
-        the model as text. Anything else is `unsupported_file_type`.
+        can see. With `workspace` (a session with a computer) every file
+        type goes to the workspace, within `APIPI_MAX_FILE_BYTES`.
+        Otherwise an allowed image type within `APIPI_MAX_IMAGE_BYTES`
+        goes to the model as an image. A text type within
+        `APIPI_MAX_INLINE_FILE_BYTES` whose bytes are UTF-8 goes to the
+        model as text. Anything else is `unsupported_file_type`.
         """
         if not files:
             return []
@@ -247,6 +394,8 @@ class FileService:
                 if row is None:
                     not_found()
                 rows[part.file_id] = row
+        if workspace:
+            return [self._workspace_file(rows[part.file_id], part) for part in files]
         checked: set[str] = set()
         out: list[InputFile] = []
         for part in files:
@@ -287,6 +436,66 @@ class FileService:
                 )
             )
         return out
+
+    def _workspace_file(self, row: FileRow, part: FilePart) -> InputFile:
+        name = part.filename or row.filename
+        limit = int(self.settings.max_file_bytes)
+        if row.size > limit:
+            raise ApiError(
+                "invalid_request",
+                f"input_file {name} is {row.size} bytes, more than the {limit} "
+                "bytes of APIPI_MAX_FILE_BYTES",
+                code="payload_too_large",
+                status_code=413,
+            )
+        return InputFile(
+            file_id=row.id,
+            filename=name,
+            mime=(row.content_type or "").split(";", 1)[0].strip().lower(),
+            size=row.size,
+            model_input="workspace",
+        )
+
+    async def attach(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        files: Sequence[InputFile],
+        *,
+        environment: dict[str, Any],
+        user_id: str | None = None,
+    ) -> tuple[list[InputFile], list[str]]:
+        """Bind workspace files to a session in one transaction.
+
+        See `attach_session_files`. A unique path conflict with another
+        transaction is tried again.
+        """
+        for attempt in range(ATTACH_ATTEMPTS):
+            try:
+                async with self.store.session() as db:
+                    return await attach_session_files(
+                        db,
+                        self.settings,
+                        tenant_id,
+                        session_id,
+                        files,
+                        environment=environment,
+                        user_id=user_id,
+                    )
+            except IntegrityError:
+                if attempt + 1 == ATTACH_ATTEMPTS:
+                    raise
+        return [], []
+
+    async def unbind(
+        self, tenant_id: uuid.UUID, session_id: uuid.UUID, file_ids: list[str]
+    ) -> None:
+        """Remove the bindings of a turn that did not start, best effort."""
+        if file_ids:
+            with contextlib.suppress(Exception):
+                async with self.store.session() as db:
+                    await unbind_files(db, tenant_id, session_id, file_ids)
+        file_ids.clear()
 
     async def _require_utf8(
         self, tenant_id: uuid.UUID, file_id: str, name: str

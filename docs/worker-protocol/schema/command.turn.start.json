@@ -374,7 +374,7 @@
       "type": "object"
     },
     "InputFileRef": {
-      "description": "One `input_file` of a session without a computer, as a store reference.\n\n`model_input` says how the worker passes it to the model: `text`\n(UTF-8 text in a `<file name=\"…\">` block of the prompt) or `image`.\nThe bytes never travel in the command.",
+      "description": "One `input_file` of a turn.\n\n`model_input` says what the worker does with it: `text` (UTF-8 text\nin a `<file name=\"…\">` block of the prompt) or `image` for a session\nwithout a computer, as a store reference. `workspace` is a file of a\nsession with a computer: it has a `path` in the workspace and no\nstore reference, because the worker writes it from the context's\n`session_files`. The bytes never travel in the command.",
       "properties": {
         "file_id": {
           "title": "File Id",
@@ -403,14 +403,35 @@
         "model_input": {
           "enum": [
             "text",
-            "image"
+            "image",
+            "workspace"
           ],
           "title": "Model Input",
           "type": "string"
         },
         "object_id": {
-          "title": "Object Id",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Id"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
         },
         "size_bytes": {
           "anyOf": [
@@ -449,7 +470,6 @@
         "filename",
         "mime_type",
         "model_input",
-        "object_id",
         "type"
       ],
       "title": "InputFileRef",
@@ -593,6 +613,13 @@
             },
             "session": {
               "$ref": "#/$defs/ContextSession"
+            },
+            "session_files": {
+              "items": {
+                "$ref": "#/$defs/ContextFileRef"
+              },
+              "title": "Session Files",
+              "type": "array"
             },
             "skills": {
               "items": {

@@ -652,6 +652,15 @@ class SessionFileRow(Base):
             ondelete="CASCADE",
         ),
         Index("ix_session_files_tenant_file", "tenant_id", "file_id"),
+        Index(
+            "uq_session_files_path",
+            "tenant_id",
+            "session_id",
+            "path",
+            unique=True,
+            postgresql_where=text("path IS NOT NULL"),
+            sqlite_where=text("path IS NOT NULL"),
+        ),
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(

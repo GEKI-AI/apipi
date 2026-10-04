@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 from apipi.common.usage import usage_from
@@ -27,6 +28,7 @@ class FakeHarness:
         self.api_keys: list[str | None] = []
         self.images: list[list[dict[str, str]]] = []
         self.prompts: list[str] = []
+        self.workspaces: list[dict[str, bytes]] = []
         self.hold = False
         self.fail_message: str | None = None
         self.usage: dict[str, int] = dict(FAKE_USAGE)
@@ -51,7 +53,16 @@ class FakeHarness:
         abort: asyncio.Event | None = None,
         **_kwargs: object,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        del session_id, cwd
+        del session_id
+        if cwd and tool_result is None:
+            root = Path(cwd)
+            self.workspaces.append(
+                {
+                    path.relative_to(root).as_posix(): path.read_bytes()
+                    for path in sorted(root.rglob("*"))
+                    if path.is_file() and path.relative_to(root).parts[0] != ".apipi"
+                }
+            )
         self.tools = tools
         raw_key = _kwargs.get("api_key")
         self.api_keys.append(raw_key if isinstance(raw_key, str) else None)

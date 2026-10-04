@@ -92,9 +92,9 @@ hosted files and skills).
 | `APIPI_SESSIONS_DIR` | `sessions_dir` | `.apipi/sessions` under cwd | Root for local session workspaces (`openai_hosted`). Each worker keeps its own value. Must be writable by the gateway user. A leftover root-owned tree fails harvest with code `artifact_store`. |
 | `APIPI_DB_POOL_SIZE` | `db_pool_size` | `5` | SQLAlchemy pool size. |
 | `APIPI_MAX_REQUEST_BYTES` | `max_request_bytes` | `1MiB` | Reject larger request bodies with `413` and code `payload_too_large`. |
-| `APIPI_MAX_WORKSPACE_BYTES` | `max_workspace_bytes` | `1GiB` | Size of one `openai_hosted` session directory. An oversized microvm pull is not unpacked. Over the cap, harvest emits `agent.session.error` with code `workspace_too_large`. |
+| `APIPI_MAX_WORKSPACE_BYTES` | `max_workspace_bytes` | `1GiB` | Size of one `openai_hosted` session directory. An oversized microvm pull is not unpacked. Over the cap, harvest emits `agent.session.error` with code `workspace_too_large`. The agent inputs and the attachments of a session together must fit it: a message whose `input_file` parts would exceed it returns `413` with code `payload_too_large`. |
 | `APIPI_MAX_ARTIFACT_BYTES` | `max_artifact_bytes` | `512MiB` | Published artifact bytes per session. Publishing more is refused with code `artifact_too_large`. The harness session cache uses the same blob store and does not count toward this cap. |
-| `APIPI_MAX_FILE_BYTES` | `max_file_bytes` | `50MiB` | Max size of one `POST /v1/files` or `POST /v1/skills` upload. Larger bodies return `413` with code `payload_too_large`. JSON routes still use `max_request_bytes`. |
+| `APIPI_MAX_FILE_BYTES` | `max_file_bytes` | `50MiB` | Max size of one `POST /v1/files` or `POST /v1/skills` upload, and of one `input_file` in a session with a computer. Larger bodies return `413` with code `payload_too_large`. JSON routes still use `max_request_bytes`. |
 | `APIPI_AGENT_VERSIONS_KEEP` | `agent_versions_keep` | removed | Warned about and ignored. Agent versions and snapshots are gone; the live agent row is the only state. Use the agent bundle export for snapshots. |
 | `APIPI_ARTIFACT_STORE` | `artifact_store` | `local` | `local` or `s3`. Published artifacts, hosted file uploads, and hosted skill bundles share this backend. `s3` is the recommended production setup: the API issues presigned PUT and GET URLs and the worker uploads and downloads directly, so store credentials exist only on the API. `local` works on a single host with no extra config, because `APIPI_LOCAL_STORE_DIR` defaults to `.apipi/store`. With several hosts, the API and every worker must mount one shared `APIPI_LOCAL_STORE_DIR` at the same location. Local bytes stay under `<store-root>/.artifacts`, files under `<store-root>/.store/files`, and skills under `<store-root>/.store/skills`. |
 | `APIPI_LOCAL_STORE_DIR` | `local_store_dir` | `.apipi/store` under cwd | Dedicated root for local artifact, file, and skill bytes. `apipi dev` starts both processes in the same directory, so they share this default. A blank value is rejected when `APIPI_ARTIFACT_STORE=local`. Because the default is always set, a split deployment on several hosts is not caught by that check: set it to one path the API and every worker mounts at the same location (same machine or a shared network filesystem). A worker whose store root is not the API's fails the store check when it registers. How to share it is up to the operator and out of scope for ApiPi. |
@@ -116,7 +116,7 @@ hosted files and skills).
 | `APIPI_MAX_IMAGES` | `max_images` | 8 | Maximum images in one message. |
 | `APIPI_IMAGE_MIMES` | `image_mimes` | `image/png,image/jpeg,image/webp,image/gif` | Comma-separated MIME types allowed on `input_image`. For a `file_id` it is checked against the content type of the file. An `input_file` with one of these types goes to the model as an image. |
 | `APIPI_MAX_INLINE_FILE_BYTES` | `max_inline_file_bytes` | `256KiB` | Maximum size of one text `input_file` that goes to the model as text in a session without a computer. A larger file returns `413` with code `payload_too_large` before the turn starts. |
-| `APIPI_MAX_FILES_PER_MESSAGE` | `max_files_per_message` | 10 | Maximum `input_file` parts in one message. More return `400`. |
+| `APIPI_MAX_FILES_PER_MESSAGE` | `max_files_per_message` | 10 | Maximum `input_file` parts in one message, with or without a computer. More return `400`. |
 | `APIPI_USAGE_STORE` | `usage_store` | `turns` | How much agent usage hits Postgres: `off` \| `rollups` \| `turns`. See [usage](usage.md). |
 | `APIPI_USAGE_RETENTION` | `usage_retention` | `15d` | Delete turn log rows older than this. Empty means no purge. Rollups stay. |
 | `APIPI_USAGE_EXPORT_URL` | `usage_export_url` | unset | HTTPS POST of one non-text agent usage event per turn. Off when unset. |
@@ -551,7 +551,9 @@ told that the working directory is `/workspace` and that the sandbox
 stops after some idle time. The prompt does not state that duration.
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED` and `APIPI_IDLE_TTL` are unchanged.
 User-provided files under `inputs/` are restored in their original
-version after a restart. Edits the agent makes to them last until then.
+version after a restart. Files the user attaches to a message are
+under `attachments/`, named in the message, and restored the same way.
+Edits the agent makes to these files last until then.
 Every other workspace file is non-persistent, including `outputs/`.
 A missing file is probably a sandbox restart. `outputs/` is for
 artifacts. Those files are collected after each turn and shared with
@@ -565,7 +567,7 @@ browser.
 | Fragment | When it is appended |
 | --- | --- |
 | No-computer main prompt | `environment.type` is `none` or omitted. No `/workspace`, size, or browser text. |
-| Hosted main prompt | `openai_hosted`. Names `/workspace`, an idle stop with no duration, `inputs/`, and `outputs/`. |
+| Hosted main prompt | `openai_hosted`. Names `/workspace`, an idle stop with no duration, `inputs/`, `attachments/`, and `outputs/`. |
 
 | Operator main prompt | `APIPI_PLATFORM_PROMPT` is set. Replaces the built-in main block. `""` drops it. |
 | Additional platform text | `APIPI_PLATFORM_PROMPT_ADDITIONAL` is non-empty. Always, after the main block. |

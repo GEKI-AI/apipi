@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
@@ -487,6 +488,14 @@ class PiPool:
         if proc is None or not proc.alive:
             return None
         return proc
+
+    async def settled(self, session_id: uuid.UUID) -> PiProc | None:
+        """The live process of a session after a boot in flight has ended."""
+        inflight = self._inflight.get(session_id)
+        if inflight is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.shield(inflight)
+        return self.peek(session_id)
 
     def touch(self, session_id: uuid.UUID) -> None:
         self._last[session_id] = time.monotonic()

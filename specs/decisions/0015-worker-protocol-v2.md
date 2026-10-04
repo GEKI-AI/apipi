@@ -303,12 +303,16 @@ rules:
 
 The features today are `search`, `presign`, and `lease_cursor`, which
 describe the protocol that existed before features and are in the
-baseline, and `session_stopped`, `image_refs`, and `file_refs`, which
-are not. `image_refs` sends input images in `turn.start` as store
-references instead of base64 bytes, so an image no longer counts toward
-the command size limit. `file_refs` does the same for the `input_file`
-parts of a session without a computer: the worker reads a text file from
-the store and puts its text in the prompt. The `hello` of the API
+baseline, and `session_stopped`, `image_refs`, `file_refs`, and
+`session_files`, which are not. `image_refs` sends input images in
+`turn.start` as store references instead of base64 bytes, so an image no
+longer counts toward the command size limit. `file_refs` does the same
+for the `input_file` parts of a session without a computer: the worker
+reads a text file from the store and puts its text in the prompt.
+`session_files` adds the attachments of a session with a computer: the
+context lists them as references in `session_files`, the worker writes
+the missing ones into the workspace, and a `turn.start` part names the
+path of each new one. The `hello` of the API
 must carry `lease_ttl_seconds` and `heartbeat_seconds`: a worker cannot
 guess a safe heartbeat, so a `hello` without them stays an error. A
 receiver does not ack an unknown `op` as done, so the API sends it again

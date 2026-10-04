@@ -717,3 +717,59 @@ async def test_turn_start_with_a_file_is_forwarded_without_its_reference(
     parts = stored[0]["payload"]["parts"]
     assert parts[1] == {"type": "file", "file_id": file_id, "filename": "plan.md"}
     assert replica_harness.prompts == ['read\n<file name="plan.md">\n# notes\n</file>']
+
+
+async def test_turn_start_with_an_attachment_is_forwarded_with_its_path(
+    replicas: Replicas,
+    replica_harness: FakeHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apipi.workerhub import forward as forward_module
+
+    stored: list[dict[str, Any]] = []
+    real = forward_module.create_worker_forward
+
+    async def spy(db: Any, row: WorkerForward) -> None:
+        stored.append(dict(row.body))
+        await real(db, row)
+
+    monkeypatch.setattr(forward_module, "create_worker_forward", spy)
+    session_id = await _new_session(replicas.client_b, {"type": "openai_hosted"})
+    uploaded = await replicas.client_b.post(
+        "/v1/files",
+        headers=_auth(),
+        data={"purpose": "user_data"},
+        files={"file": ("report.xlsx", b"sheet", "application/octet-stream")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    file_id = uploaded.json()["id"]
+    content = [
+        {"type": "input_text", "text": "sum it"},
+        {"type": "input_file", "file_id": file_id},
+    ]
+    posted = await replicas.client_b.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(),
+        json={
+            "events": [
+                {
+                    "type": "agent.session.input.message",
+                    "input": [{"role": "user", "content": content}],
+                }
+            ]
+        },
+    )
+    assert posted.status_code == 200, posted.text
+    assert replicas.calls == [("acquire", "turn.start")]
+    body = stored[0]
+    assert "context" not in body["payload"]
+    assert body["payload"]["parts"][1] == {
+        "type": "file",
+        "file_id": file_id,
+        "filename": "report.xlsx",
+        "path": "attachments/report.xlsx",
+    }
+    assert replica_harness.prompts == [
+        "sum it\nAttached: attachments/report.xlsx (xlsx, 5 B)"
+    ]
+    assert replica_harness.workspaces[-1]["attachments/report.xlsx"] == b"sheet"

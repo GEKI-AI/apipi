@@ -222,7 +222,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | `input_file` with a type the model cannot read without a computer (pdf, xlsx, docx, zip, …), or a text file that is not UTF-8 | `invalid_request` | `unsupported_file_type` |
 | Text `input_file` larger than `APIPI_MAX_INLINE_FILE_BYTES` | `invalid_request` | `payload_too_large` (`413`) |
 | `input_file` with `file_data` or `file_url` | `not_implemented` | `file_data` or `file_url` |
-| `input_file` in a session with a computer | `not_implemented` | `input_file` (`501`) |
+| `input_file` larger than `APIPI_MAX_FILE_BYTES`, or attachments that with the agent inputs exceed `APIPI_MAX_WORKSPACE_BYTES`, in a session with a computer | `invalid_request` | `payload_too_large` (`413`) |
 | Other non-text input parts | `not_implemented` | The part type |
 
 The envelope is `{ "error": { "type", "code", "message" } }`. When
@@ -276,10 +276,13 @@ In a session without a computer (`environment.type` `none`), a text
 file goes to the model as text with its file name, and an image file
 goes to the model like `input_image`. Unlike OpenAI, ApiPi does not
 read PDF or other documents for the model; such a file returns `400`
-with code `unsupported_file_type`. A session with a computer does not
-take `input_file` yet (`501`). The user item lists the part as
-`{"type": "input_file", "file_id", "filename"}`. See
-[API](api.md#events) for the types and limits.
+with code `unsupported_file_type`. The user item lists the part as
+`{"type": "input_file", "file_id", "filename"}`. In a session with a
+computer, any file type is accepted and goes to the workspace under
+`attachments/` instead of the model, as in a code interpreter
+container. The agent opens it with its tools, and the user item also
+has the workspace `path`. See [API](api.md#events) for the types and
+limits.
 
 SSE events use ApiPi public types (`agent.session.created`,
 `agent.session.turn.output_text.done`, and the rest listed on

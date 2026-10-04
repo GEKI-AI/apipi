@@ -155,6 +155,37 @@ def file_block(filename: str, text: str) -> str:
     return f'<file name="{html.escape(filename, quote=True)}">\n{body}\n</file>'
 
 
+def size_text(size: int) -> str:
+    """A short size for the prompt: `512 B`, `240 KB`, `1.5 MB`, `2.0 GB`."""
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024**2:
+        return f"{round(size / 1024)} KB"
+    if size < 1024**3:
+        return f"{size / 1024**2:.1f} MB"
+    return f"{size / 1024**3:.1f} GB"
+
+
+def attached_line(part: Mapping[str, Any]) -> str:
+    """The prompt line of a workspace file, like `Attached: <path> (xlsx, 240 KB)`.
+
+    The type is the file extension, or the content type when the name has
+    none.
+    """
+    path = str(part.get("path") or "")
+    stem, dot, extension = path.rsplit("/", 1)[-1].rpartition(".")
+    mime = str(part.get("mime_type") or "")
+    if stem and dot and extension:
+        kind = extension.lower()
+    elif mime and mime != "application/octet-stream":
+        kind = mime
+    else:
+        kind = "file"
+    size = part.get("size_bytes")
+    details = f"{kind}, {size_text(size)}" if isinstance(size, int) else kind
+    return f"Attached: {path} ({details})"
+
+
 async def fetch_input_files(parts: list[Any], settings: Settings) -> list[str]:
     """Fetch the text `file` parts of `turn.start` as prompt blocks, in order.
 
