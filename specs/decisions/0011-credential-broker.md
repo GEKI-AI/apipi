@@ -16,10 +16,12 @@ are the registered tool URLs. The proxy injects a matching vault
 bearer, or host-expanded tool headers, and does not put those values
 in guest env.
 
-Stdio MCP is out of scope. Arbitrary guest `curl` that ignores the
-rewritten URLs is a later MITM story, not this path.
+Stdio MCP is out of scope. Arbitrary guest traffic that ignores the
+rewritten URLs, such as `curl` or `git`, goes through the egress
+gateway (0016), which also injects environment variable credentials.
 
-Vaults follow the OpenAI Agents shape (`static_bearer` first). They
+Vaults follow the OpenAI Agents shape (`static_bearer` for MCP,
+`environment_variable` for guest HTTPS through 0016). They
 are tenant-scoped store rows, not the gateway auth bearer. Vault
 tokens are encrypted at rest with AES-256-GCM
 (`APIPI_VAULT_MASTER_KEY`, ciphertext prefix `v1:`).
