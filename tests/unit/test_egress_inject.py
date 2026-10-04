@@ -133,6 +133,20 @@ def test_placeholder_to_other_host_stays() -> None:
     assert mixed.header("x-key") == PH
 
 
+def test_plain_http_never_gets_a_secret() -> None:
+    head = RequestHead(
+        method="GET",
+        target=f"/x?k={PH}",
+        headers=(("Host", API), ("Authorization", f"Bearer {PH}")),
+        host=API,
+        port=80,
+    )
+    injector = _injector()
+    assert injector.request(head) is None
+    response = ResponseHead(status=200, reason="OK", headers=(("X", "ghp_real"),))
+    assert injector.response(head, response) is None
+
+
 def test_two_credentials_on_one_host() -> None:
     injector = SecretInjector(
         [
@@ -222,7 +236,10 @@ def test_injector_for_context_and_git_files() -> None:
 
 async def test_gateway_sends_secret_upstream(env: Env) -> None:
     upstream = await env.upstream()
-    injector = SecretInjector([Injection("cred", "SECRET", PH, "real-secret", (HOST,))])
+    injector = SecretInjector(
+        [Injection("cred", "SECRET", PH, "real-secret", (HOST,))],
+        ports=(upstream.port,),
+    )
     hooks = EgressHooks(request=[injector.request], response=[injector.response])
     gateway = await env.gateway(
         "restricted", port=upstream.port, intercept=(HOST,), hooks=hooks

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from apipi.common.logutil import log_event
 from apipi.common.metrics import Metrics
 from apipi.protocol import ContextEnvCredential
-from apipi.worker.egress.gateway import egress_metrics
+from apipi.worker.egress.gateway import TLS_PORTS, egress_metrics
 from apipi.worker.egress.intercept import (
     EgressHooks,
     Headers,
@@ -76,10 +76,12 @@ class SecretInjector:
         *,
         session_id: str | None = None,
         metrics: Metrics | None = None,
+        ports: Iterable[int] = TLS_PORTS,
     ) -> None:
         self.injections = tuple(injections)
         self.session_id = session_id
         self.metrics = metrics
+        self.ports = frozenset(ports)
 
     @property
     def hosts(self) -> tuple[str, ...]:
@@ -127,6 +129,8 @@ class SecretInjector:
         return EgressHooks(request=[self.request], response=[self.response])
 
     def request(self, head: RequestHead) -> RequestHead | None:
+        if head.port not in self.ports:
+            return None
         headers = list(head.headers)
         target = head.target
         used: list[Injection] = []
@@ -164,6 +168,8 @@ class SecretInjector:
     def response(
         self, head: RequestHead, response: ResponseHead
     ) -> ResponseHead | None:
+        if head.port not in self.ports:
+            return None
         headers: Headers = response.headers
         changed = False
         for injection in self.injections:
