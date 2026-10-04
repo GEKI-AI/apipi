@@ -14,6 +14,7 @@ from tests.unit.test_blobs import FakeS3
 from apipi.common.objects import NS_FILES
 from apipi.config import Settings
 from apipi.gateway import create_app
+from apipi.gateway.auth import AuthRequest, tenant_from_key
 from apipi.gateway.tokens import hash_token
 from apipi.protocol import (
     MAX_COMMAND_BYTES,
@@ -300,6 +301,89 @@ async def test_session_create_with_a_foreign_file_id_creates_no_session(
         sessions = await client.get("/v1/agents/sessions", headers=_auth(token))
     assert created.status_code == 404
     assert sessions.json()["data"] == []
+
+
+class _Users:
+    def __call__(self, token: str, request: AuthRequest) -> dict[str, object]:
+        user = request.headers.get("x-end-user")
+        return {
+            "key_id": hash_token(token),
+            "tenant_id": tenant_from_key(token),
+            "user_id": user,
+            "cache_key": f"{token}:{user}",
+        }
+
+    def cache_key(self, token: str, request: AuthRequest) -> str:
+        return f"{token}:{request.headers.get('x-end-user')}"
+
+
+async def test_input_image_of_another_user_is_not_found(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    harness = FakeHarness()
+    async with split_client_for(
+        _vision(settings),
+        store,
+        harness=harness,
+        token=worker_secret,
+        authenticate=_Users(),
+    ) as (_app, client, _worker):
+        token = "image-users"
+        u1 = {**_auth(token), "X-End-User": "u1"}
+        u2 = {**_auth(token), "X-End-User": "u2"}
+        uploaded = await client.post(
+            "/v1/files",
+            headers=u1,
+            data={"purpose": "vision"},
+            files={"file": ("photo.png", _png(1024), "image/png")},
+        )
+        assert uploaded.status_code == 200, uploaded.json()
+        image = uploaded.json()["id"]
+        agent = await client.post(
+            "/v1/agents", headers=u1, json={"name": "bot", "model": "test"}
+        )
+        agent_id = agent.json()["id"]
+        part = {"type": "input_image", "file_id": image}
+        u2_create = await client.post(
+            "/v1/agents/sessions",
+            headers=u2,
+            json={
+                "agent_id": agent_id,
+                "environment": {"type": "none"},
+                "input": {"role": "user", "content": [part]},
+            },
+        )
+        u2_sessions = await client.get("/v1/agents/sessions", headers=u2)
+        sessions: dict[str, str] = {}
+        for name, headers in (("u1", u1), ("u2", u2), ("none", _auth(token))):
+            created = await client.post(
+                "/v1/agents/sessions",
+                headers=headers,
+                json={"agent_id": agent_id, "environment": {"type": "none"}},
+            )
+            assert created.status_code == 200, created.json()
+            sessions[name] = created.json()["id"]
+        u2_sent = await client.post(
+            f"/v1/agents/sessions/{sessions['u2']}/events",
+            headers=u2,
+            json=_message(part),
+        )
+        u1_sent = await client.post(
+            f"/v1/agents/sessions/{sessions['u1']}/events",
+            headers=u1,
+            json=_message(part),
+        )
+        none_sent = await client.post(
+            f"/v1/agents/sessions/{sessions['none']}/events",
+            headers=_auth(token),
+            json=_message(part),
+        )
+    assert u2_create.status_code == 404
+    assert u2_sessions.json()["data"] == []
+    assert u2_sent.status_code == 404
+    assert u1_sent.status_code == 200, u1_sent.json()
+    assert none_sent.status_code == 200, none_sent.json()
+    assert len(harness.images) == 2
 
 
 async def test_command_over_the_limit_fails_with_a_clear_message(

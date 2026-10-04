@@ -1508,11 +1508,41 @@ async def create_file(
     return row
 
 
+USER_FILE_KINDS = ("attachment", "image")
+
+
+def file_visible(user_id: str | None) -> list[Any]:
+    """The rule for which files a caller with `user_id` can see.
+
+    Files of kind `attachment` or `image` are user files. With a
+    `user_id`, a user file is visible only when it has the same
+    `user_id` or none. Other kinds and callers without a `user_id`
+    stay tenant-scoped.
+    """
+    if user_id is None:
+        return []
+    return [
+        or_(
+            FileRow.kind.not_in(USER_FILE_KINDS),
+            FileRow.user_id.is_(None),
+            FileRow.user_id == user_id,
+        )
+    ]
+
+
 async def get_file(
-    db: AsyncSession, tenant_id: uuid.UUID, file_id: str
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    file_id: str,
+    *,
+    user_id: str | None = None,
 ) -> FileRow | None:
     return await db.scalar(
-        select(FileRow).where(FileRow.tenant_id == tenant_id, FileRow.id == file_id)
+        select(FileRow).where(
+            FileRow.tenant_id == tenant_id,
+            FileRow.id == file_id,
+            *file_visible(user_id),
+        )
     )
 
 
@@ -1534,11 +1564,17 @@ def _order(created: Any, key: Any, order: str) -> tuple[Any, Any]:
 
 
 async def file_cursor(
-    db: AsyncSession, tenant_id: uuid.UUID, file_id: str
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    file_id: str,
+    *,
+    user_id: str | None = None,
 ) -> tuple[datetime, str] | None:
     created = await db.scalar(
         select(FileRow.created_at).where(
-            FileRow.tenant_id == tenant_id, FileRow.id == file_id
+            FileRow.tenant_id == tenant_id,
+            FileRow.id == file_id,
+            *file_visible(user_id),
         )
     )
     return None if created is None else (created, file_id)
@@ -1550,26 +1586,29 @@ async def list_files(
     *,
     kinds: Collection[str] | None = None,
     purpose: str | None = None,
-    user_id: str | None = None,
+    owner_id: str | None = None,
     session_id: uuid.UUID | None = None,
     filename_prefix: str | None = None,
     ids: Collection[str] | None = None,
     after: tuple[datetime, str] | None = None,
     order: str = "desc",
     limit: int | None = None,
+    user_id: str | None = None,
 ) -> tuple[list[FileRow], bool]:
     """One page of the tenant's files, newest first unless `order` is `asc`.
 
     Returns the rows and whether more rows follow. `after` is the
-    `(created_at, id)` of the last row of the previous page.
+    `(created_at, id)` of the last row of the previous page. `owner_id`
+    filters by the file's `user_id`. `user_id` is the caller.
     """
     query = select(FileRow).where(FileRow.tenant_id == tenant_id)
+    query = query.where(*file_visible(user_id))
     if kinds is not None:
         query = query.where(FileRow.kind.in_(list(kinds)))
     if purpose is not None:
         query = query.where(FileRow.purpose == purpose)
-    if user_id is not None:
-        query = query.where(FileRow.user_id == user_id)
+    if owner_id is not None:
+        query = query.where(FileRow.user_id == owner_id)
     if filename_prefix:
         query = query.where(
             func.substr(FileRow.filename, 1, len(filename_prefix)) == filename_prefix
@@ -1594,8 +1633,14 @@ async def list_files(
     return rows, False
 
 
-async def delete_file(db: AsyncSession, tenant_id: uuid.UUID, file_id: str) -> bool:
-    row = await get_file(db, tenant_id, file_id)
+async def delete_file(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    file_id: str,
+    *,
+    user_id: str | None = None,
+) -> bool:
+    row = await get_file(db, tenant_id, file_id, user_id=user_id)
     if row is None:
         return False
     await db.execute(
@@ -1609,9 +1654,16 @@ async def delete_file(db: AsyncSession, tenant_id: uuid.UUID, file_id: str) -> b
 
 
 async def promote_attachments(
-    db: AsyncSession, tenant_id: uuid.UUID, file_ids: Collection[str]
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    file_ids: Collection[str],
+    *,
+    user_id: str | None = None,
 ) -> None:
-    """Make attachments used as agent or session input files of kind `file`."""
+    """Make attachments used as agent or session input files of kind `file`.
+
+    Only attachments the caller with `user_id` can see are changed.
+    """
     if not file_ids:
         return
     await db.execute(
@@ -1620,6 +1672,7 @@ async def promote_attachments(
             FileRow.tenant_id == tenant_id,
             FileRow.id.in_(list(file_ids)),
             FileRow.kind == "attachment",
+            *file_visible(user_id),
         )
         .values(kind="file")
     )
@@ -1673,13 +1726,27 @@ async def link_session_file_item(
 
 
 async def session_file_cursor(
-    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID, file_id: str
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    file_id: str,
+    *,
+    user_id: str | None = None,
 ) -> tuple[datetime, str] | None:
     created = await db.scalar(
-        select(SessionFileRow.created_at).where(
+        select(SessionFileRow.created_at)
+        .join(
+            FileRow,
+            and_(
+                FileRow.tenant_id == SessionFileRow.tenant_id,
+                FileRow.id == SessionFileRow.file_id,
+            ),
+        )
+        .where(
             SessionFileRow.tenant_id == tenant_id,
             SessionFileRow.session_id == session_id,
             SessionFileRow.file_id == file_id,
+            *file_visible(user_id),
         )
     )
     return None if created is None else (created, file_id)
@@ -1694,8 +1761,12 @@ async def list_session_files(
     after: tuple[datetime, str] | None = None,
     order: str = "asc",
     limit: int | None = None,
+    user_id: str | None = None,
 ) -> tuple[list[tuple[SessionFileRow, FileRow]], bool]:
-    """The files bound to a session with their bindings, in binding order."""
+    """The files bound to a session with their bindings, in binding order.
+
+    `user_id` is the caller; files it cannot see are left out.
+    """
     query = (
         select(SessionFileRow, FileRow)
         .join(
@@ -1708,6 +1779,7 @@ async def list_session_files(
         .where(
             SessionFileRow.tenant_id == tenant_id,
             SessionFileRow.session_id == session_id,
+            *file_visible(user_id),
         )
     )
     if ids is not None:
@@ -1721,9 +1793,6 @@ async def list_session_files(
     if limit is not None and len(rows) > limit:
         return rows[:limit], True
     return rows, False
-
-
-SESSION_OWNED_KINDS = ("attachment", "image")
 
 
 async def unbind_session_files(
@@ -1748,7 +1817,7 @@ async def unbind_session_files(
             .where(
                 SessionFileRow.tenant_id == tenant_id,
                 SessionFileRow.session_id == session_id,
-                FileRow.kind.in_(SESSION_OWNED_KINDS),
+                FileRow.kind.in_(USER_FILE_KINDS),
                 ~exists().where(
                     other.tenant_id == tenant_id,
                     other.file_id == FileRow.id,
@@ -1944,13 +2013,24 @@ async def create_upload(
 
 
 async def get_upload(
-    db: AsyncSession, tenant_id: uuid.UUID, upload_id: uuid.UUID
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    upload_id: uuid.UUID,
+    *,
+    user_id: str | None = None,
 ) -> UploadRow | None:
-    return await db.scalar(
-        select(UploadRow).where(
-            UploadRow.tenant_id == tenant_id, UploadRow.id == upload_id
-        )
+    """An upload of the tenant.
+
+    With `user_id`, only an upload of that user or of no user.
+    """
+    query = select(UploadRow).where(
+        UploadRow.tenant_id == tenant_id, UploadRow.id == upload_id
     )
+    if user_id is not None:
+        query = query.where(
+            or_(UploadRow.user_id.is_(None), UploadRow.user_id == user_id)
+        )
+    return await db.scalar(query)
 
 
 async def create_artifact_upload(

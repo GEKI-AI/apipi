@@ -582,4 +582,5 @@ async def list_session_files(
         after=after,
         order=order,
         limit=limit,
+        user_id=_user_id(request),
     )

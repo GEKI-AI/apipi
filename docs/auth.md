@@ -107,6 +107,17 @@ plugin decides which header, if any, names the end user.
 When the identity includes `user_id`, session create stores it. List,
 get, update, delete, resume, export, turns, items, and artifacts then
 match tenant and `user_id`. A missing session for that user is `404`.
+Files keep the `user_id` of the identity that uploaded them. Files of
+kind `attachment` or `image` are user files: when the identity has a
+`user_id`, a user file is visible only when it has the same `user_id`,
+or no `user_id` because an identity without one uploaded it. A user
+file of another user is `404` on read, download, and delete, is left
+out of every file list, and is `404` when a message or a session or
+agent `environment.files` references it. Presigned upload complete
+matches the `user_id` of the upload the same way. Files of kind `file`
+are agent files and stay tenant-scoped, so an agent file one user
+uploaded works in the sessions of every user. See
+[files](api.md#files).
 When the identity includes `org_id`, session create stores it and
 returns it on the session. `org_id` does not change which sessions a
 caller can see. Lifecycle export forwards it to the pool owner. See

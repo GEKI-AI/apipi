@@ -827,3 +827,192 @@ async def test_attachments_used_as_environment_files_become_files(
     assert loose not in kinds
     assert kinds[in_session] == "file"
     assert kinds[in_defaults] == "file"
+
+
+async def test_user_files_are_visible_only_to_their_user(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    async with _vision_client(settings, store, worker_secret) as (app, client):
+        token = "user-files"
+        tenant_id = tenant_from_key(token)
+        u1, u2, anyone = _as(token, "u1"), _as(token, "u2"), _as(token)
+        files = app.state.gateway.files
+
+        async def _attachment(user_id: str | None) -> str:
+            created = await files.create(
+                tenant_id,
+                data=b"bytes",
+                filename="note.txt",
+                purpose="user_data",
+                kind="attachment",
+                user_id=user_id,
+            )
+            return str(created["id"])
+
+        agent_file = await _upload(client, u1, "agent.csv")
+        attachment = await _attachment("u1")
+        shared = await _attachment(None)
+        uploaded = await client.post(
+            "/v1/files",
+            headers=u1,
+            data={"purpose": "vision"},
+            files={"file": ("photo.png", _png(), "image/png")},
+        )
+        image = str(uploaded.json()["id"])
+        u2_session = await _session(client, u2)
+        await files.bind_session(tenant_id, uuid.UUID(u2_session), [image, agent_file])
+        everything = {agent_file, attachment, shared, image}
+        mine = {agent_file, shared}
+
+        async def _lists(headers: dict[str, str]) -> list[set[str]]:
+            return [
+                set(
+                    _ids(
+                        await client.get(
+                            "/v1/files",
+                            headers=headers,
+                            params={"include_attachments": "true"},
+                        )
+                    )
+                ),
+                set(_ids(await client.get("/v1/apipi/files", headers=headers))),
+            ]
+
+        u1_lists = await _lists(u1)
+        u2_lists = await _lists(u2)
+        anyone_lists = await _lists(anyone)
+        u2_by_user = await client.get(
+            "/v1/apipi/files", headers=u2, params={"user_id": "u1"}
+        )
+        u2_images = await client.get(
+            "/v1/apipi/files", headers=u2, params={"kind": "image"}
+        )
+        u2_after = [
+            await client.get(
+                path,
+                headers=u2,
+                params={"after": file_id, "include_attachments": "true"},
+            )
+            for path in ("/v1/files", "/v1/apipi/files")
+            for file_id in (attachment, image)
+        ]
+        u1_after = await client.get(
+            "/v1/apipi/files", headers=u1, params={"after": attachment}
+        )
+        session_path = f"/v1/apipi/sessions/{u2_session}/files"
+        u2_bound = await client.get(session_path, headers=u2)
+        u2_bound_after = await client.get(
+            session_path, headers=u2, params={"after": image}
+        )
+        u2_reads = [
+            await client.get(f"/v1/files/{file_id}{suffix}", headers=u2)
+            for file_id in (attachment, image)
+            for suffix in ("", "/content")
+        ]
+        u2_shared = await client.get(f"/v1/files/{shared}/content", headers=u2)
+        u2_agent_file = await client.get(f"/v1/files/{agent_file}", headers=u2)
+        u1_reads = [
+            await client.get(f"/v1/files/{file_id}/content", headers=u1)
+            for file_id in (attachment, image)
+        ]
+        anyone_read = await client.get(f"/v1/files/{attachment}", headers=anyone)
+        u2_delete = await client.delete(f"/v1/files/{attachment}", headers=u2)
+        u1_delete = await client.delete(f"/v1/files/{attachment}", headers=u1)
+    assert u1_lists == [everything, everything]
+    assert anyone_lists == [everything, everything]
+    assert u2_lists == [mine, mine]
+    assert _ids(u2_by_user) == [agent_file]
+    assert _ids(u2_images) == []
+    assert [response.status_code for response in u2_after] == [400] * 4
+    assert u1_after.status_code == 200
+    assert [row["file_id"] for row in u2_bound.json()["data"]] == [agent_file]
+    assert u2_bound_after.status_code == 400
+    assert [response.status_code for response in u2_reads] == [404] * 4
+    assert u2_shared.status_code == 200
+    assert u2_agent_file.status_code == 200
+    assert [response.status_code for response in u1_reads] == [200, 200]
+    assert anyone_read.status_code == 200
+    assert u2_delete.status_code == 404
+    assert u1_delete.status_code == 200
+
+
+async def test_user_files_of_another_user_are_not_session_inputs(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    async with _vision_client(settings, store, worker_secret) as (app, client):
+        token = "user-inputs"
+        tenant_id = tenant_from_key(token)
+        u1, u2 = _as(token, "u1"), _as(token, "u2")
+        agent_file = await _upload(client, u1, "agent.csv")
+        created = await app.state.gateway.files.create(
+            tenant_id,
+            data=b"secret",
+            filename="note.txt",
+            purpose="user_data",
+            kind="attachment",
+            user_id="u1",
+        )
+        attachment = str(created["id"])
+
+        def _env(file_id: str) -> dict[str, Any]:
+            return {
+                "type": "openai_hosted",
+                "files": [
+                    {"type": "file_id", "file_id": file_id, "path": "data/in.txt"}
+                ],
+            }
+
+        u1_agent = await client.post(
+            "/v1/agents",
+            headers=u1,
+            json={
+                "name": "bot",
+                "model": "test",
+                "session_defaults": {"environment": _env(agent_file)},
+            },
+        )
+        assert u1_agent.status_code == 200, u1_agent.json()
+        agent_id = u1_agent.json()["id"]
+        u2_agent_create = await client.post(
+            "/v1/agents",
+            headers=u2,
+            json={
+                "name": "bot",
+                "model": "test",
+                "session_defaults": {"environment": _env(attachment)},
+            },
+        )
+        u2_agent_update = await client.post(
+            f"/v1/agents/{agent_id}",
+            headers=u2,
+            json={"session_defaults": {"environment": _env(attachment)}},
+        )
+        u2_session_create = await client.post(
+            "/v1/agents/sessions",
+            headers=u2,
+            json={"agent_id": agent_id, "environment": _env(attachment)},
+        )
+        u1_kinds = {
+            row["id"]: row["kind"]
+            for row in (await client.get("/v1/apipi/files", headers=u1)).json()["data"]
+        }
+        u2_from_defaults = await client.post(
+            "/v1/agents/sessions", headers=u2, json={"agent_id": agent_id}
+        )
+        u2_agent_file = await client.post(
+            "/v1/agents/sessions",
+            headers=u2,
+            json={"agent_id": agent_id, "environment": _env(agent_file)},
+        )
+        u1_session = await client.post(
+            "/v1/agents/sessions",
+            headers=u1,
+            json={"agent_id": agent_id, "environment": _env(attachment)},
+        )
+    assert u2_agent_create.status_code == 404
+    assert u2_agent_update.status_code == 404
+    assert u2_session_create.status_code == 404
+    assert u1_kinds[attachment] == "attachment"
+    assert u2_from_defaults.status_code == 200, u2_from_defaults.json()
+    assert u2_agent_file.status_code == 200, u2_agent_file.json()
+    assert u1_session.status_code == 200, u1_session.json()

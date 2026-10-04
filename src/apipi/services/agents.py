@@ -439,8 +439,9 @@ class AgentService:
         if check_model:
             await require_saved_model(self.settings, payload.get("model"), api_key)
         async with self.store.session() as db:
-            await require_default_refs(db, tenant_id, payload.get("session_defaults"))
-            await promote_default_files(db, tenant_id, payload.get("session_defaults"))
+            defaults = payload.get("session_defaults")
+            await require_default_refs(db, tenant_id, defaults, user_id=user_id)
+            await promote_default_files(db, tenant_id, defaults, user_id=user_id)
             agent = await create_agent(
                 db,
                 tenant_id,
@@ -536,8 +537,9 @@ class AgentService:
                 payload.get("session_defaults"), dict
             ):
                 validate_defaults_shape(self.settings, payload["session_defaults"])
-                await require_default_refs(db, tenant_id, payload["session_defaults"])
-                await promote_default_files(db, tenant_id, payload["session_defaults"])
+                defaults = payload["session_defaults"]
+                await require_default_refs(db, tenant_id, defaults, user_id=user_id)
+                await promote_default_files(db, tenant_id, defaults, user_id=user_id)
             tools = payload.get("tools", existing.tools)
             if "session_defaults" in payload:
                 effective_defaults = payload["session_defaults"]

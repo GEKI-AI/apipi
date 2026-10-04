@@ -62,4 +62,6 @@ async def complete_upload(
         request, action="file.write", resource_type="file", resource_id=None
     )
     purpose = body.file_purpose if body is not None else None
-    return await _uploads(request).complete(tenant.id, upload_id, file_purpose=purpose)
+    return await _uploads(request).complete(
+        tenant.id, upload_id, file_purpose=purpose, user_id=_user_id(request)
+    )
