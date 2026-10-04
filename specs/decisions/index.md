@@ -27,3 +27,4 @@ These files are not on the MkDocs site.
 | 0013 | Agent templates |
 | 0014 | OpenAI Agents API compatibility |
 | 0015 | Worker protocol v2 |
+| 0016 | Egress gateway for microVM guests |
