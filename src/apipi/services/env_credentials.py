@@ -25,11 +25,13 @@ ENVIRONMENT_VARIABLE = "environment_variable"
 GIT_USERNAME_KEY = "apipi.git_username"
 MAX_ALLOWED_HOSTS = 100
 MAX_SECRET_NAME = 255
+MIN_SECRET_VALUE = 8
 MAX_SECRET_VALUE = 16_384
 MAX_GIT_USERNAME = 255
 
 _LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_SECRET_VALUE = re.compile(r"[\x21-\x7e]+")
 _AUTH_KEYS = frozenset({"type", "secret_name", "secret_value", "networking"})
 _NETWORKING_KEYS = frozenset({"type", "allowed_hosts"})
 
@@ -67,10 +69,15 @@ def parse_secret_name(value: object) -> str:
 def parse_secret_value(value: object) -> str:
     if not isinstance(value, str) or not value:
         _bad("secret_value must be a non-empty string")
+    if len(value) < MIN_SECRET_VALUE:
+        _bad(f"secret_value is at least {MIN_SECRET_VALUE} characters")
     if len(value) > MAX_SECRET_VALUE:
         _bad(f"secret_value is at most {MAX_SECRET_VALUE} characters")
-    if _CONTROL.search(value):
-        _bad("secret_value must not contain control characters or line breaks")
+    if _SECRET_VALUE.fullmatch(value) is None:
+        _bad(
+            "secret_value must be printable ASCII without spaces, "
+            "line breaks, or other control characters"
+        )
     return value
 
 

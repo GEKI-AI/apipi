@@ -58,6 +58,7 @@ from apipi.worker.pi.artifacts import (
 from apipi.worker.pi.model_host import note_pi_model
 from apipi.worker.pi.platform_prompt import compose_instructions
 from apipi.worker.pi.pool import PiPool
+from apipi.worker.pi.proc import EnvCredentialsUnsupported
 from apipi.worker.pi.settings_json import resolve_system_prompt
 from apipi.worker.sink import ResultSink
 from apipi.worker.turn_context import (
@@ -1008,6 +1009,23 @@ async def run_turn(
                         sink=sink,
                     )
                     return
+                except EnvCredentialsUnsupported as exc:
+                    await fail_turn(
+                        hub,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        str(exc),
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                        settings=settings,
+                        code=exc.code,
+                        user_id=user_id,
+                        turn_context=ctx,
+                        sink=sink,
+                    )
+                    return
                 except OSError as exc:
                     await fail_turn(
                         hub,
@@ -1368,6 +1386,23 @@ async def continue_turn(
                         code="turn_timeout",
                         user_id=user_id,
                         failure=timed_out,
+                        turn_context=ctx,
+                        sink=sink,
+                    )
+                    return
+                except EnvCredentialsUnsupported as exc:
+                    await fail_turn(
+                        hub,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        str(exc),
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                        settings=settings,
+                        code=exc.code,
+                        user_id=user_id,
                         turn_context=ctx,
                         sink=sink,
                     )

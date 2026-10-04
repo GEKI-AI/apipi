@@ -305,11 +305,11 @@ async def test_context_carries_decrypted_env_credentials(
     rotated = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials/{cred_id}",
         headers=_auth(token),
-        json={"auth": {"type": "environment_variable", "secret_value": "rotated"}},
+        json={"auth": {"type": "environment_variable", "secret_value": "rotated-1"}},
     )
     assert rotated.status_code == 200
     again = await build_turn_context(store, settings, _tenant(token), session_id)
-    assert again["env_credentials"][0]["secret_value"] == "rotated"
+    assert again["env_credentials"][0]["secret_value"] == "rotated-1"
 
 
 async def test_context_rechecks_vaults_that_changed(

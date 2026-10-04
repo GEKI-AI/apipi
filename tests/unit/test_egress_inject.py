@@ -1,6 +1,9 @@
 import base64
+import gzip
 import logging
 import re
+import time
+import zlib
 
 import pytest
 from tests.unit.test_egress_gateway import (
@@ -15,7 +18,7 @@ from tests.unit.test_egress_gateway import (
 
 from apipi.common.metrics import Metrics
 from apipi.protocol import ContextEnvCredential
-from apipi.worker.egress import EgressHooks, RequestHead, ResponseHead
+from apipi.worker.egress import Reject, RequestHead, ResponseHead
 from apipi.worker.egress.inject import (
     Injection,
     SecretInjector,
@@ -103,13 +106,39 @@ def test_request_replaces_placeholder_in_headers(
     assert metrics.egress_injections._value.get() == 1
 
 
-def test_request_replaces_placeholder_in_query_only() -> None:
-    head = _head([], target=f"/search?q=x&key={PH}")
-    result = _injector().request(head)
+def test_query_and_path_are_never_substituted() -> None:
+    result = _injector().request(_head([], target=f"/search?q=x&key={PH}"))
     assert result is not None
-    assert result.target == "/search?q=x&key=ghp_real"
-    path_only = _injector().request(_head([], target=f"/{PH}/x"))
-    assert path_only is None
+    assert result.target == f"/search?q=x&key={PH}"
+    path = _injector().request(_head([], target=f"/{PH}/x"))
+    assert path is not None
+    assert path.target == f"/{PH}/x"
+
+
+def test_request_forces_identity_encoding() -> None:
+    result = _injector().request(
+        _head([("Accept-Encoding", "gzip, br"), ("accept-encoding", "deflate")])
+    )
+    assert result is not None
+    assert [v for k, v in result.headers if k.lower() == "accept-encoding"] == [
+        "identity"
+    ]
+    assert _injector().request(_head([], host="evil.test")) is None
+
+
+def test_headers_mask_longest_secret_first() -> None:
+    injector = SecretInjector(
+        [
+            Injection("short", "A", PH, "abcdefgh", (API,)),
+            Injection("long", "B", OTHER_PH, "abcdefgh-longer", (API,)),
+        ]
+    )
+    response = ResponseHead(
+        status=200, reason="OK", headers=(("X-Echo", "abcdefgh-longer"),)
+    )
+    masked = injector.response(_head([]), response)
+    assert masked is not None
+    assert masked.headers == (("X-Echo", OTHER_PH),)
 
 
 def test_placeholder_to_other_host_stays() -> None:
@@ -121,7 +150,8 @@ def test_placeholder_to_other_host_stays() -> None:
     other = injector.request(
         _head([("Authorization", f"Bearer {PH}")], host="other.example.com")
     )
-    assert other is None
+    assert other is not None
+    assert other.header("authorization") == f"Bearer {PH}"
     mixed = injector.request(
         _head(
             [("Authorization", f"Bearer {OTHER_PH}"), ("X-Key", PH)],
@@ -225,46 +255,149 @@ def test_injector_for_context_and_git_files() -> None:
     for secret in ("ghp_real", "glpat", "fj\t", "'fj'"):
         assert secret not in blob
     config = injector.git_config_env("/helper /file", start=2)
-    assert config["GIT_CONFIG_COUNT"] == str(2 + 3 * 4)
+    assert config["GIT_CONFIG_COUNT"] == str(2 + 4 * 4)
     assert config["GIT_CONFIG_KEY_2"] == f"credential.https://{GH}.helper"
     assert config["GIT_CONFIG_VALUE_2"] == "/helper /file"
-    assert config["GIT_CONFIG_KEY_3"] == f"url.https://{GH}/.insteadOf"
-    assert config["GIT_CONFIG_VALUE_3"] == f"git@{GH}:"
-    assert config["GIT_CONFIG_VALUE_4"] == f"ssh://git@{GH}/"
+    assert config["GIT_CONFIG_KEY_3"] == f"credential.https://{GH}:8443.helper"
+    assert config["GIT_CONFIG_KEY_4"] == f"url.https://{GH}/.insteadOf"
+    assert config["GIT_CONFIG_VALUE_4"] == f"git@{GH}:"
+    assert config["GIT_CONFIG_VALUE_5"] == f"ssh://git@{GH}/"
     assert injector_for([]).git_config_env("/h") == {}
 
 
-async def test_gateway_sends_secret_upstream(env: Env) -> None:
-    upstream = await env.upstream()
+def _body(
+    injector: SecretInjector, headers: tuple[tuple[str, str], ...], chunks: list[bytes]
+) -> tuple[ResponseHead, bytes]:
+    result = injector.body(
+        _head([]), ResponseHead(status=200, reason="OK", headers=headers)
+    )
+    assert isinstance(result, tuple)
+    head, mask = result
+    out = bytearray()
+    for chunk in chunks:
+        for piece in mask.feed(chunk):
+            out.extend(piece)
+    for piece in mask.end():
+        out.extend(piece)
+    return head, bytes(out)
+
+
+def test_body_masks_secret_split_across_chunks() -> None:
+    injector = _injector()
+    data = b"a" * 100 + b"ghp_real" + b"b" * 50 + b"other_real" + b"x"
+    for size in (1, 3, 7, 8, 9, 64):
+        chunks = [data[i : i + size] for i in range(0, len(data), size)]
+        _, out = _body(injector, (("Content-Length", str(len(data))),), chunks)
+        assert b"ghp_real" not in out
+        assert out == b"a" * 100 + PH.encode() + b"b" * 50 + b"other_real" + b"x"
+
+
+def test_body_masks_longest_secret_first() -> None:
     injector = SecretInjector(
-        [Injection("cred", "SECRET", PH, "real-secret", (HOST,))],
+        [
+            Injection("short", "A", PH, "abcdefgh", (API,)),
+            Injection("long", "B", OTHER_PH, "abcdefgh-longer", (API,)),
+        ]
+    )
+    _, out = _body(injector, (), [b"x abcdefgh-lon", b"ger y abcdefgh z"])
+    assert out == f"x {OTHER_PH} y {PH} z".encode()
+
+
+@pytest.mark.parametrize("coding", ["gzip", "x-gzip", "deflate", "raw-deflate"])
+def test_body_decodes_compressed_responses(coding: str) -> None:
+    payload = b"token=ghp_real; " * 2000
+    if coding in ("gzip", "x-gzip"):
+        packed = gzip.compress(payload)
+    elif coding == "deflate":
+        packed = zlib.compress(payload)
+    else:
+        raw = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+        packed = raw.compress(payload) + raw.flush()
+    name = "deflate" if coding == "raw-deflate" else coding
+    head, out = _body(
+        _injector(),
+        (("Content-Encoding", name), ("Content-Type", "text/plain")),
+        [packed[i : i + 100] for i in range(0, len(packed), 100)],
+    )
+    assert out == payload.replace(b"ghp_real", PH.encode())
+    assert all(k.lower() != "content-encoding" for k, _ in head.headers)
+
+
+def test_body_rejects_unknown_encoding() -> None:
+    result = _injector().body(
+        _head([]),
+        ResponseHead(status=200, reason="OK", headers=(("Content-Encoding", "br"),)),
+    )
+    assert isinstance(result, Reject)
+    assert result.status == 502
+    other = _injector().body(
+        _head([], host="evil.test"),
+        ResponseHead(status=200, reason="OK", headers=(("Content-Encoding", "br"),)),
+    )
+    assert other is None
+
+
+async def test_gateway_sends_secret_upstream_and_masks_responses(env: Env) -> None:
+    upstream = await env.upstream()
+    secret = "real-secret-value"
+    injector = SecretInjector(
+        [Injection("cred", "SECRET", PH, secret, (HOST,))],
         ports=(upstream.port,),
     )
-    hooks = EgressHooks(request=[injector.request], response=[injector.response])
     gateway = await env.gateway(
-        "restricted", port=upstream.port, intercept=(HOST,), hooks=hooks
+        "restricted", port=upstream.port, intercept=(HOST,), hooks=injector.hooks()
     )
     reader, writer = await tls_connect(gateway, trust(env.worker_ca))
     client = HttpClient(reader, writer)
-    status, _, _ = await client.request(
+    status, headers, body = await client.request(
         "POST",
         f"/v1/items?key={PH}",
         headers=[
             ("Authorization", _basic(f"user:{PH}")),
             ("X-Api-Key", PH),
+            ("Accept-Encoding", "gzip"),
         ],
         body=f"body keeps {PH}".encode(),
     )
     assert status == 200
-    status, _, _ = await client.request(
-        "GET", "/again", headers=[("Authorization", f"Bearer {PH}")]
+    assert "content-length" not in headers
+    status, _, body = await client.request(
+        "GET", f"/echo/{secret}", headers=[("Authorization", f"Bearer {PH}")]
     )
     assert status == 200
+    assert body == f"hello GET /echo/{PH} 0".encode()
+    status, headers, body = await client.request("HEAD", "/head")
+    assert status == 200
     await close(writer)
-    first, second = upstream.seen
-    assert first.target == "/v1/items?key=real-secret"
-    assert ("X-Api-Key", "real-secret") in first.headers
-    assert ("Authorization", _basic("user:real-secret")) in first.headers
+    first, second, _third = upstream.seen
+    assert first.target == f"/v1/items?key={PH}"
+    assert ("X-Api-Key", secret) in first.headers
+    assert ("Authorization", _basic(f"user:{secret}")) in first.headers
+    assert ("Accept-Encoding", "identity") in first.headers
     assert first.body == f"body keeps {PH}".encode()
-    assert ("Authorization", "Bearer real-secret") in second.headers
+    assert ("Authorization", f"Bearer {secret}") in second.headers
     assert upstream.connections == 1
+
+
+@pytest.mark.slow
+async def test_masked_body_throughput(env: Env) -> None:
+    total = 64 * 1024 * 1024
+    upstream = await env.upstream()
+    injector = SecretInjector(
+        [Injection("cred", "SECRET", PH, "real-secret-value", (HOST,))],
+        ports=(upstream.port,),
+    )
+    gateway = await env.gateway(
+        "restricted", port=upstream.port, intercept=(HOST,), hooks=injector.hooks()
+    )
+    reader, writer = await tls_connect(gateway, trust(env.worker_ca))
+    client = HttpClient(reader, writer)
+    started = time.perf_counter()
+    status, _, body = await client.request("GET", f"/big/{total}")
+    wall = time.perf_counter() - started
+    await close(writer)
+    assert status == 200
+    assert len(body) == total
+    rate = total * 8 / 1_000_000 / wall
+    print(f"\nmasked body throughput over 64 MiB: {rate:.0f} Mbit/s")
+    assert rate >= 50

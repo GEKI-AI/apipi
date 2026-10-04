@@ -436,6 +436,10 @@ def pi_command_args(
     return args
 
 
+class EnvCredentialsUnsupported(ConfigError):
+    code = "credential_not_allowed"
+
+
 async def spawn_pi(
     settings: Settings,
     *,
@@ -468,7 +472,7 @@ async def spawn_pi(
     optional: dict[str, Any] = {"web_search": True} if web_search else {}
     if env_credentials:
         if backend.name != "microvm":
-            raise ConfigError(
+            raise EnvCredentialsUnsupported(
                 "vault environment credentials need isolation microvm, "
                 f"and isolation {backend.name} has no egress gateway"
             )

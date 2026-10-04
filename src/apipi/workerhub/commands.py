@@ -21,6 +21,7 @@ from apipi.protocol import (
     CommandTooLarge,
     ContextBytes,
     check_command_size,
+    context_error_message,
     parse_turn_context,
 )
 
@@ -100,11 +101,30 @@ def command_features(wire: dict[str, Any]) -> list[str]:
     workspace = any(item.get("model_input") == "workspace" for item in items)
     if (op == "turn.start" and workspace) or session_files:
         needed.append(FEATURE_SESSION_FILES)
-    context = payload.get("context") if isinstance(payload, dict) else None
-    credentials = context.get("env_credentials") if isinstance(context, dict) else None
-    if op in COMMAND_CONTEXT_OPS and credentials:
+    if has_env_credentials(wire):
         needed.append(FEATURE_ENV_CREDENTIALS)
     return needed
+
+
+def has_env_credentials(wire: dict[str, Any]) -> bool:
+    if str(wire.get("op")) not in COMMAND_CONTEXT_OPS:
+        return False
+    payload = wire.get("payload")
+    context = payload.get("context") if isinstance(payload, dict) else None
+    credentials = context.get("env_credentials") if isinstance(context, dict) else None
+    return bool(credentials)
+
+
+def require_credential_isolation(wire: dict[str, Any], run_mode: str) -> None:
+    if run_mode == "microvm" or not has_env_credentials(wire):
+        return
+    raise ApiError(
+        "invalid_request",
+        "Vault environment credentials need a worker with isolation microvm, "
+        f"and the worker for this session runs isolation {run_mode}",
+        code="credential_not_allowed",
+        status_code=400,
+    )
 
 
 def _too_large_message(op: str, exc: CommandTooLarge) -> str:
@@ -130,7 +150,7 @@ def _check_command_context(op: str, wire: dict[str, Any]) -> None:
         except (ContextBytes, ValidationError) as exc:
             raise ApiError(
                 "invalid_request",
-                f"invalid turn context: {exc}",
+                context_error_message(exc),
                 code="invalid_request",
                 status_code=400,
             ) from exc

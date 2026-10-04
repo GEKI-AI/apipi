@@ -15,6 +15,10 @@ done
 [ -n "$host" ] || exit 0
 [ -f "$file" ] || exit 0
 host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+case $host in
+  *:443) host=${host%:443} ;;
+  *:8443) host=${host%:8443} ;;
+esac
 tab=$(printf '\t')
 while IFS=$tab read -r name user secret; do
   if [ "$name" = "$host" ]; then

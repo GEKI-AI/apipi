@@ -55,6 +55,16 @@ async def encrypt_plaintext_vault_tokens(store: Store, settings: Settings) -> in
     return rewritten
 
 
+SECRET_NAME_CONSTRAINT = "vault_credentials_secret_name_key"
+
+
+def _sqlite_unique(exc: IntegrityError) -> bool:
+    text = str(exc.orig)
+    return (
+        "UNIQUE constraint failed" in text and "vault_credentials.secret_name" in text
+    )
+
+
 def _secret_name_taken(secret_name: str) -> NoReturn:
     raise ApiError(
         "invalid_request",
@@ -276,7 +286,9 @@ class VaultService:
                     metadata=metadata,
                 )
                 return credential_body(row)
-        except IntegrityError:
+        except IntegrityError as exc:
+            if SECRET_NAME_CONSTRAINT not in str(exc.orig) and not _sqlite_unique(exc):
+                raise
             _secret_name_taken(auth.secret_name)
 
     async def list_credentials(

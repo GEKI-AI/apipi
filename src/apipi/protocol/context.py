@@ -13,7 +13,7 @@ import copy
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from apipi.protocol.base import ContextPart
 from apipi.protocol.constants import (
@@ -121,6 +121,18 @@ def _reject_bytes(value: Any) -> None:
     elif isinstance(value, (list, tuple)):
         for item in value:
             _reject_bytes(item)
+
+
+def context_error_message(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        fields = sorted(
+            {
+                ".".join(str(part) for part in error.get("loc", ()))
+                for error in exc.errors(include_input=False, include_url=False)
+            }
+        )
+        return "invalid turn context: " + ", ".join(fields)
+    return f"invalid turn context: {exc}"
 
 
 def parse_turn_context(raw: Any) -> TurnContext:

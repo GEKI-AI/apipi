@@ -62,6 +62,7 @@ from apipi.workerhub.commands import (
     command_features,
     command_payload,
     image_unavailable_message,
+    require_credential_isolation,
     session_image,
 )
 from apipi.workerhub.connection import WorkerConnection, claimed_leases
@@ -226,6 +227,7 @@ class WorkerHub:
             self.metrics.observe_worker_command(op, result)
 
     def _enqueue(self, wire: dict[str, Any], conn: WorkerConnection) -> PendingCommand:
+        require_credential_isolation(wire, conn.run_mode)
         for feature in command_features(wire):
             if feature in conn.features:
                 continue

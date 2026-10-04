@@ -15,7 +15,7 @@ from apipi.protocol import (
 from apipi.worker.pi.harness import PiHarness
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc, spawn_pi
-from apipi.workerhub.commands import command_features
+from apipi.workerhub.commands import command_features, require_credential_isolation
 
 HELPER = Path(__file__).parents[2] / "src/apipi/worker/pi/git-credential.sh"
 PH = "apipi-secret-" + "c" * 32
@@ -39,6 +39,10 @@ def _helper(tmp_path: Path, op: str, request: str) -> str:
 def test_helper_answers_get_for_known_host(tmp_path: Path) -> None:
     out = _helper(tmp_path, "get", "protocol=https\nhost=GitHub.com\npath=a/b\n\n")
     assert out == f"username=x-access-token\npassword={PH}\n"
+    for port in ("443", "8443"):
+        ported = _helper(tmp_path, "get", f"protocol=https\nhost=github.com:{port}\n\n")
+        assert ported == f"username=x-access-token\npassword={PH}\n"
+    assert _helper(tmp_path, "get", "protocol=https\nhost=github.com:9000\n\n") == ""
     spaced = _helper(tmp_path, "get", "protocol=https\nhost=git.example.com\n")
     assert spaced == "username=apipi bot\npassword=ph-2\n"
 
@@ -221,3 +225,44 @@ async def test_harness_forwards_credentials_to_the_pool() -> None:
         pass
     assert seen[0]["env_credentials"] is credentials
     assert "env_credentials" not in seen[1]
+
+
+def _credential_wire(op: str = "turn.start") -> dict[str, Any]:
+    return {
+        "op": op,
+        "payload": {
+            "context": {
+                "env_credentials": [
+                    {
+                        "credential_id": "c",
+                        "secret_name": "T",
+                        "secret_value": "value-123",
+                        "allowed_hosts": ["github.com"],
+                    }
+                ]
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize("run_mode", ["none", "package.mod:Class"])
+def test_hub_refuses_credentials_for_workers_without_microvm(run_mode: str) -> None:
+    from types import SimpleNamespace
+
+    from apipi.common.errors import ApiError
+    from apipi.protocol import SUPPORTED_FEATURES
+    from apipi.workerhub.hub import WorkerHub
+
+    hub = WorkerHub(
+        Settings(database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi")
+    )
+    conn = SimpleNamespace(
+        run_mode=run_mode, features=SUPPORTED_FEATURES, worker_id=uuid.uuid4()
+    )
+    with pytest.raises(ApiError) as refused:
+        hub._enqueue(_credential_wire(), cast(Any, conn))
+    assert refused.value.code == "credential_not_allowed"
+    assert refused.value.status_code == 400
+    assert run_mode in refused.value.message
+    require_credential_isolation(_credential_wire(), "microvm")
+    require_credential_isolation({"op": "turn.start", "payload": {}}, "none")

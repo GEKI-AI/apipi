@@ -1561,7 +1561,7 @@ async def test_start_microvm_wires_env_credentials(
         env_text = packed[".apipi/env"].decode()
         assert "GITHUB_TOKEN=apipi-secret-" in env_text
         assert "user-value" not in env_text
-        assert "GIT_CONFIG_COUNT=7" in env_text
+        assert "GIT_CONFIG_COUNT=9" in env_text
         assert "GIT_CONFIG_KEY_1=credential.https://github.com.helper" in env_text
         for blob in packed.values():
             assert b"ghp-must-not-leak" not in blob

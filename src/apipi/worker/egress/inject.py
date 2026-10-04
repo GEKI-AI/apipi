@@ -1,8 +1,10 @@
 import base64
 import binascii
 import logging
+import re
 import secrets
-from collections.abc import Iterable
+import zlib
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 
 from apipi.common.logutil import log_event
@@ -10,8 +12,11 @@ from apipi.common.metrics import Metrics
 from apipi.protocol import ContextEnvCredential
 from apipi.worker.egress.gateway import TLS_PORTS, egress_metrics
 from apipi.worker.egress.intercept import (
+    BodyFilter,
     EgressHooks,
     Headers,
+    InterceptError,
+    Reject,
     RequestHead,
     ResponseHead,
 )
@@ -22,6 +27,8 @@ log = logging.getLogger("apipi.egress")
 PLACEHOLDER_PREFIX = "apipi-secret-"
 GIT_USERNAME_DEFAULTS = {"gitlab.com": "oauth2"}
 GIT_USERNAME_FALLBACK = "x-access-token"
+GIT_PORTS = (443, 8443)
+DECODE_CHUNK = 1 << 20
 
 
 def new_placeholder() -> str:
@@ -62,11 +69,92 @@ def _basic(value: str, injection: Injection) -> str | None:
     return f"{scheme} {base64.b64encode(replaced).decode('ascii')}"
 
 
-def _query(target: str, injection: Injection) -> str | None:
-    path, mark, query = target.partition("?")
-    if not mark or injection.placeholder not in query:
-        return None
-    return f"{path}?{query.replace(injection.placeholder, injection.value)}"
+def _header(headers: Headers, name: str) -> list[str]:
+    key = name.lower()
+    return [value for item, value in headers if item.lower() == key]
+
+
+class _Decoder:
+    def __init__(self, coding: str) -> None:
+        self.coding = coding
+        wbits = zlib.MAX_WBITS | 16 if coding == "gzip" else zlib.MAX_WBITS
+        self.inner = zlib.decompressobj(wbits)
+        self.started = False
+
+    def _switch_raw(self, data: bytes) -> bytes:
+        self.inner = zlib.decompressobj(-zlib.MAX_WBITS)
+        return self.inner.decompress(data, DECODE_CHUNK)
+
+    def decode(self, data: bytes) -> Iterator[bytes]:
+        try:
+            out = self.inner.decompress(data, DECODE_CHUNK)
+        except zlib.error:
+            if self.coding != "deflate" or self.started:
+                raise
+            out = self._switch_raw(data)
+        self.started = True
+        yield out
+        while self.inner.unconsumed_tail:
+            yield self.inner.decompress(self.inner.unconsumed_tail, DECODE_CHUNK)
+
+    def flush(self) -> bytes:
+        return self.inner.flush()
+
+
+class SecretMask:
+    def __init__(
+        self, pairs: list[tuple[bytes, bytes]], decoder: _Decoder | None = None
+    ) -> None:
+        ordered = sorted(pairs, key=lambda pair: len(pair[0]), reverse=True)
+        self.replacements = dict(ordered)
+        self.pattern = re.compile(b"|".join(re.escape(value) for value, _ in ordered))
+        self.keep = max(len(value) for value, _ in ordered) - 1
+        self.carry = b""
+        self.decoder = decoder
+
+    def _sub(self, match: re.Match[bytes]) -> bytes:
+        return self.replacements[match.group(0)]
+
+    def _emit(self, data: bytes) -> bytes:
+        if not data:
+            return b""
+        buf = self.carry + data
+        cut = len(buf) - self.keep
+        if cut <= 0:
+            self.carry = buf
+            return b""
+        out: list[bytes] = []
+        pos = 0
+        for match in self.pattern.finditer(buf):
+            if match.start() >= cut:
+                break
+            out.append(buf[pos : match.start()])
+            out.append(self.replacements[match.group(0)])
+            pos = match.end()
+        end = max(pos, cut)
+        out.append(buf[pos:end])
+        self.carry = buf[end:]
+        return b"".join(out)
+
+    def feed(self, data: bytes) -> Iterator[bytes]:
+        if self.decoder is None:
+            yield self._emit(data)
+            return
+        try:
+            for piece in self.decoder.decode(data):
+                yield self._emit(piece)
+        except zlib.error as exc:
+            raise InterceptError("content_decode") from exc
+
+    def end(self) -> Iterator[bytes]:
+        if self.decoder is not None:
+            try:
+                yield self._emit(self.decoder.flush())
+            except zlib.error as exc:
+                raise InterceptError("content_decode") from exc
+        tail = self.pattern.sub(self._sub, self.carry)
+        self.carry = b""
+        yield tail
 
 
 class SecretInjector:
@@ -78,7 +166,9 @@ class SecretInjector:
         metrics: Metrics | None = None,
         ports: Iterable[int] = TLS_PORTS,
     ) -> None:
-        self.injections = tuple(injections)
+        self.injections = tuple(
+            sorted(injections, key=lambda item: len(item.value), reverse=True)
+        )
         self.session_id = session_id
         self.metrics = metrics
         self.ports = frozenset(ports)
@@ -110,7 +200,9 @@ class SecretInjector:
     def git_config_env(self, helper: str, start: int = 0) -> dict[str, str]:
         entries: list[tuple[str, str]] = []
         for host in self.hosts:
-            entries.append((f"credential.https://{host}.helper", helper))
+            for port in GIT_PORTS:
+                origin = host if port == 443 else f"{host}:{port}"
+                entries.append((f"credential.https://{origin}.helper", helper))
             entries.append((f"url.https://{host}/.insteadOf", f"git@{host}:"))
             entries.append((f"url.https://{host}/.insteadOf", f"ssh://git@{host}/"))
         if not entries:
@@ -122,21 +214,28 @@ class SecretInjector:
         env["GIT_CONFIG_COUNT"] = str(start + len(entries))
         return env
 
-    def secret_values(self) -> tuple[str, ...]:
-        return tuple(item.value for item in self.injections)
-
     def hooks(self) -> EgressHooks:
-        return EgressHooks(request=[self.request], response=[self.response])
+        return EgressHooks(
+            request=[self.request], response=[self.response], body=[self.body]
+        )
+
+    def _applying(self, head: RequestHead) -> list[Injection]:
+        if head.port not in self.ports:
+            return []
+        return [item for item in self.injections if item.applies(head.host)]
 
     def request(self, head: RequestHead) -> RequestHead | None:
-        if head.port not in self.ports:
+        applying = self._applying(head)
+        if not applying:
             return None
-        headers = list(head.headers)
-        target = head.target
+        headers = [
+            (name, value)
+            for name, value in head.headers
+            if name.lower() != "accept-encoding"
+        ]
+        headers.append(("Accept-Encoding", "identity"))
         used: list[Injection] = []
-        for injection in self.injections:
-            if not injection.applies(head.host):
-                continue
+        for injection in applying:
             hit = False
             for index, (name, value) in enumerate(headers):
                 new = value.replace(injection.placeholder, injection.value)
@@ -147,19 +246,13 @@ class SecretInjector:
                 if new != value:
                     headers[index] = (name, new)
                     hit = True
-            query = _query(target, injection)
-            if query is not None:
-                target = query
-                hit = True
             if hit:
                 used.append(injection)
-        if not used:
-            return None
         for injection in used:
             self._record(injection, head.host)
         return RequestHead(
             method=head.method,
-            target=target,
+            target=head.target,
             headers=tuple(headers),
             host=head.host,
             port=head.port,
@@ -168,24 +261,62 @@ class SecretInjector:
     def response(
         self, head: RequestHead, response: ResponseHead
     ) -> ResponseHead | None:
-        if head.port not in self.ports:
+        applying = self._applying(head)
+        if not applying:
             return None
         headers: Headers = response.headers
-        changed = False
-        for injection in self.injections:
-            if not injection.applies(head.host) or not injection.value:
-                continue
-            masked = tuple(
+        for injection in applying:
+            headers = tuple(
                 (name, value.replace(injection.value, injection.placeholder))
                 for name, value in headers
             )
-            if masked != headers:
-                headers = masked
-                changed = True
-        if not changed:
+        if headers == response.headers:
             return None
         return ResponseHead(
             status=response.status, reason=response.reason, headers=headers
+        )
+
+    def body(
+        self, head: RequestHead, response: ResponseHead
+    ) -> tuple[ResponseHead, BodyFilter] | Reject | None:
+        applying = self._applying(head)
+        if not applying:
+            return None
+        codings = [
+            part.strip().lower()
+            for value in _header(response.headers, "content-encoding")
+            for part in value.split(",")
+            if part.strip() and part.strip().lower() != "identity"
+        ]
+        decoder: _Decoder | None = None
+        if codings in (["gzip"], ["x-gzip"]):
+            decoder = _Decoder("gzip")
+        elif codings == ["deflate"]:
+            decoder = _Decoder("deflate")
+        elif codings:
+            log_event(
+                log,
+                logging.WARNING,
+                "egress response encoding not supported",
+                event="egress.encoding_rejected",
+                session_id=self.session_id,
+                host=norm_host(head.host),
+                encoding=",".join(codings),
+            )
+            return Reject(status=502, reason="content_encoding")
+        headers = response.headers
+        if decoder is not None:
+            headers = tuple(
+                (name, value)
+                for name, value in headers
+                if name.lower() != "content-encoding"
+            )
+        pairs = [(item.value.encode(), item.placeholder.encode()) for item in applying]
+        return (
+            ResponseHead(
+                status=response.status, reason=response.reason, headers=headers
+            ),
+            SecretMask(pairs, decoder),
         )
 
     def _record(self, injection: Injection, host: str) -> None:

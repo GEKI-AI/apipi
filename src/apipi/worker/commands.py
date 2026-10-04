@@ -34,6 +34,7 @@ from apipi.protocol import (
     TurnStartCommandPayload,
     WorkerCommand,
     collect_unknown_fields,
+    context_error_message,
     parse_turn_context,
     summarize_context,
 )
@@ -189,7 +190,7 @@ def _command_turn_context(
     except (ContextBytes, ValidationError) as exc:
         raise ApiError(
             "invalid_request",
-            f"invalid turn context: {exc}",
+            context_error_message(exc),
             code="invalid_request",
             status_code=400,
         ) from exc

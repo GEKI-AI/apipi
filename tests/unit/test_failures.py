@@ -482,3 +482,30 @@ async def test_stale_turn_is_interrupted(store: Store) -> None:
     assert failed.data["code"] == "turn_interrupted"
     assert failed.data["failure_source"] == "internal"
     assert failed.data["retryable"] is True
+
+
+class _NoGateway:
+    async def abort(self, _session_id: uuid.UUID) -> None:
+        return None
+
+    async def generate(self, *_args: object, **_kwargs: object) -> Any:
+        from apipi.worker.pi.proc import EnvCredentialsUnsupported
+
+        raise EnvCredentialsUnsupported("vault environment credentials need microvm")
+        yield ("usage", {})
+
+
+async def test_env_credentials_without_microvm_is_user_failure(
+    store: Store, settings: Settings
+) -> None:
+    tenant_id, session_id = await new_session(store)
+    host = settings.model_copy(update={"model_base_url": "http://model.test/v1"})
+    await run_worker_turn(store, host, _NoGateway(), tenant_id, session_id)
+    async with store.session() as db:
+        events = await list_events(db, tenant_id, session_id)
+    failed = next(
+        event for event in events if event.type == "agent.session.turn.failed"
+    )
+    assert isinstance(failed.data, dict)
+    assert failed.data["code"] == "credential_not_allowed"
+    assert failed.data["failure_source"] == "user"

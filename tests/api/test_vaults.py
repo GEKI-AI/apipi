@@ -387,6 +387,16 @@ def _hosts(*hosts: str) -> dict[str, object]:
         ({"secret_value": ""}, "secret_value"),
         ({"secret_value": 5}, "secret_value"),
         ({"secret_value": "line\nbreak"}, "control characters"),
+        ({"secret_value": "with space"}, "printable ASCII"),
+        ({"secret_value": "nonascii-\u00e9-value"}, "printable ASCII"),
+        ({"secret_value": "short7!"}, "at least 8"),
+        ({"secret_name": "CURL_CA_BUNDLE"}, "reserved"),
+        ({"secret_name": "UV_CACHE_DIR"}, "reserved"),
+        ({"secret_name": "npm_config_cache"}, "reserved"),
+        ({"secret_name": "GIT_CONFIG_COUNT"}, "reserved"),
+        ({"secret_name": "GIT_CONFIG_KEY_3"}, "reserved"),
+        ({"secret_name": "GIT_CONFIG_VALUE_12"}, "reserved"),
+        ({"secret_name": "WS"}, "reserved"),
         ({"networking": None}, "networking"),
         ({"networking": {"type": "open", "allowed_hosts": ["a.com"]}}, "limited"),
         (_hosts(), "at least one"),
@@ -558,3 +568,21 @@ async def test_encrypt_plaintext_env_secret(settings: Settings, store: Store) ->
         )
     assert found is not None
     assert is_vault_ciphertext(found.token)
+
+
+async def test_env_credential_unique_constraint_maps_to_collision(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = "env-race"
+    vault_id = await _vault(client, token)
+    base = f"/v1/agents/vaults/{vault_id}/credentials"
+    first = await client.post(base, headers=_auth(token), json={"auth": _env_auth()})
+    assert first.status_code == 200
+
+    async def no_rows(*_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    monkeypatch.setattr("apipi.services.vaults.list_vault_credentials", no_rows)
+    second = await client.post(base, headers=_auth(token), json={"auth": _env_auth()})
+    assert second.status_code == 400
+    assert second.json()["error"]["code"] == "secret_name_collision"

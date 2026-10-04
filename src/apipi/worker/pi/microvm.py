@@ -1520,6 +1520,7 @@ async def start_microvm(
         egress_hooks = EgressHooks(
             request=[*hooks.request, injector.request],
             response=[*hooks.response, injector.response],
+            body=[*hooks.body, injector.body],
         )
         intercept_hosts = tuple(dict.fromkeys((*intercept_hosts, *injector.hosts)))
         credential_env = {
