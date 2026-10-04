@@ -163,10 +163,12 @@ The gateway appends a platform prompt, then `agent.instructions` when
 those are set. A system prompt may replace Pi's harness default first.
 See [Concepts](concepts.md#agents) and [config](config.md#pi).
 
-`vault_ids` on session create attaches vaults for HTTP MCP. The
-gateway matches `mcp_server_url` and injects the bearer on the host
-broker. Tokens are encrypted at rest. GET of a vault or credential
-never returns the token.
+`vault_ids` on session create attaches vaults. A `static_bearer`
+credential gives an HTTP MCP server its bearer on the host broker. An
+`environment_variable` credential lets code in a microVM sandbox call
+HTTPS APIs with a key it never holds. Secrets are encrypted at rest.
+GET of a vault or credential never returns them. See
+[Vaults](#vaults) and [Vaults and credentials](vaults.md).
 
 ## Vaults
 
@@ -183,12 +185,63 @@ never returns the token.
 | `POST` | `/v1/agents/vaults/{vault_id}/credentials/{id}` |
 | `DELETE` | `/v1/agents/vaults/{vault_id}/credentials/{id}` |
 
-Create a vault with `name` and `metadata`. Add a credential with
-`auth.type` `static_bearer`, `mcp_server_url`, and `token`. The store
-keeps the token as AES-256-GCM ciphertext (`APIPI_VAULT_MASTER_KEY`).
-List and get omit `token`. `auth.type` `mcp_oauth` is
-`not_implemented`. Every query is tenant-scoped. A vault from another
-tenant is `404`.
+Create a vault with `name` and `metadata`. Every query is
+tenant-scoped. A vault from another tenant is `404`. Deleting a vault
+deletes its credentials. The guide with examples for GitHub, Forgejo,
+GitLab, and other services is [Vaults and credentials](vaults.md).
+
+A credential has `name`, `metadata` (a key-value map, as on vaults),
+and `auth`. `auth.type` selects the kind:
+
+| `auth.type` | Write fields | Returned in `auth` | Used by |
+| --- | --- | --- | --- |
+| `static_bearer` | `mcp_server_url`, `token` | `type`, `mcp_server_url` | The host broker, for the HTTP MCP server with that URL or `credential_id` |
+| `environment_variable` | `secret_name`, `secret_value`, `networking` (`{"type": "limited", "allowed_hosts": [...]}`) | `type`, `secret_name`, `networking` | The egress gateway of a microVM sandbox, for HTTPS requests to `allowed_hosts` |
+| `mcp_oauth` | | | `400` with type `not_implemented` |
+
+The store keeps `token` and `secret_value` as AES-256-GCM ciphertext
+(`APIPI_VAULT_MASTER_KEY`). List and get never return them.
+
+`environment_variable` fields:
+
+| Field | Rule |
+| --- | --- |
+| `secret_name` | `^[A-Za-z_][A-Za-z0-9_]*$`, unique in the vault. Reserved names (`OPENAI_*`, `APIPI_*`, `PI_*`, `CODEX_*`, `PATH`, `HOME`, the certificate variables, and the guest environment deny list) are `400`. The full list is in [Vaults and credentials](vaults.md#environment_variable). |
+| `secret_value` | Non-empty string, at most 16,384 characters, without control characters. |
+| `networking.type` | `limited` |
+| `networking.allowed_hosts` | 1 to 100 exact hostnames, stored in lowercase. No scheme, port, path, wildcard, or IP address. |
+| `metadata["apipi.git_username"]` | Optional. The user name the guest git credential helper sends for these hosts. |
+
+Update (`POST /v1/agents/vaults/{vault_id}/credentials/{id}`) keeps the
+id and the type. It can change `name`, replace `metadata`, and replace
+`token` or `secret_value`. Changing `auth.type`, `secret_name`, or
+`networking` is `400`; create a new credential instead. Static bearer
+credentials keep their earlier validation and error codes.
+
+Credential errors:
+
+| Status | Code | When |
+| --- | --- | --- |
+| `400` | `invalid_request` | A field breaks a rule above, or an update tries to change `auth.type`, `secret_name`, or `networking`. The message names the field. |
+| `400` | `unknown_field` | An unknown key in an `environment_variable` `auth` or `networking` object. |
+| `400` | `validation_error` | A `static_bearer` body without `mcp_server_url` or `token`, or an unknown `auth.type`. |
+| `400` | `secret_name_collision` | The vault already has a credential with that `secret_name`. |
+| `400` | `mcp_oauth` (type `not_implemented`) | `auth.type` `mcp_oauth`. |
+| `404` | `not_found` | Unknown vault or credential, or one from another tenant. |
+
+Session create checks the environment credentials of the attached
+vaults, after merging the agent's `session_defaults.vault_ids`. Each
+rule is `400`: environment credentials on `environment.type` `none`
+(`credential_not_allowed`), with `network.access` `disabled`
+(`credential_not_allowed`), two attached credentials with the same
+`secret_name` (`secret_name_collision`), a `secret_name` that is also
+an `environment.env` key (`secret_name_collision`), and, when the
+operator TAP allowlist is on, a credential host the operator does not
+allow (`credential_host_not_allowed`). With `network.access`
+`restricted`, the credential hosts are added to the allowed hostnames
+when the sandbox starts. All vault credentials are a snapshot taken
+when the sandbox starts. See
+[Vaults and credentials](vaults.md#when-secrets-are-read).
 
 ## Files
 

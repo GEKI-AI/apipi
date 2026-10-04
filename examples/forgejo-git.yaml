@@ -1,0 +1,56 @@
+# Git and the Forgejo API in a microVM sandbox with a vault credential.
+# The token lives in the vault. The sandbox only sees a placeholder in
+# FORGEJO_TOKEN, and the egress gateway on the worker replaces it in
+# requests to git.example.com. See docs/vaults.md.
+#
+# 1. Create an access token for a bot user in Forgejo (Settings,
+#    Applications) with write:repository, plus write:issue if the agent
+#    comments on issues or pull requests.
+# 2. Create a vault (POST /v1/agents/vaults) and add the credential
+#    (POST /v1/agents/vaults/{vault_id}/credentials) with this body.
+#    apipi.git_username is the user name of the token owner; git sends
+#    it with the token.
+#
+#    {
+#      "name": "forgejo bot",
+#      "auth": {
+#        "type": "environment_variable",
+#        "secret_name": "FORGEJO_TOKEN",
+#        "secret_value": "<forgejo token>",
+#        "networking": {
+#          "type": "limited",
+#          "allowed_hosts": ["git.example.com"]
+#        }
+#      },
+#      "metadata": {"apipi.git_username": "apipi-bot"}
+#    }
+#
+# 3. A Forgejo on a private network needs the operator to allow it on
+#    every worker: APIPI_MICROVM_EGRESS_PRIVATE_HOSTS=git.example.com,
+#    and APIPI_MICROVM_EGRESS_UPSTREAM_CA=/path/to/internal-ca.pem when
+#    its certificate comes from an internal authority. With
+#    APIPI_MICROVM_EGRESS_ALLOWLIST=true, also add git.example.com to
+#    APIPI_MICROVM_EGRESS_HOSTS on the API and the workers.
+# 4. Create the agent below with the vault id, or pass vault_ids on
+#    session create.
+#
+# In the sandbox:
+#   git clone https://git.example.com/acme/widgets.git
+#   git push -u origin fix-test
+#   curl -H "Authorization: token $FORGEJO_TOKEN" \
+#     https://git.example.com/api/v1/repos/acme/widgets/pulls \
+#     -H "Content-Type: application/json" \
+#     -d '{"title": "Fix", "head": "fix-test", "base": "main"}'
+
+name: forgejo-dev
+model: gpt-4.1
+instructions: >-
+  Work in /workspace. Clone repositories from https://git.example.com.
+  Push to a new branch and open a pull request with the Forgejo API
+  (POST /api/v1/repos/{owner}/{repo}/pulls, header
+  "Authorization: token $FORGEJO_TOKEN"). Never push to main.
+session_defaults:
+  environment:
+    type: openai_hosted
+  vault_ids:
+    - <vault id>

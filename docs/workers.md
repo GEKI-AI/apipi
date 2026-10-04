@@ -422,7 +422,8 @@ and never logs it. The schemas live in
 | --- | --- |
 | `session` | The resolved environment, metadata, `required_actions`, identity (`user_id`, `org_id`, `key_id`), status, and the effective idle TTL in seconds (resolved on the API, so the worker reaper needs no database read). |
 | `agent` | The resolved definition: model, instructions, function tools, metadata, `builtin_tools`, `codemode`, the thinking level, and `web_search`. `web_search` is only a boolean: it says the Pi tool is loaded for this turn. The API sets it from the agent tools and the search resolver. The context never carries the provider name, the key, or the domain list. |
-| `mcp` | The resolved HTTP MCP servers (`server_label`, `server_url`, vault-applied `headers`, `allowed_tools`). Rebuilt from the database and the vault on every turn, so a follow-up on another API replica works. |
+| `mcp` | The resolved HTTP MCP servers (`server_label`, `server_url`, vault-applied `headers`, `allowed_tools`). Rebuilt from the database and the vault for every command, so a follow-up on another API replica works. The worker uses them when the sandbox starts and keeps that snapshot while it runs. |
+| `env_credentials` | The decrypted vault `environment_variable` credentials (`credential_id`, `secret_name`, `secret_value`, `allowed_hosts`, `git_username`). Built next to `mcp` for every command, and used by the worker only when the sandbox starts, for the egress gateway and the guest placeholders. See [Vaults and credentials](vaults.md). |
 | `model` | The model base URL override (if any) and the model key. |
 | `files`, `skills` | References only, never bytes. |
 | `pi_session` | The cold-restore reference for the Pi session blob, if one exists. |
@@ -442,7 +443,8 @@ file bytes are rejected, and a command frame over 262,144 bytes
 text frame) is rejected with `payload_too_large`. Images are references,
 so only text, instructions, tools, and metadata count toward that limit. Credentials in the context never appear in logs:
 the worker command log carries only a secret-free summary (operation,
-environment type, model, MCP labels, file and skill counts).
+environment type, model, MCP labels, file, skill, and environment
+credential counts).
 
 ## Replay
 

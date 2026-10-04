@@ -421,6 +421,35 @@ A nonzero exit emits `agent.session.environment.failed` and
 `agent.session.failed`. Pi does not start. Successful prep is visible
 in the workspace before the turn. `none` rejects packages, setup commands, env, and files. Environment type `none` ignores `network`.
 
+### Vault credentials and the network
+
+A vault credential of type `environment_variable` lets code in the
+guest call HTTPS APIs with a key that the guest never holds. The guest
+environment sets the credential's `secret_name` to a placeholder, and
+the egress gateway on the worker replaces it in requests to the
+credential's `allowed_hosts`. See
+[Vaults and credentials](vaults.md#how-environment-credentials-work).
+
+These credentials depend on `network.access`:
+
+- `enabled`: the credential hosts are reachable like any public host.
+- `restricted`: the `allowed_hosts` of every attached environment
+  credential are added to `allowed_domains` when the sandbox starts.
+  You do not list them twice. The stored `environment.network` keeps
+  only the hosts you wrote.
+- `disabled`: session create with environment credentials is `400`
+  with code `credential_not_allowed`, because no request could leave
+  the guest.
+
+When the operator TAP allowlist is on, every credential host must also
+be allowed by the operator, or session create is `400` with code
+`credential_host_not_allowed`. A credential host on a private network
+works only when the operator lists it in
+`APIPI_MICROVM_EGRESS_PRIVATE_HOSTS`. A `secret_name` that is also a
+key in `environment.env` is `400` with code `secret_name_collision`.
+`environment.type` `none` has no guest, so environment credentials
+there are `400` with code `credential_not_allowed`.
+
 ## `none`
 
 No computer. Built-in tools are always off and cannot be turned on:

@@ -488,6 +488,7 @@ File bytes never travel in a command.
 | `agent` | object | The resolved agent definition. |
 | `model` | object | `{base_url, api_key}`: the model host override (or `null`) and the model key. This is the only place the key travels. |
 | `mcp` | list | HTTP MCP servers: `{server_label, server_url, headers, allowed_tools}`. `headers` is a map of strings with the vault credentials applied. |
+| `env_credentials` | list | Vault `environment_variable` credentials, decrypted: `{credential_id, secret_name, secret_value, allowed_hosts, git_username}`. Empty for `environment.type` `none`. See below. |
 | `files` | list | Workspace files: `{path, object_id, url, local_path, size_bytes, content_type}`. |
 | `session_files` | list | The files bound to the session with a workspace path, in the same shape as `files`: the attachments of earlier and current user messages. Empty for a session without a computer. A file deleted from the Files API is no longer in the list. |
 | `skills` | list | Installed skills: `{skill_id, object_id, url, local_path}`. |
@@ -503,6 +504,21 @@ definitions), `metadata`, `builtin_tools` (`on`, `off`, or `only`),
 `codemode` (`on`, `off`, or `only`), `thinking`, and `web_search` (boolean).
 `web_search` only says that the worker offers the search tool to the model.
 It carries no provider, no key, and no domain list.
+
+`env_credentials`: one object per environment credential of the
+session's vaults, sorted by `secret_name`. `credential_id` (string),
+`secret_name` (string, an environment variable name), `secret_value`
+(string, the plain secret), `allowed_hosts` (list of lowercase
+hostnames), and `git_username` (string or `null`, from the credential
+metadata key `apipi.git_username`). The API has already checked the
+session rules, so the names are unique and do not clash with
+`environment.env`. The worker reads the list only when it starts a
+sandbox: it gives the values to the egress gateway of that sandbox and
+writes a fresh placeholder per credential into the guest environment.
+A running sandbox keeps its snapshot, the same as for `mcp`. The
+worker MUST NOT log `secret_value` and MUST NOT write it to the guest
+or to the workspace drive. `redact_context` replaces it with `...`, and
+the model repr leaves it out.
 
 #### File references
 

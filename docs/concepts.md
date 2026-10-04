@@ -51,7 +51,10 @@ process uses SQLite. Several processes share Postgres.
 An agent is saved configuration: model, instructions, tools,
 metadata, and session defaults. You create them; a fresh database has
 none. Session defaults are the environment and vaults that a new
-session inherits unless the request overrides them. A template is a
+session inherits unless the request overrides them. A vault holds API
+keys and tokens that the session can use without the model or the
+sandbox seeing them (see [Vaults and credentials](vaults.md)). A
+template is a
 zip of that configuration you can store, download, and use to create
 a new agent in the same tenant. See [API](api.md#agents) and
 [agent templates](agent-templates.md).

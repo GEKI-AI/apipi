@@ -52,7 +52,7 @@ your environment.
 When `DATABASE_URL` is unset, the API uses SQLite at `.apipi/apipi.db`
 in the current working directory, next to `.apipi/sessions`. Outside
 `apipi dev`, run `apipi migrate` before `apipi serve`. Unset
-`APIPI_VAULT_MASTER_KEY` uses a local default for MCP vault tokens and
+`APIPI_VAULT_MASTER_KEY` uses a local default for vault secrets and
 logs a warning; set a 32-byte key in production. `apipi serve` binds
 `0.0.0.0:8000`. `OPENAI_BASE_URL` is the model host that Pi calls.
 
@@ -356,7 +356,7 @@ DATABASE_URL=postgresql+asyncpg://apipi:apipi@db:5432/apipi
 APIPI_WORKER_TOKEN_FILE=/run/apipi/worker.token
 
 Set `APIPI_VAULT_MASTER_KEY` on the API to a 32-byte key (base64 or
-hex) so MCP vault tokens are not encrypted with the local default.
+hex) so vault secrets are not encrypted with the local default.
 
 ```
 # extra on the worker

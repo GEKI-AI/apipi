@@ -1,0 +1,43 @@
+# Git and the GitHub CLI in a microVM sandbox with a vault credential.
+# The token lives in the vault. The sandbox only sees a placeholder in
+# GITHUB_TOKEN, and the egress gateway on the worker replaces it in
+# requests to github.com and api.github.com. See docs/vaults.md.
+#
+# 1. Create a fine-grained personal access token for the repositories
+#    the agent works on: Contents read and write, Pull requests read
+#    and write.
+# 2. Create a vault (POST /v1/agents/vaults) and add the credential
+#    (POST /v1/agents/vaults/{vault_id}/credentials) with this body:
+#
+#    {
+#      "name": "github token",
+#      "auth": {
+#        "type": "environment_variable",
+#        "secret_name": "GITHUB_TOKEN",
+#        "secret_value": "<github_pat_...>",
+#        "networking": {
+#          "type": "limited",
+#          "allowed_hosts": ["github.com", "api.github.com"]
+#        }
+#      }
+#    }
+#
+# 3. Create the agent below with the vault id, or pass vault_ids on
+#    session create. The session needs environment.type openai_hosted
+#    on isolation microvm, and network.access enabled or restricted.
+#
+# In the sandbox, git clone/pull/push over HTTPS, SSH remotes for
+# github.com (rewritten to HTTPS), gh pr create, and
+# curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/...
+# all work without a token in a URL or a file.
+
+name: github-dev
+model: gpt-4.1
+instructions: >-
+  Work in /workspace. Clone repositories over HTTPS. Push to a new
+  branch and open a pull request with gh. Never push to main.
+session_defaults:
+  environment:
+    type: openai_hosted
+  vault_ids:
+    - <vault id>

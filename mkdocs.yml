@@ -89,6 +89,7 @@ nav:
       - Sandbox workers: workers.md
       - Worker protocol: worker-protocol.md
       - Tools and skills: tools.md
+      - Vaults and credentials: vaults.md
       - Usage: usage.md
       - How it works: architecture.md
   - Contribute:

@@ -70,7 +70,7 @@ hosted files and skills).
 | `APIPI_ERROR_CODES` | `error_codes` | `specific` | `specific` or `legacy`. `specific` puts the specific code in `code` on `agent.session.error` and the non-stream `502` body for upstream failures. `legacy` keeps `model_host_error` there for one release. The specific code is always `detail_code`, and `legacy_code` is still `model_host_error` on those failures. `turn.failed`, logs, and usage always use the specific code. See [failure codes](errors.md). |
 | `APIPI_AUTH` | `auth` | unset (default hash) | Import path `package.mod:func` for the auth callback. The callback may return a typed reject (`401` or `429`). |
 | `APIPI_WORKER_TOKEN_FILE` | `worker_token_file` | unset | Path to a file with this worker's token for `apipi worker` connections. Create the token with `apipi workers token create`, which prints the secret once and stores only its hash. The worker trims surrounding whitespace and fails at startup when the setting is unset or the file is missing, unreadable, or empty. A worker token is valid only on `/internal/worker`. See [workers](workers.md). |
-| `APIPI_VAULT_MASTER_KEY` | `vault_master_key` | local default | 32-byte AES-256-GCM key for MCP vault tokens at rest (standard or urlsafe base64, or 64-char hex). Unset uses a local default so laptop try-outs keep working, and logs a warning. Production must set a real key from the deploy secret store. Never commit it. `apipi migrate` rewrites leftover plaintext rows to ciphertext. Generate with `python -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"`. |
+| `APIPI_VAULT_MASTER_KEY` | `vault_master_key` | local default | 32-byte AES-256-GCM key for vault secrets (MCP tokens and environment credential values) at rest (standard or urlsafe base64, or 64-char hex). Unset uses a local default so laptop try-outs keep working, and logs a warning. Production must set a real key from the deploy secret store. Never commit it. `apipi migrate` rewrites leftover plaintext rows to ciphertext. Generate with `python -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"`. |
 | `APIPI_MCP_ALLOW_HOSTS` | `[mcp].allow_hosts` | empty | Private MCP targets the SSRF guard admits, comma-separated or a TOML array. Entries are hostnames or CIDRs (for example `mcp.internal, 10.0.0.0/8`). Empty blocks loopback, RFC 1918, link-local, and other special-use addresses, including names that resolve to them. Public MCP hosts need no entry. See [tools](tools.md#mcp). |
 | `APIPI_WORKER_LEASE_TTL` | `worker_lease_ttl` | `30s` | How long a session lease stays valid without a renewal. Set it on the API only: the API sends it to every worker in `hello.reply`, together with the heartbeat interval (a third of the TTL, at most 10 seconds). A worker that has this setting ignores it and logs `worker.lease_ttl.ignored`. Expiry fails closed and emits `agent.session.error` with code `worker_lease_expired`. |
 | `APIPI_API_URL` | `api_url` | unset (`http://127.0.0.1:8000` for `apipi worker`) | Base URL the worker uses to open `/internal/worker`. Non-loopback URLs must use TLS (`https://` or `wss://`); `apipi worker` fails at startup otherwise. Loopback `http://` is allowed for local development. |
@@ -785,6 +785,14 @@ The guest itself still cannot reach the private address. If
 such a host uses a certificate from an internal authority, put that
 authority in a PEM file and set `upstream_ca`. The gateway adds it to
 the system authorities when it checks an upstream certificate.
+
+The API also reads `APIPI_MICROVM_EGRESS_ALLOWLIST` and
+`APIPI_MICROVM_EGRESS_HOSTS`. With the allowlist on, session create
+rejects a vault environment credential whose `allowed_hosts` are not
+the model host, a listed `egress_hosts` entry, or a package registry
+of the session (`credential_host_not_allowed`). Set both values the
+same on the API and on the workers. See
+[Vaults and credentials](vaults.md#requirements).
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
