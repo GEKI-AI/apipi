@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import secrets
 import time
@@ -57,6 +58,7 @@ from apipi.env.setup import (
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.gateway.auth import AuthIdentity, not_found
 from apipi.gateway.content import (
+    ImagePart,
     UserContent,
     parse_user_content,
     require_image_model,
@@ -318,6 +320,16 @@ async def iter_session_events(
         hub.unsubscribe(session_id, queue)
 
 
+_MAYBE_SENT = frozenset({"forward_timeout", "command_ack_timeout"})
+
+
+def _turn_not_sent(exc: BaseException) -> bool:
+    """True when the turn command surely never reached a worker."""
+    if isinstance(exc, ApiError):
+        return exc.code not in _MAYBE_SENT
+    return isinstance(exc, ObjectStoreError)
+
+
 class SessionService:
     def __init__(
         self,
@@ -391,21 +403,70 @@ class SessionService:
         tenant_id: uuid.UUID,
         content: UserContent,
         known: dict[str, tuple[str, int]],
-    ) -> list[dict[str, Any]]:
-        """The `turn.start` parts, with each image as a store reference."""
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """The `turn.start` parts with image references, and the new file ids.
+
+        Data URL images are stored as files here. The caller deletes the
+        new files when the turn does not start.
+        """
         images = await self.files.input_images(tenant_id, content.images, known)
-        refs = [
-            input_image_ref(
-                self.settings,
-                tenant_id,
-                file_id,
-                mime_type=mime,
-                size_bytes=size,
-                objects=self.files.objects,
+        refs = [self._image_ref(tenant_id, *image) for image in images]
+        created = [
+            file_id
+            for image, (file_id, _mime, _size) in zip(
+                content.images, images, strict=True
             )
-            for file_id, mime, size in images
+            if not image.file_id
         ]
-        return content.wire_parts(refs)
+        return content.wire_parts(refs), created
+
+    def _image_ref(
+        self, tenant_id: uuid.UUID, file_id: str, mime: str, size: int
+    ) -> dict[str, Any]:
+        return input_image_ref(
+            self.settings,
+            tenant_id,
+            file_id,
+            mime_type=mime,
+            size_bytes=size,
+            objects=self.files.objects,
+        )
+
+    async def _drop_files(self, tenant_id: uuid.UUID, file_ids: list[str]) -> None:
+        """Delete the image files of a turn that did not start, best effort."""
+        for file_id in file_ids:
+            with contextlib.suppress(Exception):
+                await self.files.delete(tenant_id, file_id)
+        file_ids.clear()
+
+    async def forward_image_parts(
+        self, tenant_id: uuid.UUID, parts: list[Any]
+    ) -> list[dict[str, Any]]:
+        """Sign the image parts of a forwarded `turn.start` on this replica.
+
+        The forward row keeps only `file_id`. The file is checked for the
+        tenant again and the reference is built from the tenant here.
+        """
+        images = tuple(
+            ImagePart(file_id=str(part.get("file_id") or ""))
+            for part in parts
+            if isinstance(part, dict) and part.get("type") == "image"
+        )
+        if any(not image.file_id for image in images):
+            raise ApiError(
+                "invalid_request",
+                "forwarded image part has no file_id",
+                code="invalid_request",
+            )
+        known = await self.files.image_files(tenant_id, images)
+        out: list[dict[str, Any]] = []
+        for part in parts:
+            if isinstance(part, dict) and part.get("type") == "image":
+                file_id = str(part["file_id"])
+                out.append(self._image_ref(tenant_id, file_id, *known[file_id]))
+            else:
+                out.append(part)
+        return out
 
     async def _turn_context(
         self,
@@ -570,6 +631,50 @@ class SessionService:
         api_key: str | None = None,
         wait_turn: bool = True,
     ) -> dict[str, Any]:
+        pending: list[str] = []
+        try:
+            return await self._create(
+                tenant_id,
+                agent=agent,
+                agent_id=agent_id,
+                environment=environment,
+                input=input,
+                metadata=metadata,
+                idle_ttl=idle_ttl,
+                vault_ids=vault_ids,
+                inherit_agent_defaults=inherit_agent_defaults,
+                key_id=key_id,
+                user_id=user_id,
+                org_id=org_id,
+                request_id=request_id,
+                api_key=api_key,
+                wait_turn=wait_turn,
+                pending=pending,
+            )
+        finally:
+            await self._drop_files(tenant_id, pending)
+
+    async def _create(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        agent: AgentWrite | None,
+        agent_id: uuid.UUID | None,
+        environment: EnvironmentSpec | None,
+        input: str | dict[str, Any] | list[Any] | None,
+        metadata: dict[str, Any] | None,
+        idle_ttl: str | None,
+        vault_ids: list[uuid.UUID] | None,
+        inherit_agent_defaults: bool,
+        key_id: str,
+        user_id: str | None,
+        org_id: str | None,
+        request_id: str | None,
+        api_key: str | None,
+        wait_turn: bool,
+        pending: list[str],
+    ) -> dict[str, Any]:
+        """Create the session. `pending` holds image files no turn owns yet."""
         if agent is None and agent_id is None:
             raise ApiError(
                 "invalid_request",
@@ -612,6 +717,10 @@ class SessionService:
                 ) from exc
         turn_content = parse_user_content(input, settings=self.settings)
         image_files = await self.files.image_files(tenant_id, turn_content.images)
+        turn_parts, created = await self._turn_parts(
+            tenant_id, turn_content, image_files
+        )
+        pending.extend(created)
         raw_tools: list[Any] = []
         model: str | None = None
         instructions: str | None = None
@@ -822,34 +931,39 @@ class SessionService:
                     tenant_id,
                     session_mem_mib=mem_mib_for_size(self.settings, size),
                 )
-                turn_parts = await self._turn_parts(
-                    tenant_id, turn_content, image_files
-                )
 
                 if wait_turn:
-                    await self.execution.run_turn(
-                        tenant_id,
-                        session_id,
-                        text,
-                        parts=turn_parts,
-                        mcp_http=servers,
-                        request_id=request_id,
-                        api_key=api_key,
-                        key_id=key_id or None,
-                        user_id=user_id,
-                        org_id=org_id,
-                        turn_context=await self._turn_context(
+                    try:
+                        await self.execution.run_turn(
                             tenant_id,
                             session_id,
-                            servers,
+                            text,
+                            parts=turn_parts,
+                            mcp_http=servers,
+                            request_id=request_id,
                             api_key=api_key,
                             key_id=key_id or None,
                             user_id=user_id,
                             org_id=org_id,
-                        ),
-                    )
+                            turn_context=await self._turn_context(
+                                tenant_id,
+                                session_id,
+                                servers,
+                                api_key=api_key,
+                                key_id=key_id or None,
+                                user_id=user_id,
+                                org_id=org_id,
+                            ),
+                        )
+                    except Exception as exc:
+                        if not _turn_not_sent(exc):
+                            pending.clear()
+                        raise
+                    pending.clear()
                     await self._raise_if_first_turn_failed(tenant_id, session_id)
                 else:
+                    owned = list(pending)
+                    pending.clear()
 
                     async def _run_first_turn() -> None:
                         try:
@@ -879,6 +993,8 @@ class SessionService:
                                 "background turn",
                                 extra={"session_id": str(session_id)},
                             )
+                            if _turn_not_sent(exc):
+                                await self._drop_files(tenant_id, owned)
                             if isinstance(exc, ApiError) and exc.code:
                                 code = exc.code
                             else:
@@ -1248,28 +1364,35 @@ class SessionService:
                     tenant_id,
                     session_mem_mib=mem_mib_for_size(self.settings, follow_size),
                 )
-                turn_parts = await self._turn_parts(tenant_id, parsed, image_files)
-                await self.execution.run_turn(
-                    tenant_id,
-                    session_id,
-                    message,
-                    parts=turn_parts,
-                    mcp_http=turn_servers,
-                    request_id=request_id,
-                    api_key=api_key,
-                    key_id=key_id,
-                    user_id=user_id,
-                    org_id=org_id,
-                    turn_context=await self._turn_context(
+                turn_parts, created = await self._turn_parts(
+                    tenant_id, parsed, image_files
+                )
+                try:
+                    await self.execution.run_turn(
                         tenant_id,
                         session_id,
-                        turn_servers,
+                        message,
+                        parts=turn_parts,
+                        mcp_http=turn_servers,
+                        request_id=request_id,
                         api_key=api_key,
                         key_id=key_id,
                         user_id=user_id,
                         org_id=org_id,
-                    ),
-                )
+                        turn_context=await self._turn_context(
+                            tenant_id,
+                            session_id,
+                            turn_servers,
+                            api_key=api_key,
+                            key_id=key_id,
+                            user_id=user_id,
+                            org_id=org_id,
+                        ),
+                    )
+                except Exception as exc:
+                    if _turn_not_sent(exc):
+                        await self._drop_files(tenant_id, created)
+                    raise
         async with self.store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             if row is None:

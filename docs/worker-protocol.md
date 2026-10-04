@@ -869,8 +869,14 @@ it does not know. A release may add a field to a context or a payload only
 after every worker and every API runs a version that ignores unknown fields.
 `hello` MUST carry `lease_ttl_seconds` and `heartbeat_seconds` in every
 version, because a worker cannot guess a safe heartbeat. While some workers
-do not list `image_refs` yet, a message with images that is placed on one of
-them fails with `501`. Text turns are not affected.
+do not list `image_refs` yet, the API places a message with images on a
+worker that lists it when one has room. A message with images that still
+lands on an older worker fails with `501`. Text turns are not affected.
+
+**Rollback order.** Roll back in the reverse order: the workers first, then
+the API. A worker with `image_refs` accepts only image references and
+rejects the old inline image parts of an older API, so an older API must not
+run with newer workers while users send images.
 
 ## Security rules for a worker
 

@@ -441,7 +441,9 @@ decisions, and why:
 * **The owning replica builds the context.** It reads the session, the
   agent, the vault, and the object store itself, so no vault header,
   presigned URL, or file reference is ever stored in the mailbox or
-  sent over `NOTIFY`. The same holds for the model key: the request
+  sent over `NOTIFY`. An input image keeps only its `file_id` in the
+  row, and the owning replica checks it for the tenant and signs the
+  image reference itself. The same holds for the model key: the request
   bearer is never written to Postgres (constitution rule 5), so it is
   not forwarded. The row keeps `key_id`, `user_id`, `org_id` and the
   tenant, and the owning replica resolves the key from that identity

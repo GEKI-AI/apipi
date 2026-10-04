@@ -532,7 +532,14 @@ and it fails an upload with a clear error, instead of sending an
 envelope, when the API did not list `presign`. The API refuses a command
 op that needs a feature the worker did not list, and a `turn.start` with
 images for a worker that did not list `image_refs` (`501`,
-`unsupported_op`). The `hello` of the API
+`unsupported_op`). Placement prefers a worker on the same replica that
+lists `image_refs` for a turn with images. A worker on another replica is
+not filtered, because its features are known only to the replica that
+holds its socket.
+
+Upgrade the API first and the workers after it. Roll back in the reverse
+order: the workers first, then the API. A worker with `image_refs`
+rejects the inline image parts that an older API sends. The `hello` of the API
 must carry `lease_ttl_seconds` and `heartbeat_seconds`: a `hello`
 without them still stops the worker with an error, because no later
 version may leave them out and a worker cannot guess a safe heartbeat.
@@ -950,14 +957,17 @@ it does this:
 
 1. It stores one row in `worker_forwards`: the command and its
    arguments, without the turn context, and the id of the replica that
-   holds the socket. The row id is the command id.
+   holds the socket. The row id is the command id. An image part of
+   `turn.start` keeps only its `file_id`, never a presigned URL, a store
+   path, or an object key.
 2. It sends that replica a small `forward` message with the row id,
    over the event bus. On Postgres this is `NOTIFY` on a channel of its
    own for that replica. The body never travels on the bus, because a
    command can be up to 262,144 bytes and `NOTIFY` carries 8000.
 3. The replica that holds the socket claims the row, builds the turn
    context itself from the database, the vault, and the object store,
-   and sends the command through its own writer and queue. From there it
+   checks each image `file_id` for the tenant again and builds its
+   image reference, and sends the command through its own writer and queue. From there it
    is an ordinary command: it is retransmitted, acked, and expires with
    the lease like a local one.
 4. It writes the outcome to the row and sends a `forward_result`
@@ -967,7 +977,7 @@ it does this:
    `session.stopped`, the same as a local stop.
 5. The requesting replica deletes the row.
 
-The row holds the text, images, and tool output of the turn until the
+The row holds the text, image file ids, and tool output of the turn until the
 command is sent, and never the context, the vault headers, or the model
 key. It is deleted as soon as the result is read. A row that a crashed
 replica leaves behind is purged after 10 minutes.

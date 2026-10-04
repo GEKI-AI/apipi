@@ -137,7 +137,7 @@ def check_context_op(op: str, payload: dict[str, Any]) -> None:
     check_command_size(payload)
 
 
-def _redact_url(url: str) -> str:
+def redact_url(url: str) -> str:
     parts = urlsplit(url)
     if parts.query or parts.fragment:
         return urlunsplit((parts.scheme, parts.netloc, parts.path, "...", ""))
@@ -163,16 +163,16 @@ def redact_context(raw: Any) -> Any:
                     headers[key] = "..."
             url = server.get("server_url")
             if isinstance(url, str) and url:
-                server["server_url"] = _redact_url(url)
+                server["server_url"] = redact_url(url)
     for key in ("files", "skills"):
         refs = redacted.get(key)
         if isinstance(refs, list):
             for ref in refs:
                 if isinstance(ref, dict) and isinstance(ref.get("url"), str):
-                    ref["url"] = _redact_url(ref["url"])
+                    ref["url"] = redact_url(ref["url"])
     pi_session = redacted.get("pi_session")
     if isinstance(pi_session, dict) and isinstance(pi_session.get("url"), str):
-        pi_session["url"] = _redact_url(pi_session["url"])
+        pi_session["url"] = redact_url(pi_session["url"])
     return redacted
 
 

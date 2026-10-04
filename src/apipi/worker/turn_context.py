@@ -9,6 +9,7 @@ from apipi.common.dirs import store_root
 from apipi.common.errors import store_error
 from apipi.config import Settings
 from apipi.env.setup import workspace_file_missing
+from apipi.protocol.context import redact_url
 
 
 def local_ref_path(settings: Settings, local_path: str) -> Path:
@@ -35,13 +36,15 @@ async def fetch_ref_bytes(ref: Mapping[str, Any], settings: Settings) -> bytes:
                 response = await client.get(url)
         except Exception as exc:
             raise store_error(
-                f"cannot fetch turn context ref: {exc}", operation="get"
+                f"cannot fetch turn context ref: {type(exc).__name__}",
+                operation="get",
+                key=redact_url(url),
             ) from exc
         if response.status_code != 200:
             raise store_error(
                 f"cannot fetch turn context ref: HTTP {response.status_code}",
                 operation="get",
-                key=url,
+                key=redact_url(url),
             )
         return response.content
     local_path = ref.get("local_path")
@@ -113,6 +116,13 @@ async def fetch_input_images(
         if not isinstance(part, Mapping) or part.get("type") != "image":
             continue
         data = await fetch_ref_bytes(part, settings)
+        size = part.get("size_bytes")
+        if isinstance(size, int) and len(data) != size:
+            raise store_error(
+                f"input image is {len(data)} bytes, expected {size}",
+                operation="get",
+                key=str(part.get("object_id") or ""),
+            )
         images.append(
             {
                 "type": "image",

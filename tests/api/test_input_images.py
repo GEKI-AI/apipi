@@ -337,15 +337,139 @@ async def test_worker_without_image_refs_gets_no_image_turn(
     ) as client:
         token = "image-old-worker"
         session_id = await _session(client, token)
+        image = {"type": "input_image", "image_url": _data_url(_png(64))}
+        sent = await client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json=_message(image),
+        )
+        agent = await client.post(
+            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        )
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent.json()["id"],
+                "environment": {"type": "none"},
+                "input": {"role": "user", "content": [image]},
+            },
+        )
+        files = await client.get("/v1/files", headers=_auth(token))
+    await worker.close()
+    assert sent.status_code == 501
+    assert sent.json()["error"]["code"] == "unsupported_op"
+    assert "image_refs" in sent.json()["error"]["message"]
+    assert created.status_code == 501
+    assert files.json()["data"] == []
+
+
+async def test_placement_prefers_a_worker_with_image_refs(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    from apipi.services.worker_tokens import create_token
+
+    old_token = await create_token(store, name="old-worker")
+    harness = FakeHarness()
+    async with split_client_for(
+        _vision(settings), store, harness=harness, token=worker_secret
+    ) as (app, client, _worker):
+        old = FakeWorker(app, old_token.secret)
+        await old.connect(
+            capacity=8,
+            memory_mb=1_000_000,
+            features=["lease_cursor", "presign", "search"],
+        )
+        token = "image-mixed-fleet"
+        session_id = await _session(client, token)
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
             headers=_auth(token),
             json=_message({"type": "input_image", "image_url": _data_url(_png(64))}),
         )
-    await worker.close()
-    assert sent.status_code == 501
-    assert sent.json()["error"]["code"] == "unsupported_op"
-    assert "image_refs" in sent.json()["error"]["message"]
+        await old.close()
+    assert sent.status_code == 200, sent.json()
+    assert len(harness.images) == 1
+
+
+async def test_parts_reject_fields_of_the_other_part_type(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    async with split_client_for(_vision(settings), store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
+        token = "image-strict-parts"
+        session_id = await _session(client, token)
+        path = f"/v1/agents/sessions/{session_id}/events"
+        text_with_file = await client.post(
+            path,
+            headers=_auth(token),
+            json=_message({"type": "input_text", "text": "x", "file_id": "file-1"}),
+        )
+        image_with_text = await client.post(
+            path,
+            headers=_auth(token),
+            json=_message({"type": "input_image", "file_id": "file-1", "text": "x"}),
+        )
+        unknown = await client.post(
+            path,
+            headers=_auth(token),
+            json=_message({"type": "input_audio", "data": "x"}),
+        )
+    for response in (text_with_file, image_with_text):
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "unknown_field"
+    assert unknown.status_code == 400
+    assert unknown.json()["error"]["code"] == "input_audio"
+
+
+async def test_worker_checks_the_image_size_and_hides_the_url(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    from apipi.common.dirs import store_root
+    from apipi.common.errors import ObjectStoreError
+    from apipi.worker.turn_context import fetch_input_images
+
+    root = store_root(settings)
+    (root / "files").mkdir(parents=True, exist_ok=True)
+    (root / "files" / "image").write_bytes(b"12345")
+    ref = {
+        "type": "image",
+        "file_id": "file-1",
+        "object_id": "files/image",
+        "local_path": "files/image",
+        "mime_type": "image/png",
+        "size_bytes": 4,
+    }
+    with pytest.raises(ObjectStoreError, match="expected 4"):
+        await fetch_input_images([ref], settings)
+    assert (await fetch_input_images([{**ref, "size_bytes": 5}], settings))[0][
+        "data"
+    ] == base64.b64encode(b"12345").decode()
+
+    class _Broken:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def get(self, url: str) -> Any:
+            raise httpx.ConnectError(f"cannot reach {url}")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Broken)
+    url = "https://bucket.example/files/image?X-Amz-Signature=secret"
+    with pytest.raises(ObjectStoreError) as caught:
+        await fetch_input_images([{**ref, "url": url, "local_path": None}], settings)
+    assert "secret" not in str(caught.value)
+    assert "secret" not in caught.value.key
 
 
 async def test_s3_store_sends_presigned_image_refs(
