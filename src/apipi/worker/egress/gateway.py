@@ -112,6 +112,10 @@ def _warn_accept(session_id: str | None, error: str) -> None:
     )
 
 
+def egress_metrics() -> Metrics | None:
+    return _metrics
+
+
 def _tls_enough(data: bytes) -> bool:
     try:
         parse_client_hello(data)

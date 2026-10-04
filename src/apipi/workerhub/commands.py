@@ -7,9 +7,13 @@ from pydantic import ValidationError
 from apipi.common.errors import ApiError
 from apipi.common.sandbox import sandbox_size_of
 from apipi.protocol import (
+    COMMAND_CONTEXT_OPS,
     COMMAND_PAYLOAD_MODELS,
     CURSOR_OPS,
     FEATURE_FILE_REFS,
+
+
+    FEATURE_ENV_CREDENTIALS,
     FEATURE_IMAGE_REFS,
     FEATURE_SESSION_FILES,
     OP_FEATURES,
@@ -96,6 +100,10 @@ def command_features(wire: dict[str, Any]) -> list[str]:
     workspace = any(item.get("model_input") == "workspace" for item in items)
     if (op == "turn.start" and workspace) or session_files:
         needed.append(FEATURE_SESSION_FILES)
+    context = payload.get("context") if isinstance(payload, dict) else None
+    credentials = context.get("env_credentials") if isinstance(context, dict) else None
+    if op in COMMAND_CONTEXT_OPS and credentials:
+        needed.append(FEATURE_ENV_CREDENTIALS)
     return needed
 
 

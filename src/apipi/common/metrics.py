@@ -461,6 +461,11 @@ class Metrics:
             ["direction"],
             registry=self.registry,
         )
+        self.egress_injections = Counter(
+            "apipi_egress_injections_total",
+            "Requests where the egress gateway injected a vault secret",
+            registry=self.registry,
+        )
         self.sandboxes_active = Gauge(
             "apipi_sandboxes_active",
             "Live sandboxes by size",
@@ -789,6 +794,9 @@ class Metrics:
             self.egress_bytes.labels(direction="up").inc(bytes_up)
         if bytes_down:
             self.egress_bytes.labels(direction="down").inc(bytes_down)
+
+    def observe_egress_injection(self) -> None:
+        self.egress_injections.inc()
 
     def observe_sandbox_destroy(self, *, size: str, hold_seconds: float) -> None:
         self.sandbox_destroy.labels(size=size).inc()

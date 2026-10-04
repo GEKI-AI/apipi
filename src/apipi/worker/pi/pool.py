@@ -15,6 +15,7 @@ from apipi.common.sandbox import size_for_mem
 from apipi.common.timefmt import utc_ts
 from apipi.config import CapacityError, Settings
 from apipi.mcp.http import McpHttpServer
+from apipi.protocol import ContextEnvCredential
 from apipi.worker.pi.proc import PiProc, spawn_pi
 
 _EVENT_REASON = {
@@ -109,6 +110,7 @@ class PiPool:
         agent_id: str | None = None,
         user_id: str | None = None,
         org_id: str | None = None,
+        env_credentials: list[ContextEnvCredential] | None = None,
     ) -> PiProc:
         instructions = instructions if instructions else None
         from apipi.worker.pi.settings_json import process_system_prompt
@@ -196,6 +198,8 @@ class PiPool:
                 lock_wait_ms=lock_wait_ms,
             ):
                 optional: dict[str, Any] = {"web_search": True} if web_search else {}
+                if env_credentials:
+                    optional["env_credentials"] = env_credentials
                 proc = await spawn_pi(
                     self.settings,
                     cwd=cwd,

@@ -20,6 +20,7 @@ def main() -> None:
         names = archive.namelist()
         required = (
             "apipi/worker/pi/guest.sh",
+            "apipi/worker/pi/git-credential.sh",
             "apipi/worker/pi/images/build.sh",
             "apipi/worker/pi/images/default/image.env",
             "apipi/worker/pi/images/browser/image.env",

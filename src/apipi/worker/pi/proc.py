@@ -10,8 +10,9 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from apipi.common.logutil import log_event
-from apipi.config import Settings
+from apipi.config import ConfigError, Settings
 from apipi.mcp.http import McpHttpServer
+from apipi.protocol import ContextEnvCredential
 from apipi.worker.pi.orphan import host_pi_stamp
 from apipi.worker.pi.version import PINNED_PI
 
@@ -456,6 +457,7 @@ async def spawn_pi(
     env_type: str | None = None,
     session_id: str | None = None,
     web_search: bool = False,
+    env_credentials: list[ContextEnvCredential] | None = None,
 ) -> PiProc:
     from apipi.worker.pi.isolation import load_isolation
 
@@ -464,6 +466,13 @@ async def spawn_pi(
     else:
         backend = load_isolation(settings.run_mode)
     optional: dict[str, Any] = {"web_search": True} if web_search else {}
+    if env_credentials:
+        if backend.name != "microvm":
+            raise ConfigError(
+                "vault environment credentials need isolation microvm, "
+                f"and isolation {backend.name} has no egress gateway"
+            )
+        optional["env_credentials"] = env_credentials
     return await backend.spawn(
         settings,
         cwd=cwd,

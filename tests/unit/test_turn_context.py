@@ -145,7 +145,7 @@ def test_guest_env_deny_list_covers_the_worker() -> None:
     from apipi.common.guest_env import GUEST_ENV_NEVER, reserved_secret_name
     from apipi.worker.pi import microvm
 
-    assert microvm._EXTRA_NEVER <= GUEST_ENV_NEVER
+    assert microvm.GUEST_ENV_NEVER is GUEST_ENV_NEVER
     assert all(reserved_secret_name(name) for name in microvm._GUEST_FILE_KEYS)
 
 

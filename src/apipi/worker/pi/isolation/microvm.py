@@ -2,6 +2,7 @@ from typing import Any
 
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
+from apipi.protocol import ContextEnvCredential
 from apipi.worker.pi.microvm import probe_microvm, require_microvm, spawn_microvm_pi
 from apipi.worker.pi.proc import PiProc
 
@@ -39,6 +40,7 @@ class MicrovmIsolation:
         env_type: str | None = None,
         session_id: str | None = None,
         web_search: bool = False,
+        env_credentials: list[ContextEnvCredential] | None = None,
     ) -> PiProc:
         return await spawn_microvm_pi(
             settings,
@@ -60,4 +62,5 @@ class MicrovmIsolation:
             env_type=env_type,
             session_id=session_id,
             web_search=web_search,
+            env_credentials=env_credentials,
         )
