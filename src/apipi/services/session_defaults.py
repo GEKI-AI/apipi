@@ -12,7 +12,13 @@ from apipi.common.sandbox import (
 from apipi.config import Settings
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.gateway.auth import not_found
-from apipi.store.repo import get_file, get_skill, get_vault, promote_attachments
+from apipi.store.repo import (
+    USER_FILE_KINDS,
+    get_file,
+    get_skill,
+    get_vault,
+    promote_attachments,
+)
 
 _HOSTED = "openai_hosted"
 
@@ -171,12 +177,17 @@ async def promote_default_files(
     *,
     user_id: str | None = None,
 ) -> None:
-    """Make attachments in the defaults' `environment.files` files of kind `file`."""
+    """Make user files in the defaults' `environment.files` files of kind `file`.
+
+    A file an agent references is an agent file, so attachments and
+    images both become kind `file`.
+    """
     await promote_attachments(
         db,
         tenant_id,
         environment_file_ids(_environment_dict(defaults)),
         user_id=user_id,
+        kinds=USER_FILE_KINDS,
     )
 
 

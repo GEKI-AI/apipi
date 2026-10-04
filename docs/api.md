@@ -243,8 +243,12 @@ cursor on it is `400`, and an `input_image` with its `file_id` or an
 `session_defaults` on agent create and update) is `404`. Files of kind
 `file` are agent files and stay visible to every identity of the
 tenant, whoever uploaded them, so an agent file in `session_defaults`
-works in every user's sessions. An identity without `user_id` sees
-every file of the tenant.
+works in every user's sessions. Agent export
+(`GET /v1/apipi/agents/{agent_id}/export`) and `POST
+/v1/apipi/templates` read the files of the agent's `session_defaults`
+with the same rule, so an agent that still references a user file of
+another user (saved before such files became agent files) is `404`
+there. An identity without `user_id` sees every file of the tenant.
 
 A file can be bound to one or more sessions. An image is bound to the
 session whose message carried it, and an image sent by `file_id` is
@@ -306,8 +310,13 @@ input becomes a file of kind `file`, so the check never deletes it:
 this happens when its id is in `environment.files` (`type: "file_id"`)
 of a session create, including files that come from the agent's
 `session_defaults`, or in `session_defaults` saved on an agent (also
-an agent made from a template). An attachment of another user is
-`404` there, so a caller never changes its kind. Images stay images.
+an agent made from a template). A file that an agent's
+`session_defaults` references is an agent file, so on agent create and
+update an image there becomes kind `file` as well, and every user of
+the tenant can start a session from that agent and export it. An image
+in `environment.files` of a session create stays an image. A user file
+of another user is `404` in both places, so a caller never changes its
+kind.
 
 Browser and BFF uploads that must not proxy bytes through the gateway
 use [presigned uploads](#uploads) instead of this multipart route.
@@ -352,7 +361,8 @@ checks the object with `HeadObject`, enforces `APIPI_MAX_FILE_BYTES`,
 and writes Files or Skills metadata. Complete before PUT is `400` with
 code `upload_incomplete`. Wrong tenant is `404`. When the identity has
 a `user_id`, complete also needs the upload to have the same `user_id`
-or none; another user's upload is `404`. The Pi harness session
+or none, for every `purpose` including `skill`; another user's upload
+is `404`. The Pi harness session
 cache is not exposed this way.
 
 A presigned GET forces a download. The URL sets

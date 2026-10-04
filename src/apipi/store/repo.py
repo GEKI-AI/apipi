@@ -1659,10 +1659,11 @@ async def promote_attachments(
     file_ids: Collection[str],
     *,
     user_id: str | None = None,
+    kinds: Collection[str] = ("attachment",),
 ) -> None:
-    """Make attachments used as agent or session input files of kind `file`.
+    """Make files of `kinds` used as agent or session input files of kind `file`.
 
-    Only attachments the caller with `user_id` can see are changed.
+    Only files the caller with `user_id` can see are changed.
     """
     if not file_ids:
         return
@@ -1671,7 +1672,7 @@ async def promote_attachments(
         .where(
             FileRow.tenant_id == tenant_id,
             FileRow.id.in_(list(file_ids)),
-            FileRow.kind == "attachment",
+            FileRow.kind.in_(list(kinds)),
             *file_visible(user_id),
         )
         .values(kind="file")

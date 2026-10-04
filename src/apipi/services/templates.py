@@ -109,6 +109,7 @@ class TemplateService:
             agent,
             name=body.name,
             description=body.description,
+            user_id=created_by,
         )
         return await self._store_bundle(
             tenant_id,
@@ -189,6 +190,8 @@ class TemplateService:
         self,
         tenant_id: uuid.UUID,
         agent_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
     ) -> tuple[str, bytes]:
         agent = await self.agents.get(tenant_id, agent_id)
         raw_name = agent.get("name")
@@ -197,6 +200,7 @@ class TemplateService:
             agent,
             name=raw_name if isinstance(raw_name, str) else None,
             description=None,
+            user_id=user_id,
         )
         name = agent.get("name") if isinstance(agent.get("name"), str) else agent_id.hex
         return f"{name}.apipi-agent.zip", data
@@ -260,8 +264,11 @@ class TemplateService:
         *,
         name: str | None,
         description: str | None,
+        user_id: str | None = None,
     ) -> tuple[bytes, dict[str, Any], list[str]]:
-        skills, files, credentials, vaults = await self._gather(tenant_id, agent)
+        skills, files, credentials, vaults = await self._gather(
+            tenant_id, agent, user_id=user_id
+        )
         data, manifest, warnings = build_bundle(
             agent=agent,
             template_name=name,
@@ -277,7 +284,11 @@ class TemplateService:
         return data, manifest, warnings
 
     async def _gather(
-        self, tenant_id: uuid.UUID, agent: dict[str, Any]
+        self,
+        tenant_id: uuid.UUID,
+        agent: dict[str, Any],
+        *,
+        user_id: str | None = None,
     ) -> tuple[
         dict[str, bytes],
         dict[str, bytes],
@@ -325,7 +336,7 @@ class TemplateService:
                         file_id = item.get("file_id")
                         if not isinstance(file_id, str):
                             continue
-                        row = await get_file(db, tenant_id, file_id)
+                        row = await get_file(db, tenant_id, file_id, user_id=user_id)
                         if row is None:
                             not_found()
                         blob = await self.objects.get(

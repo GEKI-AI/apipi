@@ -22,6 +22,7 @@ from apipi.gateway.tokens import hash_token
 from apipi.store.blobs import file_object_id
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
+from apipi.store.repo import get_file
 from apipi.worker.fake_harness import FakeHarness
 
 
@@ -1016,3 +1017,75 @@ async def test_user_files_of_another_user_are_not_session_inputs(
     assert u2_from_defaults.status_code == 200, u2_from_defaults.json()
     assert u2_agent_file.status_code == 200, u2_agent_file.json()
     assert u1_session.status_code == 200, u1_session.json()
+
+
+async def _image_agent(client: AsyncClient, headers: dict[str, str]) -> tuple[str, str]:
+    uploaded = await client.post(
+        "/v1/files",
+        headers=headers,
+        data={"purpose": "vision"},
+        files={"file": ("photo.png", _png(), "image/png")},
+    )
+    assert uploaded.status_code == 200, uploaded.json()
+    image = str(uploaded.json()["id"])
+    agent = await client.post(
+        "/v1/agents",
+        headers=headers,
+        json={
+            "name": "bot",
+            "model": "test",
+            "session_defaults": {
+                "environment": {
+                    "type": "openai_hosted",
+                    "files": [
+                        {"type": "file_id", "file_id": image, "path": "data/a.png"}
+                    ],
+                }
+            },
+        },
+    )
+    assert agent.status_code == 200, agent.json()
+    return image, str(agent.json()["id"])
+
+
+async def test_images_in_agent_defaults_become_agent_files(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    async with _vision_client(settings, store, worker_secret) as (_app, client):
+        u1, u2 = _as("agent-images", "u1"), _as("agent-images", "u2")
+        image, agent_id = await _image_agent(client, u1)
+        kinds = {
+            row["id"]: row["kind"]
+            for row in (await client.get("/v1/apipi/files", headers=u1)).json()["data"]
+        }
+        u2_read = await client.get(f"/v1/files/{image}", headers=u2)
+        u2_export = await client.get(f"/v1/apipi/agents/{agent_id}/export", headers=u2)
+        u2_session = await client.post(
+            "/v1/agents/sessions", headers=u2, json={"agent_id": agent_id}
+        )
+    assert kinds[image] == "file"
+    assert u2_read.status_code == 200
+    assert u2_export.status_code == 200
+    assert u2_session.status_code == 200, u2_session.json()
+
+
+async def test_user_files_of_an_older_agent_are_not_exported_to_another_user(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    async with _vision_client(settings, store, worker_secret) as (_app, client):
+        token = "agent-older"
+        u1, u2 = _as(token, "u1"), _as(token, "u2")
+        image, agent_id = await _image_agent(client, u1)
+        async with store.session() as db:
+            row = await get_file(db, tenant_from_key(token), image)
+            assert row is not None
+            row.kind = "image"
+        export = f"/v1/apipi/agents/{agent_id}/export"
+        u2_export = await client.get(export, headers=u2)
+        u2_template = await client.post(
+            "/v1/apipi/templates", headers=u2, json={"agent_id": agent_id}
+        )
+        u1_export = await client.get(export, headers=u1)
+    assert u2_export.status_code == 404
+    assert u2_template.status_code == 404
+    assert u1_export.status_code == 200

@@ -116,7 +116,8 @@ out of every file list, and is `404` when a message or a session or
 agent `environment.files` references it. Presigned upload complete
 matches the `user_id` of the upload the same way. Files of kind `file`
 are agent files and stay tenant-scoped, so an agent file one user
-uploaded works in the sessions of every user. See
+uploaded works in the sessions of every user. An attachment or image
+saved in an agent's `session_defaults` becomes an agent file. See
 [files](api.md#files).
 When the identity includes `org_id`, session create stores it and
 returns it on the session. `org_id` does not change which sessions a
