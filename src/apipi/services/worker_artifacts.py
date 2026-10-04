@@ -570,7 +570,7 @@ async def complete_artifact_upload(
     `verified_size` is the result of `verify_upload_object` when the
     caller already checked the object outside the row lock; without it
     the check runs here."""
-    from apipi.store.repo import create_file
+    from apipi.store.repo import bind_session_file, create_file
 
     upload = await get_artifact_upload(db, tenant_id, upload_id)
     if upload is None or upload.session_id != session_id:
@@ -617,6 +617,7 @@ async def complete_artifact_upload(
     elif upload.kind == "input_image":
         assert file_id is not None
         artifact_name = (name or upload.filename).strip() or upload.filename
+        owner = await get_session(db, tenant_id, session_id)
         await create_file(
             db,
             tenant_id,
@@ -625,7 +626,11 @@ async def complete_artifact_upload(
             purpose="user_data",
             size=actual_size,
             content_type=upload.content_type,
+            kind="image",
+            user_id=owner.user_id if owner is not None else None,
         )
+        if owner is not None:
+            await bind_session_file(db, tenant_id, session_id, file_id)
     else:
         artifact_name = (name or upload.filename).strip() or upload.filename
         await create_artifact(

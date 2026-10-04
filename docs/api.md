@@ -198,10 +198,16 @@ tenant is `404`.
 | `GET` | `/v1/files/{file_id}` |
 | `GET` | `/v1/files/{file_id}/content` |
 | `DELETE` | `/v1/files/{file_id}` |
+| `GET` | `/v1/apipi/files` |
+| `GET` | `/v1/apipi/sessions/{session_id}/files` |
 
 Upload is multipart form data with `file` and `purpose`. Accepted
-purposes are `user_data` and `assistants`. Other purposes return
-`not_implemented`. The object is `{ id, object: "file", bytes,
+purposes are `user_data`, `assistants`, and `vision`. Other purposes
+return `not_implemented`. `vision` is for an image a client uploads to
+send later as `input_image` by `file_id`. Its content type must be in
+`APIPI_IMAGE_MIMES` (`400` otherwise) and its size within
+`APIPI_MAX_IMAGE_BYTES` (`413` with code `payload_too_large` otherwise),
+and it creates a file of kind `image`. The object is `{ id, object: "file", bytes,
 created_at, filename, purpose, status }`. `created_at` is a Unix
 timestamp. Ids look like `file-` plus hex. Bytes live in the same
 object store as artifacts (`APIPI_ARTIFACT_STORE`). Metadata is in
@@ -210,6 +216,76 @@ A larger body returns `413` with code `payload_too_large`. A file
 from another tenant is `404`. Attach an uploaded file on session
 create with `environment.files` `{ "type": "file_id", "file_id":
 "…", "path": "/workspace/…" }`.
+
+Every file has a `kind` that says what it is for. The kind is set when
+the file is created and does not change:
+
+| Kind | Created by |
+| --- | --- |
+| `file` | `POST /v1/files` with purpose `user_data` or `assistants`, and a [presigned upload](#uploads) with `purpose: "file"`. Files for agents and setup. |
+| `attachment` | A presigned upload with `purpose: "attachment"`: a file an end user attaches to a message. |
+| `image` | An image sent with a message. `POST /v1/files` with purpose `vision` and a presigned upload with `purpose: "image"` create one (purpose `vision`). The gateway also stores each `input_image` data URL as one (purpose `user_data`, see [events](#events)). |
+
+A file also keeps the `user_id` of the auth identity that uploaded it,
+the same way a session keeps its `user_id`. Images take the `user_id`
+of their session. The value is null when the identity has no
+`user_id`.
+
+A file can be bound to one or more sessions. An image is bound to the
+session whose message carried it, and an image sent by `file_id` is
+bound to that session too, whatever its kind. A binding has a `path`
+(the workspace path of an attachment, null for images) and the
+`item_id` of the user item the file came with. `item_id` is set when
+the worker stores that user item and the item lists the file, so it is
+null until then, and stays null for a file that no item lists.
+
+`GET /v1/files` has the OpenAI shape `{ object: "list", data, first_id,
+last_id, has_more }` and lists only files of kind `file`. Add
+`include_attachments=true` to list attachments and images as well. The
+list is paginated:
+
+| Parameter | Meaning |
+| --- | --- |
+| `limit` | Page size, 1 to 100, default 20. Other values are `400`. |
+| `after` | A file id from the previous page. The next page starts after it. An id that is not a file of the tenant (or, for the session route, not bound to the session) is `400`. |
+| `order` | `desc` (newest first, the default) or `asc`. |
+| `purpose` | Only files with this purpose. |
+
+Files are ordered by `created_at` and then by id, so pages stay stable
+while new files arrive. `has_more` is true when another page follows.
+`first_id` and `last_id` are the first and last ids of `data`, or null
+for an empty page.
+
+`GET /v1/apipi/files` lists every kind by default and takes the same
+`limit`, `after`, `order`, and `purpose`, plus these filters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `kind` | `file`, `attachment`, or `image`. Repeat it for several kinds (`?kind=attachment&kind=image`). Another value is `400`. |
+| `session_id` | Only files bound to this session. A session of another tenant, or of another user when the identity has a `user_id`, is `404`. |
+| `user_id` | Only files with this `user_id`. It never matches files of another tenant. |
+| `filename` | Only files whose name starts with this text. The match is case-sensitive. |
+
+Each object is the file object plus `kind`, `user_id`, and
+`content_type`.
+
+`GET /v1/apipi/sessions/{session_id}/files` lists the files bound to one
+session with the same `limit`, `after`, and `order`. Each entry is
+`{ file_id, kind, filename, bytes, content_type, path, item_id,
+created_at }`, where `created_at` is the time of the binding and the
+order follows it. `first_id` and `last_id` are file ids. The session
+must be readable by the caller, like the other session routes. The
+authorization hook's `file.list` filter applies to all three lists.
+
+Deleting a session deletes its bindings and every bound file of kind
+`attachment` or `image` that no other session still uses, both the row
+and the bytes. Files of kind `file` are never deleted with a session.
+Deleting a file deletes its bindings. A stored item keeps the
+`file_id`, and reading the file then returns `404`.
+
+An attachment that is not bound to any session is deleted, with its
+bytes, once it is older than `APIPI_ATTACHMENT_TTL` (default 24 hours).
+The API checks once an hour.
 
 Browser and BFF uploads that must not proxy bytes through the gateway
 use [presigned uploads](#uploads) instead of this multipart route.
@@ -232,9 +308,21 @@ store returns `400` with code `presign_unsupported`.
 | `POST` | `/v1/apipi/skills/{skill_id}/download` |
 | `POST` | `/v1/apipi/sessions/{session_id}/artifacts/{artifact_id}/download` |
 
-Create takes `purpose` (`file`, `attachment`, or `skill`), `filename`,
-`bytes`, and optional `content_type`. `attachment` is the same store as
-`file`. The response is a PUT URL and
+Create takes `purpose` (`file`, `attachment`, `image`, or `skill`),
+`filename`, `bytes`, optional `content_type`, and optional
+`file_purpose`. `attachment` and `image` use the same store as `file`.
+On complete, `file` creates a file of kind `file`, `attachment` a file
+of kind `attachment`, and `image` a file of kind `image` (see
+[files](#files)). All three keep the `user_id` of the identity that
+created the upload. `file_purpose` is the Files API purpose:
+`user_data` (the default) or `assistants` for `file` and `attachment`,
+and always `vision` for `image`. Any other value with `image` is `400`,
+and `vision` with `file` or `attachment` is `400`. For `image`, the
+declared `content_type` must be in `APIPI_IMAGE_MIMES` (`400`
+otherwise) and `bytes` within `APIPI_MAX_IMAGE_BYTES` (`413` with code
+`payload_too_large` otherwise). Complete checks the stored size against
+the same limit again and deletes an object that is too large. The
+response is a PUT URL and
 headers. PUT the bytes to object storage, then complete. Complete
 checks the object with `HeadObject`, enforces `APIPI_MAX_FILE_BYTES`,
 and writes Files or Skills metadata. Complete before PUT is `400` with
@@ -320,6 +408,10 @@ a client does not wait for a later event.
 
 Status: `idle | in_progress | requires_action | failed`. That is the turn, not the sandbox. An idle session can still have a live computer.
 
+`DELETE` removes the session, its workspace, its artifacts, and the
+attachments and images that only this session uses (see
+[files](#files)).
+
 `required_actions`: `function_call`. The next turn rebuilds the computer when it needs one.
 
 A hosted session (`openai_hosted`) has `environment.id`, `environment.status`, and `environment.sandbox`. `environment.status` is the OpenAI value: `provisioning` while the computer is starting, `connected` when Pi is ready, `disconnected` when it has not started or has stopped, `failed` when boot or setup failed. `environment.sandbox` is ApiPi detail: `state` (`none`, `starting`, `ready`, `stopped`, `failed`), `reason`, `since`, `image`, `image_version`, `size`, `cold_boots`, and `last_boot_ms`. It does not include a worker id. `none` sets `environment.sandbox` to null.
@@ -387,10 +479,15 @@ field, or with both, is `400`. `detail` is accepted and ignored. A
 message may carry up to `APIPI_MAX_IMAGES` images, and each may be up
 to `APIPI_MAX_IMAGE_BYTES`, in either form. A data URL counts against
 the request body limit (`APIPI_MAX_REQUEST_BYTES`, 1 MiB by default),
-so upload larger images as files and send `file_id`.
+so upload larger images as files and send `file_id`. Upload them with
+purpose `vision` (`POST /v1/files`) or as a presigned upload with
+`purpose: "image"`, so they are files of kind `image` and stay out of
+the default `GET /v1/files` list.
 
-The gateway stores each data URL image as a Files API object (purpose
-`user_data`, filename `image`) before the turn starts, and the user
+The gateway stores each data URL image as a Files API object (kind
+`image`, purpose `user_data`, filename `image`, and the `user_id` of the
+session) before the turn starts. Every image of the message, also one
+sent by `file_id`, is bound to the session (see [files](#files)). The user
 item keeps `{"type": "input_image", "file_id": "file-…"}`, never the
 base64. The worker that runs the turn reads the image from the store
 and passes it to the model. A message that, with the session context,

@@ -26,6 +26,11 @@ def _uploads(request: Request) -> Any:
     return request.app.state.gateway.uploads
 
 
+def _user_id(request: Request) -> str | None:
+    value = getattr(request.state, "user_id", None)
+    return value if isinstance(value, str) and value else None
+
+
 @router.post("/v1/apipi/uploads")
 async def create_upload(
     body: UploadCreate,
@@ -42,6 +47,7 @@ async def create_upload(
         content_type=body.content_type,
         size=body.bytes,
         file_purpose=body.file_purpose,
+        user_id=_user_id(request),
     )
 
 

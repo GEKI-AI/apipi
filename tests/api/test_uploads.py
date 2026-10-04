@@ -1,6 +1,7 @@
 import io
 import uuid
 import zipfile
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
@@ -10,6 +11,7 @@ from tests.unit.test_blobs import FakeS3
 
 from apipi.config import Settings
 from apipi.gateway import create_app
+from apipi.gateway.auth import AuthRequest, tenant_from_key
 from apipi.gateway.tokens import hash_token
 from apipi.store.blobs import S3Store, file_object_id, skill_object_id
 from apipi.store.engine import Store
@@ -234,3 +236,170 @@ async def test_artifact_download_forces_attachment(
         assert disposition == 'attachment; filename="report.html"'
         assert "inline" not in disposition
         assert query["response-content-type"] == ["application/octet-stream"]
+
+
+class _Users:
+    def __call__(self, token: str, request: AuthRequest) -> dict[str, object]:
+        user = request.headers.get("x-end-user")
+        return {
+            "key_id": hash_token(token),
+            "tenant_id": tenant_from_key(token),
+            "user_id": user,
+            "cache_key": f"{token}:{user}",
+        }
+
+    def cache_key(self, token: str, request: AuthRequest) -> str:
+        return f"{token}:{request.headers.get('x-end-user')}"
+
+
+async def test_upload_purpose_sets_the_file_kind(
+    settings: Settings, store: Store
+) -> None:
+    client_s3 = FakeS3()
+    s3_settings = _s3_settings(settings)
+    app = create_app(
+        api_settings_for(s3_settings),
+        store=store,
+        objects=S3Store(s3_settings, client=client_s3),
+        authenticate=_Users(),
+    )
+    token = "kinds"
+    headers = {**_auth(token), "X-End-User": "ada"}
+    tenant_id = tenant_from_key(token)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        ids: dict[str, str] = {}
+        for purpose in ("file", "attachment"):
+            created = await client.post(
+                "/v1/apipi/uploads",
+                headers=headers,
+                json={
+                    "purpose": purpose,
+                    "filename": f"{purpose}.txt",
+                    "bytes": 5,
+                    "content_type": "text/plain",
+                },
+            )
+            assert created.status_code == 200
+            assert created.json()["file_purpose"] is None
+            file_id = created.json()["object_id"]
+            client_s3.put_object(
+                Key=f"apipi/files/{file_object_id(tenant_id, file_id)}",
+                Body=b"hello",
+                ContentType="text/plain",
+            )
+            done = await client.post(
+                f"/v1/apipi/uploads/{created.json()['upload_id']}/complete",
+                headers=headers,
+                json={},
+            )
+            assert done.status_code == 200
+            assert done.json()["id"] == file_id
+            again = await client.post(
+                f"/v1/apipi/uploads/{created.json()['upload_id']}/complete",
+                headers=headers,
+                json={},
+            )
+            assert again.json()["id"] == file_id
+            ids[purpose] = file_id
+        default = await client.get("/v1/files", headers=headers)
+        listed = await client.get("/v1/apipi/files", headers=headers)
+        attachments = await client.get(
+            "/v1/apipi/files", headers=headers, params={"kind": "attachment"}
+        )
+        content = await client.get(
+            f"/v1/files/{ids['attachment']}/content", headers=headers
+        )
+    assert [row["id"] for row in default.json()["data"]] == [ids["file"]]
+    kinds = {row["id"]: row["kind"] for row in listed.json()["data"]}
+    assert kinds == {ids["file"]: "file", ids["attachment"]: "attachment"}
+    assert [row["id"] for row in attachments.json()["data"]] == [ids["attachment"]]
+    assert attachments.json()["data"][0]["user_id"] == "ada"
+    assert attachments.json()["data"][0]["purpose"] == "user_data"
+    assert content.content == b"hello"
+
+
+async def test_image_upload_is_an_image_within_the_image_limits(
+    settings: Settings, store: Store
+) -> None:
+    client_s3 = FakeS3()
+    s3_settings = _s3_settings(settings).model_copy(update={"max_image_bytes": 16})
+    app = create_app(
+        api_settings_for(s3_settings),
+        store=store,
+        objects=S3Store(s3_settings, client=client_s3),
+    )
+    token = "images"
+    tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+
+    async def _create(
+        client: AsyncClient, size: int, content_type: str, **extra: str
+    ) -> Any:
+        return await client.post(
+            "/v1/apipi/uploads",
+            headers=_auth(token),
+            json={
+                "purpose": "image",
+                "filename": "photo.png",
+                "bytes": size,
+                "content_type": content_type,
+                **extra,
+            },
+        )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        created = await _create(client, 8, "image/png")
+        assert created.status_code == 200
+        assert created.json()["file_purpose"] == "vision"
+        file_id = created.json()["object_id"]
+        client_s3.put_object(
+            Key=f"apipi/files/{file_object_id(tenant_id, file_id)}",
+            Body=b"\x89PNG1234",
+            ContentType="image/png",
+        )
+        done = await client.post(
+            f"/v1/apipi/uploads/{created.json()['upload_id']}/complete",
+            headers=_auth(token),
+            json={},
+        )
+        not_image = await _create(client, 8, "text/plain")
+        too_big = await _create(client, 17, "image/png")
+        wrong_purpose = await _create(client, 8, "image/png", file_purpose="user_data")
+        vision_file = await client.post(
+            "/v1/apipi/uploads",
+            headers=_auth(token),
+            json={
+                "purpose": "file",
+                "filename": "photo.png",
+                "bytes": 8,
+                "content_type": "image/png",
+                "file_purpose": "vision",
+            },
+        )
+        lying = await _create(client, 8, "image/png")
+        lying_id = lying.json()["object_id"]
+        lying_key = f"apipi/files/{file_object_id(tenant_id, lying_id)}"
+        client_s3.put_object(Key=lying_key, Body=b"x" * 32, ContentType="image/png")
+        oversized = await client.post(
+            f"/v1/apipi/uploads/{lying.json()['upload_id']}/complete",
+            headers=_auth(token),
+            json={},
+        )
+        lying_kept = lying_key in client_s3.objects
+        listed = await client.get(
+            "/v1/apipi/files", headers=_auth(token), params={"kind": "image"}
+        )
+        default = await client.get("/v1/files", headers=_auth(token))
+    assert done.status_code == 200
+    assert done.json()["purpose"] == "vision"
+    assert not_image.status_code == 400
+    assert too_big.status_code == 413
+    assert wrong_purpose.status_code == 400
+    assert vision_file.status_code == 400
+    assert oversized.status_code == 413
+    assert lying_kept is False
+    assert [row["id"] for row in listed.json()["data"]] == [file_id]
+    assert default.json()["data"] == []

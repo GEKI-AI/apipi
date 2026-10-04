@@ -416,8 +416,13 @@ async def _fs_split_flow(store: Store, tmp_path: Path) -> None:
     )
     assert result.get("file_id")
     async with store.session() as db:
+        from apipi.store.repo import list_session_files
+
         file_row = await get_file(db, tenant_id, result["file_id"])
         assert file_row is not None
+        assert file_row.kind == "image"
+        bound, _more = await list_session_files(db, tenant_id, session_id)
+        assert [binding.file_id for binding, _row in bound] == [result["file_id"]]
 
 
 @pytest.mark.anyio
@@ -975,7 +980,7 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
     async with store.session() as db:
         from apipi.store.repo import list_files
 
-        image_files = await list_files(db, tenant_id)
+        image_files, _more = await list_files(db, tenant_id)
         assert sorted(row.filename for row in image_files) == [
             "notes.txt",
             "photo.png",

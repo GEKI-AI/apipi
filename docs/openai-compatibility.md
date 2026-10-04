@@ -108,7 +108,8 @@ yours.
 | `/v1/apipi/templates`, `/v1/apipi/uploads` | ApiPi routes. |
 | `POST /v1/apipi/auth/invalidate` | ApiPi route (drop cached auth identities for the caller's tenant). |
 | `GET /health`, `GET /metrics` | ApiPi operator routes |
-| `POST/GET/DELETE /v1/files`, `GET /v1/files/{id}/content` | Same API (purpose `user_data` or `assistants`; max `APIPI_MAX_FILE_BYTES`) |
+| `POST/GET/DELETE /v1/files`, `GET /v1/files/{id}/content` | Same API (purpose `user_data`, `assistants`, or `vision`; max `APIPI_MAX_FILE_BYTES`). `vision` must be an allowed image type within `APIPI_MAX_IMAGE_BYTES`. `GET /v1/files` pages with `limit` (1 to 100, default 20), `after`, `order`, and `purpose`, and lists only files of kind `file` unless `include_attachments=true`. |
+| `GET /v1/apipi/files`, `GET /v1/apipi/sessions/{id}/files` | ApiPi routes. Files of every kind with filters, and the files bound to one session. |
 | `POST/GET/DELETE /v1/skills` | Same shape, zip upload (no version endpoints). Max `APIPI_MAX_FILE_BYTES`. |
 | `/v1/chat/completions` | Error (no such route) |
 | ChatKit | Error (no such routes) |
@@ -123,6 +124,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | Field | `idle_ttl` | Agent and session. Flat. |
 | Field | `user_id`, `org_id` | Session response. Flat. |
 | Field | `session_defaults` | Agent. |
+| Query | `include_attachments` | `GET /v1/files`. Without it the list has only files of kind `file`: what clients upload for agents and setup. `true` also lists attachments and the images users sent with messages. OpenAI has no such parameter and no file kinds. |
 | Field | `environment.sandbox_size` | `S` / `M` / `L`. ApiPi extension. OpenAI `container_size` (`small` / `medium` / `large`) is the input and is stored as `sandbox_size`. |
 | Field | `environment.container_size` | OpenAI `small` / `medium` / `large`. Stored as `sandbox_size`. |
 | Field | `environment.sandbox_image` | Guest image id. |
@@ -138,7 +140,9 @@ New extension fields are grouped. Older flat fields stay flat.
 | Route | `/v1/apipi/sessions/{id}/export` | Session export. |
 | Route | `/v1/apipi/sessions/{id}/artifacts/{artifact_id}/download` | Artifact download. |
 | Route | `/v1/apipi/templates` | Agent templates. |
-| Route | `/v1/apipi/uploads` | Presigned uploads. |
+| Route | `/v1/apipi/uploads` | Presigned uploads (`file`, `attachment`, `image`, `skill`). |
+| Route | `/v1/apipi/files` | Files of every kind, filtered by `kind`, `session_id`, `user_id`, `purpose`, and `filename` prefix. |
+| Route | `/v1/apipi/sessions/{id}/files` | Files bound to a session. |
 | Route | `/v1/apipi/usage` | Usage totals, including search calls and units. |
 | Route | `/v1/agents/sessions` with `"environment": {"type": "none"}` | Text-only sessions. Function tools, HTTP MCP, and `web_search` only. |
 
@@ -252,10 +256,13 @@ other supported form.
 An `input_image` part takes the two forms of the OpenAI Responses API:
 `{"type": "input_image", "image_url": "data:image/png;base64,…"}` or
 `{"type": "input_image", "file_id": "file-…"}` for a file uploaded with
-`POST /v1/files`. `detail` is accepted and ignored. Remote `http` and
-`https` image URLs are not supported. Both forms are stored as Files API
-objects, and the user item lists the image as `{"type": "input_image",
-"file_id"}`. See [API](api.md#events) for the limits.
+`POST /v1/files`. As with OpenAI, upload such an image with purpose
+`vision`: ApiPi then stores it as a file of kind `image`, which the
+default `GET /v1/files` list leaves out. `detail` is accepted and
+ignored. Remote `http` and `https` image URLs are not supported. Both
+forms are stored as Files API objects, and the user item lists the
+image as `{"type": "input_image", "file_id"}`. See
+[API](api.md#events) for the limits.
 
 SSE events use ApiPi public types (`agent.session.created`,
 `agent.session.turn.output_text.done`, and the rest listed on

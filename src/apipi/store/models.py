@@ -608,9 +608,14 @@ class FileRow(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
         CheckConstraint(
-            "purpose IN ('user_data', 'assistants')",
+            "purpose IN ('user_data', 'assistants', 'vision')",
             name="files_purpose_check",
         ),
+        CheckConstraint(
+            "kind IN ('file', 'attachment', 'image')",
+            name="files_kind_check",
+        ),
+        Index("ix_files_tenant_kind_created", "tenant_id", "kind", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -619,8 +624,44 @@ class FileRow(Base):
     )
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="file", server_default="file"
+    )
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class SessionFileRow(Base):
+    """A file bound to a session and, when known, to its user item."""
+
+    __tablename__ = "session_files"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "session_id"],
+            ["sessions.tenant_id", "sessions.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "file_id"],
+            ["files.tenant_id", "files.id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_session_files_tenant_file", "tenant_id", "file_id"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    file_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    path: Mapped[str | None] = mapped_column(String, nullable=True)
+    item_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -678,7 +719,7 @@ class UploadRow(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
         CheckConstraint(
-            "purpose IN ('file', 'skill')",
+            "purpose IN ('file', 'skill', 'attachment', 'image')",
             name="uploads_purpose_check",
         ),
         CheckConstraint(
@@ -698,6 +739,7 @@ class UploadRow(Base):
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     declared_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
