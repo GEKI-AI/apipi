@@ -168,8 +168,7 @@ class RemoteExecution:
         session_id: uuid.UUID,
         text: str,
         *,
-        images: list[dict[str, str]] | None = None,
-        parts: list[dict[str, str]] | None = None,
+        parts: list[dict[str, Any]] | None = None,
         mcp_http: list[Any] | None = None,
         request_id: str | None = None,
         api_key: str | None = None,
@@ -193,7 +192,7 @@ class RemoteExecution:
                     org_id=org_id,
                 ),
                 "text": text,
-                "images": images or [],
+                "images": [],
                 "parts": parts or [],
                 **self._context_extra(turn_context),
             }

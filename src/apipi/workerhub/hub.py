@@ -28,7 +28,6 @@ from apipi.protocol import (
     BASELINE_FEATURES,
     COMMAND_OPS,
     CURSOR_OPS,
-    OP_FEATURES,
     BaseCommandPayload,
     LeaseRevoke,
     RunningSession,
@@ -60,6 +59,7 @@ from apipi.workerhub.command_queue import (
 )
 from apipi.workerhub.commands import (
     _check_command_context,
+    command_features,
     command_payload,
     image_unavailable_message,
     session_image,
@@ -126,6 +126,7 @@ class WorkerHub:
         bus: EventBus,
         *,
         context_factory: Any | None = None,
+        image_factory: Any | None = None,
         stop_local: Any | None = None,
     ) -> None:
         """Serve forwards from other replicas and send ours, if the bus can."""
@@ -136,6 +137,7 @@ class WorkerHub:
             store,
             cast(InstanceBus, bus),
             context_factory=context_factory,
+            image_factory=image_factory,
             stop_local=stop_local,
             poll_interval=min(
                 max(self.settings.event_bus_fallback_poll.total_seconds(), 0.01),
@@ -224,11 +226,12 @@ class WorkerHub:
             self.metrics.observe_worker_command(op, result)
 
     def _enqueue(self, wire: dict[str, Any], conn: WorkerConnection) -> PendingCommand:
-        feature = OP_FEATURES.get(str(wire.get("op")))
-        if feature is not None and feature not in conn.features:
+        for feature in command_features(wire):
+            if feature in conn.features:
+                continue
             raise ApiError(
                 "api_error",
-                f"The worker does not support {wire.get('op')}",
+                f"The worker does not support {feature}. Upgrade the worker.",
                 code="unsupported_op",
                 status_code=501,
             )
@@ -502,7 +505,22 @@ class WorkerHub:
                 status_code=503,
                 session_id=str(session_id),
             )
+        needed = command_features(
+            {
+                "op": op,
+                "payload": command_payload(
+                    op, payload, run_mode=None, image=None
+                ).to_wire(),
+            }
+        )
+        able = [
+            item
+            for item in candidates
+            if item.conn is None or all(f in item.conn.features for f in needed)
+        ]
         chosen = fleet.choose(
+            able, kind=required, session_mem=session_mem, image=image
+        ) or fleet.choose(
             candidates, kind=required, session_mem=session_mem, image=image
         )
         if chosen is None:

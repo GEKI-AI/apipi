@@ -32,7 +32,7 @@ from apipi.common.objects import (
 from apipi.config import Settings
 from apipi.env.setup import file_id_refs_from, skill_refs_from
 from apipi.gateway.auth import not_found
-from apipi.protocol import TurnContext
+from apipi.protocol import InputImageRef, TurnContext
 from apipi.services.agents import definition_for_session
 from apipi.services.search import SearchResolver, web_search_tool
 from apipi.store.blobs import (
@@ -71,6 +71,31 @@ def _store_ref(
     root = store_root(settings)
     relative = local_object_path(root, namespace, object_id).relative_to(root)
     return {"url": None, "local_path": str(relative)}
+
+
+def input_image_ref(
+    settings: Settings,
+    tenant_id: Any,
+    file_id: str,
+    *,
+    mime_type: str,
+    size_bytes: int,
+    objects: ObjectStore | None = None,
+) -> dict[str, Any]:
+    """One `image` part of `turn.start`: a store reference, never the bytes."""
+    object_id = file_object_id(tenant_id, file_id)
+    ref = _store_ref(settings, NS_FILES, object_id, objects=objects)
+    part = InputImageRef(
+        file_id=file_id,
+        object_id=object_id,
+        mime_type=mime_type,
+        size_bytes=size_bytes,
+    )
+    if ref["url"] is not None:
+        part.url = ref["url"]
+    if ref["local_path"] is not None:
+        part.local_path = ref["local_path"]
+    return part.to_wire()
 
 
 async def build_turn_context(

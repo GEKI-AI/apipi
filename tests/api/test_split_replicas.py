@@ -5,6 +5,7 @@ B, which has no socket, so each command must be forwarded.
 """
 
 import asyncio
+import base64
 import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -622,3 +623,50 @@ async def test_callback_that_raises_fails_the_turn_without_its_error_text(
     assert posted.json()["error"]["code"] == "model_key_unavailable"
     assert "hunter2" not in posted.text
     assert replica_harness.api_keys == []
+
+
+async def test_turn_start_with_an_image_is_forwarded_without_its_reference(
+    replicas: Replicas,
+    replica_harness: FakeHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apipi.workerhub import forward as forward_module
+
+    replicas.app_b.state.gateway.sessions.settings.model_registry = {
+        "test": {"input": ["text", "image"]}
+    }
+    stored: list[dict[str, Any]] = []
+    real = forward_module.create_worker_forward
+
+    async def spy(db: Any, row: WorkerForward) -> None:
+        stored.append(dict(row.body))
+        await real(db, row)
+
+    monkeypatch.setattr(forward_module, "create_worker_forward", spy)
+    session_id = await _new_session(replicas.client_b)
+    image = b"\x89PNG\r\n\x1a\n" + b"pixels" * 100
+    encoded = base64.b64encode(image).decode()
+    content = [
+        {"type": "input_text", "text": "see"},
+        {"type": "input_image", "image_url": f"data:image/png;base64,{encoded}"},
+    ]
+    posted = await replicas.client_b.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(),
+        json={
+            "events": [
+                {
+                    "type": "agent.session.input.message",
+                    "input": [{"role": "user", "content": content}],
+                }
+            ]
+        },
+    )
+    assert posted.status_code == 200, posted.text
+    assert replicas.calls == [("acquire", "turn.start")]
+    parts = stored[0]["payload"]["parts"]
+    assert parts[0] == {"type": "input_text", "text": "see"}
+    assert set(parts[1]) == {"type", "file_id"}
+    assert replica_harness.images == [
+        [{"type": "image", "data": encoded, "mimeType": "image/png"}]
+    ]

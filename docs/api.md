@@ -371,12 +371,31 @@ one shape or the other, not both.
 A message event starts a turn. Nested form: `type`
 `agent.session.input.message` and `input` with a `user` message whose
 `content` has `input_text` and, for a vision model, `input_image`.
-`input_image.image_url` must be a `data:` URL (`png`, `jpeg`, `webp`,
-or `gif`). Remote `http` and `https` URLs are rejected. A model that
-is not in the registry, or whose `input` does not include `image`,
-returns `400` with code `unsupported_input`. Image bytes are stored as
-Files API objects. The item keeps `file_id`, not the base64. Flat form: `type`
-`agent.session.input.message` and `content` or `text`. Follow-up
+A model that is not in the registry, or whose `input` does not include
+`image`, returns `400` with code `unsupported_input`. Flat form: `type`
+`agent.session.input.message` and `content` or `text`.
+
+An `input_image` part has exactly one of two fields. `image_url` is a
+`data:` URL with a base64 image (`png`, `jpeg`, `webp`, or `gif`, as
+set by `APIPI_IMAGE_MIMES`). Remote `http` and `https` URLs are
+rejected. `file_id` is the id of a Files API object (`POST /v1/files`),
+as in the OpenAI Responses API. The file must belong to the tenant
+(`404` otherwise), its content type must be an allowed image type
+(`400` otherwise), and its size must be within `APIPI_MAX_IMAGE_BYTES`
+(`413` with code `payload_too_large` otherwise). A part with neither
+field, or with both, is `400`. `detail` is accepted and ignored. A
+message may carry up to `APIPI_MAX_IMAGES` images, and each may be up
+to `APIPI_MAX_IMAGE_BYTES`, in either form. A data URL counts against
+the request body limit (`APIPI_MAX_REQUEST_BYTES`, 1 MiB by default),
+so upload larger images as files and send `file_id`.
+
+The gateway stores each data URL image as a Files API object (purpose
+`user_data`, filename `image`) before the turn starts, and the user
+item keeps `{"type": "input_image", "file_id": "file-…"}`, never the
+base64. The worker that runs the turn reads the image from the store
+and passes it to the model. A message that, with the session context,
+is too large to send to a worker fails before the turn with `413` and
+code `payload_too_large`. Images never count toward that limit. Follow-up
 messages work the same way after the session is idle. A message while
 the session is `in_progress` cancels that turn (or fails it if the
 process no longer owns it) and starts a new turn, so a hung Pi cannot

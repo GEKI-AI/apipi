@@ -1,11 +1,11 @@
 import json
 import uuid
 from collections.abc import AsyncGenerator
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Literal, Self
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import model_validator
+from pydantic import BaseModel, Discriminator, Tag, model_validator
 from pydantic_core import PydanticCustomError
 
 from apipi.api.authorize import require_session_agent
@@ -94,20 +94,28 @@ class SessionInput(StrictModel):
 
 
 class OpenAIInputText(StrictModel):
-    type: str
-    text: str | None = None
+    type: Literal["input_text"]
+    text: str
+
+
+class OpenAIInputImage(StrictModel):
+    type: Literal["input_image"]
     image_url: str | None = None
+    file_id: str | None = None
+    detail: str | None = None
 
     @model_validator(mode="after")
-    def known_part(self) -> Self:
-        if self.type == "input_text":
-            if self.text is None:
-                raise ValueError("input_text needs text")
-            return self
-        if self.type == "input_image":
-            if not self.image_url:
-                raise ValueError("input_image needs image_url")
-            return self
+    def one_source(self) -> Self:
+        if bool(self.image_url) == bool(self.file_id):
+            raise ValueError("input_image needs image_url or file_id")
+        return self
+
+
+class OpenAIInputOther(BaseModel):
+    type: str
+
+    @model_validator(mode="after")
+    def unknown_part(self) -> Self:
         raise PydanticCustomError(
             "not_implemented",
             "{field} is not implemented",
@@ -115,9 +123,22 @@ class OpenAIInputText(StrictModel):
         )
 
 
+def _part_kind(value: Any) -> str:
+    kind = value.get("type") if isinstance(value, dict) else getattr(value, "type", "")
+    return kind if kind in ("input_text", "input_image") else "other"
+
+
+OpenAIInputPart = Annotated[
+    Annotated[OpenAIInputText, Tag("input_text")]
+    | Annotated[OpenAIInputImage, Tag("input_image")]
+    | Annotated[OpenAIInputOther, Tag("other")],
+    Discriminator(_part_kind),
+]
+
+
 class OpenAIMessageInput(StrictModel):
     role: str
-    content: list[OpenAIInputText]
+    content: list[OpenAIInputPart]
 
 
 class OpenAISessionEvent(StrictModel):
@@ -167,9 +188,9 @@ def _message_text(messages: list[OpenAIMessageInput] | None) -> str:
     saw_image = False
     for message in messages:
         for part in message.content:
-            if part.type == "input_text" and part.text is not None:
+            if isinstance(part, OpenAIInputText):
                 texts.append(part.text)
-            elif part.type == "input_image":
+            elif isinstance(part, OpenAIInputImage):
                 saw_image = True
     if not texts and not saw_image:
         raise ValueError("message needs input_text")

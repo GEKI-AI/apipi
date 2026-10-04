@@ -372,6 +372,94 @@
       ],
       "title": "ContextSkillRef",
       "type": "object"
+    },
+    "InputImageRef": {
+      "description": "One input image as a store reference, like a context file reference.\n\n`url` is a presigned GET URL (S3 store) and `local_path` a path\nrelative to the shared store root (filesystem store). The bytes\nnever travel in the command.",
+      "properties": {
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        },
+        "local_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Local Path"
+        },
+        "mime_type": {
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "object_id": {
+          "title": "Object Id",
+          "type": "string"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        },
+        "type": {
+          "const": "image",
+          "default": "image",
+          "title": "Type",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "file_id",
+        "mime_type",
+        "object_id",
+        "type"
+      ],
+      "title": "InputImageRef",
+      "type": "object"
+    },
+    "InputTextPart": {
+      "properties": {
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        },
+        "type": {
+          "const": "input_text",
+          "default": "input_text",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "InputTextPart",
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -394,6 +482,7 @@
       "type": "string"
     },
     "payload": {
+      "description": "`images` is always empty; image parts travel in `parts` as references.",
       "properties": {
         "context": {
           "properties": {
@@ -493,8 +582,21 @@
           "anyOf": [
             {
               "items": {
-                "additionalProperties": true,
-                "type": "object"
+                "discriminator": {
+                  "mapping": {
+                    "image": "#/$defs/InputImageRef",
+                    "input_text": "#/$defs/InputTextPart"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/InputTextPart"
+                  },
+                  {
+                    "$ref": "#/$defs/InputImageRef"
+                  }
+                ]
               },
               "type": "array"
             },

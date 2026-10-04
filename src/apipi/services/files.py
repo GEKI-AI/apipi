@@ -6,6 +6,7 @@ from apipi.common.objects import NS_FILES
 from apipi.config import Settings
 from apipi.env.setup import SetupError, file_id_refs_from
 from apipi.gateway.auth import not_found
+from apipi.gateway.content import ImagePart, image_mimes
 from apipi.gateway.errors import not_implemented
 from apipi.store.blobs import ObjectStore, file_object_id
 from apipi.store.engine import Store
@@ -74,6 +75,63 @@ class FileService:
                 content_type=content_type,
             )
             return file_body(row)
+
+    async def image_files(
+        self, tenant_id: uuid.UUID, images: tuple[ImagePart, ...]
+    ) -> dict[str, tuple[str, int]]:
+        """Check the `file_id` images and return `{file_id: (mime, size)}`.
+
+        Each must be a file of the tenant with an allowed image type
+        within the image size limit.
+        """
+        mimes = image_mimes(self.settings)
+        known: dict[str, tuple[str, int]] = {}
+        async with self.store.session() as db:
+            for image in images:
+                if not image.file_id or image.file_id in known:
+                    continue
+                row = await get_file(db, tenant_id, image.file_id)
+                if row is None:
+                    not_found()
+                mime = (row.content_type or "").split(";", 1)[0].strip().lower()
+                if mime not in mimes:
+                    raise ApiError(
+                        "invalid_request",
+                        f"input_image file {image.file_id} is not an allowed image",
+                        code="invalid_request",
+                    )
+                if row.size > self.settings.max_image_bytes:
+                    raise ApiError(
+                        "invalid_request",
+                        "input_image is too large",
+                        code="payload_too_large",
+                        status_code=413,
+                    )
+                known[image.file_id] = (mime, row.size)
+        return known
+
+    async def input_images(
+        self,
+        tenant_id: uuid.UUID,
+        images: tuple[ImagePart, ...],
+        known: dict[str, tuple[str, int]],
+    ) -> list[tuple[str, str, int]]:
+        """Return `(file_id, mime, size)` per image, storing data URL images."""
+        out: list[tuple[str, str, int]] = []
+        for image in images:
+            if image.file_id:
+                mime, size = known[image.file_id]
+                out.append((image.file_id, mime, size))
+                continue
+            created = await self.create(
+                tenant_id,
+                data=image.data,
+                filename="image",
+                purpose="user_data",
+                content_type=image.mime,
+            )
+            out.append((str(created["id"]), image.mime, len(image.data)))
+        return out
 
     async def list_objects(self, tenant_id: uuid.UUID) -> dict[str, Any]:
         async with self.store.session() as db:

@@ -303,7 +303,10 @@ rules:
 
 The features today are `search`, `presign`, and `lease_cursor`, which
 describe the protocol that existed before features and are in the
-baseline, and `session_stopped`, which is not. The `hello` of the API
+baseline, and `session_stopped` and `image_refs`, which are not.
+`image_refs` sends input images in `turn.start` as store references
+instead of base64 bytes, so an image no longer counts toward the command
+size limit. The `hello` of the API
 must carry `lease_ttl_seconds` and `heartbeat_seconds`: a worker cannot
 guess a safe heartbeat, so a `hello` without them stays an error. A
 receiver does not ack an unknown `op` as done, so the API sends it again
@@ -418,8 +421,8 @@ wire does not change: forwarding is internal to the API replicas. The
 decisions, and why:
 
 * **Forward over the `EventBus`, with a small database mailbox.** A
-  command body can hold the turn text and images, up to 262,144
-  bytes, and `NOTIFY` carries at most 8000. The requesting replica
+  command body can hold the turn text and image file ids, up to
+  262,144 bytes, and `NOTIFY` carries at most 8000. The requesting replica
   therefore inserts one row into `worker_forwards` (the request, never
   the context) and sends a tiny `forward` message with only the row id
   to the replica that holds the socket. The row is the durable part, so
@@ -438,7 +441,9 @@ decisions, and why:
 * **The owning replica builds the context.** It reads the session, the
   agent, the vault, and the object store itself, so no vault header,
   presigned URL, or file reference is ever stored in the mailbox or
-  sent over `NOTIFY`. The same holds for the model key: the request
+  sent over `NOTIFY`. An input image keeps only its `file_id` in the
+  row, and the owning replica checks it for the tenant and signs the
+  image reference itself. The same holds for the model key: the request
   bearer is never written to Postgres (constitution rule 5), so it is
   not forwarded. The row keeps `key_id`, `user_id`, `org_id` and the
   tenant, and the owning replica resolves the key from that identity

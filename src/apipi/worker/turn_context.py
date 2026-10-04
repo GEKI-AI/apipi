@@ -1,5 +1,6 @@
 """Read the command context on the worker: files, skills, and MCP servers."""
 
+import base64
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from apipi.common.dirs import store_root
 from apipi.common.errors import store_error
 from apipi.config import Settings
 from apipi.env.setup import workspace_file_missing
+from apipi.protocol.context import redact_url
 
 
 def local_ref_path(settings: Settings, local_path: str) -> Path:
@@ -34,13 +36,15 @@ async def fetch_ref_bytes(ref: Mapping[str, Any], settings: Settings) -> bytes:
                 response = await client.get(url)
         except Exception as exc:
             raise store_error(
-                f"cannot fetch turn context ref: {exc}", operation="get"
+                f"cannot fetch turn context ref: {type(exc).__name__}",
+                operation="get",
+                key=redact_url(url),
             ) from exc
         if response.status_code != 200:
             raise store_error(
                 f"cannot fetch turn context ref: HTTP {response.status_code}",
                 operation="get",
-                key=url,
+                key=redact_url(url),
             )
         return response.content
     local_path = ref.get("local_path")
@@ -101,6 +105,32 @@ async def fetch_pi_session_bytes(
             "cannot restore the Pi session without settings", operation="get"
         )
     return await fetch_ref_bytes(pi_session, settings)
+
+
+async def fetch_input_images(
+    parts: list[Any], settings: Settings
+) -> list[dict[str, str]]:
+    """Fetch the `image` parts of `turn.start` as Pi image parts."""
+    images: list[dict[str, str]] = []
+    for part in parts:
+        if not isinstance(part, Mapping) or part.get("type") != "image":
+            continue
+        data = await fetch_ref_bytes(part, settings)
+        size = part.get("size_bytes")
+        if isinstance(size, int) and len(data) != size:
+            raise store_error(
+                f"input image is {len(data)} bytes, expected {size}",
+                operation="get",
+                key=str(part.get("object_id") or ""),
+            )
+        images.append(
+            {
+                "type": "image",
+                "data": base64.b64encode(data).decode(),
+                "mimeType": str(part.get("mime_type") or "application/octet-stream"),
+            }
+        )
+    return images
 
 
 def mcp_servers_from_context(context: Mapping[str, Any]) -> list[Any]:

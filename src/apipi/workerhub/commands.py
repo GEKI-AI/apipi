@@ -9,6 +9,8 @@ from apipi.common.sandbox import sandbox_size_of
 from apipi.protocol import (
     COMMAND_PAYLOAD_MODELS,
     CURSOR_OPS,
+    FEATURE_IMAGE_REFS,
+    OP_FEATURES,
     BaseCommandPayload,
     CommandTooLarge,
     ContextBytes,
@@ -67,6 +69,38 @@ def command_payload(
     return model.model_copy(update=update)
 
 
+def command_features(wire: dict[str, Any]) -> list[str]:
+    """The protocol features a worker must list to receive this command."""
+    op = str(wire.get("op"))
+    needed: list[str] = []
+    feature = OP_FEATURES.get(op)
+    if feature is not None:
+        needed.append(feature)
+    payload = wire.get("payload")
+    parts = payload.get("parts") if isinstance(payload, dict) else None
+    images = [
+        item
+        for item in (parts if isinstance(parts, list) else [])
+        if isinstance(item, dict) and item.get("type") == "image"
+    ]
+    if op == "turn.start" and images:
+        needed.append(FEATURE_IMAGE_REFS)
+    return needed
+
+
+def _too_large_message(op: str, exc: CommandTooLarge) -> str:
+    if op == "turn.start":
+        return (
+            f"The message and the session context need {exc.size} bytes, more "
+            f"than the {exc.limit} bytes one turn can carry. Shorten the message, "
+            "the instructions, or the tool definitions."
+        )
+    return (
+        f"The session context needs {exc.size} bytes, more than the "
+        f"{exc.limit} bytes one worker command can carry."
+    )
+
+
 def _check_command_context(op: str, wire: dict[str, Any]) -> None:
     """Validate the turn context and the byte size of a command before sending."""
     payload = wire["payload"]
@@ -86,7 +120,7 @@ def _check_command_context(op: str, wire: dict[str, Any]) -> None:
     except CommandTooLarge as exc:
         raise ApiError(
             "invalid_request",
-            str(exc),
+            _too_large_message(op, exc),
             code="payload_too_large",
             status_code=413,
         ) from exc
