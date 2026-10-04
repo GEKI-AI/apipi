@@ -124,6 +124,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_files_tenant_kind_created", "files", ["tenant_id", "kind", "created_at"]
     )
+    op.create_index("ix_files_kind_created", "files", ["kind", "created_at"])
     with op.batch_alter_table("uploads") as batch:
         batch.add_column(sa.Column("user_id", sa.String(), nullable=True))
         batch.drop_constraint("uploads_purpose_check", type_="check")
@@ -171,6 +172,7 @@ def downgrade() -> None:
             "uploads_purpose_check", "purpose IN ('file', 'skill')"
         )
         batch.drop_column("user_id")
+    op.drop_index("ix_files_kind_created", table_name="files")
     op.drop_index("ix_files_tenant_kind_created", table_name="files")
     with op.batch_alter_table("files") as batch:
         batch.drop_constraint("files_purpose_check", type_="check")

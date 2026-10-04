@@ -12,7 +12,7 @@ from apipi.common.sandbox import (
 from apipi.config import Settings
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.gateway.auth import not_found
-from apipi.store.repo import get_file, get_skill, get_vault
+from apipi.store.repo import get_file, get_skill, get_vault, promote_attachments
 
 _HOSTED = "openai_hosted"
 
@@ -150,6 +150,26 @@ async def require_default_refs(
         vault_id = _as_uuid(raw)
         if vault_id is None or await get_vault(db, tenant_id, vault_id) is None:
             _missing(agent_label, "vault", str(raw), dangling=dangling)
+
+
+def environment_file_ids(environment: dict[str, Any] | None) -> list[str]:
+    """The `file_id` entries of an environment's `files`."""
+    out: list[str] = []
+    for item in (environment or {}).get("files") or []:
+        if isinstance(item, dict) and item.get("type") == "file_id":
+            file_id = item.get("file_id")
+            if isinstance(file_id, str) and file_id:
+                out.append(file_id)
+    return out
+
+
+async def promote_default_files(
+    db: Any, tenant_id: uuid.UUID, defaults: dict[str, Any] | None
+) -> None:
+    """Make attachments in the defaults' `environment.files` files of kind `file`."""
+    await promote_attachments(
+        db, tenant_id, environment_file_ids(_environment_dict(defaults))
+    )
 
 
 def merge_session_create(

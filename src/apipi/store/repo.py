@@ -1608,6 +1608,23 @@ async def delete_file(db: AsyncSession, tenant_id: uuid.UUID, file_id: str) -> b
     return True
 
 
+async def promote_attachments(
+    db: AsyncSession, tenant_id: uuid.UUID, file_ids: Collection[str]
+) -> None:
+    """Make attachments used as agent or session input files of kind `file`."""
+    if not file_ids:
+        return
+    await db.execute(
+        update(FileRow)
+        .where(
+            FileRow.tenant_id == tenant_id,
+            FileRow.id.in_(list(file_ids)),
+            FileRow.kind == "attachment",
+        )
+        .values(kind="file")
+    )
+
+
 async def bind_session_file(
     db: AsyncSession,
     tenant_id: uuid.UUID,

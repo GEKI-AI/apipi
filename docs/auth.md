@@ -244,7 +244,7 @@ stays `404`; the hook runs only for resources that exist.
 | `session.read` | `GET …/sessions/{id}`, `…/events`, `…/turns[/{t}]`, `…/items`, `…/export`, `…/artifacts[...]` (resource type `agent`, agent of the session) |
 | `session.list` | `GET /v1/agents/sessions` (list → `AuthFilter` on agent ids) |
 | `vault.read` / `vault.write` / `vault.list` | `/v1/agents/vaults[/{id}]` and `…/credentials[...]` (vault) |
-| `file.read` / `file.write` / `file.list` | `/v1/files[...]`, `/v1/apipi/files`, `/v1/apipi/uploads[...]` (file; `None` on create). `GET /v1/apipi/sessions/{id}/files` needs `session.read` and applies the `file.list` filter. |
+| `file.read` / `file.write` / `file.list` | `/v1/files[...]`, `/v1/apipi/files`, `/v1/apipi/uploads[...]` (file; `None` on create). `GET /v1/apipi/sessions/{id}/files`, and `GET /v1/apipi/files` with `session_id`, also need `session.read` on the session. |
 | `skill.read` / `skill.write` / `skill.list` | `/v1/skills[...]` (skill) |
 | `template.read` / `template.write` / `template.list` | `/v1/apipi/templates[...]` (template) |
 | `usage.read` | `GET /v1/apipi/usage` |

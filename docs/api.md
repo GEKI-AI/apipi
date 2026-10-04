@@ -247,7 +247,7 @@ list is paginated:
 | Parameter | Meaning |
 | --- | --- |
 | `limit` | Page size, 1 to 100, default 20. Other values are `400`. |
-| `after` | A file id from the previous page. The next page starts after it. An id that is not a file of the tenant (or, for the session route, not bound to the session) is `400`. |
+| `after` | A file id from the previous page. The next page starts after it. An id that is not a file of the tenant (or, for the session route, not bound to the session), or that the authorization hook's `file.list` filter does not allow, is `400`. |
 | `order` | `desc` (newest first, the default) or `asc`. |
 | `purpose` | Only files with this purpose. |
 
@@ -262,7 +262,7 @@ for an empty page.
 | Parameter | Meaning |
 | --- | --- |
 | `kind` | `file`, `attachment`, or `image`. Repeat it for several kinds (`?kind=attachment&kind=image`). Another value is `400`. |
-| `session_id` | Only files bound to this session. A session of another tenant, or of another user when the identity has a `user_id`, is `404`. |
+| `session_id` | Only files bound to this session. The session must be readable by the caller, as for `GET /v1/apipi/sessions/{session_id}/files` (`session.read`). A session of another tenant, or of another user when the identity has a `user_id`, is `404`. |
 | `user_id` | Only files with this `user_id`. It never matches files of another tenant. |
 | `filename` | Only files whose name starts with this text. The match is case-sensitive. |
 
@@ -285,7 +285,12 @@ Deleting a file deletes its bindings. A stored item keeps the
 
 An attachment that is not bound to any session is deleted, with its
 bytes, once it is older than `APIPI_ATTACHMENT_TTL` (default 24 hours).
-The API checks once an hour.
+The API checks once an hour. An attachment used as an agent or session
+input becomes a file of kind `file`, so the check never deletes it:
+this happens when its id is in `environment.files` (`type: "file_id"`)
+of a session create, including files that come from the agent's
+`session_defaults`, or in `session_defaults` saved on an agent (also
+an agent made from a template). Images stay images.
 
 Browser and BFF uploads that must not proxy bytes through the gateway
 use [presigned uploads](#uploads) instead of this multipart route.
@@ -317,7 +322,9 @@ of kind `attachment`, and `image` a file of kind `image` (see
 created the upload. `file_purpose` is the Files API purpose:
 `user_data` (the default) or `assistants` for `file` and `attachment`,
 and always `vision` for `image`. Any other value with `image` is `400`,
-and `vision` with `file` or `attachment` is `400`. For `image`, the
+and `vision` with `file` or `attachment` is `400`. Create and complete
+both check `file_purpose` this way, and complete uses the value sent
+with complete. For `image`, the
 declared `content_type` must be in `APIPI_IMAGE_MIMES` (`400`
 otherwise) and `bytes` within `APIPI_MAX_IMAGE_BYTES` (`413` with code
 `payload_too_large` otherwise). Complete checks the stored size against

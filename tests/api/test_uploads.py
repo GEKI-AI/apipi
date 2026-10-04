@@ -360,10 +360,34 @@ async def test_image_upload_is_an_image_within_the_image_limits(
             Body=b"\x89PNG1234",
             ContentType="image/png",
         )
+        mismatched = await client.post(
+            f"/v1/apipi/uploads/{created.json()['upload_id']}/complete",
+            headers=_auth(token),
+            json={"file_purpose": "user_data"},
+        )
         done = await client.post(
             f"/v1/apipi/uploads/{created.json()['upload_id']}/complete",
             headers=_auth(token),
-            json={},
+            json={"file_purpose": "vision"},
+        )
+        plain = await client.post(
+            "/v1/apipi/uploads",
+            headers=_auth(token),
+            json={"purpose": "file", "filename": "a.txt", "bytes": 5},
+        )
+        plain_id = plain.json()["object_id"]
+        client_s3.put_object(
+            Key=f"apipi/files/{file_object_id(tenant_id, plain_id)}", Body=b"hello"
+        )
+        plain_vision = await client.post(
+            f"/v1/apipi/uploads/{plain.json()['upload_id']}/complete",
+            headers=_auth(token),
+            json={"file_purpose": "vision"},
+        )
+        plain_done = await client.post(
+            f"/v1/apipi/uploads/{plain.json()['upload_id']}/complete",
+            headers=_auth(token),
+            json={"file_purpose": "assistants"},
         )
         not_image = await _create(client, 8, "text/plain")
         too_big = await _create(client, 17, "image/png")
@@ -393,8 +417,11 @@ async def test_image_upload_is_an_image_within_the_image_limits(
             "/v1/apipi/files", headers=_auth(token), params={"kind": "image"}
         )
         default = await client.get("/v1/files", headers=_auth(token))
+    assert mismatched.status_code == 400
     assert done.status_code == 200
     assert done.json()["purpose"] == "vision"
+    assert plain_vision.status_code == 400
+    assert plain_done.json()["purpose"] == "assistants"
     assert not_image.status_code == 400
     assert too_big.status_code == 413
     assert wrong_purpose.status_code == 400
@@ -402,4 +429,4 @@ async def test_image_upload_is_an_image_within_the_image_limits(
     assert oversized.status_code == 413
     assert lying_kept is False
     assert [row["id"] for row in listed.json()["data"]] == [file_id]
-    assert default.json()["data"] == []
+    assert [row["id"] for row in default.json()["data"]] == [plain_id]

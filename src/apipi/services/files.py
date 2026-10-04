@@ -275,7 +275,7 @@ class FileService:
             cursor: tuple[datetime, str] | None = None
             if after is not None:
                 cursor = await file_cursor(db, tenant_id, after)
-                if cursor is None:
+                if cursor is None or (ids is not None and after not in ids):
                     _unknown_after(after)
             rows, has_more = await list_files(
                 db,
@@ -309,7 +309,7 @@ class FileService:
             cursor: tuple[datetime, str] | None = None
             if after is not None:
                 cursor = await session_file_cursor(db, tenant_id, session_id, after)
-                if cursor is None:
+                if cursor is None or (ids is not None and after not in ids):
                     _unknown_after(after)
             rows, has_more = await list_session_files(
                 db,

@@ -85,7 +85,11 @@ from apipi.services.env_none import (
 from apipi.services.files import FileService
 from apipi.services.model_credentials import ModelCredentials
 from apipi.services.search import SearchResolver, require_search
-from apipi.services.session_defaults import merge_session_create, require_default_refs
+from apipi.services.session_defaults import (
+    environment_file_ids,
+    merge_session_create,
+    require_default_refs,
+)
 from apipi.services.session_events import event_body, persist_event
 from apipi.services.skill_store import SkillService
 from apipi.services.turn_context import build_turn_context, input_image_ref
@@ -117,6 +121,7 @@ from apipi.store.repo import (
     list_items,
     list_sessions,
     list_turns,
+    promote_attachments,
     unbind_session_files,
     update_session,
 )
@@ -868,6 +873,7 @@ class SessionService:
             )
             for file_id in dict.fromkeys(_image_file_ids(turn_parts)):
                 await bind_session_file(db, tenant_id, row.id, file_id)
+            await promote_attachments(db, tenant_id, environment_file_ids(env))
             if env.get("type") == "openai_hosted":
                 directory = session_workspace(self.settings, tenant_id, row.id)
                 caps = env.get("capability_directories")

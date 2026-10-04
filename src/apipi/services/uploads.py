@@ -67,31 +67,11 @@ class UploadService:
                 status_code=413,
             )
         s3 = _s3(self.objects)
+        if is_file:
+            _file_purpose(kind, file_purpose)
         if kind == "image":
-            if file_purpose not in (None, "vision"):
-                raise ApiError(
-                    "invalid_request",
-                    "purpose image takes file_purpose vision",
-                    code="invalid_request",
-                )
             check_image(self.settings, content_type, size)
             file_purpose = "vision"
-        elif file_purpose == "vision" and is_file:
-            raise ApiError(
-                "invalid_request",
-                "file_purpose vision needs purpose image",
-                code="invalid_request",
-            )
-        elif (
-            is_file
-            and file_purpose is not None
-            and file_purpose not in DOCUMENT_PURPOSES
-        ):
-            raise ApiError(
-                "not_implemented",
-                f"purpose {file_purpose} is not implemented",
-                code=file_purpose,
-            )
         ctype = (content_type or "").strip() or "application/octet-stream"
         name = filename.strip() or "upload"
         object_id = new_file_id() if is_file else new_skill_id()
@@ -145,6 +125,7 @@ class UploadService:
             if row is None:
                 not_found()
             is_file = row.purpose != "skill"
+            purpose = _file_purpose(row.purpose, file_purpose) if is_file else ""
             if row.status == "complete":
                 if is_file:
                     existing = await get_file(db, tenant_id, row.object_id)
@@ -189,11 +170,6 @@ class UploadService:
                 except ApiError:
                     await s3.delete(namespace, key)
                     raise
-                purpose = "vision"
-            elif file_purpose in DOCUMENT_PURPOSES:
-                purpose = str(file_purpose)
-            else:
-                purpose = "user_data"
             if is_file:
                 created = await create_file(
                     db,
@@ -262,6 +238,33 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value
+
+
+def _file_purpose(kind: str, file_purpose: str | None) -> str:
+    """The Files API purpose of a file upload, or an error for a wrong one."""
+    if kind == "image":
+        if file_purpose not in (None, "vision"):
+            raise ApiError(
+                "invalid_request",
+                "purpose image takes file_purpose vision",
+                code="invalid_request",
+            )
+        return "vision"
+    if file_purpose == "vision":
+        raise ApiError(
+            "invalid_request",
+            "file_purpose vision needs purpose image",
+            code="invalid_request",
+        )
+    if file_purpose is None:
+        return "user_data"
+    if file_purpose not in DOCUMENT_PURPOSES:
+        raise ApiError(
+            "not_implemented",
+            f"purpose {file_purpose} is not implemented",
+            code=file_purpose,
+        )
+    return file_purpose
 
 
 def _purpose(raw: str) -> UploadPurpose:

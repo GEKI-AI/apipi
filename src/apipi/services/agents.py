@@ -38,6 +38,7 @@ from apipi.services.search import SearchResolver, require_search
 from apipi.services.session_defaults import (
     mirror_sandbox_metadata,
     normalize_sandbox_aliases,
+    promote_default_files,
     require_default_refs,
     strip_sandbox_metadata,
     validate_defaults_shape,
@@ -439,6 +440,7 @@ class AgentService:
             await require_saved_model(self.settings, payload.get("model"), api_key)
         async with self.store.session() as db:
             await require_default_refs(db, tenant_id, payload.get("session_defaults"))
+            await promote_default_files(db, tenant_id, payload.get("session_defaults"))
             agent = await create_agent(
                 db,
                 tenant_id,
@@ -535,6 +537,7 @@ class AgentService:
             ):
                 validate_defaults_shape(self.settings, payload["session_defaults"])
                 await require_default_refs(db, tenant_id, payload["session_defaults"])
+                await promote_default_files(db, tenant_id, payload["session_defaults"])
             tools = payload.get("tools", existing.tools)
             if "session_defaults" in payload:
                 effective_defaults = payload["session_defaults"]

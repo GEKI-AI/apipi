@@ -1075,6 +1075,7 @@ class Settings(BaseSettings):
     )
     attachment_ttl: IdleTtl = Field(
         default=timedelta(hours=24),
+        gt=timedelta(0),
         validation_alias=AliasChoices("APIPI_ATTACHMENT_TTL", "attachment_ttl"),
     )
     usage_store: UsageStore = Field(
@@ -1677,7 +1678,7 @@ def _settings_message(exc: ValidationError) -> str:
         if "presign_ttl" in loc or "APIPI_PRESIGN_TTL" in loc:
             return "APIPI_PRESIGN_TTL must be like 15m"
         if "attachment_ttl" in loc or "APIPI_ATTACHMENT_TTL" in loc:
-            return "APIPI_ATTACHMENT_TTL must be like 24h"
+            return "APIPI_ATTACHMENT_TTL must be a positive duration like 24h"
         if "usage_store" in loc or "APIPI_USAGE_STORE" in loc:
             return "APIPI_USAGE_STORE must be off, rollups, or turns"
         if "usage_retention" in loc or "APIPI_USAGE_RETENTION" in loc:

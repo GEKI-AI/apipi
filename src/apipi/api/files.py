@@ -4,12 +4,12 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import Response
 
+from apipi.api.authorize import require_session_agent
 from apipi.common.objects import NS_FILES
-from apipi.gateway.auth import check_authorize, not_found, require_tenant
+from apipi.gateway.auth import check_authorize, require_tenant
 from apipi.store.blobs import file_object_id
 from apipi.store.disposition import content_disposition
 from apipi.store.models import Tenant
-from apipi.store.repo import get_session
 
 router = APIRouter()
 
@@ -84,12 +84,13 @@ async def list_apipi_files(
     order: Literal["asc", "desc"] = "desc",
 ) -> dict[str, Any]:
     if session_id is not None:
-        async with request.app.state.store.session() as db:
-            row = await get_session(
-                db, tenant.id, session_id, user_id=_user_id(request)
-            )
-            if row is None:
-                not_found()
+        await require_session_agent(
+            request,
+            tenant.id,
+            session_id,
+            action="session.read",
+            user_id=_user_id(request),
+        )
     filt = await check_authorize(
         request, action="file.list", resource_type="file", resource_id=None
     )

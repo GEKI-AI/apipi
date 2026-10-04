@@ -616,6 +616,7 @@ class FileRow(Base):
             name="files_kind_check",
         ),
         Index("ix_files_tenant_kind_created", "tenant_id", "kind", "created_at"),
+        Index("ix_files_kind_created", "kind", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

@@ -11,7 +11,13 @@ from tests.support.split_worker import split_client_for
 
 from apipi.common.objects import NS_FILES
 from apipi.config import Settings
-from apipi.gateway.auth import AuthFilter, AuthIdentity, AuthRequest, tenant_from_key
+from apipi.gateway.auth import (
+    AuthFilter,
+    AuthIdentity,
+    AuthReject,
+    AuthRequest,
+    tenant_from_key,
+)
 from apipi.gateway.tokens import hash_token
 from apipi.store.blobs import file_object_id
 from apipi.store.engine import Store
@@ -636,13 +642,16 @@ async def test_file_lists_apply_the_authorization_filter(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     allowed: set[str] = set()
+    deny_read: list[bool] = []
 
     async def authorize(
         identity: AuthIdentity, action: str, resource_type: str, resource_id: str | None
-    ) -> AuthFilter | None:
+    ) -> AuthFilter | AuthReject | None:
         del identity, resource_id
         if action == "file.list" and resource_type == "file":
             return AuthFilter(ids=frozenset(allowed))
+        if action == "session.read" and deny_read:
+            return AuthReject(status_code=403, code="forbidden", message="Forbidden")
         return None
 
     async with _vision_client(settings, store, worker_secret, authorize=authorize) as (
@@ -656,18 +665,42 @@ async def test_file_lists_apply_the_authorization_filter(
         [image] = await _send(client, headers, session_id, _data_url(_png()))
         listed = await client.get("/v1/files", headers=headers, params={"limit": 1})
         apipi = await client.get("/v1/apipi/files", headers=headers)
+        hidden_after = await client.get(
+            "/v1/files", headers=headers, params={"after": uploaded[0]}
+        )
+        deny_read.append(True)
+        denied = await client.get(
+            f"/v1/apipi/sessions/{session_id}/files", headers=headers
+        )
+        denied_filter = await client.get(
+            "/v1/apipi/files", headers=headers, params={"session_id": session_id}
+        )
+        deny_read.clear()
         hidden = await client.get(
             f"/v1/apipi/sessions/{session_id}/files", headers=headers
+        )
+        hidden_image_after = await client.get(
+            f"/v1/apipi/sessions/{session_id}/files",
+            headers=headers,
+            params={"after": image},
         )
         allowed.add(image)
         shown = await client.get(
             f"/v1/apipi/sessions/{session_id}/files", headers=headers
         )
+        by_session = await client.get(
+            "/v1/apipi/files", headers=headers, params={"session_id": session_id}
+        )
     assert _ids(listed) == [uploaded[1]]
     assert listed.json()["has_more"] is False
     assert _ids(apipi) == [uploaded[1]]
+    assert hidden_after.status_code == 400
+    assert denied.status_code == 403
+    assert denied_filter.status_code == 403
     assert hidden.json()["data"] == []
+    assert hidden_image_after.status_code == 400
     assert [row["file_id"] for row in shown.json()["data"]] == [image]
+    assert _ids(by_session) == [image]
 
 
 async def test_vision_upload_is_an_image(
@@ -721,3 +754,76 @@ async def test_vision_upload_is_an_image(
     assert listed.json()["data"][0]["purpose"] == "vision"
     assert [row["file_id"] for row in bound.json()["data"]] == [image]
     assert bound.json()["data"][0]["kind"] == "image"
+
+
+async def test_attachments_used_as_environment_files_become_files(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    async with _vision_client(settings, store, worker_secret) as (app, client):
+        token = "promote"
+        headers = _as(token)
+        tenant_id = tenant_from_key(token)
+        files = app.state.gateway.files
+        await _upload(client, headers, "plain.csv")
+
+        async def _attachment(name: str) -> str:
+            created = await files.create(
+                tenant_id,
+                data=b"bytes",
+                filename=name,
+                purpose="user_data",
+                kind="attachment",
+            )
+            return str(created["id"])
+
+        in_session = await _attachment("session.txt")
+        in_defaults = await _attachment("defaults.txt")
+        loose = await _attachment("loose.txt")
+        agent = await client.post(
+            "/v1/agents",
+            headers=headers,
+            json={
+                "name": "bot",
+                "model": "test",
+                "session_defaults": {
+                    "environment": {
+                        "type": "openai_hosted",
+                        "files": [
+                            {
+                                "type": "file_id",
+                                "file_id": in_defaults,
+                                "path": "data/defaults.txt",
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+        assert agent.status_code == 200, agent.json()
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=headers,
+            json={
+                "agent_id": agent.json()["id"],
+                "environment": {
+                    "type": "openai_hosted",
+                    "files": [
+                        {
+                            "type": "file_id",
+                            "file_id": in_session,
+                            "path": "data/session.txt",
+                        }
+                    ],
+                },
+            },
+        )
+        assert created.status_code == 200, created.json()
+        swept = await files.sweep_attachments(
+            now=utc_now() + settings.attachment_ttl + timedelta(minutes=1)
+        )
+        listed = await client.get("/v1/apipi/files", headers=headers)
+    kinds = {row["id"]: row["kind"] for row in listed.json()["data"]}
+    assert swept == 1
+    assert loose not in kinds
+    assert kinds[in_session] == "file"
+    assert kinds[in_defaults] == "file"
