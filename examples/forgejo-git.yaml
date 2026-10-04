@@ -1,7 +1,7 @@
 # Git and the Forgejo API in a microVM sandbox with a vault credential.
 # The token lives in the vault. The sandbox only sees a placeholder in
 # FORGEJO_TOKEN, and the egress gateway on the worker replaces it in
-# requests to git.example.com. See docs/vaults.md.
+# request headers to git.example.com. See docs/vaults.md.
 #
 # 1. Create an access token for a bot user in Forgejo (Settings,
 #    Applications) with write:repository, plus write:issue if the agent

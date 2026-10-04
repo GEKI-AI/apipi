@@ -1,7 +1,7 @@
 # Git and the GitHub CLI in a microVM sandbox with a vault credential.
 # The token lives in the vault. The sandbox only sees a placeholder in
 # GITHUB_TOKEN, and the egress gateway on the worker replaces it in
-# requests to github.com and api.github.com. See docs/vaults.md.
+# request headers to github.com and api.github.com. See docs/vaults.md.
 #
 # 1. Create a fine-grained personal access token for the repositories
 #    the agent works on: Contents read and write, Pull requests read

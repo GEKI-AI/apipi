@@ -207,7 +207,7 @@ The store keeps `token` and `secret_value` as AES-256-GCM ciphertext
 | Field | Rule |
 | --- | --- |
 | `secret_name` | `^[A-Za-z_][A-Za-z0-9_]*$`, unique in the vault. Reserved names (`OPENAI_*`, `APIPI_*`, `PI_*`, `CODEX_*`, `PATH`, `HOME`, the certificate variables, and the guest environment deny list) are `400`. The full list is in [Vaults and credentials](vaults.md#environment_variable). |
-| `secret_value` | Non-empty string, at most 16,384 characters, without control characters. |
+| `secret_value` | 8 to 16,384 characters of printable ASCII (`!` to `~`), without spaces or control characters. |
 | `networking.type` | `limited` |
 | `networking.allowed_hosts` | 1 to 100 exact hostnames, stored in lowercase. No scheme, port, path, wildcard, or IP address. |
 | `metadata["apipi.git_username"]` | Optional. The user name the guest git credential helper sends for these hosts. |
@@ -242,6 +242,16 @@ allow (`credential_host_not_allowed`). With `network.access`
 when the sandbox starts. All vault credentials are a snapshot taken
 when the sandbox starts. See
 [Vaults and credentials](vaults.md#when-secrets-are-read).
+
+A turn, follow-up, or sandbox start for a session with environment
+credentials needs a worker that runs isolation `microvm`. If the worker
+for the session runs another isolation, the request fails with `400`
+and code `credential_not_allowed`, and the message names the isolation.
+A worker from an older ApiPi version without the protocol feature
+`env_credentials` gets `501` with code `unsupported_op` instead. The
+API does not check the run mode at session create, because
+`apipi serve` has no run mode of its own; it learns the isolation from
+the worker that takes the session.
 
 ## Files
 

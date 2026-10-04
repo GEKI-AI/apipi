@@ -157,14 +157,17 @@ Code that the agent runs in a microVM sandbox (`curl`, `git`, `gh`,
 tenant's key through a vault credential of type
 `environment_variable`. The guest gets a random placeholder in the
 environment variable `secret_name`. The egress gateway on the worker
-replaces it with the real value only in requests to the credential's
-`allowed_hosts`, in headers and the query string, never in the body. A
-git credential helper in the guest image answers with the placeholder,
-so `git clone`, `git pull`, and `git push` over HTTPS work without a
-token in the URL. This does not work for request signing (such as AWS
-SigV4), for protocols other than HTTP (SSH, Postgres, SMTP), or for
-HTTP/2 and gRPC. Setup, rules, limits, and examples for GitHub,
-Forgejo, and GitLab are in [Vaults and credentials](vaults.md).
+replaces it with the real value only in request headers (including
+Basic auth) of HTTPS requests to the credential's `allowed_hosts`,
+never in the path, the query string, or the body, and it masks the
+secret again in the responses. The worker writes a small git credential
+helper onto the workspace drive that answers with the placeholder, so
+`git clone`, `git pull`, and `git push` over HTTPS work without a token
+in the URL. This does not work for request signing (such as AWS
+SigV4), for keys in the query string, for protocols other than HTTP
+(SSH, Postgres, SMTP), or for HTTP/2 and gRPC. Setup, rules, limits,
+and examples for GitHub, Forgejo, and GitLab are in
+[Vaults and credentials](vaults.md).
 
 ## Web search
 

