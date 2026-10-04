@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Workspace restore writes only missing files (#514). Files from `environment.files` (Files API ids and inline content) are fetched and written before a turn only when their path does not exist in the session directory. Agent edits to `inputs/` are no longer overwritten on the next turn; they last until the workspace is rebuilt (TTL wipe in isolation `none`, guest stop in `microvm`), and then the original files come back. A turn on a running microvm guest fetches no file bytes.
+
 ## [0.14.1] - 2026-10-03
 
 ### Fixed

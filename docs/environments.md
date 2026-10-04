@@ -259,9 +259,11 @@ agent turn that needs the computer:
 Hosted workspaces include an `inputs/` directory. Put files the user
 provided there, including `environment.files` paths under `inputs/`.
 Existing paths still work. `inputs/` is not published. Only `outputs/`
-is. The agent may edit or delete files under `inputs/`. An edited file
-keeps the edit on later turns. A deleted file is written again from
-the store before the next turn.
+is. The agent may edit or delete files under `inputs/`. Edits and
+deletions last until the workspace is rebuilt. In isolation `none` a
+deleted file is written again from the store before the next turn. In
+`microvm` it stays missing until the guest stops, and the next boot
+starts from the original files. See the restore rules below.
 
 `network.access` is `enabled`, `disabled`, or `restricted`.
 `restricted` requires `allowed_domains` (1–100 exact hostnames).
