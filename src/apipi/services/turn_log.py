@@ -22,7 +22,8 @@ from apipi.protocol import (
     TurnContext,
 )
 from apipi.services.agents import definition_for_session
-from apipi.services.payload_export import export_payload
+from apipi.services.env_credentials import session_vault_ids, session_vault_secrets
+from apipi.services.payload_export import export_payload, payload_export_on
 from apipi.services.session_events import event_body as event_body
 from apipi.services.session_events import persist_event as persist_event
 from apipi.services.usage_export import export_usage
@@ -333,6 +334,13 @@ async def _write_turn_log(
         )
     try:
         items = await list_items(db, tenant_id, session_id)
+        secrets: tuple[str, ...] = ()
+        if settings is not None and payload_export_on(settings):
+            session_row = await get_session(db, tenant_id, session_id)
+            if session_row is not None:
+                secrets = await session_vault_secrets(
+                    db, settings, tenant_id, session_vault_ids(session_row.vault_ids)
+                )
         export_payload(
             settings,
             metrics,
@@ -341,6 +349,7 @@ async def _write_turn_log(
             turn_id=turn_id,
             request_id=request_id,
             items=items or [],
+            secrets=secrets,
         )
     except Exception:
         log_event(

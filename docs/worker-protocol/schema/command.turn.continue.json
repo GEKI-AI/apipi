@@ -70,6 +70,48 @@
       "title": "ContextAgent",
       "type": "object"
     },
+    "ContextEnvCredential": {
+      "properties": {
+        "allowed_hosts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Hosts",
+          "type": "array"
+        },
+        "credential_id": {
+          "title": "Credential Id",
+          "type": "string"
+        },
+        "git_username": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Git Username"
+        },
+        "secret_name": {
+          "title": "Secret Name",
+          "type": "string"
+        },
+        "secret_value": {
+          "title": "Secret Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "credential_id",
+        "secret_name",
+        "secret_value"
+      ],
+      "title": "ContextEnvCredential",
+      "type": "object"
+    },
     "ContextFileRef": {
       "properties": {
         "content_type": {
@@ -411,6 +453,13 @@
           "properties": {
             "agent": {
               "$ref": "#/$defs/ContextAgent"
+            },
+            "env_credentials": {
+              "items": {
+                "$ref": "#/$defs/ContextEnvCredential"
+              },
+              "title": "Env Credentials",
+              "type": "array"
             },
             "files": {
               "items": {

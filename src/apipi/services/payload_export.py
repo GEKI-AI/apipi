@@ -97,6 +97,12 @@ def load_payload_sinks(
     return sinks
 
 
+def payload_export_on(settings: Settings | None) -> bool:
+    return settings is not None and bool(
+        settings.payload_export_url or settings.payload_sinks.strip()
+    )
+
+
 def export_payload(
     settings: Settings | None,
     metrics: Metrics | None,
@@ -106,6 +112,7 @@ def export_payload(
     turn_id: uuid.UUID,
     request_id: str | None,
     items: list[Item],
+    secrets: tuple[str, ...] = (),
 ) -> None:
     if settings is None:
         return
@@ -121,7 +128,7 @@ def export_payload(
     )
     emit_all(
         sinks,
-        redact_payload(event, _secrets(settings)),
+        redact_payload(event, (*_secrets(settings), *secrets)),
         failed="payload sink failed",
         drop_event="payload.export.dropped",
     )

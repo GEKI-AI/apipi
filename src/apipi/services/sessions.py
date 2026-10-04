@@ -80,6 +80,7 @@ from apipi.services.agents import (
     definition_for_session,
     reject_colliding_mcp_labels,
 )
+from apipi.services.env_credentials import STATIC_BEARER, check_env_credentials
 from apipi.services.env_none import (
     is_env_none,
     reject_builtin_tools_for_env_none,
@@ -209,6 +210,8 @@ def _plain_vault_creds(settings: Settings, creds: list[Any]) -> list[_VaultPlain
     key = vault_key_bytes(settings.vault_master_key)
     plain: list[_VaultPlain] = []
     for cred in creds:
+        if cred.auth_type != STATIC_BEARER:
+            continue
         try:
             token = decrypt_vault_token(
                 cred.token, key, aad=vault_aad(cred.tenant_id, cred.id)
@@ -951,6 +954,12 @@ class SessionService:
             for vault_id in vault_ids or []:
                 if await get_vault(db, tenant_id, vault_id) is None:
                     not_found()
+            if vault_ids:
+                check_env_credentials(
+                    self.settings,
+                    env,
+                    await list_credentials_for_vault_ids(db, tenant_id, vault_ids),
+                )
             row = await create_session(
                 db,
                 tenant_id,
