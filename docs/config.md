@@ -547,7 +547,8 @@ The built-in main prompt matches the session. A hosted computer is
 told that the working directory is `/workspace` and that the sandbox
 stops after some idle time. The prompt does not state that duration.
 `APIPI_SANDBOX_TTL_OPENAI_HOSTED` and `APIPI_IDLE_TTL` are unchanged.
-User-provided files under `inputs/` are restored after a restart.
+User-provided files under `inputs/` are restored in their original
+version after a restart. Edits the agent makes to them last until then.
 Every other workspace file is non-persistent, including `outputs/`.
 A missing file is probably a sandbox restart. `outputs/` is for
 artifacts. Those files are collected after each turn and shared with

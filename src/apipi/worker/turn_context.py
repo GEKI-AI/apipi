@@ -7,6 +7,7 @@ from typing import Any
 from apipi.common.dirs import store_root
 from apipi.common.errors import store_error
 from apipi.config import Settings
+from apipi.env.setup import workspace_file_missing
 
 
 def local_ref_path(settings: Settings, local_path: str) -> Path:
@@ -57,10 +58,10 @@ async def fetch_ref_bytes(ref: Mapping[str, Any], settings: Settings) -> bytes:
 
 
 async def materialize_workspace_files(
-    files: list[Any], settings: Settings | None
+    files: list[Any], settings: Settings | None, workspace: Path | None
 ) -> list[tuple[str, bytes]]:
-    """Fetch workspace file bytes for context references without DB access."""
-    if not files or settings is None:
+    """Fetch the bytes of the referenced files that are missing in the workspace."""
+    if not files or settings is None or workspace is None:
         return []
     materialized: list[tuple[str, bytes]] = []
     for ref in files:
@@ -68,6 +69,8 @@ async def materialize_workspace_files(
             continue
         path = ref.get("path")
         if not isinstance(path, str):
+            continue
+        if not workspace_file_missing(workspace, path):
             continue
         materialized.append((path, await fetch_ref_bytes(ref, settings)))
     return materialized

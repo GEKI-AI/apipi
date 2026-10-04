@@ -38,7 +38,12 @@ from apipi.common.sandbox import (
 from apipi.common.skills import discover_skill_dirs, unpack_skill_zip
 from apipi.common.usage import add_usage, empty_usage, mcp_name, usage_from
 from apipi.config import CapacityError, Settings
-from apipi.env.setup import SetupError, provision_hosted_async, session_env_from
+from apipi.env.setup import (
+    SetupError,
+    hosted_workspace,
+    provision_hosted_async,
+    session_env_from,
+)
 from apipi.protocol import (
     LIVE_EVENT_TYPES,
     ContextBytes,
@@ -399,7 +404,9 @@ async def load_boot_kwargs(
 
         gateway_hosts = tuple(microvm_egress_hosts(settings))
     extra_files = await materialize_workspace_files(
-        [ref.model_dump() for ref in ctx.files], settings
+        [ref.model_dump() for ref in ctx.files],
+        settings,
+        hosted_workspace(row.environment),
     )
     await provision_hosted_async(
         row.environment,
@@ -600,7 +607,9 @@ async def run_turn(
 
                     gateway_hosts = tuple(microvm_egress_hosts(settings))
                 extra_files = await materialize_workspace_files(
-                    [ref.model_dump() for ref in ctx.files], settings
+                    [ref.model_dump() for ref in ctx.files],
+                    settings,
+                    hosted_workspace(row.environment),
                 )
             await provision_hosted_async(
                 row.environment,
