@@ -125,13 +125,24 @@ class _UdpProtocol(asyncio.DatagramProtocol):
             self.transport.sendto(answer, addr)
 
 
+def reply_matches(reply: bytes, query: bytes) -> bool:
+    if len(reply) < 12 or reply[:2] != query[:2] or not reply[2] & 0x80:
+        return False
+    try:
+        got = parse_question(reply)
+        sent = parse_question(query)
+    except DnsFormatError:
+        return False
+    return (got.name, got.qtype, got.qclass) == (sent.name, sent.qtype, sent.qclass)
+
+
 class _UpstreamProtocol(asyncio.DatagramProtocol):
-    def __init__(self, ident: bytes) -> None:
-        self.ident = ident
+    def __init__(self, query: bytes) -> None:
+        self.query = query
         self.reply: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        if data[:2] == self.ident and not self.reply.done():
+        if not self.reply.done() and reply_matches(data, self.query):
             self.reply.set_result(data)
 
     def error_received(self, exc: Exception) -> None:
@@ -226,7 +237,7 @@ class DnsFilter:
                     reply = await self._forward_udp(outgoing, upstream)
             except (OSError, TimeoutError, asyncio.IncompleteReadError):
                 continue
-            if reply[:2] != outgoing[:2] or len(reply) < 12:
+            if not reply_matches(reply, outgoing):
                 continue
             return query[:2] + reply[2:]
         return error_reply(query, RCODE_SERVFAIL, question.end)
@@ -234,7 +245,7 @@ class DnsFilter:
     async def _forward_udp(self, query: bytes, upstream: Upstream) -> bytes:
         loop = asyncio.get_running_loop()
         transport, protocol = await loop.create_datagram_endpoint(
-            lambda: _UpstreamProtocol(query[:2]), remote_addr=upstream
+            lambda: _UpstreamProtocol(query), remote_addr=upstream
         )
         try:
             transport.sendto(query)

@@ -282,3 +282,47 @@ async def test_upstream_down_is_servfail() -> None:
         assert rcode(reply) == RCODE_SERVFAIL
     finally:
         await filt.stop()
+
+
+def test_reply_must_echo_the_question() -> None:
+    from apipi.worker.egress.dns import reply_matches
+
+    sent = query("api.example.com", ident=9)
+    assert reply_matches(answer_for(sent), sent)
+    assert not reply_matches(answer_for(query("evil.example.com", ident=9)), sent)
+    assert not reply_matches(
+        answer_for(query("api.example.com", ident=9, qtype=28)), sent
+    )
+    assert not reply_matches(answer_for(query("api.example.com", ident=10)), sent)
+    assert not reply_matches(sent, sent)
+
+
+async def test_mismatched_upstream_reply_is_dropped() -> None:
+    loop = asyncio.get_running_loop()
+
+    class Liar(asyncio.DatagramProtocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            self.transport = transport
+
+        def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+            assert isinstance(self.transport, asyncio.DatagramTransport)
+            forged = query("evil.example.com", ident=int.from_bytes(data[:2], "big"))
+            self.transport.sendto(answer_for(forged), addr)
+
+    transport, _ = await loop.create_datagram_endpoint(
+        Liar, local_addr=("127.0.0.1", 0)
+    )
+    port = transport.get_extra_info("sockname")[1]
+    filt = DnsFilter(
+        host="127.0.0.1",
+        allow=lambda name: True,
+        upstreams=(("127.0.0.1", port),),
+        timeout=0.3,
+    )
+    await filt.start()
+    try:
+        reply = await udp_ask(filt.udp_port, query("api.example.com"))
+        assert rcode(reply) == RCODE_SERVFAIL
+    finally:
+        await filt.stop()
+        transport.close()

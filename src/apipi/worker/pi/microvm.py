@@ -1705,6 +1705,13 @@ async def start_microvm(
                 f"microvm cannot start jailer: {detail}. {JAILER_RIGHTS}"
             ) from exc
         raise ConfigError(f"microvm cannot start jailer: {detail}") from exc
+    except BaseException as exc:
+        cleanup()
+        if broker is not None:
+            with contextlib.suppress(Exception):
+                await broker.stop()
+        log_sandbox_boot_failed(exc, vm_id=vm_id)
+        raise
     pid = process.pid
     if pid is None:
         process.kill()

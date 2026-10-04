@@ -1056,3 +1056,80 @@ def test_nofile_limit_is_raised_to_hard(monkeypatch: pytest.MonkeyPatch) -> None
     assert gateway_module.raise_nofile_limit() == 524288
     assert calls == [(524288, 524288)]
     assert gateway_module.worker_connection_limit() == 170
+
+
+async def test_lookups_time_out_and_are_limited_per_session(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.egress")
+    upstream = await env.upstream(mode="echo")
+    gateway = await env.gateway("restricted", port=upstream.port)
+    calls: list[str] = []
+    never: asyncio.Future[list[str]] = asyncio.get_running_loop().create_future()
+
+    async def hang(host: str, _port: int) -> list[str]:
+        calls.append(host)
+        return await never
+
+    gateway.resolve = hang
+    gateway.resolve_timeout = 0.2
+    gateway._lookups = asyncio.Semaphore(1)
+    for _ in range(2):
+        await assert_rejected(gateway, trust(env.upstream_ca))
+    await wait_record(caplog, decision="rejected", reason="resolve_failed")
+    assert calls == [HOST]
+    never.cancel()
+    await asyncio.sleep(0.05)
+    assert gateway._lookups.locked() is False
+
+
+async def test_system_resolve_uses_its_own_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from apipi.worker.egress import resolve as resolve_module
+
+    seen: list[str] = []
+
+    def fake(host: str, port: int, **_kwargs: Any) -> list[Any]:
+        seen.append(threading.current_thread().name)
+        return [(0, 0, 0, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(resolve_module.socket, "getaddrinfo", fake)
+    assert await resolve_module.system_resolve("example.com", 443) == ["93.184.216.34"]
+    assert seen[0].startswith("apipi-egress-dns")
+
+
+async def test_lf_only_http_request_is_not_delayed(env: Env) -> None:
+    upstream = await env.upstream(tls=False)
+    gateway = await env.gateway(
+        "restricted", port=upstream.port, http=True, peek_timeout=5.0
+    )
+    started = time.monotonic()
+    reply = await raw_exchange(
+        gateway.port, f"GET /lf HTTP/1.1\nHost: {HOST}\nConnection: close\n\n".encode()
+    )
+    assert b"hello GET /lf 0" in reply
+    assert time.monotonic() - started < 3
+
+
+async def test_open_upstream_has_an_overall_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apipi.worker.egress import sockets
+
+    tried: list[str] = []
+
+    async def hang(address: str, *_args: Any, **_kwargs: Any) -> Any:
+        tried.append(address)
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(sockets.asyncio, "open_connection", hang)
+    started = time.monotonic()
+    with pytest.raises(sockets.UpstreamError):
+        await sockets.open_upstream(
+            ["192.0.2.1", "192.0.2.2", "192.0.2.3"], 443, timeout=0.2, deadline=0.3
+        )
+    assert time.monotonic() - started < 1
+    assert tried == ["192.0.2.1", "192.0.2.2"]

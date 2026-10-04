@@ -1,10 +1,15 @@
 import asyncio
+import functools
 import ipaddress
 import socket
+import threading
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from apipi.common.netguard import (
     BLOCKED_NETWORKS,
+    METADATA_IPS,
+    Address,
     allowed_names,
     allowed_networks,
     ip_blocked,
@@ -16,8 +21,22 @@ BLOCKED_EGRESS_CIDRS: tuple[str, ...] = tuple(
     str(network) for network in BLOCKED_NETWORKS if network.version == 4
 )
 
+RESOLVE_THREADS = 8
 Resolver = Callable[[str, int], Awaitable[list[str]]]
 Blocked = Callable[[str], bool]
+
+_executor: ThreadPoolExecutor | None = None
+_executor_lock = threading.Lock()
+
+
+def resolver_executor() -> ThreadPoolExecutor:
+    global _executor
+    with _executor_lock:
+        if _executor is None:
+            _executor = ThreadPoolExecutor(
+                max_workers=RESOLVE_THREADS, thread_name_prefix="apipi-egress-dns"
+            )
+        return _executor
 
 
 class EgressBlocked(Exception):
@@ -28,7 +47,8 @@ class EgressBlocked(Exception):
 
 async def system_resolve(host: str, port: int) -> list[str]:
     loop = asyncio.get_running_loop()
-    infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    lookup = functools.partial(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM)
+    infos = await loop.run_in_executor(resolver_executor(), lookup)
     found: list[str] = []
     for info in infos:
         address = str(info[4][0])
@@ -43,6 +63,14 @@ def address_blocked(address: str) -> bool:
     except ValueError:
         return True
     return ip_blocked(ip)
+
+
+def metadata_address(ip: Address) -> bool:
+    checked: list[Address] = [ip]
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        checked.append(mapped)
+    return any(str(item) in METADATA_IPS or item.is_link_local for item in checked)
 
 
 def check_address(address: str, *, blocked: Blocked = address_blocked) -> list[str]:
@@ -68,16 +96,19 @@ async def resolve_upstream(
         raise EgressBlocked("resolve_failed") from exc
     if not addresses:
         raise EgressBlocked("resolve_failed")
-    if name in allowed_names(private_hosts):
-        return addresses
+    named = name in allowed_names(private_hosts)
     networks = allowed_networks(private_hosts)
     for address in addresses:
         if not blocked(address):
             continue
+        if not named:
+            raise EgressBlocked("private_address")
         try:
             ip = ipaddress.ip_address(address)
         except ValueError:
             raise EgressBlocked("private_address") from None
-        if not any(ip in network for network in networks):
+        if metadata_address(ip):
+            raise EgressBlocked("private_address")
+        if networks and not any(ip in network for network in networks):
             raise EgressBlocked("private_address")
     return addresses

@@ -5,6 +5,7 @@ import ssl
 
 CHUNK = 65536
 CONNECT_TIMEOUT = 10.0
+CONNECT_DEADLINE = 15.0
 IP_FREEBIND = getattr(socket, "IP_FREEBIND", 15)
 SO_ORIGINAL_DST = 80
 
@@ -65,8 +66,14 @@ async def open_upstream(
     ssl_context: ssl.SSLContext | None = None,
     server_hostname: str | None = None,
     timeout: float = CONNECT_TIMEOUT,
+    deadline: float = CONNECT_DEADLINE,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    loop = asyncio.get_running_loop()
+    end = loop.time() + deadline
     for address in addresses:
+        left = end - loop.time()
+        if left <= 0:
+            break
         try:
             return await asyncio.wait_for(
                 asyncio.open_connection(
@@ -76,7 +83,7 @@ async def open_upstream(
                     server_hostname=server_hostname if ssl_context else None,
                     limit=2 * CHUNK,
                 ),
-                timeout=timeout,
+                timeout=min(timeout, left),
             )
         except ssl.SSLCertVerificationError as exc:
             raise UpstreamError("upstream_tls") from exc

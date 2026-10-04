@@ -16,7 +16,7 @@ from apipi.config import (
     require_run_mode,
 )
 from apipi.env.setup import NetworkPolicy, write_network_policy
-from apipi.mcp.http import McpHttpServer
+from apipi.mcp.http import McpConnectError, McpHttpServer
 from apipi.worker.egress import EgressHooks
 from apipi.worker.pi.artifacts import unpack_workspace_tar
 from apipi.worker.pi.guest import (
@@ -1470,3 +1470,28 @@ def test_guest_sh_builds_ca_bundle() -> None:
     ):
         export_at = text.index(f'export {name}="$CA_BUNDLE"')
         assert bundle_at < env_at < export_at < pi_at
+
+
+@pytest.mark.parametrize(
+    "error", [McpConnectError("mcp blocked"), asyncio.CancelledError()]
+)
+async def test_start_microvm_closes_gateway_on_any_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    gateways: list[_FakeGateway],
+    error: BaseException,
+) -> None:
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+    torn: list[object] = []
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.teardown_tap", lambda net, **_k: torn.append(net)
+    )
+
+    async def failing_broker(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr("apipi.worker.pi.broker.start_broker", failing_broker)
+    with pytest.raises(type(error)):
+        await start_microvm(_settings(tmp_path), cwd=None, tools=True)
+    assert gateways[0].closed is True
+    assert len(torn) == 1

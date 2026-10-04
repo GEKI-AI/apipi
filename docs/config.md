@@ -765,15 +765,23 @@ enforce that field.
 
 Some upstreams live on a private network, for example a self-hosted
 Forgejo. List them in `private_hosts` (hostnames or CIDRs, the same
-format as `[mcp].allow_hosts`). The gateway may then connect to a
-private address for such a host, but only when the guest names the
-host and the session names it too: the host is in the allowed
-hostnames of a `restricted` session (or of the allowlist), or it is a
-host whose HTTPS traffic the gateway reads. An `enabled` session
-cannot reach a private host by any other name, and never by IP address
-or without a server name. A CIDR entry allows the addresses a listed
-name resolves to; it does not allow connecting to those addresses
-directly. The guest itself still cannot reach the private address. If
+format as `[mcp].allow_hosts`). A private address is allowed only for
+a hostname that is listed in `private_hosts` by name. The guest must
+connect with that name, and the session must name it too: the host is
+in the allowed hostnames of a `restricted` session (or of the
+allowlist), or it is a host whose HTTPS traffic the gateway reads. An
+`enabled` session cannot reach a private host otherwise, and no
+session can reach one by IP address or without a server name.
+
+CIDR entries open nothing on their own, so a tenant cannot reach your
+network with a wildcard DNS name such as `10-0-0-5.nip.io`. When you
+list CIDRs, they restrict the private addresses that the named hosts
+may resolve to: a named host that resolves to a private address
+outside every listed CIDR is rejected. With no CIDR listed, a named
+host may resolve to any private address. Link-local and cloud metadata
+addresses (`169.254.0.0/16`, for example `169.254.169.254`) stay
+rejected even for a named host. Loopback is allowed for a named host.
+The guest itself still cannot reach the private address. If
 such a host uses a certificate from an internal authority, put that
 authority in a PEM file and set `upstream_ca`. The gateway adds it to
 the system authorities when it checks an upstream certificate.
@@ -783,7 +791,7 @@ the system authorities when it checks an upstream certificate.
 | `APIPI_MICROVM_EGRESS_ALLOWLIST` | `[sandbox.network].egress_allowlist` | off | Optional fail-closed TAP allowlist when the backend is `microvm`. |
 | `APIPI_MICROVM_EGRESS_HOSTS` | `[sandbox.network].egress_hosts` | empty | Extra hostnames when the allowlist is on, comma-separated or a TOML array. |
 | `APIPI_MICROVM_EGRESS_MBIT` | `[sandbox.network].egress_mbit` | `50` | `tc` rate on each guest TAP, both directions. Always on. |
-| `APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` | `[sandbox.network].private_hosts` | empty | Private hostnames or CIDRs that the egress gateway (never the guest) may connect to for a host that the session explicitly allows (see above). Comma-separated or a TOML array. |
+| `APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` | `[sandbox.network].private_hosts` | empty | Private hostnames that the egress gateway (never the guest) may connect to when the session explicitly allows them, and optional CIDRs that limit where those hostnames may resolve. CIDRs alone allow nothing (see above). Comma-separated or a TOML array. |
 | `APIPI_MICROVM_EGRESS_UPSTREAM_CA` | `[sandbox.network].upstream_ca` | unset | Path to a PEM bundle of extra certificate authorities the egress gateway trusts for upstream servers, in addition to the system authorities. The worker fails at startup if the file is missing or is not a valid PEM bundle. |
 
 ```toml

@@ -47,6 +47,8 @@ TLS_PORTS = frozenset({443, 8443})
 HTTP_PORTS = frozenset({80})
 GATEWAY_PORTS = tuple(sorted(TLS_PORTS | HTTP_PORTS))
 PEEK_TIMEOUT = 10.0
+RESOLVE_TIMEOUT = 5.0
+MAX_LOOKUPS = 8
 MAX_PEEK = 16384
 MAX_CONNECTIONS = 128
 WORKER_MAX_CONNECTIONS = 8192
@@ -121,7 +123,7 @@ def _tls_enough(data: bytes) -> bool:
 
 
 def _http_enough(data: bytes) -> bool:
-    if b"\r\n\r\n" in data:
+    if b"\r\n\r\n" in data or b"\n\n" in data:
         return True
     method, space, _ = data.partition(b" ")
     if space:
@@ -180,6 +182,8 @@ class EgressGateway:
         peek_timeout: float = PEEK_TIMEOUT,
         idle_timeout: float = IDLE_TIMEOUT,
         max_connections: int = MAX_CONNECTIONS,
+        resolve_timeout: float = RESOLVE_TIMEOUT,
+        max_lookups: int = MAX_LOOKUPS,
         freebind: bool = False,
     ) -> None:
         self.host = host
@@ -199,6 +203,8 @@ class EgressGateway:
         self.idle_timeout = idle_timeout
         self.max_connections = max_connections
         self.freebind = freebind
+        self.resolve_timeout = resolve_timeout
+        self._lookups = asyncio.Semaphore(max_lookups)
         self.port = 0
         self.dns: DnsFilter | None = None
         self._listener: socket.socket | None = None
@@ -360,7 +366,7 @@ class EgressGateway:
                     conn.host,
                     conn.port,
                     private_hosts=private,
-                    resolve=self.resolve,
+                    resolve=self._resolve,
                     blocked=self.blocked,
                 )
             else:
@@ -413,6 +419,22 @@ class EgressGateway:
             if owned:
                 self._close(conn)
             self._record(conn)
+
+    async def _resolve(self, host: str, port: int) -> list[str]:
+        async with asyncio.timeout(self.resolve_timeout):
+            await self._lookups.acquire()
+            try:
+                lookup = asyncio.ensure_future(self.resolve(host, port))
+            except BaseException:
+                self._lookups.release()
+                raise
+            lookup.add_done_callback(self._lookup_done)
+            return await asyncio.shield(lookup)
+
+    def _lookup_done(self, lookup: "asyncio.Future[list[str]]") -> None:
+        self._lookups.release()
+        if not lookup.cancelled():
+            lookup.exception()
 
     def _close(self, conn: _Connection) -> None:
         sock = conn.sock
