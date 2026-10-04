@@ -316,3 +316,77 @@ async def test_enabled_guest_egress(tmp_path: Path, workspace: Path) -> None:
     assert results["curl_ip_literal"]["rc"] == 0, report
     assert _failed(results, "curl_metadata"), report
     assert _failed(results, "curl_private_resolve"), report
+
+
+DISABLED_PROBE_SOURCE = r"""
+import json
+import os
+import socket
+import subprocess
+import sys
+from pathlib import Path
+
+net = dict(
+    line.split("=", 1)
+    for line in Path("/workspace/.apipi/net").read_text().split()
+    if "=" in line
+)
+gateway = net.get("GUEST_GW", "").strip("'")
+results = {}
+curl = ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "15"]
+
+
+def run(name, argv):
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=40)
+    results[name] = {"rc": done.returncode, "out": done.stdout, "err": done.stderr}
+
+
+def check(name, func):
+    try:
+        results[name] = {"rc": 0, "out": str(func()), "err": ""}
+    except Exception as exc:
+        results[name] = {"rc": 1, "out": "", "err": repr(exc)}
+
+
+def dns_query():
+    query = bytes.fromhex("123401000001000000000000076578616d706c6503636f6d0000010001")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+        udp.settimeout(5)
+        udp.sendto(query, ("1.1.1.1", 53))
+        return udp.recv(512).hex()
+
+
+def tcp(host, port):
+    with socket.create_connection((host, port), timeout=8):
+        return "connected"
+
+
+run("curl_public", [*curl, "https://example.com/"])
+run("curl_ip_literal", [*curl, "https://1.1.1.1/"])
+check("dns_direct", dns_query)
+check("tcp_dns_direct", lambda: tcp("1.1.1.1", 53))
+check("tcp_host_other_port", lambda: tcp(gateway, 22))
+run("curl_broker", [*curl, os.environ["OPENAI_BASE_URL"] + "/models"])
+print(json.dumps({"type": "egress_probe", "results": results}), flush=True)
+sys.stdin.read()
+"""
+
+
+async def test_disabled_guest_reaches_only_the_broker(
+    tmp_path: Path, workspace: Path
+) -> None:
+    settings = _settings(tmp_path)
+    (workspace / "egress_probe.py").write_text(DISABLED_PROBE_SOURCE)
+    write_network_policy(workspace, NetworkPolicy(access="disabled"))
+    proc = await spawn_microvm_pi(settings, cwd=str(workspace), tools=True)
+    try:
+        results = await _probe(proc)
+    finally:
+        await proc.terminate()
+    report = json.dumps(results, indent=2)
+    assert _failed(results, "curl_public"), report
+    assert _failed(results, "curl_ip_literal"), report
+    assert _failed(results, "dns_direct"), report
+    assert _failed(results, "tcp_dns_direct"), report
+    assert _failed(results, "tcp_host_other_port"), report
+    assert results["curl_broker"]["rc"] == 0, report
