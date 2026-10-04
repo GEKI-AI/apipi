@@ -10,8 +10,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-CA_VALIDITY = datetime.timedelta(days=30)
-CA_RENEW_BEFORE = datetime.timedelta(days=7)
+CA_VALIDITY = datetime.timedelta(days=365)
 LEAF_CACHE_SIZE = 1024
 CA_NAME = "ApiPi worker egress CA"
 INTERCEPT_ALPN = ("http/1.1",)
@@ -96,9 +95,6 @@ class WorkerCA:
         self._leaves: OrderedDict[str, ssl.SSLContext] = OrderedDict()
         self._lock = threading.Lock()
 
-    def expires_within(self, window: datetime.timedelta) -> bool:
-        return self.not_after - _now() <= window
-
     def leaf_pem(self, host: str) -> bytes:
         now = _now()
         key = ec.generate_private_key(ec.SECP256R1())
@@ -168,6 +164,6 @@ _current_lock = threading.Lock()
 def worker_ca() -> WorkerCA:
     global _current
     with _current_lock:
-        if _current is None or _current.expires_within(CA_RENEW_BEFORE):
+        if _current is None:
             _current = WorkerCA()
         return _current

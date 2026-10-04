@@ -328,8 +328,13 @@ async def run_worker(
         )
     metrics, tracing = worker_observability(settings)
     if settings.run_mode == "microvm":
-        from apipi.worker.egress import set_egress_metrics, worker_ca
+        from apipi.worker.egress import (
+            raise_nofile_limit,
+            set_egress_metrics,
+            worker_ca,
+        )
 
+        raise_nofile_limit()
         set_egress_metrics(metrics)
         worker_ca()
     # A split worker holds no database and no object-store credentials.

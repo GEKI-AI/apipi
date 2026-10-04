@@ -6,6 +6,7 @@ import ssl
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 import h11
 
@@ -18,10 +19,13 @@ from apipi.worker.egress.sockets import (
     close_writer,
     open_upstream,
 )
-from apipi.worker.egress.splice import ByteCount, splice
+from apipi.worker.egress.splice import IDLE_TIMEOUT, ByteCount, splice, watch_idle
 
 HANDSHAKE_TIMEOUT = 10.0
 MAX_HEAD_BYTES = 65536
+HOP_BY_HOP = frozenset(
+    {"connection", "keep-alive", "te", "trailer", "upgrade", "proxy-connection"}
+)
 
 Headers = tuple[tuple[str, str], ...]
 
@@ -100,23 +104,71 @@ def _wire(headers: Headers) -> list[tuple[bytes, bytes]]:
     return [(_raw(name), _raw(value)) for name, value in headers]
 
 
+def _tokens(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    return {item.strip().lower() for item in value.split(",") if item.strip()}
+
+
 async def _resolved(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
     return value
 
 
-def host_matches(head: RequestHead) -> bool:
-    value = head.header("host")
-    if value is None:
-        return False
+def _same_host(value: str, host: str, port: int) -> bool:
     try:
-        name, port = split_host_port(value)
+        name, given = split_host_port(value)
     except ValueError:
         return False
-    if norm_host(name) != norm_host(head.host):
+    if norm_host(name) != norm_host(host):
         return False
-    return port is None or port == head.port
+    return given is None or given == port
+
+
+def host_matches(head: RequestHead) -> bool:
+    values = [value for name, value in head.headers if name.lower() == "host"]
+    if len(values) != 1:
+        return False
+    return _same_host(values[0], head.host, head.port)
+
+
+def target_matches(head: RequestHead, scheme: str) -> bool:
+    if head.target.startswith("/") or head.target == "*":
+        return True
+    try:
+        parts = urlsplit(head.target)
+    except ValueError:
+        return False
+    if parts.scheme.lower() != scheme or not parts.netloc or "@" in parts.netloc:
+        return False
+    return _same_host(parts.netloc, head.host, head.port)
+
+
+def strip_hop_by_hop(head: RequestHead) -> RequestHead:
+    connection: set[str] = set()
+    upgrade: set[str] = set()
+    for name, value in head.headers:
+        key = name.lower()
+        if key == "connection":
+            connection |= _tokens(value)
+        elif key == "upgrade":
+            upgrade |= _tokens(value)
+    dropped = HOP_BY_HOP | connection
+    headers = tuple(
+        (name, value)
+        for name, value in head.headers
+        if name.lower() not in dropped and not name.lower().startswith("proxy-")
+    )
+    if "upgrade" in connection and "websocket" in upgrade:
+        headers = (*headers, ("Connection", "Upgrade"), ("Upgrade", "websocket"))
+    return RequestHead(
+        method=head.method,
+        target=head.target,
+        headers=headers,
+        host=head.host,
+        port=head.port,
+    )
 
 
 class _Side:
@@ -125,12 +177,15 @@ class _Side:
         conn: h11.Connection,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
-        count: ByteCount | None = None,
+        count: ByteCount,
+        *,
+        guest: bool,
     ) -> None:
         self.conn = conn
         self.reader = reader
         self.writer = writer
         self.count = count
+        self.guest = guest
 
     async def next_event(self) -> Any:
         while True:
@@ -138,7 +193,8 @@ class _Side:
             if event is not h11.NEED_DATA:
                 return event
             data = await self.reader.read(CHUNK)
-            if self.count is not None:
+            self.count.touch()
+            if self.guest:
                 self.count.up += len(data)
             self.conn.receive_data(data)
 
@@ -147,7 +203,8 @@ class _Side:
         if not data:
             return
         self.writer.write(data)
-        if self.count is not None:
+        self.count.touch()
+        if self.guest:
             self.count.down += len(data)
         await self.writer.drain()
 
@@ -160,19 +217,24 @@ class Interceptor:
         port: int,
         addresses: list[str],
         hooks: EgressHooks,
-        upstream: ssl.SSLContext,
+        upstream: ssl.SSLContext | None,
         count: ByteCount,
+        idle_timeout: float = IDLE_TIMEOUT,
     ) -> None:
         self.host = host
         self.port = port
         self.addresses = addresses
         self.hooks = hooks
         self.upstream_context = upstream
+        self.scheme = "https" if upstream is not None else "http"
         self.count = count
+        self.idle_timeout = idle_timeout
         self.guest: _Side | None = None
         self.server: _Side | None = None
 
-    async def run(self, sock: socket.socket, server_context: ssl.SSLContext) -> str:
+    async def run(
+        self, sock: socket.socket, server_context: ssl.SSLContext | None
+    ) -> str:
         try:
             reader, writer = await accept_stream(
                 sock, ssl_context=server_context, handshake_timeout=HANDSHAKE_TIMEOUT
@@ -181,13 +243,22 @@ class Interceptor:
             sock.close()
             return "client_tls"
         conn = h11.Connection(h11.SERVER, max_incomplete_event_size=MAX_HEAD_BYTES)
-        self.guest = _Side(conn, reader, writer, self.count)
+        self.guest = _Side(conn, reader, writer, self.count, guest=True)
+        watch = asyncio.create_task(
+            watch_idle(self.count, self.idle_timeout, self._abort)
+        )
         try:
             return await self._serve()
         finally:
+            watch.cancel()
             if self.server is not None:
                 await close_writer(self.server.writer)
             await close_writer(writer)
+
+    def _abort(self) -> None:
+        for side in (self.guest, self.server):
+            if side is not None:
+                side.writer.transport.abort()
 
     async def _serve(self) -> str:
         guest = self.guest
@@ -244,12 +315,17 @@ class Interceptor:
             host=self.host,
             port=self.port,
         )
-        if head.method == "CONNECT":
+        if head.method.upper() == "CONNECT":
             raise InterceptError("connect_method", 405)
-        if not (head.target.startswith("/") or head.target == "*"):
+        if not target_matches(head, self.scheme):
             raise InterceptError("bad_target", 400)
         if not host_matches(head):
             raise InterceptError("host_mismatch", 421)
+        if head.header("content-length") is not None and head.header(
+            "transfer-encoding"
+        ):
+            raise InterceptError("ambiguous_length", 400)
+        head = strip_hop_by_hop(head)
         for hook in self.hooks.request:
             try:
                 result = await _resolved(hook(head))
@@ -259,7 +335,7 @@ class Interceptor:
                 raise InterceptError(result.reason, result.status)
             if isinstance(result, RequestHead):
                 head = result
-        if not host_matches(head):
+        if not host_matches(head) or not target_matches(head, self.scheme):
             raise InterceptError("host_mismatch", 421)
         return head
 
@@ -275,7 +351,9 @@ class Interceptor:
             )
         except UpstreamError as exc:
             raise InterceptError(exc.reason, 502) from exc
-        self.server = _Side(h11.Connection(h11.CLIENT), reader, writer)
+        self.server = _Side(
+            h11.Connection(h11.CLIENT), reader, writer, self.count, guest=False
+        )
         return self.server
 
     async def _exchange(self, event: h11.Request) -> bool:
@@ -387,7 +465,12 @@ class Interceptor:
             self.count.down += len(to_guest)
         self.server = None
         await splice(
-            guest.reader, guest.writer, server.reader, server.writer, self.count
+            guest.reader,
+            guest.writer,
+            server.reader,
+            server.writer,
+            self.count,
+            idle_timeout=self.idle_timeout,
         )
 
     async def _error(self, status: int) -> None:
@@ -416,10 +499,11 @@ async def intercept(
     host: str,
     port: int,
     addresses: list[str],
-    server_context: ssl.SSLContext,
-    upstream: ssl.SSLContext,
+    server_context: ssl.SSLContext | None,
+    upstream: ssl.SSLContext | None,
     hooks: EgressHooks,
     count: ByteCount,
+    idle_timeout: float = IDLE_TIMEOUT,
 ) -> str:
     interceptor = Interceptor(
         host=host,
@@ -428,5 +512,6 @@ async def intercept(
         hooks=hooks,
         upstream=upstream,
         count=count,
+        idle_timeout=idle_timeout,
     )
     return await interceptor.run(sock, server_context)

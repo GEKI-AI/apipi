@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import os
 import socket
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
@@ -13,6 +14,10 @@ RCODE_FORMERR = 1
 RCODE_SERVFAIL = 2
 RCODE_NXDOMAIN = 3
 RCODE_NOTIMP = 4
+CLASS_IN = 1
+NODATA_TYPES = frozenset({64, 65})
+MAX_UDP_INFLIGHT = 64
+MAX_TCP_CLIENTS = 16
 
 Upstream = tuple[str, int]
 
@@ -25,6 +30,7 @@ class DnsFormatError(ValueError):
 class Question:
     name: str
     qtype: int
+    qclass: int
     end: int
 
 
@@ -48,9 +54,12 @@ def parse_question(packet: bytes) -> Question:
         if len(label) != size:
             raise DnsFormatError("truncated DNS name")
         try:
-            labels.append(label.decode("ascii").lower())
+            text = label.decode("ascii").lower()
         except UnicodeDecodeError as exc:
             raise DnsFormatError("DNS name is not ASCII") from exc
+        if "." in text:
+            raise DnsFormatError("DNS label contains a dot")
+        labels.append(text)
         pos += size
     if pos + 4 > len(packet):
         raise DnsFormatError("truncated DNS question")
@@ -58,7 +67,23 @@ def parse_question(packet: bytes) -> Question:
     if len(name) > 253:
         raise DnsFormatError("DNS name is too long")
     qtype = int.from_bytes(packet[pos : pos + 2], "big")
-    return Question(name=name, qtype=qtype, end=pos + 4)
+    qclass = int.from_bytes(packet[pos + 2 : pos + 4], "big")
+    return Question(name=name, qtype=qtype, qclass=qclass, end=pos + 4)
+
+
+def build_query(question: Question, ident: bytes) -> bytes:
+    name = b"".join(
+        len(label).to_bytes(1, "big") + label.encode("ascii")
+        for label in question.name.split(".")
+    )
+    return (
+        ident
+        + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+        + name
+        + b"\x00"
+        + question.qtype.to_bytes(2, "big")
+        + question.qclass.to_bytes(2, "big")
+    )
 
 
 def error_reply(query: bytes, rcode: int, question_end: int | None = None) -> bytes:
@@ -86,10 +111,16 @@ class _UdpProtocol(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        if self.owner.udp_inflight >= MAX_UDP_INFLIGHT:
+            return
+        self.owner.udp_inflight += 1
         self.owner.spawn(self._reply(data, addr))
 
     async def _reply(self, data: bytes, addr: tuple[str, int]) -> None:
-        answer = await self.owner.answer(data, tcp=False)
+        try:
+            answer = await self.owner.answer(data, tcp=False)
+        finally:
+            self.owner.udp_inflight -= 1
         if answer is not None and self.transport is not None:
             self.transport.sendto(answer, addr)
 
@@ -125,6 +156,8 @@ class DnsFilter:
         self.freebind = freebind
         self.udp_port = 0
         self.tcp_port = 0
+        self.udp_inflight = 0
+        self.tcp_clients = 0
         self._udp: asyncio.DatagramTransport | None = None
         self._tcp: asyncio.Server | None = None
         self._tasks: set[asyncio.Task[None]] = set()
@@ -178,15 +211,24 @@ class DnsFilter:
             question = parse_question(query)
         except DnsFormatError:
             return error_reply(query, RCODE_FORMERR)
+        if question.qclass != CLASS_IN:
+            return error_reply(query, RCODE_NOTIMP, question.end)
         if not question.name or not self.allow(question.name):
             return error_reply(query, RCODE_NXDOMAIN, question.end)
+        if question.qtype in NODATA_TYPES:
+            return error_reply(query, 0, question.end)
+        outgoing = build_query(question, os.urandom(2))
         for upstream in self.upstreams:
             try:
                 if tcp:
-                    return await self._forward_tcp(query, upstream)
-                return await self._forward_udp(query, upstream)
+                    reply = await self._forward_tcp(outgoing, upstream)
+                else:
+                    reply = await self._forward_udp(outgoing, upstream)
             except (OSError, TimeoutError, asyncio.IncompleteReadError):
                 continue
+            if reply[:2] != outgoing[:2] or len(reply) < 12:
+                continue
+            return query[:2] + reply[2:]
         return error_reply(query, RCODE_SERVFAIL, question.end)
 
     async def _forward_udp(self, query: bytes, upstream: Upstream) -> bytes:
@@ -220,6 +262,10 @@ class DnsFilter:
     async def _serve_tcp(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        if self.tcp_clients >= MAX_TCP_CLIENTS:
+            writer.transport.abort()
+            return
+        self.tcp_clients += 1
         try:
             while True:
                 head = await asyncio.wait_for(reader.readexactly(2), timeout=TCP_IDLE)
@@ -235,4 +281,5 @@ class DnsFilter:
         except (OSError, TimeoutError, asyncio.IncompleteReadError):
             return
         finally:
+            self.tcp_clients -= 1
             await close_writer(writer)

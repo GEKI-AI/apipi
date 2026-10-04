@@ -6,6 +6,7 @@ from apipi.worker.egress.policy import (
     Decision,
     EgressPolicy,
     split_host_port,
+    valid_hostname,
 )
 from apipi.worker.egress.resolve import (
     BLOCKED_EGRESS_CIDRS,
@@ -56,6 +57,31 @@ def test_intercept_set() -> None:
     assert enabled.with_intercept([]).decide("git.example.com", 443) == Decision(
         "splice"
     )
+
+
+def test_private_hosts_only_for_named_hosts() -> None:
+    restricted = EgressPolicy.build(
+        "restricted", allowed_hosts=("git.internal",), private_hosts=("git.internal",)
+    )
+    assert restricted.private_allowed("Git.Internal")
+    assert not restricted.private_allowed("other.internal")
+    assert not restricted.private_allowed("10.1.2.3")
+    assert not restricted.private_allowed(None)
+    enabled = EgressPolicy.build("enabled", private_hosts=("git.internal",))
+    assert not enabled.private_allowed("git.internal")
+    assert enabled.with_intercept(["git.internal"]).private_allowed("git.internal")
+
+
+def test_hostnames_are_validated() -> None:
+    assert valid_hostname("api.example.com")
+    assert valid_hostname("_dmarc.example.com")
+    assert not valid_hostname("a" * 64 + ".example.com")
+    assert not valid_hostname("bad host.example")
+    assert not valid_hostname("-lead.example")
+    assert not valid_hostname("x." * 130 + "com")
+    policy = EgressPolicy.build("enabled")
+    assert policy.decide("a" * 64 + ".example", 443) == Decision("reject", "bad_host")
+    assert policy.decide("ex\u00e4mple.com", 443) == Decision("reject", "bad_host")
 
 
 def test_unknown_mode() -> None:
@@ -134,10 +160,23 @@ async def test_resolve_private_hosts_by_name_and_cidr() -> None:
     assert await resolve_upstream(
         "net.internal", 443, private_hosts=private, resolve=resolve
     ) == ["192.168.7.7"]
-    assert await resolve_upstream(
-        "192.168.7.8", 443, private_hosts=private, resolve=resolve
-    ) == ["192.168.7.8"]
+    with pytest.raises(EgressBlocked):
+        await resolve_upstream(
+            "192.168.7.8", 443, private_hosts=private, resolve=resolve
+        )
     with pytest.raises(EgressBlocked):
         await resolve_upstream(
             "other.internal", 443, private_hosts=private, resolve=resolve
         )
+
+
+async def test_resolve_maps_bad_names_to_resolve_failed() -> None:
+    async def broken(host: str, _port: int) -> list[str]:
+        raise UnicodeError("label too long")
+
+    with pytest.raises(EgressBlocked) as err:
+        await resolve_upstream("a" * 64 + ".example", 443, resolve=broken)
+    assert err.value.reason == "resolve_failed"
+    with pytest.raises(EgressBlocked) as err:
+        await resolve_upstream("a" * 64 + ".example", 443)
+    assert err.value.reason == "resolve_failed"

@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import errno
 import logging
 import socket
 import ssl
@@ -26,6 +27,8 @@ from apipi.worker.egress import (
     WorkerCA,
     start_gateway,
 )
+from apipi.worker.egress import gateway as gateway_module
+from apipi.worker.egress.resolve import address_blocked
 
 HOST = "allowed.test"
 
@@ -44,6 +47,7 @@ class Upstream:
     ca: WorkerCA
     tls: bool = True
     mode: str = "http"
+    bind: str = "127.0.0.1"
     port: int = 0
     seen: list[Seen] = field(default_factory=list)
     connections: int = 0
@@ -52,7 +56,7 @@ class Upstream:
     async def start(self) -> None:
         context = self.ca.server_context(HOST) if self.tls else None
         self._server = await asyncio.start_server(
-            self._serve, "127.0.0.1", 0, ssl=context, limit=1 << 17
+            self._serve, self.bind, 0, ssl=context, limit=1 << 17
         )
         self.port = int(self._server.sockets[0].getsockname()[1])
 
@@ -70,7 +74,7 @@ class Upstream:
                 self.seen.append(Seen("GET", "/ws", [], head, "1.1"))
                 writer.write(
                     b"HTTP/1.1 101 Switching Protocols\r\n"
-                    b"Upgrade: echo\r\nConnection: Upgrade\r\n\r\nready"
+                    b"Upgrade: websocket\r\nConnection: Upgrade\r\n\r\nready"
                 )
             if self.mode in ("echo", "upgrade"):
                 while data := await reader.read(65536):
@@ -164,6 +168,10 @@ def resolver(table: dict[str, list[str]]) -> Callable[[str, int], Awaitable[list
     return resolve
 
 
+def loopback_allowed_blocked(address: str) -> bool:
+    return address != "127.0.0.1" and address_blocked(address)
+
+
 @dataclass
 class Env:
     tmp: Path
@@ -173,8 +181,10 @@ class Env:
     gateways: list[EgressGateway] = field(default_factory=list)
     upstreams: list[Upstream] = field(default_factory=list)
 
-    async def upstream(self, *, tls: bool = True, mode: str = "http") -> Upstream:
-        server = Upstream(self.upstream_ca, tls=tls, mode=mode)
+    async def upstream(
+        self, *, tls: bool = True, mode: str = "http", bind: str = "127.0.0.1"
+    ) -> Upstream:
+        server = Upstream(self.upstream_ca, tls=tls, mode=mode, bind=bind)
         await server.start()
         self.upstreams.append(server)
         return server
@@ -186,7 +196,7 @@ class Env:
         port: int,
         allowed: tuple[str, ...] = (HOST,),
         intercept: tuple[str, ...] = (),
-        private: tuple[str, ...] = ("127.0.0.1/32",),
+        private: tuple[str, ...] = (),
         dest: tuple[str, int] | None = None,
         table: dict[str, list[str]] | None = None,
         http: bool = False,
@@ -194,6 +204,8 @@ class Env:
         metrics: Metrics | None = None,
         upstream_ca: bool = True,
         peek_timeout: float = 2.0,
+        idle_timeout: float = 300.0,
+        max_connections: int = 128,
     ) -> EgressGateway:
         policy = EgressPolicy.build(
             cast(EgressMode, mode),
@@ -211,10 +223,13 @@ class Env:
             hooks=hooks,
             resolve=resolver(table if table is not None else {HOST: ["127.0.0.1"]}),
             original_dst=lambda _sock: target,
+            blocked=loopback_allowed_blocked,
             metrics=metrics,
             tls_ports=frozenset() if http else frozenset({port}),
             http_ports=frozenset({port}) if http else frozenset(),
             peek_timeout=peek_timeout,
+            idle_timeout=idle_timeout,
+            max_connections=max_connections,
         )
         await gateway.start()
         self.gateways.append(gateway)
@@ -423,10 +438,7 @@ async def test_restricted_rejects_other_hosts_ip_literals_and_no_sni(
     )
 
 
-async def test_gateway_connects_to_its_own_resolution(
-    env: Env, caplog: pytest.LogCaptureFixture
-) -> None:
-    caplog.set_level(logging.INFO, logger="apipi.egress")
+async def test_restricted_connects_to_its_own_resolution(env: Env) -> None:
     upstream = await env.upstream(mode="echo")
     gateway = await env.gateway(
         "restricted", port=upstream.port, dest=("203.0.113.66", upstream.port)
@@ -439,34 +451,89 @@ async def test_gateway_connects_to_its_own_resolution(
     assert upstream.connections == 1
 
 
+async def test_enabled_splice_uses_original_destination(env: Env) -> None:
+    upstream = await env.upstream(mode="echo")
+    gateway = await env.gateway(
+        "enabled",
+        port=upstream.port,
+        dest=("127.0.0.1", upstream.port),
+        table={HOST: ["93.184.216.34"]},
+    )
+    reader, writer = await tls_connect(gateway, trust(env.upstream_ca))
+    writer.write(b"y")
+    await writer.drain()
+    assert await reader.readexactly(1) == b"y"
+    await close(writer)
+    assert upstream.connections == 1
+
+
 async def test_private_address_rejected_in_every_mode(
     env: Env, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="apipi.egress")
     upstream = await env.upstream(mode="echo")
-    for mode in ("enabled", "restricted"):
-        gateway = await env.gateway(mode, port=upstream.port, private=())
-        await assert_rejected(gateway, trust(env.upstream_ca))
-        await wait_record(caplog, decision="rejected", reason="private_address")
-        caplog.clear()
+    restricted = await env.gateway(
+        "restricted", port=upstream.port, table={HOST: ["10.0.0.5"]}
+    )
+    await assert_rejected(restricted, trust(env.upstream_ca))
+    await wait_record(caplog, decision="rejected", reason="private_address")
+    caplog.clear()
+    enabled = await env.gateway(
+        "enabled", port=upstream.port, dest=("10.0.0.5", upstream.port)
+    )
+    await assert_rejected(enabled, trust(env.upstream_ca))
+    await wait_record(caplog, decision="rejected", reason="private_address")
+    caplog.clear()
     disabled = await env.gateway("disabled", port=upstream.port)
     await assert_rejected(disabled, trust(env.upstream_ca))
     await wait_record(caplog, decision="rejected", reason="disabled")
     assert upstream.connections == 0
 
 
-async def test_private_hosts_allow_named_upstream(env: Env) -> None:
-    upstream = await env.upstream(mode="echo")
-    gateway = await env.gateway("restricted", port=upstream.port, private=(HOST,))
+async def test_private_hosts_only_for_hosts_the_session_names(env: Env) -> None:
+    upstream = await env.upstream(mode="echo", bind="127.0.0.2")
+    table = {HOST: ["127.0.0.2"]}
+    gateway = await env.gateway(
+        "restricted", port=upstream.port, private=(HOST,), table=table
+    )
     reader, writer = await tls_connect(gateway, trust(env.upstream_ca))
     writer.write(b"forgejo")
     await writer.drain()
     assert await reader.readexactly(7) == b"forgejo"
     await close(writer)
     other = await env.gateway(
-        "restricted", port=upstream.port, private=("forgejo.internal",)
+        "restricted", port=upstream.port, private=("forgejo.internal",), table=table
     )
     await assert_rejected(other, trust(env.upstream_ca))
+    cidr = await env.gateway(
+        "enabled",
+        port=upstream.port,
+        private=("127.0.0.2/32", HOST),
+        dest=("127.0.0.2", upstream.port),
+        table=table,
+    )
+    await assert_rejected(cidr, trust(env.upstream_ca))
+    loose = ssl.create_default_context()
+    loose.check_hostname = False
+    loose.verify_mode = ssl.CERT_NONE
+    await assert_rejected(cidr, loose, None)
+    assert upstream.connections == 1
+
+
+async def test_private_host_reachable_when_intercepted_in_enabled(env: Env) -> None:
+    upstream = await env.upstream(bind="127.0.0.2")
+    gateway = await env.gateway(
+        "enabled",
+        port=upstream.port,
+        private=(HOST,),
+        intercept=(HOST,),
+        table={HOST: ["127.0.0.2"]},
+    )
+    reader, writer = await tls_connect(gateway, trust(env.worker_ca))
+    status, _, _ = await HttpClient(reader, writer).request("GET", "/repo.git")
+    assert status == 200
+    await close(writer)
+    assert upstream.seen[0].target == "/repo.git"
 
 
 async def test_enabled_splices_ip_literal_and_no_sni_to_original_destination(
@@ -487,6 +554,24 @@ async def test_enabled_splices_ip_literal_and_no_sni_to_original_destination(
     await close(writer)
     record = await wait_record(caplog, decision="spliced")
     assert "host" not in record
+
+
+async def test_bad_server_name_is_rejected_without_traceback(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.egress")
+    upstream = await env.upstream(mode="echo")
+    for mode in ("restricted", "enabled"):
+        gateway = await env.gateway(mode, port=upstream.port)
+        reader, writer = await asyncio.open_connection("127.0.0.1", gateway.port)
+        writer.write(handmade_hello("a" * 64 + ".example"))
+        await writer.drain()
+        with contextlib.suppress(ConnectionError):
+            assert await asyncio.wait_for(reader.read(), timeout=5) == b""
+        await close(writer)
+        await wait_record(caplog, decision="rejected", reason="bad_host")
+        caplog.clear()
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
 async def test_other_ports_rejected(env: Env, caplog: pytest.LogCaptureFixture) -> None:
@@ -516,8 +601,10 @@ async def test_plain_http_checks_host_header(
     status, _, body = await client.request("GET", "/plain")
     assert status == 200
     assert body == b"hello GET /plain 0"
+    status, _, body = await client.request("GET", "/again")
+    assert body == b"hello GET /again 0"
     await close(writer)
-    await wait_record(caplog, decision="spliced", host=HOST)
+    await wait_record(caplog, decision="intercepted", host=HOST)
     reader, writer = await asyncio.open_connection("127.0.0.1", gateway.port)
     status, _, body = await HttpClient(reader, writer).request(
         "GET", "/", host="other.test"
@@ -530,7 +617,163 @@ async def test_plain_http_checks_host_header(
     assert status == 403
     await close(writer)
     await wait_record(caplog, decision="rejected", reason="ip_literal")
-    assert len(upstream.seen) == 1
+    assert [seen.target for seen in upstream.seen] == ["/plain", "/again"]
+
+
+async def raw_exchange(port: int, data: bytes) -> bytes:
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(data)
+    await writer.drain()
+    try:
+        return await asyncio.wait_for(reader.read(), timeout=5)
+    except ConnectionError:
+        return b""
+    finally:
+        await close(writer)
+
+
+async def test_plain_http_checks_every_request_in_restricted(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.egress")
+    upstream = await env.upstream(tls=False)
+    gateway = await env.gateway("restricted", port=upstream.port, http=True)
+    pipelined = (
+        f"GET /one HTTP/1.1\r\nHost: {HOST}\r\n\r\n"
+        "GET /two HTTP/1.1\r\nHost: evil.test\r\n\r\n"
+    ).encode()
+    reply = await raw_exchange(gateway.port, pipelined)
+    assert b"hello GET /one 0" in reply
+    assert b" 421 " in reply
+    await wait_record(caplog, decision="intercepted", reason="host_mismatch")
+    absolute = f"GET http://evil.test/ HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode()
+    assert b" 400 " in await raw_exchange(gateway.port, absolute)
+    matching = (
+        f"GET http://{HOST}/abs HTTP/1.1\r\nHost: {HOST}\r\nConnection: close\r\n\r\n"
+    ).encode()
+    assert b"hello GET http://" in await raw_exchange(gateway.port, matching)
+    connect = f"CONNECT evil.test:443 HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode()
+    assert b" 405 " in await raw_exchange(gateway.port, connect)
+    targets = [seen.target for seen in upstream.seen]
+    assert targets == ["/one", f"http://{HOST}/abs"]
+
+
+async def test_plain_http_is_spliced_in_enabled(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.egress")
+    upstream = await env.upstream(tls=False)
+    gateway = await env.gateway(
+        "enabled", port=upstream.port, http=True, dest=("127.0.0.1", upstream.port)
+    )
+    reader, writer = await asyncio.open_connection("127.0.0.1", gateway.port)
+    status, _, _ = await HttpClient(reader, writer).request("GET", "/open")
+    assert status == 200
+    await close(writer)
+    await wait_record(caplog, decision="spliced", host=HOST)
+
+
+async def test_intercept_rejects_ambiguous_length_and_strips_hop_headers(
+    env: Env,
+) -> None:
+    upstream = await env.upstream()
+    gateway = await env.gateway("restricted", port=upstream.port, intercept=(HOST,))
+    reader, writer = await tls_connect(gateway, trust(env.worker_ca))
+    writer.write(
+        (
+            f"POST /x HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: 5\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+        ).encode()
+    )
+    await writer.drain()
+    reply = await asyncio.wait_for(reader.read(), timeout=5)
+    assert reply.startswith(b"HTTP/1.1 400")
+    await close(writer)
+    assert upstream.seen == []
+    reader, writer = await tls_connect(gateway, trust(env.worker_ca))
+    status, _, _ = await HttpClient(reader, writer).request(
+        "GET",
+        "/hop",
+        headers=[
+            ("Connection", "X-Drop"),
+            ("X-Drop", "1"),
+            ("Keep-Alive", "timeout=5"),
+            ("TE", "trailers"),
+            ("Proxy-Authorization", "Basic abc"),
+            ("Upgrade", "h2c"),
+            ("X-Keep", "1"),
+        ],
+    )
+    assert status == 200
+    await close(writer)
+    names = {name.lower() for name, _ in upstream.seen[0].headers}
+    assert "x-keep" in names
+    for name in ("connection", "x-drop", "keep-alive", "te", "upgrade"):
+        assert name not in names
+    assert "proxy-authorization" not in names
+
+
+async def test_idle_connections_are_closed(env: Env) -> None:
+    upstream = await env.upstream(mode="echo")
+    gateway = await env.gateway("restricted", port=upstream.port, idle_timeout=0.3)
+    reader, writer = await tls_connect(gateway, trust(env.upstream_ca))
+    writer.write(b"a")
+    await writer.drain()
+    assert await reader.readexactly(1) == b"a"
+    with contextlib.suppress(ConnectionError, ssl.SSLError):
+        assert await asyncio.wait_for(reader.read(), timeout=5) == b""
+    await close(writer)
+    intercepted = await env.gateway(
+        "restricted", port=upstream.port, intercept=(HOST,), idle_timeout=0.3
+    )
+    reader, writer = await tls_connect(intercepted, trust(env.worker_ca))
+    with contextlib.suppress(ConnectionError, ssl.SSLError):
+        assert await asyncio.wait_for(reader.read(), timeout=5) == b""
+    await close(writer)
+
+
+async def test_connection_cap_per_gateway(env: Env) -> None:
+    upstream = await env.upstream(mode="echo")
+    gateway = await env.gateway("restricted", port=upstream.port, max_connections=1)
+    reader, writer = await tls_connect(gateway, trust(env.upstream_ca))
+    writer.write(b"a")
+    await writer.drain()
+    assert await reader.readexactly(1) == b"a"
+    await assert_rejected(gateway, trust(env.upstream_ca))
+    await close(writer)
+
+
+async def test_accept_backs_off_when_out_of_files(
+    env: Env, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.egress")
+    monkeypatch.setattr(gateway_module, "ACCEPT_BACKOFF", 0.05)
+    monkeypatch.setattr(gateway_module, "_last_warning", 0.0)
+    upstream = await env.upstream(mode="echo")
+    gateway = await env.gateway("restricted", port=upstream.port)
+    listener = gateway._listener
+    assert listener is not None
+    loop = asyncio.get_running_loop()
+    error = OSError(errno.EMFILE, "Too many open files")
+    gateway._backoff(error)
+    assert loop.remove_reader(listener.fileno()) is False
+    first = gateway._rearm
+    assert first is not None
+    first.cancel()
+    gateway._backoff(error)
+    assert gateway._rearm is not None
+    warnings = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("event") == "egress.accept.failed"
+    ]
+    assert len(warnings) == 1
+    await asyncio.sleep(0.2)
+    reader, writer = await tls_connect(gateway, trust(env.upstream_ca))
+    writer.write(b"b")
+    await writer.drain()
+    assert await reader.readexactly(1) == b"b"
+    await close(writer)
 
 
 async def test_intercept_terminates_tls_and_forwards_http11(
@@ -578,12 +821,12 @@ async def test_intercept_terminates_tls_and_forwards_http11(
         assert "abc" not in str(item.__dict__.values())
 
 
-async def test_intercept_passes_protocol_upgrade(env: Env) -> None:
+async def test_intercept_passes_websocket_upgrade(env: Env) -> None:
     upstream = await env.upstream(mode="upgrade")
     gateway = await env.gateway("restricted", port=upstream.port, intercept=(HOST,))
     reader, writer = await tls_connect(gateway, trust(env.worker_ca))
     writer.write(
-        f"GET /ws HTTP/1.1\r\nHost: {HOST}\r\nUpgrade: echo\r\n"
+        f"GET /ws HTTP/1.1\r\nHost: {HOST}\r\nUpgrade: websocket\r\n"
         "Connection: Upgrade\r\n\r\n".encode()
     )
     await writer.drain()
@@ -594,7 +837,7 @@ async def test_intercept_passes_protocol_upgrade(env: Env) -> None:
     await writer.drain()
     assert await asyncio.wait_for(reader.readexactly(5), timeout=5) == b"frame"
     await close(writer)
-    assert b"upgrade: echo" in upstream.seen[0].body.lower()
+    assert b"upgrade: websocket" in upstream.seen[0].body.lower()
 
 
 async def test_intercept_requires_host_to_match_sni(
@@ -788,3 +1031,28 @@ async def test_throughput_spliced_and_intercepted(env: Env) -> None:
     )
     assert splice_rate >= 50
     assert intercept_rate >= 50
+
+
+async def test_worker_wide_connection_cap(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream = await env.upstream(mode="echo")
+    gateway = await env.gateway("restricted", port=upstream.port)
+    monkeypatch.setattr(gateway_module, "worker_connection_limit", lambda: 0)
+    await assert_rejected(gateway, trust(env.upstream_ca))
+    assert upstream.connections == 0
+
+
+def test_nofile_limit_is_raised_to_hard(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        gateway_module.resource, "getrlimit", lambda _kind: (1024, 524288)
+    )
+    monkeypatch.setattr(
+        gateway_module.resource,
+        "setrlimit",
+        lambda _kind, limits: calls.append(limits),
+    )
+    assert gateway_module.raise_nofile_limit() == 524288
+    assert calls == [(524288, 524288)]
+    assert gateway_module.worker_connection_limit() == 170

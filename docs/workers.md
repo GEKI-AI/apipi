@@ -616,10 +616,8 @@ What is still lost, exactly:
 
 The egress gateway certificate authority lives only in worker memory,
 so a restart creates a new one. No guest outlives the authority it
-trusts, because the restart ended those guests. A worker that runs for
-weeks makes a new authority for new guests a week before the old one
-expires (it is valid for 30 days). Running guests keep the gateway and
-authority they started with.
+trusts, because the restart ended those guests. The authority is valid
+for one year, and nothing is stored or rotated.
 
 ## Keepalive and reconnect
 

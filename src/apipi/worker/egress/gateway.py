@@ -1,8 +1,11 @@
 import asyncio
 import contextlib
+import errno
 import logging
+import resource
 import socket
 import struct
+import time
 from collections.abc import Callable, Iterable
 
 import h11
@@ -20,8 +23,11 @@ from apipi.worker.egress.intercept import (
 )
 from apipi.worker.egress.policy import EgressPolicy, norm_host, split_host_port
 from apipi.worker.egress.resolve import (
+    Blocked,
     EgressBlocked,
     Resolver,
+    address_blocked,
+    check_address,
     resolve_upstream,
     system_resolve,
 )
@@ -33,7 +39,7 @@ from apipi.worker.egress.sockets import (
     open_upstream,
     original_dst,
 )
-from apipi.worker.egress.splice import ByteCount, splice
+from apipi.worker.egress.splice import IDLE_TIMEOUT, ByteCount, splice
 
 log = logging.getLogger("apipi.egress")
 
@@ -42,7 +48,11 @@ HTTP_PORTS = frozenset({80})
 GATEWAY_PORTS = tuple(sorted(TLS_PORTS | HTTP_PORTS))
 PEEK_TIMEOUT = 10.0
 MAX_PEEK = 16384
-MAX_CONNECTIONS = 512
+MAX_CONNECTIONS = 128
+WORKER_MAX_CONNECTIONS = 8192
+FD_RESERVE = 512
+ACCEPT_BACKOFF = 0.5
+WARN_INTERVAL = 60.0
 DECISIONS = {"splice": "spliced", "intercept": "intercepted", "reject": "rejected"}
 FORBIDDEN = (
     b"HTTP/1.1 403 Forbidden\r\n"
@@ -51,15 +61,53 @@ FORBIDDEN = (
     b"Connection: close\r\n\r\n"
     b"egress gateway: host is not allowed.\n"
 )
+_FD_ERRORS = frozenset({errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM})
 
 OriginalDst = Callable[[socket.socket], tuple[str, int]]
 
 _metrics: Metrics | None = None
+_worker_open = 0
+_last_warning = 0.0
 
 
 def set_egress_metrics(metrics: Metrics | None) -> None:
     global _metrics
     _metrics = metrics
+
+
+def raise_nofile_limit() -> int:
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = hard if hard != resource.RLIM_INFINITY else 1 << 20
+    if soft == resource.RLIM_INFINITY or soft >= target:
+        return soft
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (OSError, ValueError):
+        return soft
+    return target
+
+
+def worker_connection_limit() -> int:
+    soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft == resource.RLIM_INFINITY:
+        return WORKER_MAX_CONNECTIONS
+    return max(16, min(WORKER_MAX_CONNECTIONS, (soft - FD_RESERVE) // 3))
+
+
+def _warn_accept(session_id: str | None, error: str) -> None:
+    global _last_warning
+    now = time.monotonic()
+    if now - _last_warning < WARN_INTERVAL:
+        return
+    _last_warning = now
+    log_event(
+        log,
+        logging.WARNING,
+        "egress gateway cannot accept",
+        event="egress.accept.failed",
+        session_id=session_id,
+        error=error,
+    )
 
 
 def _tls_enough(data: bytes) -> bool:
@@ -124,11 +172,14 @@ class EgressGateway:
         hooks: EgressHooks | None = None,
         resolve: Resolver = system_resolve,
         original_dst: OriginalDst = original_dst,
+        blocked: Blocked = address_blocked,
         dns_upstreams: tuple[Upstream, ...] = (),
         metrics: Metrics | None = None,
         tls_ports: frozenset[int] = TLS_PORTS,
         http_ports: frozenset[int] = HTTP_PORTS,
         peek_timeout: float = PEEK_TIMEOUT,
+        idle_timeout: float = IDLE_TIMEOUT,
+        max_connections: int = MAX_CONNECTIONS,
         freebind: bool = False,
     ) -> None:
         self.host = host
@@ -139,15 +190,19 @@ class EgressGateway:
         self.upstream = upstream_context(upstream_ca)
         self.resolve = resolve
         self.original_dst = original_dst
+        self.blocked = blocked
         self.dns_upstreams = dns_upstreams
         self.metrics = metrics
         self.tls_ports = tls_ports
         self.http_ports = http_ports
         self.peek_timeout = peek_timeout
+        self.idle_timeout = idle_timeout
+        self.max_connections = max_connections
         self.freebind = freebind
         self.port = 0
         self.dns: DnsFilter | None = None
         self._listener: socket.socket | None = None
+        self._rearm: asyncio.TimerHandle | None = None
         self._tasks: set[asyncio.Task[None]] = set()
 
     @property
@@ -173,11 +228,10 @@ class EgressGateway:
         self.session_id = session_id
 
     async def start(self) -> None:
-        loop = asyncio.get_running_loop()
         listener = bind_socket(self.host, socket.SOCK_STREAM, freebind=self.freebind)
         self._listener = listener
         self.port = int(listener.getsockname()[1])
-        loop.add_reader(listener.fileno(), self._accept)
+        self._arm()
         if self.policy.mode == "restricted":
             self.dns = DnsFilter(
                 host=self.host,
@@ -191,7 +245,16 @@ class EgressGateway:
                 self.close()
                 raise
 
+    def _arm(self) -> None:
+        self._rearm = None
+        if self._listener is not None:
+            loop = asyncio.get_running_loop()
+            loop.add_reader(self._listener.fileno(), self._accept)
+
     def close(self) -> None:
+        if self._rearm is not None:
+            self._rearm.cancel()
+            self._rearm = None
         listener = self._listener
         if listener is not None:
             self._listener = None
@@ -212,7 +275,17 @@ class EgressGateway:
             with contextlib.suppress(BaseException):
                 await task
 
+    def _backoff(self, exc: OSError) -> None:
+        listener = self._listener
+        if listener is None:
+            return
+        loop = asyncio.get_running_loop()
+        loop.remove_reader(listener.fileno())
+        self._rearm = loop.call_later(ACCEPT_BACKOFF, self._arm)
+        _warn_accept(self.session_id, exc.strerror or str(exc))
+
     def _accept(self) -> None:
+        global _worker_open
         listener = self._listener
         if listener is None:
             return
@@ -221,16 +294,27 @@ class EgressGateway:
                 sock, _ = listener.accept()
             except (BlockingIOError, InterruptedError):
                 return
-            except OSError:
-                log.warning("egress accept failed", exc_info=True)
-                return
-            if len(self._tasks) >= MAX_CONNECTIONS:
+            except OSError as exc:
+                if exc.errno in _FD_ERRORS:
+                    self._backoff(exc)
+                    return
+                continue
+            if (
+                len(self._tasks) >= self.max_connections
+                or _worker_open >= worker_connection_limit()
+            ):
                 _reset(sock)
                 continue
             sock.setblocking(False)
+            _worker_open += 1
             task = asyncio.create_task(self._handle(sock))
             self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            task.add_done_callback(self._done)
+
+    def _done(self, task: "asyncio.Task[None]") -> None:
+        global _worker_open
+        _worker_open -= 1
+        self._tasks.discard(task)
 
     async def _handle(self, sock: socket.socket) -> None:
         conn = _Connection(sock)
@@ -252,7 +336,8 @@ class EgressGateway:
                 return
             if data is not None:
                 self._read_host(conn, data, tls)
-            if not conn.recognized and self.policy.mode == "restricted":
+            restricted = self.policy.mode == "restricted"
+            if not conn.recognized and restricted:
                 if data is None:
                     conn.reason = "timeout"
                 else:
@@ -262,13 +347,27 @@ class EgressGateway:
             if decision.action == "reject":
                 conn.reason = decision.reason
                 return
-            addresses = await resolve_upstream(
-                conn.host or dest,
-                conn.port,
-                private_hosts=self.policy.private_hosts,
-                resolve=self.resolve,
+            owns_name = conn.host is not None and (
+                restricted or decision.action == "intercept"
             )
-            if decision.action == "intercept" and tls and conn.host is not None:
+            if owns_name and conn.host is not None:
+                private = (
+                    self.policy.private_hosts
+                    if self.policy.private_allowed(conn.host)
+                    else ()
+                )
+                addresses = await resolve_upstream(
+                    conn.host,
+                    conn.port,
+                    private_hosts=private,
+                    resolve=self.resolve,
+                    blocked=self.blocked,
+                )
+            else:
+                addresses = check_address(dest, blocked=self.blocked)
+            if conn.host is not None and (
+                (decision.action == "intercept" and tls) or (conn.http and restricted)
+            ):
                 conn.action = "intercept"
                 owned = False
                 conn.reason = await intercept(
@@ -276,10 +375,11 @@ class EgressGateway:
                     host=conn.host,
                     port=conn.port,
                     addresses=addresses,
-                    server_context=self.ca.server_context(conn.host),
-                    upstream=self.upstream,
-                    hooks=self.hooks,
+                    server_context=self.ca.server_context(conn.host) if tls else None,
+                    upstream=self.upstream if tls else None,
+                    hooks=self.hooks if tls else EgressHooks(),
                     count=conn.count,
+                    idle_timeout=self.idle_timeout,
                 )
                 return
             upstream_reader, upstream_writer = await open_upstream(addresses, conn.port)
@@ -291,7 +391,12 @@ class EgressGateway:
                 raise
             owned = False
             await splice(
-                guest_reader, guest_writer, upstream_reader, upstream_writer, conn.count
+                guest_reader,
+                guest_writer,
+                upstream_reader,
+                upstream_writer,
+                conn.count,
+                idle_timeout=self.idle_timeout,
             )
         except EgressBlocked as exc:
             conn.action = "reject"

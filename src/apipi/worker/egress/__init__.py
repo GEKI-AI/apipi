@@ -1,12 +1,13 @@
 from collections.abc import Iterable
 
+from apipi.common.netguard import split_allow_hosts
 from apipi.config import Settings
-from apipi.mcp.guard import split_allow_hosts
 from apipi.worker.egress.ca import WorkerCA, worker_ca
 from apipi.worker.egress.dns import Upstream
 from apipi.worker.egress.gateway import (
     GATEWAY_PORTS,
     EgressGateway,
+    raise_nofile_limit,
     set_egress_metrics,
 )
 from apipi.worker.egress.intercept import (
@@ -16,6 +17,7 @@ from apipi.worker.egress.intercept import (
     RequestHook,
     ResponseHead,
     ResponseHook,
+    upstream_context,
 )
 from apipi.worker.egress.policy import EgressMode, EgressPolicy
 from apipi.worker.egress.resolve import BLOCKED_EGRESS_CIDRS
@@ -33,8 +35,10 @@ __all__ = [
     "ResponseHead",
     "ResponseHook",
     "WorkerCA",
+    "raise_nofile_limit",
     "set_egress_metrics",
     "start_gateway",
+    "upstream_context",
     "worker_ca",
 ]
 

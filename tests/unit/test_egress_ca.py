@@ -13,7 +13,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from apipi.worker.egress import ca as ca_module
-from apipi.worker.egress.ca import CA_RENEW_BEFORE, WorkerCA, worker_ca
+from apipi.worker.egress.ca import WorkerCA, worker_ca
 
 
 def _handshake(server: ssl.SSLContext, client: ssl.SSLContext, host: str) -> str:
@@ -47,7 +47,7 @@ def test_ca_certificate_shape() -> None:
     assert isinstance(key, ec.EllipticCurvePublicKey)
     assert key.curve.name == "secp256r1"
     lifetime = cert.not_valid_after_utc - cert.not_valid_before_utc
-    assert lifetime <= datetime.timedelta(days=31)
+    assert lifetime <= datetime.timedelta(days=366)
     assert b"PRIVATE KEY" not in ca.cert_pem
 
 
@@ -122,11 +122,9 @@ def test_ca_key_never_touches_disk(monkeypatch: pytest.MonkeyPatch) -> None:
             assert b"PRIVATE KEY" not in value
 
 
-def test_worker_ca_is_shared_and_renewed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_worker_ca_is_shared_for_the_process(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ca_module, "_current", None)
     first = worker_ca()
     assert worker_ca() is first
-    first.not_after = datetime.datetime.now(datetime.UTC) + CA_RENEW_BEFORE / 2
-    second = worker_ca()
-    assert second is not first
-    assert worker_ca() is second
+    lifetime = first.not_after - datetime.datetime.now(datetime.UTC)
+    assert datetime.timedelta(days=360) < lifetime <= datetime.timedelta(days=366)

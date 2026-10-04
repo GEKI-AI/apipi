@@ -81,9 +81,13 @@ through the egress gateway (`event=egress.connection`). It carries
 `session_id`, `host` (the server name or `Host` header, when the guest
 sent one), `port`, `decision` (`spliced`, `intercepted`, or
 `rejected`), `reason` when the connection was rejected or ended early
-(for example `not_allowed`, `ip_literal`, `no_host`, `private_address`,
-`port`, `upstream_tls`, or `host_mismatch`), and `bytes_up` and
-`bytes_down`. It never carries header values, paths, or bodies.
+(for example `not_allowed`, `ip_literal`, `no_host`, `bad_host`,
+`private_address`, `port`, `upstream_tls`, `host_mismatch`,
+`bad_target`, `connect_method`, or `ambiguous_length`), and `bytes_up`
+and `bytes_down`. It never carries header values, paths, or bodies.
+When the worker runs out of file descriptors, the gateway stops
+accepting for half a second and logs `egress.accept.failed` (warning,
+at most once per minute).
 
 A typical shipper reads stderr and writes Loki, CloudWatch, or
 another store. Example shape (Vector):
@@ -234,7 +238,7 @@ These series are exposed by the worker (`apipi worker`) on its
 | `apipi_worker_waiter_total` | counter, `kind` (`presign`, `search`), `result` (`ok`, `timeout`, `disconnected`) | Waits for a reply from the API. `disconnected` is a wait that ended because the socket closed. A presign wait ends this way only when the API had acked the request, so its reply was lost; otherwise the worker keeps waiting for the replay. |
 | `apipi_worker_deltas_dropped_total` | counter, `reason` | Live deltas the worker did not send: `disconnected` (no socket) or `oversize` (over the message limit). |
 | `apipi_worker_draining` | gauge | 1 while the worker drains. |
-| `apipi_egress_connections_total` | counter, `decision` | Guest connections through the microVM egress gateway: `spliced` (passed through unchanged), `intercepted` (TLS ended at the gateway), or `rejected` (by policy, a private address, or a failed upstream connect). A rising `rejected` rate on one worker usually means a session tries hosts its policy does not allow. Each connection also logs `egress.connection`. |
+| `apipi_egress_connections_total` | counter, `decision` | Guest connections through the microVM egress gateway: `spliced` (passed through unchanged), `intercepted` (the gateway read each HTTP request: TLS ended at the gateway, or plain HTTP on port 80 with `restricted`), or `rejected` (by policy, a private address, or a failed upstream connect). A rising `rejected` rate on one worker usually means a session tries hosts its policy does not allow. Each connection also logs `egress.connection`. |
 | `apipi_egress_bytes_total` | counter, `direction` | Bytes through the egress gateway. `up` is guest to upstream, `down` is upstream to guest. On intercepted connections it counts the HTTP bytes after TLS. |
 | `apipi_background_loop_errors_total`, `apipi_background_loop_last_run_timestamp`, `apipi_event_loop_lag_seconds` | as on the API | Worker loops: `worker_observe`, `session_reaper`, `workspace_reaper`, `sandbox_seen`, `outbox_metrics`, `outbox_spool`. Tasks: `worker_metrics`, `worker_command`, `worker_stop`, `worker_revoke`, `worker_release`. |
 

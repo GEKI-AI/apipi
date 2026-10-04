@@ -3,7 +3,7 @@ import ipaddress
 import socket
 from collections.abc import Awaitable, Callable
 
-from apipi.mcp.guard import (
+from apipi.common.netguard import (
     BLOCKED_NETWORKS,
     allowed_names,
     allowed_networks,
@@ -17,6 +17,7 @@ BLOCKED_EGRESS_CIDRS: tuple[str, ...] = tuple(
 )
 
 Resolver = Callable[[str, int], Awaitable[list[str]]]
+Blocked = Callable[[str], bool]
 
 
 class EgressBlocked(Exception):
@@ -36,14 +37,18 @@ async def system_resolve(host: str, port: int) -> list[str]:
     return found
 
 
-def address_allowed(address: str, private_hosts: tuple[str, ...]) -> bool:
+def address_blocked(address: str) -> bool:
     try:
         ip = ipaddress.ip_address(address)
     except ValueError:
-        return False
-    if not ip_blocked(ip):
         return True
-    return any(ip in network for network in allowed_networks(private_hosts))
+    return ip_blocked(ip)
+
+
+def check_address(address: str, *, blocked: Blocked = address_blocked) -> list[str]:
+    if blocked(address):
+        raise EgressBlocked("private_address")
+    return [address]
 
 
 async def resolve_upstream(
@@ -52,20 +57,27 @@ async def resolve_upstream(
     *,
     private_hosts: tuple[str, ...] = (),
     resolve: Resolver = system_resolve,
+    blocked: Blocked = address_blocked,
 ) -> list[str]:
-    name = norm_host(host).strip("[]")
+    name = norm_host(host)
     if is_ip_literal(name):
-        addresses = [name]
-    else:
-        try:
-            addresses = await resolve(name, port)
-        except OSError as exc:
-            raise EgressBlocked("resolve_failed") from exc
+        return check_address(name.strip("[]"), blocked=blocked)
+    try:
+        addresses = await resolve(name, port)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise EgressBlocked("resolve_failed") from exc
     if not addresses:
         raise EgressBlocked("resolve_failed")
-    if not is_ip_literal(name) and name in allowed_names(private_hosts):
+    if name in allowed_names(private_hosts):
         return addresses
+    networks = allowed_networks(private_hosts)
     for address in addresses:
-        if not address_allowed(address, private_hosts):
+        if not blocked(address):
+            continue
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            raise EgressBlocked("private_address") from None
+        if not any(ip in network for network in networks):
             raise EgressBlocked("private_address")
     return addresses

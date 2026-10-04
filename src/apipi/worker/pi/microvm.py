@@ -40,6 +40,7 @@ from apipi.worker.egress import (
     EgressHooks,
     EgressMode,
     start_gateway,
+    upstream_context,
 )
 from apipi.worker.pi.extension import (
     APIPI_EXTENSION_REL,
@@ -118,8 +119,9 @@ class TapNet(NamedTuple):
         return f"{self.network}/{self.prefix}"
 
 
-class EgressPorts(NamedTuple):
-    tcp: int
+class TapPorts(NamedTuple):
+    broker: int
+    gateway: int | None = None
     dns_udp: int | None = None
     dns_tcp: int | None = None
 
@@ -383,10 +385,18 @@ def require_microvm(settings: Settings | None) -> None:
     microvm_binaries()
     microvm_net_binaries()
     upstream_ca = settings.microvm_egress_upstream_ca
-    if upstream_ca and not Path(upstream_ca).is_file():
-        raise ConfigError(
-            f"APIPI_MICROVM_EGRESS_UPSTREAM_CA is not a file: {upstream_ca}"
-        )
+    if upstream_ca:
+        if not Path(upstream_ca).is_file():
+            raise ConfigError(
+                f"APIPI_MICROVM_EGRESS_UPSTREAM_CA is not a file: {upstream_ca}"
+            )
+        try:
+            upstream_context(upstream_ca)
+        except (OSError, ValueError) as exc:
+            raise ConfigError(
+                f"APIPI_MICROVM_EGRESS_UPSTREAM_CA is not a valid PEM bundle: "
+                f"{upstream_ca}"
+            ) from exc
     microvm_images(settings, image=settings.sandbox_default_image)
     if settings.sandbox_default_size == "L":
         microvm_images(settings, image="browser")
@@ -845,6 +855,10 @@ def _nat_chain(net: TapNet) -> str:
     return f"{net.name}gw"
 
 
+def _input_chain(net: TapNet) -> str:
+    return f"{net.name}in"
+
+
 def _reject_unreachable(iptables: str, chain: str, *match: str) -> list[str]:
     return [
         iptables,
@@ -877,27 +891,69 @@ def _egress_filter_cmds(
     if mode == "enabled":
         cmds.append([iptables, "-w", "-A", chain, "-j", "ACCEPT"])
         return cmds
-    if mode == "disabled":
-        for dns in GUEST_DNS:
-            for proto in ("udp", "tcp"):
-                cmds.append(
-                    [
-                        iptables,
-                        "-w",
-                        "-A",
-                        chain,
-                        "-p",
-                        proto,
-                        "-d",
-                        dns,
-                        "--dport",
-                        "53",
-                        "-j",
-                        "ACCEPT",
-                    ]
-                )
     cmds.append(_reject_unreachable(iptables, chain))
     return cmds
+
+
+def _input_cmds(
+    iptables: str, chain: str, *, net: TapNet, ports: TapPorts
+) -> list[list[str]]:
+    cmds: list[list[str]] = [
+        [iptables, "-w", "-N", chain],
+        [
+            iptables,
+            "-w",
+            "-A",
+            chain,
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "RELATED,ESTABLISHED",
+            "-j",
+            "ACCEPT",
+        ],
+    ]
+    allowed = [("tcp", ports.broker), ("tcp", ports.gateway)]
+    allowed += [("udp", ports.dns_udp), ("tcp", ports.dns_tcp)]
+    for proto, port in allowed:
+        if port is None:
+            continue
+        cmds.append(
+            [
+                iptables,
+                "-w",
+                "-A",
+                chain,
+                "-d",
+                net.host_ip,
+                "-p",
+                proto,
+                "--dport",
+                str(port),
+                "-j",
+                "ACCEPT",
+            ]
+        )
+    cmds.append(_reject_unreachable(iptables, chain))
+    return cmds
+
+
+def _input_jump(
+    iptables: str, net: TapNet, action: list[str], comment: str
+) -> list[str]:
+    return [
+        iptables,
+        "-w",
+        *action,
+        "-i",
+        net.name,
+        "-m",
+        "comment",
+        "--comment",
+        comment,
+        "-j",
+        _input_chain(net),
+    ]
 
 
 def _dnat(iptables: str, chain: str, proto: str, ports: str, target: str) -> list[str]:
@@ -927,13 +983,13 @@ def _gateway_nat_cmds(
     *,
     net: TapNet,
     mode: EgressMode,
-    egress: EgressPorts | None,
+    ports: TapPorts,
 ) -> list[list[str]]:
     if mode == "disabled":
         return []
-    if egress is None:
+    if ports.gateway is None:
         raise ValueError("microvm egress gateway is not running")
-    ports = ",".join(str(port) for port in GATEWAY_PORTS)
+    web = ",".join(str(port) for port in GATEWAY_PORTS)
     cmds: list[list[str]] = [
         [iptables, "-w", "-t", "nat", "-N", chain],
         [
@@ -948,16 +1004,16 @@ def _gateway_nat_cmds(
             "-j",
             "RETURN",
         ],
-        _dnat(iptables, chain, "tcp", ports, f"{net.host_ip}:{egress.tcp}"),
+        _dnat(iptables, chain, "tcp", web, f"{net.host_ip}:{ports.gateway}"),
     ]
     if mode == "restricted":
-        if egress.dns_udp is None or egress.dns_tcp is None:
+        if ports.dns_udp is None or ports.dns_tcp is None:
             raise ValueError("microvm egress DNS filter is not running")
         cmds.append(
-            _dnat(iptables, chain, "udp", "53", f"{net.host_ip}:{egress.dns_udp}")
+            _dnat(iptables, chain, "udp", "53", f"{net.host_ip}:{ports.dns_udp}")
         )
         cmds.append(
-            _dnat(iptables, chain, "tcp", "53", f"{net.host_ip}:{egress.dns_tcp}")
+            _dnat(iptables, chain, "tcp", "53", f"{net.host_ip}:{ports.dns_tcp}")
         )
     return cmds
 
@@ -982,11 +1038,15 @@ def _gateway_jump(
     ]
 
 
-def egress_ports(gateway: EgressGateway) -> EgressPorts:
+def tap_ports(broker_port: int, gateway: EgressGateway | None) -> TapPorts:
+    if gateway is None:
+        return TapPorts(broker=broker_port)
     dns = gateway.dns_ports
     if dns is None:
-        return EgressPorts(tcp=gateway.port)
-    return EgressPorts(tcp=gateway.port, dns_udp=dns[0], dns_tcp=dns[1])
+        return TapPorts(broker=broker_port, gateway=gateway.port)
+    return TapPorts(
+        broker=broker_port, gateway=gateway.port, dns_udp=dns[0], dns_tcp=dns[1]
+    )
 
 
 def tap_setup_argv(
@@ -996,9 +1056,9 @@ def tap_setup_argv(
     iptables: str,
     uid: int,
     gid: int,
+    ports: TapPorts,
     tc: str | None = None,
     mode: EgressMode = "enabled",
-    egress: EgressPorts | None = None,
     egress_mbit: int = 50,
 ) -> list[list[str]]:
     comment = f"apipi-{net.name}"
@@ -1059,9 +1119,9 @@ def tap_setup_argv(
         ],
     ]
     cmds.extend(_egress_filter_cmds(iptables, chain, subnet=net.subnet, mode=mode))
-    nat = _gateway_nat_cmds(
-        iptables, _nat_chain(net), net=net, mode=mode, egress=egress
-    )
+    cmds.extend(_input_cmds(iptables, _input_chain(net), net=net, ports=ports))
+    cmds.append(_input_jump(iptables, net, ["-I", "INPUT", "1"], comment))
+    nat = _gateway_nat_cmds(iptables, _nat_chain(net), net=net, mode=mode, ports=ports)
     if nat:
         cmds.extend(nat)
         cmds.append(_gateway_jump(iptables, net, ["-I", "PREROUTING", "1"], comment))
@@ -1163,6 +1223,14 @@ def tap_teardown_argv(
                 [iptables, "-w", "-t", "nat", "-X", nat_chain],
             ]
         )
+    input_chain = _input_chain(net)
+    cmds.extend(
+        [
+            _input_jump(iptables, net, ["-D", "INPUT"], comment),
+            [iptables, "-w", "-F", input_chain],
+            [iptables, "-w", "-X", input_chain],
+        ]
+    )
     cmds.extend(
         [
             [
@@ -1302,9 +1370,9 @@ def setup_tap(
     iptables: str,
     uid: int,
     gid: int,
+    ports: TapPorts,
     tc: str | None = None,
     mode: EgressMode = "enabled",
-    egress: EgressPorts | None = None,
     egress_mbit: int = 50,
 ) -> None:
     _enable_forward()
@@ -1314,9 +1382,9 @@ def setup_tap(
         iptables=iptables,
         uid=uid,
         gid=gid,
+        ports=ports,
         tc=tc,
         mode=mode,
-        egress=egress,
         egress_mbit=egress_mbit,
     ):
         _run(argv)
@@ -1494,27 +1562,6 @@ async def start_microvm(
 
     broker = None
     try:
-        egress = await start_gateway(
-            settings,
-            host=net.host_ip,
-            mode=tap.mode,
-            allowed_hosts=tap.hosts,
-            session_id=session_id,
-            intercept_hosts=intercept_hosts,
-            hooks=egress_hooks,
-            dns_upstreams=tuple((dns, 53) for dns in GUEST_DNS),
-        )
-        setup_tap(
-            net,
-            ip=ip_bin,
-            iptables=iptables_bin,
-            uid=uid,
-            gid=gid,
-            tc=tc_bin,
-            mode=tap.mode,
-            egress=egress_ports(egress),
-            egress_mbit=settings.microvm_egress_mbit,
-        )
         from apipi.worker.pi.broker import start_broker
         from apipi.worker.pi.model_host import models_json_for_base_url
         from apipi.worker.pi.settings_json import (
@@ -1524,6 +1571,17 @@ async def start_microvm(
             settings_json_text,
         )
 
+        if tap.mode != "disabled":
+            egress = await start_gateway(
+                settings,
+                host=net.host_ip,
+                mode=tap.mode,
+                allowed_hosts=tap.hosts,
+                session_id=session_id,
+                intercept_hosts=intercept_hosts,
+                hooks=egress_hooks,
+                dns_upstreams=tuple((dns, 53) for dns in GUEST_DNS),
+            )
         broker = await start_broker(
             settings,
             api_key=api_key,
@@ -1531,6 +1589,17 @@ async def start_microvm(
             host="0.0.0.0",
             port=0,
             public_host=net.host_ip,
+        )
+        setup_tap(
+            net,
+            ip=ip_bin,
+            iptables=iptables_bin,
+            uid=uid,
+            gid=gid,
+            ports=tap_ports(broker.port, egress),
+            tc=tc_bin,
+            mode=tap.mode,
+            egress_mbit=settings.microvm_egress_mbit,
         )
         _link_or_copy(Path(kernel), chroot_dir / "vmlinux")
         _link_or_copy(Path(rootfs), chroot_dir / "rootfs.ext4")
@@ -1594,7 +1663,7 @@ async def start_microvm(
             settings_json=settings_json_text(pi_settings).encode(),
             system_md=system_md,
             web_search=web_search,
-            egress_ca=egress.ca_pem,
+            egress_ca=egress.ca_pem if egress is not None else None,
         )
         config = microvm_config(
             kernel="vmlinux",

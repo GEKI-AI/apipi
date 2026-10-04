@@ -42,6 +42,7 @@ class FakeResolver:
     def __init__(self) -> None:
         self.udp: list[str] = []
         self.tcp: list[str] = []
+        self.raw: list[bytes] = []
         self.port = 0
         self._udp: asyncio.DatagramTransport | None = None
         self._tcp: asyncio.Server | None = None
@@ -56,6 +57,7 @@ class FakeResolver:
 
             def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
                 owner.udp.append(parse_question(data).name)
+                owner.raw.append(data)
                 assert isinstance(self.transport, asyncio.DatagramTransport)
                 self.transport.sendto(answer_for(data), addr)
 
@@ -73,6 +75,7 @@ class FakeResolver:
         size = int.from_bytes(await reader.readexactly(2), "big")
         data = await reader.readexactly(size)
         self.tcp.append(parse_question(data).name)
+        self.raw.append(data)
         reply = answer_for(data)
         writer.write(len(reply).to_bytes(2, "big") + reply)
         await writer.drain()
@@ -139,13 +142,96 @@ async def tcp_ask(port: int, packet: bytes) -> bytes:
             await writer.wait_closed()
 
 
+def answered(reply: bytes, packet: bytes) -> bool:
+    return (
+        reply[:2] == packet[:2]
+        and rcode(reply) == 0
+        and int.from_bytes(reply[6:8], "big") == 1
+        and reply.endswith(b"\x5d\xb8\xd8\x22")
+    )
+
+
 async def test_allowed_name_is_forwarded_over_udp(
     dns: DnsFilter, resolver: FakeResolver
 ) -> None:
     packet = query("API.example.com")
     reply = await udp_ask(dns.udp_port, packet)
-    assert reply == answer_for(packet)
+    assert answered(reply, packet)
     assert resolver.udp == ["api.example.com"]
+
+
+async def test_forwarded_query_is_rebuilt(
+    dns: DnsFilter, resolver: FakeResolver
+) -> None:
+    packet = bytearray(query("API.example.com", ident=0x0BAD))
+    packet[3] |= 0x10
+    packet[11] = 1
+    packet += b"\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x05guest"
+    reply = await udp_ask(dns.udp_port, bytes(packet))
+    assert answered(reply, bytes(packet))
+    sent = resolver.raw[0]
+    assert sent[2:4] == b"\x01\x00"
+    assert sent[4:12] == b"\x00\x01\x00\x00\x00\x00\x00\x00"
+    assert sent[12:] == query("api.example.com")[12:]
+    assert b"guest" not in sent
+
+
+async def test_https_records_get_no_data(
+    dns: DnsFilter, resolver: FakeResolver
+) -> None:
+    for qtype in (64, 65):
+        packet = query("api.example.com", qtype=qtype)
+        reply = await udp_ask(dns.udp_port, packet)
+        assert rcode(reply) == 0
+        assert int.from_bytes(reply[6:8], "big") == 0
+        assert parse_question(reply).qtype == qtype
+    assert resolver.udp == []
+
+
+async def test_multi_question_and_other_class_are_refused(
+    dns: DnsFilter, resolver: FakeResolver
+) -> None:
+    double = bytearray(query("api.example.com"))
+    double[5] = 2
+    double += query("api.example.com")[12:]
+    assert rcode(await udp_ask(dns.udp_port, bytes(double))) == RCODE_FORMERR
+    chaos = bytearray(query("api.example.com"))
+    chaos[-1] = 3
+    assert rcode(await udp_ask(dns.udp_port, bytes(chaos))) == RCODE_NOTIMP
+    assert resolver.udp == []
+
+
+async def test_udp_queries_in_flight_are_capped(
+    resolver: FakeResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("apipi.worker.egress.dns.MAX_UDP_INFLIGHT", 0)
+    filt = DnsFilter(
+        host="127.0.0.1",
+        allow=lambda name: True,
+        upstreams=(("127.0.0.1", resolver.port),),
+        timeout=1.0,
+    )
+    await filt.start()
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(udp_ask(filt.udp_port, query("a.example")), 0.3)
+    finally:
+        await filt.stop()
+    assert resolver.udp == []
+
+
+async def test_tcp_clients_are_capped(
+    dns: DnsFilter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("apipi.worker.egress.dns.MAX_TCP_CLIENTS", 1)
+    reader, writer = await asyncio.open_connection("127.0.0.1", dns.tcp_port)
+    await asyncio.sleep(0.05)
+    with pytest.raises((asyncio.IncompleteReadError, ConnectionError)):
+        await tcp_ask(dns.tcp_port, query("api.example.com"))
+    writer.close()
+    with contextlib.suppress(OSError):
+        await writer.wait_closed()
+    del reader
 
 
 async def test_other_names_get_nxdomain(dns: DnsFilter, resolver: FakeResolver) -> None:
@@ -163,7 +249,7 @@ async def test_other_names_get_nxdomain(dns: DnsFilter, resolver: FakeResolver) 
 
 async def test_tcp_queries(dns: DnsFilter, resolver: FakeResolver) -> None:
     packet = query("api.example.com", ident=7)
-    assert await tcp_ask(dns.tcp_port, packet) == answer_for(packet)
+    assert answered(await tcp_ask(dns.tcp_port, packet), packet)
     assert resolver.tcp == ["api.example.com"]
     denied = await tcp_ask(dns.tcp_port, query("other.example.com"))
     assert rcode(denied) == RCODE_NXDOMAIN

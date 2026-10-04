@@ -335,8 +335,8 @@ stored file sizes before the turn starts and answers `413` with code
 `enabled` allows outbound traffic to the public internet. Private and
 special-use IPv4 ranges are always rejected. If the process-wide TAP
 allowlist is on, that list still wins for public hosts. `disabled`
-blocks guest TAP egress (DNS and the host broker on the TAP subnet
-still work). `restricted` allows only those hostnames, plus package
+blocks all guest TAP egress, DNS included. The guest reaches only the
+host broker on the TAP host IP. `restricted` allows only those hostnames, plus package
 registries when `packages` is set so install can run. A session cannot
 add a host that `[sandbox.network]` forbids. Model and HTTP MCP calls
 go through the host broker, so they still work when TAP is locked.
@@ -345,25 +345,45 @@ In `microvm`, the policy is enforced by hostname, not by IP address.
 Guest TCP to ports 80, 443, and 8443 goes to an egress gateway in the
 worker process. The guest needs no proxy settings. On 443 and 8443 the
 gateway reads the server name (SNI) from the TLS handshake. On 80 it
-reads the `Host` header. It then resolves that name itself, checks
-every address against the private ranges, and connects to the address
-it resolved, not to the address the guest asked for. A name that
-resolves to a private address is rejected in every mode, so DNS
-rebinding or a changed `/etc/hosts` in the guest cannot reach the
-worker network. The bytes are passed through unchanged, so the guest
-still sees the real certificate of the server. UDP to port 443 is
-rejected, so QUIC clients fall back to TCP.
+reads the `Host` header. UDP to port 443 is rejected, so QUIC clients
+fall back to TCP. Private and special-use addresses are rejected in
+every mode. The guest can reach the worker host only on the broker,
+gateway, and DNS filter ports of its own session.
 
 With `restricted` (or the process-wide TAP allowlist), a hostname must
 match an allowed name exactly (case does not matter). A connection
-without a server name, or with an IP address as the server name or
-`Host`, is rejected. TCP to other ports and other UDP traffic is
-rejected. Guest DNS goes to a filtering resolver on the TAP host IP.
-It forwards queries for allowed names and answers `NXDOMAIN` for every
-other name, so DNS cannot carry data out. With `enabled`, public hosts
-are allowed, IP addresses included, other ports use the direct NAT
-path, and DNS goes directly to the public resolvers, as before.
-`disabled` does not use the gateway.
+without a server name, with a server name that is not a valid
+hostname, or with an IP address as the server name or `Host`, is
+rejected. The gateway resolves the allowed name itself, checks every
+address against the private ranges, and connects to the address it
+resolved, not to the address the guest asked for. DNS rebinding or a
+changed `/etc/hosts` in the guest therefore cannot reach another
+address. On port 80 the gateway reads every HTTP request on the
+connection. Each request must name the same allowed host in `Host`, a
+request with a full URL must name that host too, and `CONNECT` is
+rejected. TCP to other ports and other UDP traffic is rejected. Guest
+DNS goes to a filtering resolver on the TAP host IP. It forwards
+queries for allowed names, answers `NXDOMAIN` for every other name, and
+sends upstream only a new query built from the name and type, so DNS
+cannot carry data out. It answers HTTPS and SVCB queries with no
+records.
+
+On TLS connections that are passed through, `restricted` checks only
+the server name. The gateway does not see the encrypted request, so it
+cannot stop domain fronting (a `Host` header for another site behind
+the same CDN) or read the inner name of Encrypted Client Hello. Allow
+only hosts that you trust with that.
+
+With `enabled`, public hosts are allowed, IP addresses included. The
+gateway connects to the address the guest asked for after checking that
+it is not private, so `curl --resolve` and `/etc/hosts` in the guest
+work as before. Other ports use the direct NAT path, and DNS goes
+directly to the public resolvers. `disabled` does not start a gateway.
+
+Allowed connections are passed through unchanged, so the guest still
+sees the real certificate of the server. A connection that sends no
+data for 5 minutes is closed. Each session may have up to 128 open
+connections through the gateway.
 
 After a sandbox TTL wipe, the next turn recreates `/workspace` and
 re-applies the stored files (inline and Files API ids), env, packages,

@@ -252,8 +252,9 @@ model host is reached through that broker even when it is private.
 Each TAP is rate-limited with
 `tc` (`APIPI_MICROVM_EGRESS_MBIT`, default 50). Guest TCP to ports 80,
 443, and 8443 goes through the egress gateway in the worker, which
-checks the hostname from TLS SNI or the `Host` header and connects to
-the address it resolved itself.
+checks the hostname from TLS SNI or the `Host` header. The guest can
+reach the worker host only on the broker, gateway, and DNS filter
+ports of its session.
 
 To lock destinations, set `APIPI_MICROVM_EGRESS_ALLOWLIST=on`. Then the
 guest may reach only the model host, HTTP MCP hosts for that session,
