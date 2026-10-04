@@ -96,7 +96,16 @@ value or the placeholder. When a credential host answers with a body
 encoding other than `gzip` or `deflate`, so the gateway cannot mask the
 secret in it, the gateway fails the request with `502` and writes a
 warning line (`event=egress.encoding_rejected`) with `session_id`,
-`host`, and `encoding`. See [Vaults and credentials](vaults.md).
+`host`, and `encoding`. When a compressed body from a credential host
+expands past 10 MiB and 100 times its compressed size, the gateway
+closes the connection and writes a warning line
+(`event=egress.decode_limit`) with `session_id`, `host`,
+`encoded_bytes`, and `decoded_bytes`. A plain HTTP connection to a
+credential host is rejected with `403`; its `egress.connection` line has
+reason `credential_host_plain_http`, and a cut compressed body or a
+decode limit ends the connection with reason `content_truncated`,
+`content_decode`, or `decode_limit`. See
+[Vaults and credentials](vaults.md).
 
 A typical shipper reads stderr and writes Loki, CloudWatch, or
 another store. Example shape (Vector):

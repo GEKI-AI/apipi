@@ -105,19 +105,36 @@ there and store or render them (an issue title, a search term). If the
 gateway substituted the query string, the guest could make a credential
 host write the real secret into a page and read it back.
 
-A request to any other host carries only the placeholder. On requests to
-a credential's hosts the gateway asks for `Accept-Encoding: identity`
-and replaces the secret with the placeholder again in the response
-headers and in the response body. Body masking streams with a carry
-buffer of the longest secret minus one byte, so a secret split across
-reads is masked, and replaces the longest secret first. Because the
-length changes, the gateway drops `Content-Length` and sends the body
-chunked. A `gzip` or `deflate` body is decompressed before masking; any
-other content encoding is a `502`. This is defense in depth: the guest
-chooses which header carries the placeholder, so a credential host that
-stores a request header and shows it somewhere other than in the
-response could still expose the secret. Tokens and `allowed_hosts`
-must be scoped to what the task needs.
+A request to any other host carries only the placeholder. Credential
+hosts are HTTPS only: plain HTTP on port 80 to such a host is rejected
+(`credential_host_plain_http`). On requests to a credential's hosts the
+gateway removes `Upgrade` and `Connection`, so nothing is passed through
+unmasked after a `101`, asks for `Accept-Encoding: identity`, and masks
+the response headers and body, dropping response trailers. The mask
+strings are the exact secret, its JSON string forms (with and without
+`\/`), its percent-encoded forms, and every Basic token the gateway
+built for that host (base64 of `user:secret`, replaced with the token
+the guest sent), longest first. Other transformations (hashes, partial
+copies, base64 of the bare secret built by the agent) are not masked.
+
+Body masking streams: each piece of a read is decoded, masked, and sent
+before the next is produced, so a connection holds at most one decode
+chunk and a carry. The carry is only the longest suffix that is a proper
+prefix of a mask string, so streaming responses are not delayed.
+Because the length changes, the gateway drops `Content-Length` and sends
+the body chunked. A `gzip` body (also several members) or `deflate`
+body (zlib or raw) is decompressed in bounded steps; a truncated stream
+aborts the connection before the final chunk, and a body that expands
+past 10 MiB and 100 times its compressed size is aborted
+(`egress.decode_limit`). Any other content encoding is a `502`.
+
+This is defense in depth, not a boundary: the guest chooses which header
+carries the placeholder, so a credential host that stores a request
+header and shows it somewhere other than in the response could still
+expose the secret, and with `enabled` the guest can reach the same
+server by IP address or another server name, which the gateway splices
+unchanged. Tokens and `allowed_hosts` must be scoped to what the task
+needs.
 
 Request signing (AWS SigV4, HMAC), keys that only work in the query
 string, and non-HTTP protocols cannot work this way. Function tools
@@ -153,9 +170,12 @@ rights of its token.
   by the operator, or session create is `400`. A tenant cannot open a
   host by creating a credential.
 * Two attached credentials with the same `secret_name` are `400`.
-  Reserved names (`OPENAI_*`, `APIPI_*`, `PI_*`, `PATH`, the variables
-  guest init sets, `GIT_CONFIG_*`, and the guest environment deny list)
-  are rejected when the credential is written.
+  Reserved names are rejected when the credential is written: the
+  prefixes `OPENAI_`, `APIPI_`, `PI_`, `CODEX_`, `GIT_`, and
+  `AGENT_BROWSER_`, the guest environment deny list, and the variables
+  guest init sets (`PATH`, `HOME`, `USER`, `SHELL`, `PWD`, the CA bundle
+  variables, the npm and uv cache variables, `WS`, `CA_BUNDLE`, `CA_DIR`,
+  and `cmd`).
 
 ## When secrets are read
 

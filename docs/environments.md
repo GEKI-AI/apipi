@@ -431,8 +431,9 @@ HTTPS requests on ports 443 and 8443 to the credential's `allowed_hosts`
 and masks the secret again in the responses. For those hosts only, the gateway terminates TLS with a certificate from the
 worker's certificate authority, which guest init adds to the guest's
 trusted bundle `/run/apipi/ca-bundle.pem` (see
-[configuration](config.md#networking)). Plain HTTP on port 80
-never gets a secret. See
+[configuration](config.md#networking)). Credential hosts are HTTPS
+only: a plain HTTP connection on port 80 to one of them is rejected with
+`403`. See
 [Vaults and credentials](vaults.md#how-environment-credentials-work).
 
 These credentials depend on `network.access`:

