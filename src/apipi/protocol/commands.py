@@ -69,11 +69,32 @@ class InputImageRef(ContextPart):
     size_bytes: int | None = Field(default=None, ge=0)
 
 
-TurnInputPart = Annotated[InputTextPart | InputImageRef, Field(discriminator="type")]
+class InputFileRef(ContextPart):
+    """One `input_file` of a session without a computer, as a store reference.
+
+    `model_input` says how the worker passes it to the model: `text`
+    (UTF-8 text in a `<file name="…">` block of the prompt) or `image`.
+    The bytes never travel in the command.
+    """
+
+    type: Literal["file"] = "file"
+    file_id: str
+    filename: str
+    object_id: str
+    url: str | None = None
+    local_path: str | None = None
+    mime_type: str
+    size_bytes: int | None = Field(default=None, ge=0)
+    model_input: Literal["text", "image"]
+
+
+TurnInputPart = Annotated[
+    InputTextPart | InputImageRef | InputFileRef, Field(discriminator="type")
+]
 
 
 class TurnStartCommandPayload(ContextCommandPayload):
-    """`images` is always empty; image parts travel in `parts` as references."""
+    """`images` is always empty; images and files travel in `parts` as references."""
 
     text: str | None = None
     images: list[dict[str, Any]] | None = None

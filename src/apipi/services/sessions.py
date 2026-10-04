@@ -58,7 +58,9 @@ from apipi.env.setup import (
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.gateway.auth import AuthIdentity, not_found
 from apipi.gateway.content import (
+    FilePart,
     ImagePart,
+    InputFile,
     UserContent,
     parse_user_content,
     require_image_model,
@@ -92,7 +94,11 @@ from apipi.services.session_defaults import (
 )
 from apipi.services.session_events import event_body, persist_event
 from apipi.services.skill_store import SkillService
-from apipi.services.turn_context import build_turn_context, input_image_ref
+from apipi.services.turn_context import (
+    build_turn_context,
+    input_file_ref,
+    input_image_ref,
+)
 from apipi.services.turn_state import fail_session, fail_stale_in_progress
 from apipi.services.vault_crypto import (
     VaultCryptoError,
@@ -330,12 +336,30 @@ async def iter_session_events(
 _MAYBE_SENT = frozenset({"forward_timeout", "command_ack_timeout", "forward_failed"})
 
 
-def _image_file_ids(parts: list[dict[str, Any]]) -> list[str]:
+_REF_PARTS = ("image", "file")
+
+
+def _part_file_ids(parts: list[dict[str, Any]]) -> list[str]:
     return [
         str(part["file_id"])
         for part in parts
-        if part.get("type") == "image" and part.get("file_id")
+        if part.get("type") in _REF_PARTS and part.get("file_id")
     ]
+
+
+def _require_no_computer(
+    environment: dict[str, Any] | None, content: UserContent
+) -> None:
+    """`input_file` works only in a session without a computer for now."""
+    if content.files and not is_env_none(environment):
+        raise ApiError(
+            "not_implemented",
+            "input_file is not implemented yet for a session with a computer. "
+            "Use a session with environment.type none, or send an image as "
+            "input_image.",
+            code="input_file",
+            status_code=501,
+        )
 
 
 def _turn_not_sent(exc: BaseException) -> bool:
@@ -421,18 +445,20 @@ class SessionService:
         *,
         user_id: str | None,
         session_id: uuid.UUID | None = None,
+        files: list[InputFile] | None = None,
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        """The `turn.start` parts with image references, and the new file ids.
+        """The `turn.start` parts with references, and the new file ids.
 
         Data URL images are stored as files of kind `image` owned by the
-        session user. With `session_id`, every image is bound to that
-        session. The caller deletes the new files when the turn does not
-        start.
+        session user. With `session_id`, every image and every
+        `input_file` is bound to that session, without a path. The caller
+        deletes the new files when the turn does not start.
         """
         images = await self.files.input_images(
             tenant_id, content.images, known, user_id=user_id
         )
         refs = [self._image_ref(tenant_id, *image) for image in images]
+        file_refs = [self._file_ref(tenant_id, item) for item in files or []]
         created = [
             file_id
             for image, (file_id, _mime, _size) in zip(
@@ -440,15 +466,14 @@ class SessionService:
             )
             if not image.file_id
         ]
-        if session_id is not None and images:
+        bound = [image[0] for image in images] + [item.file_id for item in files or []]
+        if session_id is not None and bound:
             try:
-                await self.files.bind_session(
-                    tenant_id, session_id, [image[0] for image in images]
-                )
+                await self.files.bind_session(tenant_id, session_id, bound)
             except BaseException:
                 await self._drop_files(tenant_id, created)
                 raise
-        return content.wire_parts(refs), created
+        return content.wire_parts(refs, file_refs), created
 
     def _image_ref(
         self, tenant_id: uuid.UUID, file_id: str, mime: str, size: int
@@ -462,6 +487,11 @@ class SessionService:
             objects=self.files.objects,
         )
 
+    def _file_ref(self, tenant_id: uuid.UUID, item: InputFile) -> dict[str, Any]:
+        return input_file_ref(
+            self.settings, tenant_id, item, objects=self.files.objects
+        )
+
     async def _drop_files(self, tenant_id: uuid.UUID, file_ids: list[str]) -> None:
         """Delete the image files of a turn that did not start, best effort.
 
@@ -472,31 +502,53 @@ class SessionService:
                 await self.files.delete(tenant_id, file_id)
         file_ids.clear()
 
-    async def forward_image_parts(
+    async def forward_parts(
         self, tenant_id: uuid.UUID, parts: list[Any]
     ) -> list[dict[str, Any]]:
-        """Sign the image parts of a forwarded `turn.start` on this replica.
+        """Sign the image and file parts of a forwarded `turn.start` here.
 
-        The forward row keeps only `file_id`. The file is checked for the
-        tenant again and the reference is built from the tenant here.
+        The forward row keeps only `file_id` (and `filename` of a file
+        part). Each file is checked for the tenant again and the reference
+        is built from the tenant on this replica.
         """
-        images = tuple(
-            ImagePart(file_id=str(part.get("file_id") or ""))
+        refs = [
+            part
             for part in parts
-            if isinstance(part, dict) and part.get("type") == "image"
-        )
-        if any(not image.file_id for image in images):
+            if isinstance(part, dict) and part.get("type") in _REF_PARTS
+        ]
+        if any(not part.get("file_id") for part in refs):
             raise ApiError(
                 "invalid_request",
-                "forwarded image part has no file_id",
+                "forwarded part has no file_id",
                 code="invalid_request",
             )
+        images = tuple(
+            ImagePart(file_id=str(part["file_id"]))
+            for part in refs
+            if part.get("type") == "image"
+        )
         known = await self.files.image_files(tenant_id, images)
+        files = iter(
+            await self.files.input_files(
+                tenant_id,
+                tuple(
+                    FilePart(
+                        file_id=str(part["file_id"]),
+                        filename=str(part.get("filename") or ""),
+                    )
+                    for part in refs
+                    if part.get("type") == "file"
+                ),
+            )
+        )
         out: list[dict[str, Any]] = []
         for part in parts:
-            if isinstance(part, dict) and part.get("type") == "image":
+            kind = part.get("type") if isinstance(part, dict) else None
+            if kind == "image":
                 file_id = str(part["file_id"])
                 out.append(self._image_ref(tenant_id, file_id, *known[file_id]))
+            elif kind == "file":
+                out.append(self._file_ref(tenant_id, next(files)))
             else:
                 out.append(part)
         return out
@@ -752,11 +804,15 @@ class SessionService:
                     status_code=503,
                 ) from exc
         turn_content = parse_user_content(input, settings=self.settings)
+        _require_no_computer(env, turn_content)
+        input_files = await self.files.input_files(
+            tenant_id, turn_content.files, user_id=user_id
+        )
         image_files = await self.files.image_files(
             tenant_id, turn_content.images, user_id=user_id
         )
         turn_parts, created = await self._turn_parts(
-            tenant_id, turn_content, image_files, user_id=user_id
+            tenant_id, turn_content, image_files, user_id=user_id, files=input_files
         )
         pending.extend(created)
         raw_tools: list[Any] = []
@@ -848,7 +904,7 @@ class SessionService:
             require_known_image(self.settings, image)
             require_image_size(image, size)
             env = {**env, "sandbox_size": size, "sandbox_image": image}
-            require_image_model(self.settings, model, turn_content)
+            require_image_model(self.settings, model, turn_content, input_files)
             try:
                 reject_microvm_system_packages(env, run_mode="microvm")
             except SetupError as exc:
@@ -876,7 +932,7 @@ class SessionService:
                 vault_ids=vault_id_strs,
                 tools=raw_tools if agent_id is None else None,
             )
-            for file_id in dict.fromkeys(_image_file_ids(turn_parts)):
+            for file_id in dict.fromkeys(_part_file_ids(turn_parts)):
                 await bind_session_file(db, tenant_id, row.id, file_id)
             await promote_attachments(
                 db, tenant_id, environment_file_ids(env), user_id=user_id
@@ -967,7 +1023,7 @@ class SessionService:
                     set_span(self.tracing, status="failed")
                     return session_body(row)
             text = turn_content.text
-            if text or turn_content.images:
+            if text or turn_content.images or turn_content.files:
                 require_model(model)
                 self._require_capacity(
                     session_id,
@@ -1309,6 +1365,7 @@ class SessionService:
             if row is None:
                 not_found()
             session_user = row.user_id
+            session_env = row.environment
             follow_size = sandbox_size_of(row.environment)
             if type == "agent.session.input.cancel":
                 action = "cancel"
@@ -1341,8 +1398,13 @@ class SessionService:
                     if isinstance(raw_model, str):
                         follow_model = raw_model
         image_files: dict[str, tuple[str, int]] = {}
+        input_files: list[InputFile] = []
         if action == "message":
-            require_image_model(self.settings, follow_model, parsed)
+            _require_no_computer(session_env, parsed)
+            input_files = await self.files.input_files(
+                tenant_id, parsed.files, user_id=user_id
+            )
+            require_image_model(self.settings, follow_model, parsed, input_files)
             image_files = await self.files.image_files(
                 tenant_id, parsed.images, user_id=user_id
             )
@@ -1418,6 +1480,7 @@ class SessionService:
                     image_files,
                     user_id=session_user,
                     session_id=session_id,
+                    files=input_files,
                 )
                 try:
                     await self.execution.run_turn(

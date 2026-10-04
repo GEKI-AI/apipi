@@ -1,8 +1,8 @@
 {"fixture": "turn-continue", "format": 1, "title": "A function call, requires_action, and turn.continue", "description": "The model calls a function. The turn stops in requires_action, the client submits the result, and turn.continue finishes the turn with the session cursor continuing from the first command."}
 {"step": "action", "for": "worker", "name": "script_model", "args": {"function_calls": [{"name": "echo", "arguments": {"text": "hi"}, "call_id": "call_1"}]}}
 {"step": "connect"}
-{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
-{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "store_check": "<store_check>", "revoke": [], "ttl": {}, "features": ["image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["file_refs", "image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "store_check": "<store_check>", "revoke": [], "ttl": {}, "features": ["file_refs", "image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
 {"from": "worker", "frame": {"type": "store.proof", "marker": "<var:marker>", "nonce": "<var:nonce>"}}
 {"step": "action", "for": "api", "name": "create_session", "args": {"tools": ["echo"]}}
 {"step": "action", "for": "api", "name": "start_turn", "args": {"text": "use echo"}}

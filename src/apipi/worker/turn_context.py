@@ -1,6 +1,7 @@
 """Read the command context on the worker: files, skills, and MCP servers."""
 
 import base64
+import html
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -107,22 +108,37 @@ async def fetch_pi_session_bytes(
     return await fetch_ref_bytes(pi_session, settings)
 
 
+def _model_input(part: Any) -> str | None:
+    if not isinstance(part, Mapping):
+        return None
+    if part.get("type") == "image":
+        return "image"
+    if part.get("type") == "file":
+        return str(part.get("model_input") or "")
+    return None
+
+
+async def _fetch_part(part: Mapping[str, Any], settings: Settings) -> bytes:
+    data = await fetch_ref_bytes(part, settings)
+    size = part.get("size_bytes")
+    if isinstance(size, int) and len(data) != size:
+        raise store_error(
+            f"input {part.get('type')} is {len(data)} bytes, expected {size}",
+            operation="get",
+            key=str(part.get("object_id") or ""),
+        )
+    return data
+
+
 async def fetch_input_images(
     parts: list[Any], settings: Settings
 ) -> list[dict[str, str]]:
-    """Fetch the `image` parts of `turn.start` as Pi image parts."""
+    """Fetch the `image` parts and image `file` parts of `turn.start` for Pi."""
     images: list[dict[str, str]] = []
     for part in parts:
-        if not isinstance(part, Mapping) or part.get("type") != "image":
+        if _model_input(part) != "image":
             continue
-        data = await fetch_ref_bytes(part, settings)
-        size = part.get("size_bytes")
-        if isinstance(size, int) and len(data) != size:
-            raise store_error(
-                f"input image is {len(data)} bytes, expected {size}",
-                operation="get",
-                key=str(part.get("object_id") or ""),
-            )
+        data = await _fetch_part(part, settings)
         images.append(
             {
                 "type": "image",
@@ -131,6 +147,28 @@ async def fetch_input_images(
             }
         )
     return images
+
+
+def file_block(filename: str, text: str) -> str:
+    """The prompt text of one `input_file`: its text inside a `<file>` block."""
+    body = text[:-1] if text.endswith("\n") else text
+    return f'<file name="{html.escape(filename, quote=True)}">\n{body}\n</file>'
+
+
+async def fetch_input_files(parts: list[Any], settings: Settings) -> list[str]:
+    """Fetch the text `file` parts of `turn.start` as prompt blocks, in order.
+
+    Raises `UnicodeDecodeError` when a file is not UTF-8 text.
+    """
+    blocks: list[str] = []
+    for part in parts:
+        if _model_input(part) != "text":
+            continue
+        data = await _fetch_part(part, settings)
+        blocks.append(
+            file_block(str(part.get("filename") or ""), data.decode("utf-8-sig"))
+        )
+    return blocks
 
 
 def mcp_servers_from_context(context: Mapping[str, Any]) -> list[Any]:

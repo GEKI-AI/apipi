@@ -401,7 +401,7 @@ async def _store_event(
     return event_body(event)
 
 
-def _user_image_ids(data: dict[str, Any]) -> list[str]:
+def _user_file_ids(data: dict[str, Any]) -> list[str]:
     content = data.get("content")
     if data.get("role") != "user" or not isinstance(content, list):
         return []
@@ -409,7 +409,7 @@ def _user_image_ids(data: dict[str, Any]) -> list[str]:
         part["file_id"]
         for part in content
         if isinstance(part, dict)
-        and part.get("type") == "input_image"
+        and part.get("type") in ("input_image", "input_file")
         and isinstance(part.get("file_id"), str)
     ]
 
@@ -543,7 +543,7 @@ async def _apply(
             item_id=item_id,
         )
         await link_session_file_item(
-            db, tenant_id, session_id, _user_image_ids(data), item_id
+            db, tenant_id, session_id, _user_file_ids(data), item_id
         )
         return
     if envelope.type == "item.done":

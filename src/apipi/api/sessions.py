@@ -111,6 +111,28 @@ class OpenAIInputImage(StrictModel):
         return self
 
 
+class OpenAIInputFile(StrictModel):
+    type: Literal["input_file"]
+    file_id: str | None = None
+    filename: str | None = None
+    file_data: str | None = None
+    file_url: str | None = None
+
+    @model_validator(mode="after")
+    def by_file_id(self) -> Self:
+        for field in ("file_data", "file_url"):
+            if getattr(self, field) is not None:
+                raise PydanticCustomError(
+                    "not_implemented",
+                    "input_file {field} is not implemented. Upload the file and "
+                    "send its file_id.",
+                    {"field": field},
+                )
+        if not self.file_id:
+            raise ValueError("input_file needs file_id")
+        return self
+
+
 class OpenAIInputOther(BaseModel):
     type: str
 
@@ -125,12 +147,13 @@ class OpenAIInputOther(BaseModel):
 
 def _part_kind(value: Any) -> str:
     kind = value.get("type") if isinstance(value, dict) else getattr(value, "type", "")
-    return kind if kind in ("input_text", "input_image") else "other"
+    return kind if kind in ("input_text", "input_image", "input_file") else "other"
 
 
 OpenAIInputPart = Annotated[
     Annotated[OpenAIInputText, Tag("input_text")]
     | Annotated[OpenAIInputImage, Tag("input_image")]
+    | Annotated[OpenAIInputFile, Tag("input_file")]
     | Annotated[OpenAIInputOther, Tag("other")],
     Discriminator(_part_kind),
 ]
@@ -185,14 +208,14 @@ def _message_text(messages: list[OpenAIMessageInput] | None) -> str:
     if not messages:
         raise ValueError("message needs input")
     texts: list[str] = []
-    saw_image = False
+    saw_other = False
     for message in messages:
         for part in message.content:
             if isinstance(part, OpenAIInputText):
                 texts.append(part.text)
-            elif isinstance(part, OpenAIInputImage):
-                saw_image = True
-    if not texts and not saw_image:
+            elif isinstance(part, OpenAIInputImage | OpenAIInputFile):
+                saw_other = True
+    if not texts and not saw_other:
         raise ValueError("message needs input_text")
     return "\n".join(texts)
 

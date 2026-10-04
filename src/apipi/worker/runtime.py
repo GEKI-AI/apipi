@@ -60,6 +60,7 @@ from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.settings_json import resolve_system_prompt
 from apipi.worker.sink import ResultSink
 from apipi.worker.turn_context import (
+    fetch_input_files,
     fetch_input_images,
     fetch_pi_session_bytes,
     materialize_skill_zips,
@@ -495,7 +496,7 @@ def _model_span_attrs(
 def _user_item_content(
     text: str, parts: list[dict[str, Any]]
 ) -> str | list[dict[str, Any]]:
-    if not any(part.get("type") == "image" for part in parts):
+    if not any(part.get("type") in ("image", "file") for part in parts):
         return text
     stored: list[dict[str, Any]] = []
     for part in parts:
@@ -503,7 +504,29 @@ def _user_item_content(
             stored.append({"type": "input_text", "text": str(part.get("text") or "")})
         elif part.get("type") == "image":
             stored.append({"type": "input_image", "file_id": part.get("file_id")})
+        elif part.get("type") == "file":
+            stored.append(
+                {
+                    "type": "input_file",
+                    "file_id": part.get("file_id"),
+                    "filename": part.get("filename"),
+                }
+            )
     return stored
+
+
+def _prompt_text(text: str, parts: list[dict[str, Any]], blocks: list[str]) -> str:
+    """The prompt with each text file block at the place of its part."""
+    if not blocks:
+        return text
+    pending = iter(blocks)
+    out: list[str] = []
+    for part in parts:
+        if part.get("type") == "input_text":
+            out.append(str(part.get("text") or ""))
+        elif part.get("type") == "file" and part.get("model_input") == "text":
+            out.append(next(pending))
+    return "\n".join(out)
 
 
 def _spawn_identity_empty(user_id: str | None, org_id: str | None) -> dict[str, Any]:
@@ -556,14 +579,27 @@ async def run_turn(
         if settings is not None and isinstance(item_content, list):
             try:
                 images = await fetch_input_images(ordered, settings)
+                text = _prompt_text(
+                    text, ordered, await fetch_input_files(ordered, settings)
+                )
             except ObjectStoreError:
                 await report_environment_failed(
                     sink,
                     hub,
                     tenant_id,
                     session_id,
-                    "Cannot read input images",
+                    "Cannot read input files",
                     code="artifact_store",
+                )
+                return
+            except UnicodeDecodeError:
+                await report_environment_failed(
+                    sink,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    "An input file is not UTF-8 text",
+                    code="invalid_request",
                 )
                 return
         resolved_key = api_key if api_key is not None else ctx.model.api_key

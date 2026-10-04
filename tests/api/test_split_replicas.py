@@ -670,3 +670,50 @@ async def test_turn_start_with_an_image_is_forwarded_without_its_reference(
     assert replica_harness.images == [
         [{"type": "image", "data": encoded, "mimeType": "image/png"}]
     ]
+
+
+async def test_turn_start_with_a_file_is_forwarded_without_its_reference(
+    replicas: Replicas,
+    replica_harness: FakeHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apipi.workerhub import forward as forward_module
+
+    stored: list[dict[str, Any]] = []
+    real = forward_module.create_worker_forward
+
+    async def spy(db: Any, row: WorkerForward) -> None:
+        stored.append(dict(row.body))
+        await real(db, row)
+
+    monkeypatch.setattr(forward_module, "create_worker_forward", spy)
+    session_id = await _new_session(replicas.client_b)
+    uploaded = await replicas.client_b.post(
+        "/v1/files",
+        headers=_auth(),
+        data={"purpose": "user_data"},
+        files={"file": ("notes.md", b"# notes", "text/markdown")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    file_id = uploaded.json()["id"]
+    content = [
+        {"type": "input_text", "text": "read"},
+        {"type": "input_file", "file_id": file_id, "filename": "plan.md"},
+    ]
+    posted = await replicas.client_b.post(
+        f"/v1/agents/sessions/{session_id}/events",
+        headers=_auth(),
+        json={
+            "events": [
+                {
+                    "type": "agent.session.input.message",
+                    "input": [{"role": "user", "content": content}],
+                }
+            ]
+        },
+    )
+    assert posted.status_code == 200, posted.text
+    assert replicas.calls == [("acquire", "turn.start")]
+    parts = stored[0]["payload"]["parts"]
+    assert parts[1] == {"type": "file", "file_id": file_id, "filename": "plan.md"}
+    assert replica_harness.prompts == ['read\n<file name="plan.md">\n# notes\n</file>']

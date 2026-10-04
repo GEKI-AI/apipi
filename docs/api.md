@@ -238,7 +238,8 @@ identity has a `user_id`, a user file is visible only when its
 like a file of another tenant: `GET /v1/files/{file_id}`, `/content`,
 `POST /v1/apipi/files/{file_id}/download`, and `DELETE
 /v1/files/{file_id}` return `404`, the lists leave it out, an `after`
-cursor on it is `400`, and an `input_image` with its `file_id` or an
+cursor on it is `400`, and an `input_image` or `input_file` with its
+`file_id` or an
 `environment.files` entry with its `file_id` (on session create, or in
 `session_defaults` on agent create and update) is `404`. Files of kind
 `file` are agent files and stay visible to every identity of the
@@ -252,7 +253,8 @@ there. An identity without `user_id` sees every file of the tenant.
 
 A file can be bound to one or more sessions. An image is bound to the
 session whose message carried it, and an image sent by `file_id` is
-bound to that session too, whatever its kind. A binding has a `path`
+bound to that session too, whatever its kind. So is a file sent as
+`input_file` (see [events](#events)). A binding has a `path`
 (the workspace path of an attachment, null for images) and the
 `item_id` of the user item the file came with. `item_id` is set when
 the worker stores that user item and the item lists the file, so it is
@@ -498,7 +500,8 @@ one shape or the other, not both.
 
 A message event starts a turn. Nested form: `type`
 `agent.session.input.message` and `input` with a `user` message whose
-`content` has `input_text` and, for a vision model, `input_image`.
+`content` has `input_text`, `input_image` (for a vision model), and,
+in a session without a computer, `input_file`.
 A model that is not in the registry, or whose `input` does not include
 `image`, returns `400` with code `unsupported_input`. Flat form: `type`
 `agent.session.input.message` and `content` or `text`.
@@ -528,8 +531,55 @@ item keeps `{"type": "input_image", "file_id": "file-…"}`, never the
 base64. The worker that runs the turn reads the image from the store
 and passes it to the model. A message that, with the session context,
 is too large to send to a worker fails before the turn with `413` and
-code `payload_too_large`. Images never count toward that limit. Follow-up
-messages work the same way after the session is idle. A message while
+code `payload_too_large`. Images and files never count toward that
+limit.
+
+An `input_file` part is `{"type": "input_file", "file_id": "file-…"}`
+with an optional `filename`. `file_id` is the id of a file of the
+tenant that the caller can see (`404` otherwise, see
+[files](#files)), uploaded with `POST /v1/files` or a
+[presigned upload](#uploads), for example with `purpose: "attachment"`.
+`filename` replaces the stored file name in the prompt and in the item.
+A part without `file_id` is `400`; `file_data` and `file_url` are not
+implemented. A message may carry up to `APIPI_MAX_FILES_PER_MESSAGE`
+(default 10) `input_file` parts, and a message with only `input_file`
+parts starts a turn too.
+
+In a session without a computer (`environment.type` `none`), the
+gateway decides from the content type and the name of the file how it
+goes to the model, before the turn starts:
+
+| File | To the model |
+| --- | --- |
+| Content type in `APIPI_IMAGE_MIMES` | As an image, like `input_image` with that `file_id`. The model must accept images (`400` `unsupported_input` otherwise), the size must be within `APIPI_MAX_IMAGE_BYTES`, and the file counts toward `APIPI_MAX_IMAGES`. |
+| Content type `text/*`, `application/json`, `application/xml`, `application/yaml`, `application/x-yaml`, or `application/javascript` | As text. |
+| No content type or `application/octet-stream`, and a name ending in `.txt`, `.md`, `.markdown`, `.csv`, `.tsv`, `.json`, `.jsonl`, `.yaml`, `.yml`, `.xml`, `.toml`, `.ini`, `.log`, `.py`, `.js`, `.ts`, `.tsx`, `.jsx`, `.sql`, `.sh`, `.html`, `.css`, `.java`, `.go`, `.rs`, `.rb`, `.php`, `.c`, `.h`, `.cpp`, `.cs`, `.kt`, or `.swift` | As text. |
+| Anything else (pdf, xlsx, docx, zip, …) | Not at all: `400` with code `unsupported_file_type`, and a message that says the session needs a computer for that file type. |
+
+A text file must be at most `APIPI_MAX_INLINE_FILE_BYTES` (256 KiB by
+default, `413` with code `payload_too_large` otherwise), and its bytes
+must be UTF-8 (`400` `unsupported_file_type` otherwise). The gateway
+reads the stored bytes once to check this. The model gets the text at
+the place of the part, with the file name, joined to the `input_text`
+parts by a newline:
+
+```
+<file name="notes.md">
+…content…
+</file>
+```
+
+Each file is bound to the session without a `path` (see
+[files](#files)) and keeps its kind, so an uploaded file of kind `file`
+stays a `file` and an attachment stays an attachment. The user item
+keeps `{"type": "input_file", "file_id": "file-…", "filename": "…"}`,
+never the text. The worker reads the file from the store, like an
+image. A session with a computer (`openai_hosted`, which is also the
+default when create omits `environment`) does not take `input_file`
+yet: the request fails with `501`, type `not_implemented`, and code
+`input_file`, and nothing is dropped silently.
+
+Follow-up messages work the same way after the session is idle. A message while
 the session is `in_progress` cancels that turn (or fails it if the
 process no longer owns it) and starts a new turn, so a hung Pi cannot
 block the next command. `GET` of a session that is `in_progress` with

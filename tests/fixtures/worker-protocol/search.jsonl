@@ -1,8 +1,8 @@
 {"fixture": "search", "format": 1, "title": "A web_search call goes to the API and the reply comes back", "description": "The worker waits until the API acked the session so far, then sends search.request and gets search.reply with normalized results.", "api": {"search": true}}
 {"step": "action", "for": "worker", "name": "script_model", "args": {"search": {"query": "pi agents", "max_results": 3}}}
 {"step": "connect"}
-{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
-{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "store_check": "<store_check>", "revoke": [], "ttl": {}, "features": ["image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["file_refs", "image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "store_check": "<store_check>", "revoke": [], "ttl": {}, "features": ["file_refs", "image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
 {"from": "worker", "frame": {"type": "store.proof", "marker": "<var:marker>", "nonce": "<var:nonce>"}}
 {"step": "action", "for": "api", "name": "create_session", "args": {"tools": ["web_search"]}}
 {"step": "action", "for": "api", "name": "start_turn", "args": {"text": "hi"}}

@@ -58,7 +58,7 @@ CONTEXT_OPS = frozenset({"turn.start", "turn.continue", "sandbox.boot"})
 STRIPPED_FIELDS = ("context", "run_mode", "sandbox_image", "last_seq")
 
 ContextFactory = Callable[..., Awaitable[dict[str, Any] | None]]
-ImageFactory = Callable[..., Awaitable[list[dict[str, Any]]]]
+PartFactory = Callable[..., Awaitable[list[dict[str, Any]]]]
 StopLocal = Callable[..., Awaitable[None]]
 
 
@@ -102,15 +102,22 @@ def forward_body(
 
 
 def _forward_part(part: Any) -> Any:
-    """An image part without its store reference; the owner signs it again."""
+    """An image or file part without its store reference; the owner signs it."""
     if isinstance(part, dict) and part.get("type") == "image":
         return {"type": "image", "file_id": part.get("file_id")}
+    if isinstance(part, dict) and part.get("type") == "file":
+        return {
+            "type": "file",
+            "file_id": part.get("file_id"),
+            "filename": part.get("filename"),
+        }
     return part
 
 
-def _has_image(parts: Any) -> bool:
+def _has_ref(parts: Any) -> bool:
     return isinstance(parts, list) and any(
-        isinstance(part, dict) and part.get("type") == "image" for part in parts
+        isinstance(part, dict) and part.get("type") in ("image", "file")
+        for part in parts
     )
 
 
@@ -124,7 +131,7 @@ class Forwarder:
         bus: InstanceBus,
         *,
         context_factory: ContextFactory | None = None,
-        image_factory: ImageFactory | None = None,
+        part_factory: PartFactory | None = None,
         stop_local: StopLocal | None = None,
         sent_timeout: float = SENT_TIMEOUT,
         poll_interval: float = RESULT_POLL,
@@ -133,7 +140,7 @@ class Forwarder:
         self.store = store
         self.bus = bus
         self.context_factory = context_factory
-        self.image_factory = image_factory
+        self.part_factory = part_factory
         self.stop_local = stop_local
         self.sent_timeout = sent_timeout
         self.poll_interval = poll_interval
@@ -477,10 +484,10 @@ class Forwarder:
         self, row: WorkerForward, body: dict[str, Any]
     ) -> BaseCommandPayload:
         data = dict(body.get("payload") or {})
-        if row.op == "turn.start" and _has_image(data.get("parts")):
-            if self.image_factory is None:
-                raise unreachable("This API replica cannot build image references")
-            data["parts"] = await self.image_factory(row.tenant_id, data["parts"])
+        if row.op == "turn.start" and _has_ref(data.get("parts")):
+            if self.part_factory is None:
+                raise unreachable("This API replica cannot build file references")
+            data["parts"] = await self.part_factory(row.tenant_id, data["parts"])
         model = COMMAND_PAYLOAD_MODELS[row.op].model_validate(data)
         if (
             body.get("has_context")

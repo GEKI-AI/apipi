@@ -331,7 +331,7 @@ Rules for the worker:
 | `last_seq` | integer, 0 or more | The session cursor. See [Sequencing and delivery](#sequencing-and-delivery). |
 | `text` | string | The user input as text. |
 | `images` | list | Always an empty list. Images travel in `parts`. The field stays so that the payload does not change for older workers. |
-| `parts` | list | The input in order: `{type: "input_text", text}` and [image references](#image-references). |
+| `parts` | list | The input in order: `{type: "input_text", text}`, [image references](#image-references), and [file references](#input-file-references). |
 
 #### Image references
 
@@ -356,6 +356,44 @@ The worker fetches the bytes the same way as a file reference, before it
 reports the turn, and passes them to the model as images in the order of
 `parts`. A worker that cannot fetch an image reports the turn as failed
 with code `artifact_store`. A worker does not upload input images.
+
+#### Input file references
+
+A file part is one `input_file` of a session without a computer, as a
+reference to a file in the store. Like an image, its bytes never travel
+in a command. The API checks the type, the size, and (for text) the UTF-8
+encoding of the file before it sends `turn.start`, and sends file parts
+only to a worker that listed the feature `file_refs`.
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `type` | string | yes | `file`. |
+| `file_id` | string | yes | The id of the file. |
+| `filename` | string | yes | The file name the model sees and the user item keeps. |
+| `object_id` | string | yes | The object key of the file in the store. |
+| `url` | string | S3 store | A presigned GET URL with a short TTL. |
+| `local_path` | string | Filesystem store | The path relative to the store root. |
+| `mime_type` | string | yes | The content type of the file, `application/octet-stream` when it has none. |
+| `size_bytes` | integer, 0 or more | no | The size of the file. |
+| `model_input` | string | yes | `text` or `image`: how the worker passes the file to the model. |
+
+The worker fetches the bytes the same way as an image reference. For
+`model_input` `image` it passes them to the model as an image, in the
+order of the image parts. For `text` it decodes the bytes as UTF-8 and
+puts the text in the prompt at the place of the part, inside a block
+with the file name:
+
+```
+<file name="notes.md">
+…content…
+</file>
+```
+
+The prompt is then the `input_text` parts and these blocks in order,
+joined by a newline. The worker puts the part in the user message item
+as `{type: "input_file", file_id, filename}`. A worker that cannot fetch
+a file reports the turn as failed with code `artifact_store`, and one
+whose text file is not UTF-8 with code `invalid_request`.
 
 ### `turn.continue`
 
@@ -855,13 +893,15 @@ names the receiver does not know: it ignores them.
 | `lease_cursor` | `payload.last_seq` in `turn.start`, `turn.continue`, and `sandbox.boot`. | Yes |
 | `session_stopped` | The worker acks `session.stop` on receipt. The durable `session.stopped` envelope completes it, and the API waits up to 15 seconds for it. | No |
 | `image_refs` | `turn.start` carries input images as [image references](#image-references) in `parts`, and the worker no longer uploads them with the kind `input_image`. | No |
+| `file_refs` | `turn.start` carries the `input_file` parts of a session without a computer as [file references](#input-file-references) in `parts`. | No |
 
 A worker does not wire web search when the API did not list `search`, and it
 fails an upload with a clear error, without sending an envelope, when the API
 did not list `presign`. The API refuses a command op that needs a feature the
 worker did not list. It also refuses a `turn.start` with image parts for a
-worker that did not list `image_refs`: the HTTP request fails with `501` and
-code `unsupported_op`, and the message names the feature.
+worker that did not list `image_refs`, and a `turn.start` with file parts
+for a worker that did not list `file_refs`: the HTTP request fails with
+`501` and code `unsupported_op`, and the message names the feature.
 
 **Upgrade order.** Upgrade the API first and the workers after it. A new API
 tolerates old workers. An old worker rejects a command context with a field
@@ -871,7 +911,8 @@ after every worker and every API runs a version that ignores unknown fields.
 version, because a worker cannot guess a safe heartbeat. While some workers
 do not list `image_refs` yet, the API places a message with images on a
 worker that lists it when one has room. A message with images that still
-lands on an older worker fails with `501`. Text turns are not affected.
+lands on an older worker fails with `501`. The same holds for `file_refs`
+and a message with `input_file` parts. Text turns are not affected.
 
 **Rollback order.** Roll back in the reverse order: the workers first, then
 the API. A worker with `image_refs` accepts only image references and
