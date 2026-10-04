@@ -107,6 +107,17 @@ Firecracker and what the rootfs must contain are in
 If kernel, rootfs, KVM, or TAP cannot start, the tests skip. They still
 require a real microVM.
 
+`tests/e2e/test_microvm_egress.py` checks the egress gateway from inside
+a guest: allowed and other hosts, IP addresses, other ports, DNS,
+private hosts, and the CA bundle with `curl`, Python, Node, and `git`.
+It needs internet access from the worker host and root, because it
+also runs a private upstream on `127.0.0.1:443`. The hosts default to
+`example.com`, `example.org`, `github.com`, and `localtest.me` (a
+public name for `127.0.0.1`). Override them with
+`APIPI_E2E_EGRESS_HOST`, `APIPI_E2E_EGRESS_OTHER_HOST`,
+`APIPI_E2E_EGRESS_INTERCEPT_HOST`, `APIPI_E2E_EGRESS_GIT_REPO`, and
+`APIPI_E2E_EGRESS_PRIVATE_HOST`.
+
 ## Slow tests
 
 ```
