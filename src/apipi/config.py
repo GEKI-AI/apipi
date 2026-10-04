@@ -191,6 +191,8 @@ _SANDBOX_NETWORK_TOML = {
     "egress_allowlist": "microvm_egress_allowlist",
     "egress_hosts": "microvm_egress_hosts",
     "egress_mbit": "microvm_egress_mbit",
+    "private_hosts": "microvm_egress_private_hosts",
+    "upstream_ca": "microvm_egress_upstream_ca",
 }
 _SANDBOX_TTL_TOML = {
     "openai_hosted": "sandbox_ttl_openai_hosted",
@@ -1026,6 +1028,18 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias=AliasChoices(
             "APIPI_MICROVM_EGRESS_MBIT", "microvm_egress_mbit"
+        ),
+    )
+    microvm_egress_private_hosts: HostList = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "APIPI_MICROVM_EGRESS_PRIVATE_HOSTS", "microvm_egress_private_hosts"
+        ),
+    )
+    microvm_egress_upstream_ca: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "APIPI_MICROVM_EGRESS_UPSTREAM_CA", "microvm_egress_upstream_ca"
         ),
     )
     db_pool_size: int = Field(

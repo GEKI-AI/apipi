@@ -341,6 +341,30 @@ registries when `packages` is set so install can run. A session cannot
 add a host that `[sandbox.network]` forbids. Model and HTTP MCP calls
 go through the host broker, so they still work when TAP is locked.
 
+In `microvm`, the policy is enforced by hostname, not by IP address.
+Guest TCP to ports 80, 443, and 8443 goes to an egress gateway in the
+worker process. The guest needs no proxy settings. On 443 and 8443 the
+gateway reads the server name (SNI) from the TLS handshake. On 80 it
+reads the `Host` header. It then resolves that name itself, checks
+every address against the private ranges, and connects to the address
+it resolved, not to the address the guest asked for. A name that
+resolves to a private address is rejected in every mode, so DNS
+rebinding or a changed `/etc/hosts` in the guest cannot reach the
+worker network. The bytes are passed through unchanged, so the guest
+still sees the real certificate of the server. UDP to port 443 is
+rejected, so QUIC clients fall back to TCP.
+
+With `restricted` (or the process-wide TAP allowlist), a hostname must
+match an allowed name exactly (case does not matter). A connection
+without a server name, or with an IP address as the server name or
+`Host`, is rejected. TCP to other ports and other UDP traffic is
+rejected. Guest DNS goes to a filtering resolver on the TAP host IP.
+It forwards queries for allowed names and answers `NXDOMAIN` for every
+other name, so DNS cannot carry data out. With `enabled`, public hosts
+are allowed, IP addresses included, other ports use the direct NAT
+path, and DNS goes directly to the public resolvers, as before.
+`disabled` does not use the gateway.
+
 After a sandbox TTL wipe, the next turn recreates `/workspace` and
 re-applies the stored files (inline and Files API ids), env, packages,
 setup commands, and network policy. The wipe deletes the session

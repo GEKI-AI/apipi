@@ -27,6 +27,18 @@ mkdir -p "$WS" "$WS/inputs"
 if [ -b /dev/vdb ]; then
   tar -xf /dev/vdb -C "$WS"
 fi
+CA_BUNDLE=
+if [ -f "$WS/.apipi/egress-ca.pem" ] && [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+  CA_DIR=/tmp/apipi
+  if [ -d /run ] && mount -t tmpfs -o mode=755,nosuid,nodev tmpfs /run 2>/dev/null; then
+    CA_DIR=/run/apipi
+  fi
+  mkdir -p "$CA_DIR"
+  if cat /etc/ssl/certs/ca-certificates.crt "$WS/.apipi/egress-ca.pem" > "$CA_DIR/ca-bundle.pem"; then
+    chmod 644 "$CA_DIR/ca-bundle.pem"
+    CA_BUNDLE="$CA_DIR/ca-bundle.pem"
+  fi
+fi
 if [ -f "$WS/.apipi/net" ]; then
   . "$WS/.apipi/net"
   if command -v ip >/dev/null 2>&1; then
@@ -57,6 +69,13 @@ if [ -f "$WS/.apipi/env" ]; then
   set +a
 fi
 export HOME="$WS"
+if [ -n "$CA_BUNDLE" ]; then
+  export SSL_CERT_FILE="$CA_BUNDLE"
+  export REQUESTS_CA_BUNDLE="$CA_BUNDLE"
+  export GIT_SSL_CAINFO="$CA_BUNDLE"
+  export NODE_EXTRA_CA_CERTS="$CA_BUNDLE"
+  export CURL_CA_BUNDLE="$CA_BUNDLE"
+fi
 mkdir -p /tmp/npm-cache
 if [ -d /var/cache/npm ]; then
   cp -a /var/cache/npm/. /tmp/npm-cache/ 2>/dev/null || true

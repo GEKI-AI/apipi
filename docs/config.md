@@ -719,22 +719,56 @@ use **host** loopback, so it cannot open Postgres on the worker's
 when the model host itself is on a private address. A session
 allowlist cannot open a private range.
 
+Guest TCP to ports 80, 443, and 8443 goes through an egress gateway
+in the worker process. The worker starts one gateway per microVM on
+the TAP host IP and sends that traffic to it with iptables `DNAT`, so
+the guest needs no proxy settings. The gateway reads the hostname from
+the TLS server name (SNI) on 443 and 8443 and from the `Host` header on
+80. It resolves the hostname itself, rejects it if any address is
+private, and connects to the address it resolved. Allowed connections
+are passed through byte for byte, so certificate pinning in the guest
+keeps working. UDP to port 443 is rejected so QUIC clients use TCP.
+Each worker also creates a certificate authority in memory when it
+starts. The key never leaves worker memory. Only the certificate goes
+to the guest, on the workspace drive. Guest init joins the image's
+system authorities and that certificate into `/run/apipi/ca-bundle.pem`
+and points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`,
+`NODE_EXTRA_CA_CERTS`, and `CURL_CA_BUNDLE` at it. This needs a guest
+image built from this ApiPi version; an older image skips the bundle.
+The gateway uses the authority only for hosts whose HTTPS traffic it
+must read, and no current setting turns that on.
+
 To lock destinations, set `egress_allowlist = true`. Then the guest
 may reach only the model host, this session's HTTP MCP hosts, extra
-`egress_hosts`, package registries when `environment.packages` is set,
-and DNS, and only when those addresses are public. Unlisted TCP is
-rejected. Private ranges stay rejected even if a name resolves to
-one. Session `environment.network` can
-still disable TAP egress or restrict it to named hosts. A session
-cannot add a host that this allowlist forbids. If the allowlist is
-off, a session may still set `disabled` or `restricted`. Isolation
-`none` cannot enforce that field.
+`egress_hosts`, and package registries when `environment.packages` is
+set, and only by those exact hostnames. A connection without a server
+name, or to an IP address, is rejected. Unlisted TCP ports and other
+UDP are rejected. Guest DNS goes to a filtering resolver on the TAP
+host IP that answers only listed names and returns `NXDOMAIN` for the
+rest. Private ranges stay rejected even if a name resolves to one.
+Session `environment.network` can still disable TAP egress or restrict
+it to named hosts, with the same hostname rules. A session cannot add
+a host that this allowlist forbids. If the allowlist is off, a session
+may still set `disabled` or `restricted`. Isolation `none` cannot
+enforce that field.
+
+Some upstreams live on a private network, for example a self-hosted
+Forgejo. List them in `private_hosts` (hostnames or CIDRs, the same
+format as `[mcp].allow_hosts`). The gateway may then connect to them
+even though they resolve to a private address. The guest still cannot
+reach that address directly, and the host must also be allowed by the
+session policy. If such a host uses a certificate from an internal
+authority, put that authority in a PEM file and set `upstream_ca`. The
+gateway adds it to the system authorities when it checks an upstream
+certificate.
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
 | `APIPI_MICROVM_EGRESS_ALLOWLIST` | `[sandbox.network].egress_allowlist` | off | Optional fail-closed TAP allowlist when the backend is `microvm`. |
 | `APIPI_MICROVM_EGRESS_HOSTS` | `[sandbox.network].egress_hosts` | empty | Extra hostnames when the allowlist is on, comma-separated or a TOML array. |
 | `APIPI_MICROVM_EGRESS_MBIT` | `[sandbox.network].egress_mbit` | `50` | `tc` rate on each guest TAP, both directions. Always on. |
+| `APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` | `[sandbox.network].private_hosts` | empty | Private hostnames or CIDRs that the egress gateway (never the guest) may connect to when the session policy allows the host. Comma-separated or a TOML array. |
+| `APIPI_MICROVM_EGRESS_UPSTREAM_CA` | `[sandbox.network].upstream_ca` | unset | Path to a PEM bundle of extra certificate authorities the egress gateway trusts for upstream servers, in addition to the system authorities. The worker fails at startup if the file is missing. |
 
 ```toml
 [sandbox.network]
@@ -747,8 +781,10 @@ Lock down to named hosts (model host is still included):
 ```toml
 [sandbox.network]
 egress_allowlist = true
-egress_hosts = ["mcp.tavily.com"]
+egress_hosts = ["mcp.tavily.com", "forgejo.internal"]
 egress_mbit = 50
+private_hosts = ["forgejo.internal"]
+upstream_ca = "/etc/apipi/internal-ca.pem"
 ```
 
 ### Lifetime

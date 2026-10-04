@@ -324,7 +324,7 @@ API code.
 | --- | --- |
 | `apipi.protocol` | Every wire model, both directions: the handshake, control messages, envelopes and their payloads, commands with one payload model per `op`, the command context, replies, close reasons, and constants such as `PROTOCOL_VERSION` and the size limits. It imports only pydantic and the standard library. The base classes are named by role: `ControlMessage` for messages outside the envelope stream, `EnvelopePayload` for envelope payloads, `CommandPayload` for command payloads, and `ContextPart` for sections of the command context. `parse_worker_message` and `parse_api_message` turn one incoming frame into its model, and every model writes its frame with `to_wire()`. |
 | `apipi.workerhub` | The API side of the socket: `WorkerHub` and its leases, command building and the command queue, register and heartbeat handling, delta checks, inventory reconcile, and `RemoteExecution`. The socket route is `apipi.api.workers`, and ingest is `apipi.services.ingest`. |
-| `apipi.worker` | The worker process: the socket client (`run_worker`), command dispatch, the Pi runtime, `LocalExecution`, the outbox, `OutboxSink`, `OutboxLifecycleReporter`, artifact uploads, and the Pi harness and isolation backends under `apipi.worker.pi`. |
+| `apipi.worker` | The worker process: the socket client (`run_worker`), command dispatch, the Pi runtime, `LocalExecution`, the outbox, `OutboxSink`, `OutboxLifecycleReporter`, artifact uploads, the Pi harness and isolation backends under `apipi.worker.pi`, and the microVM egress gateway under `apipi.worker.egress`. |
 | `apipi.common` | Code both sides use: logging, metrics, tracing, failure codes, the sandbox and agent metadata rules, the in-process event bus, and object store paths. It imports no FastAPI, SQLAlchemy, or store code. |
 
 `tests/unit/test_import_boundary.py` enforces the split. It starts a
@@ -613,6 +613,13 @@ What is still lost, exactly:
   as before.
 - The turn itself. A guest or Pi that died with the worker cannot
   continue, so the turn fails and the client sees the error.
+
+The egress gateway certificate authority lives only in worker memory,
+so a restart creates a new one. No guest outlives the authority it
+trusts, because the restart ended those guests. A worker that runs for
+weeks makes a new authority for new guests a week before the old one
+expires (it is valid for 30 days). Running guests keep the gateway and
+authority they started with.
 
 ## Keepalive and reconnect
 

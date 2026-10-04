@@ -1,0 +1,198 @@
+import asyncio
+import contextlib
+import socket
+from collections.abc import AsyncIterator
+
+import pytest
+
+from apipi.worker.egress.dns import (
+    RCODE_FORMERR,
+    RCODE_NOTIMP,
+    RCODE_NXDOMAIN,
+    RCODE_SERVFAIL,
+    DnsFilter,
+    parse_question,
+)
+
+
+def query(name: str, ident: int = 0x1234, qtype: int = 1) -> bytes:
+    labels = b"".join(
+        len(part).to_bytes(1, "big") + part.encode() for part in name.split(".")
+    )
+    header = ident.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    return header + labels + b"\x00" + qtype.to_bytes(2, "big") + b"\x00\x01"
+
+
+def answer_for(packet: bytes) -> bytes:
+    question = parse_question(packet)
+    record = b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04\x5d\xb8\xd8\x22"
+    return (
+        packet[:2]
+        + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00"
+        + packet[12 : question.end]
+        + record
+    )
+
+
+def rcode(packet: bytes) -> int:
+    return packet[3] & 0x0F
+
+
+class FakeResolver:
+    def __init__(self) -> None:
+        self.udp: list[str] = []
+        self.tcp: list[str] = []
+        self.port = 0
+        self._udp: asyncio.DatagramTransport | None = None
+        self._tcp: asyncio.Server | None = None
+
+    async def start(self) -> None:
+        loop = asyncio.get_running_loop()
+        owner = self
+
+        class Proto(asyncio.DatagramProtocol):
+            def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                self.transport = transport
+
+            def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+                owner.udp.append(parse_question(data).name)
+                assert isinstance(self.transport, asyncio.DatagramTransport)
+                self.transport.sendto(answer_for(data), addr)
+
+        tcp = await asyncio.start_server(self._serve, "127.0.0.1", 0)
+        self.port = int(tcp.sockets[0].getsockname()[1])
+        self._tcp = tcp
+        transport, _ = await loop.create_datagram_endpoint(
+            Proto, local_addr=("127.0.0.1", self.port)
+        )
+        self._udp = transport
+
+    async def _serve(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        size = int.from_bytes(await reader.readexactly(2), "big")
+        data = await reader.readexactly(size)
+        self.tcp.append(parse_question(data).name)
+        reply = answer_for(data)
+        writer.write(len(reply).to_bytes(2, "big") + reply)
+        await writer.drain()
+        writer.close()
+
+    def close(self) -> None:
+        if self._udp is not None:
+            self._udp.close()
+        if self._tcp is not None:
+            self._tcp.close()
+
+
+@pytest.fixture
+async def resolver() -> AsyncIterator[FakeResolver]:
+    fake = FakeResolver()
+    await fake.start()
+    yield fake
+    fake.close()
+
+
+@pytest.fixture
+async def dns(resolver: FakeResolver) -> AsyncIterator[DnsFilter]:
+    allowed = {"api.example.com"}
+    filt = DnsFilter(
+        host="127.0.0.1",
+        allow=lambda name: name in allowed,
+        upstreams=(("127.0.0.1", resolver.port),),
+        timeout=1.0,
+    )
+    await filt.start()
+    yield filt
+    await filt.stop()
+
+
+async def udp_ask(port: int, packet: bytes) -> bytes:
+    loop = asyncio.get_running_loop()
+    got: asyncio.Future[bytes] = loop.create_future()
+
+    class Proto(asyncio.DatagramProtocol):
+        def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+            if not got.done():
+                got.set_result(data)
+
+    transport, _ = await loop.create_datagram_endpoint(
+        Proto, remote_addr=("127.0.0.1", port)
+    )
+    try:
+        transport.sendto(packet)
+        return await asyncio.wait_for(got, timeout=3)
+    finally:
+        transport.close()
+
+
+async def tcp_ask(port: int, packet: bytes) -> bytes:
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    try:
+        writer.write(len(packet).to_bytes(2, "big") + packet)
+        await writer.drain()
+        size = int.from_bytes(await reader.readexactly(2), "big")
+        return await reader.readexactly(size)
+    finally:
+        writer.close()
+        with contextlib.suppress(OSError):
+            await writer.wait_closed()
+
+
+async def test_allowed_name_is_forwarded_over_udp(
+    dns: DnsFilter, resolver: FakeResolver
+) -> None:
+    packet = query("API.example.com")
+    reply = await udp_ask(dns.udp_port, packet)
+    assert reply == answer_for(packet)
+    assert resolver.udp == ["api.example.com"]
+
+
+async def test_other_names_get_nxdomain(dns: DnsFilter, resolver: FakeResolver) -> None:
+    for name in ("evil.example.com", "example.com", "secret-data.attacker.test"):
+        packet = query(name, ident=0x4321, qtype=16)
+        reply = await udp_ask(dns.udp_port, packet)
+        assert reply[:2] == packet[:2]
+        assert reply[2] & 0x80
+        assert rcode(reply) == RCODE_NXDOMAIN
+        assert parse_question(reply).name == name
+        assert int.from_bytes(reply[6:8], "big") == 0
+    assert resolver.udp == []
+    assert resolver.tcp == []
+
+
+async def test_tcp_queries(dns: DnsFilter, resolver: FakeResolver) -> None:
+    packet = query("api.example.com", ident=7)
+    assert await tcp_ask(dns.tcp_port, packet) == answer_for(packet)
+    assert resolver.tcp == ["api.example.com"]
+    denied = await tcp_ask(dns.tcp_port, query("other.example.com"))
+    assert rcode(denied) == RCODE_NXDOMAIN
+    assert resolver.tcp == ["api.example.com"]
+
+
+async def test_malformed_and_unsupported(dns: DnsFilter) -> None:
+    bad = query("api.example.com")[:15]
+    assert rcode(await udp_ask(dns.udp_port, bad)) == RCODE_FORMERR
+    update = bytearray(query("api.example.com"))
+    update[2] = 0x28
+    assert rcode(await udp_ask(dns.udp_port, bytes(update))) == RCODE_NOTIMP
+    assert await dns.answer(b"\x00\x01\x80\x00" + b"\x00" * 8, tcp=False) is None
+
+
+async def test_upstream_down_is_servfail() -> None:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.bind(("127.0.0.1", 0))
+    dead = probe.getsockname()[1]
+    probe.close()
+    filt = DnsFilter(
+        host="127.0.0.1",
+        allow=lambda name: True,
+        upstreams=(("127.0.0.1", dead),),
+        timeout=0.2,
+    )
+    await filt.start()
+    try:
+        reply = await udp_ask(filt.udp_port, query("api.example.com"))
+        assert rcode(reply) == RCODE_SERVFAIL
+    finally:
+        await filt.stop()

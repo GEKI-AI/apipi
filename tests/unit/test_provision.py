@@ -256,6 +256,7 @@ def test_tap_policy_gateway_floor() -> None:
         restricted, gateway_allowlist=False, extra_hosts=PYPI_HOSTS
     )
     assert open_tap.allowlist is True
+    assert open_tap.mode == "restricted"
     assert "api.example.com" in open_tap.hosts
     assert "pypi.org" in open_tap.hosts
     with pytest.raises(SetupError, match="not allowed"):
@@ -274,6 +275,7 @@ def test_tap_policy_gateway_floor() -> None:
     assert disabled is not None
     locked = tap_policy_from(disabled, gateway_allowlist=False, extra_hosts=PYPI_HOSTS)
     assert locked.allowlist is True
+    assert locked.mode == "disabled"
     assert locked.hosts == ()
     enabled_policy = session_network_from({"network": {"access": "enabled"}})
     enabled = tap_policy_from(
@@ -283,8 +285,10 @@ def test_tap_policy_gateway_floor() -> None:
         extra_hosts=("pypi.org",),
     )
     assert enabled.allowlist is True
+    assert enabled.mode == "restricted"
     assert enabled.hosts == ("api.openai.com", "pypi.org")
     assert tap_policy_from(None, gateway_allowlist=False).allowlist is False
+    assert tap_policy_from(None, gateway_allowlist=False).mode == "enabled"
 
 
 def test_prepare_writes_network_policy(tmp_path: Path) -> None:

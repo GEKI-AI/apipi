@@ -250,13 +250,18 @@ guest may use the public internet. Private and special-use IPv4 ranges
 are rejected. The TAP subnet stays open for the host broker, so the
 model host is reached through that broker even when it is private.
 Each TAP is rate-limited with
-`tc` (`APIPI_MICROVM_EGRESS_MBIT`, default 50).
+`tc` (`APIPI_MICROVM_EGRESS_MBIT`, default 50). Guest TCP to ports 80,
+443, and 8443 goes through the egress gateway in the worker, which
+checks the hostname from TLS SNI or the `Host` header and connects to
+the address it resolved itself.
 
 To lock destinations, set `APIPI_MICROVM_EGRESS_ALLOWLIST=on`. Then the
 guest may reach only the model host, HTTP MCP hosts for that session,
-extra hosts in `APIPI_MICROVM_EGRESS_HOSTS`, package registries when
-`environment.packages` is set (PyPI, npm, Debian), and DNS (`1.1.1.1`
-and `8.8.8.8`). Other TCP is rejected. See [config](config.md).
+extra hosts in `APIPI_MICROVM_EGRESS_HOSTS`, and package registries
+when `environment.packages` is set (PyPI, npm, Debian), by exact
+hostname. IP addresses, other TCP ports, and other UDP are rejected.
+Guest DNS goes to a filtering resolver that answers only those names.
+See [config](config.md#networking).
 
 This is the mode that protects the host from a hostile session. Guest
 RAM is the real cost (`APIPI_MICROVM_MEM_MIB`, default 512). Chromium

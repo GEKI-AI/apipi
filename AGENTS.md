@@ -32,6 +32,7 @@ Code comments stay omitted unless asked.
 | `src/apipi/protocol/` | Every worker socket message: wire models, parsing, constants. Imports only pydantic and the standard library |
 | `src/apipi/workerhub/` | API side of the worker socket: hub, leases, commands, `RemoteExecution` |
 | `src/apipi/worker/` | Worker process: socket client, command dispatch, Pi runtime, execution, outbox, Pi harness, isolation. Imports nothing from the API |
+| `src/apipi/worker/egress/` | MicroVM egress gateway: hostname policy, SNI and `Host` checks, DNS filter, worker CA, TLS interception with request hooks |
 | `src/apipi/common/` | Code both sides use: logging, metrics, tracing, failure codes, metadata rules, in-process event bus. Imports no FastAPI, SQLAlchemy, or store |
 | `src/apipi/store/` | Durable store and object blobs |
 | `src/apipi/env/` | Computer and hosted/self_hosted environments |

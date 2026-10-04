@@ -327,6 +327,11 @@ async def run_worker(
             extra={"event": "worker.lease_ttl.ignored"},
         )
     metrics, tracing = worker_observability(settings)
+    if settings.run_mode == "microvm":
+        from apipi.worker.egress import set_egress_metrics, worker_ca
+
+        set_egress_metrics(metrics)
+        worker_ca()
     # A split worker holds no database and no object-store credentials.
     # Turn context arrives in commands, live deltas go over the socket
     # through the relay, and durable results go through the outbox

@@ -64,11 +64,11 @@ def split_allow_hosts(raw: object) -> tuple[str, ...]:
     return tuple(item for item in items if item)
 
 
-def _norm_host(host: str) -> str:
+def norm_host(host: str) -> str:
     return host.strip().rstrip(".").lower()
 
 
-def _allowed_networks(allow_hosts: tuple[str, ...]) -> tuple[Network, ...]:
+def allowed_networks(allow_hosts: tuple[str, ...]) -> tuple[Network, ...]:
     networks: list[Network] = []
     for entry in allow_hosts:
         try:
@@ -78,17 +78,17 @@ def _allowed_networks(allow_hosts: tuple[str, ...]) -> tuple[Network, ...]:
     return tuple(networks)
 
 
-def _allowed_names(allow_hosts: tuple[str, ...]) -> frozenset[str]:
+def allowed_names(allow_hosts: tuple[str, ...]) -> frozenset[str]:
     names: set[str] = set()
     for entry in allow_hosts:
         try:
             ipaddress.ip_network(entry, strict=False)
         except ValueError:
-            names.add(_norm_host(entry))
+            names.add(norm_host(entry))
     return frozenset(names)
 
 
-def _ip_blocked(ip: Address) -> bool:
+def ip_blocked(ip: Address) -> bool:
     if str(ip) in METADATA_IPS:
         return True
     if any(ip in net for net in BLOCKED_NETWORKS):
@@ -113,13 +113,13 @@ def _check_ips(
 ) -> None:
     if not ips:
         raise McpConnectError(f"mcp {label} blocked host: {url}")
-    networks = _allowed_networks(allow_hosts)
+    networks = allowed_networks(allow_hosts)
     for raw in ips:
         try:
             ip = ipaddress.ip_address(raw)
         except ValueError:
             raise McpConnectError(f"mcp {label} blocked host: {url}") from None
-        if _ip_blocked(ip) and not any(ip in net for net in networks):
+        if ip_blocked(ip) and not any(ip in net for net in networks):
             raise McpConnectError(f"mcp {label} blocked host: {url}")
 
 
@@ -146,11 +146,11 @@ def check_mcp_url_sync(
     else:
         _check_ips([host], url=url, allow_hosts=allow_hosts, label=label)
         return
-    if _norm_host(host) in METADATA_HOSTNAMES:
-        if _norm_host(host) not in _allowed_names(allow_hosts):
+    if norm_host(host) in METADATA_HOSTNAMES:
+        if norm_host(host) not in allowed_names(allow_hosts):
             raise McpConnectError(f"mcp {label} blocked host: {url}")
         return
-    if _norm_host(host) in _allowed_names(allow_hosts):
+    if norm_host(host) in allowed_names(allow_hosts):
         return
     if resolve is not None:
         ips = list(resolve(host))
@@ -175,11 +175,11 @@ async def check_mcp_url(
     else:
         _check_ips([host], url=url, allow_hosts=allow_hosts, label=label)
         return
-    if _norm_host(host) in METADATA_HOSTNAMES:
-        if _norm_host(host) not in _allowed_names(allow_hosts):
+    if norm_host(host) in METADATA_HOSTNAMES:
+        if norm_host(host) not in allowed_names(allow_hosts):
             raise McpConnectError(f"mcp {label} blocked host: {url}")
         return
-    if _norm_host(host) not in _allowed_names(allow_hosts):
+    if norm_host(host) not in allowed_names(allow_hosts):
         infos = await asyncio.to_thread(
             socket.getaddrinfo, host, port, 0, socket.SOCK_STREAM
         )

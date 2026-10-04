@@ -7,7 +7,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 def _is_under(path: Path, root: Path) -> bool:
@@ -91,8 +91,12 @@ class NetworkPolicy:
 
 @dataclass(frozen=True)
 class TapPolicy:
-    allowlist: bool
+    mode: Literal["enabled", "restricted", "disabled"]
     hosts: tuple[str, ...] = ()
+
+    @property
+    def allowlist(self) -> bool:
+        return self.mode != "enabled"
 
 
 def _names(raw: object) -> tuple[str, ...]:
@@ -290,19 +294,19 @@ def tap_policy_from(
 ) -> TapPolicy:
     if policy is None or policy.access == "enabled":
         if not gateway_allowlist:
-            return TapPolicy(allowlist=False)
+            return TapPolicy(mode="enabled")
         return TapPolicy(
-            allowlist=True, hosts=_unique_hosts((*gateway_hosts, *extra_hosts))
+            mode="restricted", hosts=_unique_hosts((*gateway_hosts, *extra_hosts))
         )
     if policy.access == "disabled":
-        return TapPolicy(allowlist=True)
+        return TapPolicy(mode="disabled")
     if gateway_allowlist:
         floor = {host.lower() for host in (*gateway_hosts, *extra_hosts)}
         for host in policy.allowed_domains:
             if host.lower() not in floor:
                 raise SetupError(f"network host {host} is not allowed")
     return TapPolicy(
-        allowlist=True,
+        mode="restricted",
         hosts=_unique_hosts((*policy.allowed_domains, *extra_hosts)),
     )
 
