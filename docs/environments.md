@@ -426,8 +426,13 @@ in the workspace before the turn. `none` rejects packages, setup commands, env, 
 A vault credential of type `environment_variable` lets code in the
 guest call HTTPS APIs with a key that the guest never holds. The guest
 environment sets the credential's `secret_name` to a placeholder, and
-the egress gateway on the worker replaces it in requests to the
-credential's `allowed_hosts`. See
+the egress gateway on the worker replaces it in HTTPS requests on
+ports 443 and 8443 to the credential's `allowed_hosts`. For those
+hosts only, the gateway terminates TLS with a certificate from the
+worker's certificate authority, which guest init adds to the guest's
+trusted bundle `/run/apipi/ca-bundle.pem` (see
+[configuration](config.md#networking)). Plain HTTP on port 80
+never gets a secret. See
 [Vaults and credentials](vaults.md#how-environment-credentials-work).
 
 These credentials depend on `network.access`:

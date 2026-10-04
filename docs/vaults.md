@@ -207,46 +207,90 @@ expect a sandbox that runs longer than the token's lifetime to get
 
 An `environment_variable` credential works only in a microVM sandbox,
 which means a session with `environment.type` `openai_hosted` on
-isolation `microvm`. A worker with a custom isolation backend has no
-egress gateway, so a sandbox with environment credentials fails to
-start there with a clear error. The worker runs an egress gateway next to each
-sandbox. All TCP traffic of the guest to ports 80, 443, and 8443 goes
-through that gateway. See [environments](environments.md#vault-credentials-and-the-network).
+isolation `microvm`. The worker runs an egress gateway next to each
+sandbox, and iptables sends all guest TCP to ports 80, 443, and 8443
+to it. The guest needs no proxy settings. The gateway is described in
+[environments](environments.md#vault-credentials-and-the-network) and
+[configuration](config.md#networking). A worker with a custom
+isolation backend has no egress gateway, so a sandbox with
+environment credentials fails to start there with an error that names
+the isolation.
 
-1. When the sandbox starts, the worker makes a random placeholder for
-   each environment credential, `apipi-secret-` followed by 32 hex
-   characters. The placeholder is new for every sandbox start.
-2. The guest environment sets `secret_name` to the placeholder. A
+When the sandbox starts, the worker does this for the credentials it
+received from the API:
+
+1. It makes a random placeholder for each credential,
+   `apipi-secret-` followed by 32 hex characters. The placeholder is
+   new for every sandbox start and every credential.
+2. It writes `secret_name=<placeholder>` into the guest environment. A
    program that reads `$GITHUB_TOKEN` gets the placeholder, not the
-   token. `echo $GITHUB_TOKEN` prints only the placeholder.
-3. For each host in `allowed_hosts`, the gateway terminates TLS with a
-   certificate from a per-worker certificate authority that the guest
-   trusts. `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, and
-   `NODE_EXTRA_CA_CERTS` point at a bundle that contains it.
-4. On an HTTPS request to one of the credential's `allowed_hosts`, the
-   gateway replaces the placeholder with `secret_value` in request
-   header values, including inside `Authorization: Basic` (after base64
-   decoding), and in the query string. It never changes the request
-   body.
-5. The gateway connects to the real host, checks its real
-   certificate, and sends the request. In response headers it replaces
-   the secret with the placeholder again.
+   token, so `echo $GITHUB_TOKEN` prints only the placeholder. A value
+   for the same name in `environment.env` cannot override it (session
+   create already rejects that clash).
+3. It tells the gateway to terminate TLS for every host in the
+   credentials' `allowed_hosts`. The gateway answers those
+   connections with a certificate from the worker's own certificate
+   authority. Guest init joins that authority with the image's system
+   authorities into `/run/apipi/ca-bundle.pem` and points
+   `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`,
+   `NODE_EXTRA_CA_CERTS`, and `CURL_CA_BUNDLE` at it. This needs a
+   guest image built from this ApiPi version or later.
+4. With `network.access` `restricted`, it adds the credential hosts to
+   the session's allowed hostnames.
 
-A request with the placeholder to any other host goes out unchanged.
-The placeholder alone is worthless. Plain HTTP (port 80) never gets a
-secret. Traffic to hosts that no credential names is not decrypted:
-the gateway passes the TLS connection through as it is.
+Then, for each HTTPS request on port 443 or 8443 to one of a
+credential's `allowed_hosts`, the gateway:
 
-For git, the guest image has a git credential helper. When git asks
-for a password for a host in a credential's `allowed_hosts`, the
-helper answers with the placeholder. The user name is
-`apipi.git_username` from the credential metadata when it is set.
-Without it, the helper uses `oauth2` for `gitlab.com` and
-`x-access-token` for every other host, which is what GitHub expects.
-The guest git configuration also rewrites SSH remotes for those hosts
-(`git@host:` and `ssh://git@host/`) to `https://host/`, so a clone URL
-copied from the SSH tab goes through the gateway too. No token is ever
-written into a remote URL or a file in the workspace.
+1. replaces the placeholder with `secret_value` in request header
+   values, including inside `Authorization: Basic` (it decodes the
+   base64 `user:password`, replaces, and encodes it again), so
+   `Bearer`, `token`, custom headers such as `X-Api-Key`, and git over
+   HTTPS all work,
+2. replaces the placeholder in the query string,
+3. never changes the path or the request body,
+4. connects to the real host, checks its real certificate, and sends
+   the request,
+5. replaces the secret with the placeholder again in the response
+   headers.
+
+A request with the placeholder to any other host goes out unchanged,
+and the placeholder alone is worthless. Plain HTTP on port 80 never
+gets a secret. Connections to hosts that no credential names are not
+decrypted: the gateway passes them through byte for byte, so the guest
+sees the real certificate of those servers.
+
+The gateway logs each injection as `event=egress.injection` with
+`session_id`, `credential_id`, and `host`, and counts it in
+`apipi_egress_injections_total`. It never logs the secret value or the
+placeholder. See [observability](observability.md).
+
+### Git
+
+Git asks a credential helper for a user name and a password. The
+worker writes two files onto the workspace drive: a small helper
+script, `.apipi/git-credential`, and a list of hosts,
+`.apipi/git-credentials`, with one line per credential host that holds
+the host, the user name, and the placeholder. Neither file contains a
+secret. The guest environment configures git through
+`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, and `GIT_CONFIG_VALUE_<n>`.
+For each credential host it sets:
+
+- `credential.https://<host>.helper` to the helper, so git asks it only
+  for that host,
+- `url.https://<host>/.insteadOf` to `git@<host>:` and to
+  `ssh://git@<host>/`, so a clone URL copied from the SSH tab uses
+  HTTPS and goes through the gateway.
+
+If `environment.env` already sets `GIT_CONFIG_COUNT` and its keys, the
+worker appends its entries after them. The helper answers only `get`
+requests for `https` URLs of a listed host. It ignores `store` and
+`erase`, so git cannot save the placeholder anywhere.
+
+The user name is `apipi.git_username` from the credential metadata
+when it is set. Without it, the helper uses `oauth2` for `gitlab.com`
+and `x-access-token` for every other host, which is what GitHub
+expects. No token is ever written into a remote URL or into
+`.git/config`.
 
 ### Requirements
 
@@ -279,12 +323,23 @@ when the sandbox starts. You do not have to list them twice. The
 session's stored `environment.network` does not show the added hosts.
 
 A credential host on a private network, such as a self-hosted Forgejo
-at `10.0.0.5`, works only when the operator lists it in
-`APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` on the worker. If its certificate
-comes from an internal certificate authority, the operator also sets
-`APIPI_MICROVM_EGRESS_UPSTREAM_CA` to a PEM bundle with that authority.
+at `10.0.0.5`, works only when the operator lists it on the worker in
+`APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` (`[sandbox.network].private_hosts`,
+hostnames or CIDRs). The gateway uses that list only for hostnames the
+session names itself, which credential hosts always are, so listing a
+private host does not open it for every session. If the server
+certificate comes from an internal certificate authority, the operator
+also sets `APIPI_MICROVM_EGRESS_UPSTREAM_CA`
+(`[sandbox.network].upstream_ca`) to a PEM bundle with that authority.
 The guest never reaches a private address directly. See
-[configuration](config.md).
+[configuration](config.md#networking).
+
+The worker must list the protocol feature `env_credentials`. A worker
+from an older ApiPi version does not list it, and the API does not send
+it a command with environment credentials: the request fails with
+`501` and code `unsupported_op` instead of starting a sandbox without
+the credentials. Upgrade the workers. See
+[worker protocol](worker-protocol.md#versioning-and-features).
 
 ### Limits
 
@@ -298,6 +353,9 @@ the query string. They do not cover:
 - Protocols other than HTTP over TLS: Postgres, MySQL, Redis, SSH,
   SMTP, IMAP, and others. The gateway does not change them. Git over
   SSH works only because the remote is rewritten to HTTPS.
+- HTTPS on ports other than 443 and 8443, such as a Forgejo that
+  listens on port 3000. Only those two ports go through the gateway, so
+  put a credential host behind a reverse proxy on 443.
 - HTTP/2 and gRPC to credential hosts. The gateway offers only
   `http/1.1` on intercepted connections, and most clients fall back to
   it. gRPC needs HTTP/2 and fails.
@@ -523,6 +581,19 @@ APIPI_MICROVM_EGRESS_PRIVATE_HOSTS=git.example.com
 APIPI_MICROVM_EGRESS_UPSTREAM_CA=/etc/apipi/internal-ca.pem
 APIPI_MICROVM_EGRESS_HOSTS=git.example.com   # only with APIPI_MICROVM_EGRESS_ALLOWLIST=true
 ```
+
+The same in `apipi.toml`:
+
+```toml
+[sandbox.network]
+private_hosts = ["git.example.com"]
+upstream_ca = "/etc/apipi/internal-ca.pem"
+```
+
+`private_hosts` also accepts a CIDR such as `10.0.0.0/24`. The worker
+fails at startup if the `upstream_ca` file is missing. Forgejo must
+serve HTTPS on port 443 or 8443, because only those ports go through
+the gateway.
 
 ### GitLab
 

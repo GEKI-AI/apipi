@@ -741,7 +741,8 @@ and points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`,
 `NODE_EXTRA_CA_CERTS`, and `CURL_CA_BUNDLE` at it. This needs a guest
 image built from this ApiPi version; an older image skips the bundle.
 The gateway uses the authority only for hosts whose HTTPS traffic it
-must read, and no current setting turns that on. On such a connection
+must read: the hosts of the session's vault environment credentials
+(see [Vaults and credentials](vaults.md#how-environment-credentials-work)). On such a connection
 the gateway forwards HTTP/1.1 requests one at a time. It rejects a
 request that has both `Content-Length` and `Transfer-Encoding`, drops
 hop-by-hop headers, and allows only WebSocket upgrades. After an

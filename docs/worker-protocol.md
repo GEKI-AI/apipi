@@ -518,7 +518,10 @@ writes a fresh placeholder per credential into the guest environment.
 A running sandbox keeps its snapshot, the same as for `mcp`. The
 worker MUST NOT log `secret_value` and MUST NOT write it to the guest
 or to the workspace drive. `redact_context` replaces it with `...`, and
-the model repr leaves it out.
+the model repr leaves it out. The API sends a non-empty list only to a
+worker that lists the feature `env_credentials`. A worker whose
+isolation has no egress gateway (anything but `microvm`) fails the
+sandbox start when the list is not empty.
 
 #### File references
 
@@ -960,16 +963,22 @@ names the receiver does not know: it ignores them.
 | `image_refs` | `turn.start` carries input images as [image references](#image-references) in `parts`, and the worker no longer uploads them with the kind `input_image`. | No |
 | `file_refs` | `turn.start` carries the `input_file` parts of a session without a computer as [file references](#input-file-references) in `parts`. | No |
 | `session_files` | `turn.start` carries the `input_file` parts of a session with a computer as [workspace files](#workspace-files), and the context carries `session_files`. | No |
+| `env_credentials` | The worker uses `context.env_credentials` when it starts a sandbox: placeholders in the guest environment, secret injection in the egress gateway, and the git credential helper. | No |
 
 A worker does not wire web search when the API did not list `search`, and it
 fails an upload with a clear error, without sending an envelope, when the API
 did not list `presign`. The API refuses a command op that needs a feature the
 worker did not list. It also refuses a `turn.start` with image parts for a
 worker that did not list `image_refs`, a `turn.start` with file parts
-for a worker that did not list `file_refs`, and a `turn.start` with
+for a worker that did not list `file_refs`, a `turn.start` with
 workspace parts, or any command whose context has `session_files`, for a
-worker that did not list `session_files`: the HTTP request fails with
-`501` and code `unsupported_op`, and the message names the feature.
+worker that did not list `session_files`, and a `turn.start`,
+`turn.continue`, or `sandbox.boot` whose `context.env_credentials` is
+not empty for a worker that did not list `env_credentials`: the HTTP
+request fails with `501` and code `unsupported_op`, and the message
+names the feature. An older worker would ignore the unknown context
+field and start the sandbox without the credentials, so the API never
+sends it one.
 
 **Upgrade order.** Upgrade the API first and the workers after it. A new API
 tolerates old workers. An old worker rejects a command context with a field
