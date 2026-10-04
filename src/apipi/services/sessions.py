@@ -320,7 +320,7 @@ async def iter_session_events(
         hub.unsubscribe(session_id, queue)
 
 
-_MAYBE_SENT = frozenset({"forward_timeout", "command_ack_timeout"})
+_MAYBE_SENT = frozenset({"forward_timeout", "command_ack_timeout", "forward_failed"})
 
 
 def _turn_not_sent(exc: BaseException) -> bool:
@@ -955,7 +955,7 @@ class SessionService:
                                 org_id=org_id,
                             ),
                         )
-                    except Exception as exc:
+                    except BaseException as exc:
                         if not _turn_not_sent(exc):
                             pending.clear()
                         raise

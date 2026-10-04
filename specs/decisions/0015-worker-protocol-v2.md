@@ -421,8 +421,8 @@ wire does not change: forwarding is internal to the API replicas. The
 decisions, and why:
 
 * **Forward over the `EventBus`, with a small database mailbox.** A
-  command body can hold the turn text and images, up to 262,144
-  bytes, and `NOTIFY` carries at most 8000. The requesting replica
+  command body can hold the turn text and image file ids, up to
+  262,144 bytes, and `NOTIFY` carries at most 8000. The requesting replica
   therefore inserts one row into `worker_forwards` (the request, never
   the context) and sends a tiny `forward` message with only the row id
   to the replica that holds the socket. The row is the durable part, so
