@@ -1,6 +1,9 @@
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
+from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
+from apipi.gateway import create_app
+from apipi.gateway.auth import AuthFilter, AuthIdentity, AuthReject
 from apipi.store.engine import Store
 
 
@@ -48,6 +51,40 @@ async def test_vault_crud_omits_token(client: AsyncClient) -> None:
         headers=_auth("other-tenant"),
     )
     assert other.status_code == 404
+
+
+async def test_vault_list_applies_authorize_filter(
+    settings: Settings, store: Store
+) -> None:
+    allowed: set[str] = set()
+
+    async def authorize(
+        identity: AuthIdentity, action: str, resource_type: str, resource_id: str | None
+    ) -> AuthFilter | AuthReject | None:
+        if action == "vault.list" and allowed:
+            return AuthFilter(ids=frozenset(allowed))
+        return None
+
+    app = create_app(api_settings_for(settings), store=store, authorize=authorize)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        headers = _auth("vault-filter")
+        first = await client.post(
+            "/v1/agents/vaults", headers=headers, json={"name": "A"}
+        )
+        second = await client.post(
+            "/v1/agents/vaults", headers=headers, json={"name": "B"}
+        )
+        assert first.status_code == 200
+        assert second.status_code == 200
+        vault_a = first.json()["id"]
+        allowed.add(vault_a)
+        listed = await client.get("/v1/agents/vaults", headers=headers)
+        assert listed.status_code == 200
+        body = listed.json()
+        assert [v["id"] for v in body["data"]] == [vault_a]
+        assert "vaults" not in body
 
 
 async def test_vault_oauth_is_not_implemented(client: AsyncClient) -> None:
