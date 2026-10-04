@@ -1075,3 +1075,28 @@ def test_mcp_allow_hosts_env_and_toml(
     assert load_settings().mcp_allow_hosts == "mcp.internal, 10.0.0.0/8"
     monkeypatch.delenv("APIPI_MCP_ALLOW_HOSTS")
     assert load_settings().mcp_allow_hosts == "toml.internal"
+
+
+@pytest.mark.parametrize("value", ["0s", "-1h", "nope"])
+def test_attachment_ttl_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    monkeypatch.setenv("APIPI_ATTACHMENT_TTL", value)
+    with pytest.raises(
+        ConfigError, match="APIPI_ATTACHMENT_TTL must be a positive duration like 24h"
+    ):
+        load_settings()
+
+
+def test_attachment_ttl_default_and_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.setenv("APIPI_RUN_MODE", "none")
+    assert load_settings().attachment_ttl == timedelta(hours=24)
+    monkeypatch.setenv("APIPI_ATTACHMENT_TTL", "2h")
+    assert load_settings().attachment_ttl == timedelta(hours=2)

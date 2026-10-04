@@ -3,8 +3,9 @@ from collections.abc import Collection
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from apipi.store.errors import NotFoundError
 from apipi.store.models import (
@@ -16,6 +17,7 @@ from apipi.store.models import (
     FileRow,
     Item,
     SearchTurnCount,
+    SessionFileRow,
     SessionRow,
     SkillRow,
     TemplateRow,
@@ -1488,12 +1490,16 @@ async def create_file(
     purpose: str,
     size: int,
     content_type: str | None = None,
+    kind: str = "file",
+    user_id: str | None = None,
 ) -> FileRow:
     row = FileRow(
         id=file_id,
         tenant_id=tenant_id,
         filename=filename,
         purpose=purpose,
+        kind=kind,
+        user_id=user_id,
         size=size,
         content_type=content_type,
     )
@@ -1510,22 +1516,292 @@ async def get_file(
     )
 
 
-async def list_files(db: AsyncSession, tenant_id: uuid.UUID) -> list[FileRow]:
-    result = await db.scalars(
-        select(FileRow)
-        .where(FileRow.tenant_id == tenant_id)
-        .order_by(FileRow.created_at.desc())
+def _after(
+    created: Any, key: Any, cursor: tuple[datetime, str] | None, order: str
+) -> list[Any]:
+    if cursor is None:
+        return []
+    at, last = cursor
+    if order == "asc":
+        return [or_(created > at, and_(created == at, key > last))]
+    return [or_(created < at, and_(created == at, key < last))]
+
+
+def _order(created: Any, key: Any, order: str) -> tuple[Any, Any]:
+    if order == "asc":
+        return created.asc(), key.asc()
+    return created.desc(), key.desc()
+
+
+async def file_cursor(
+    db: AsyncSession, tenant_id: uuid.UUID, file_id: str
+) -> tuple[datetime, str] | None:
+    created = await db.scalar(
+        select(FileRow.created_at).where(
+            FileRow.tenant_id == tenant_id, FileRow.id == file_id
+        )
     )
-    return list(result)
+    return None if created is None else (created, file_id)
+
+
+async def list_files(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    kinds: Collection[str] | None = None,
+    purpose: str | None = None,
+    user_id: str | None = None,
+    session_id: uuid.UUID | None = None,
+    filename_prefix: str | None = None,
+    ids: Collection[str] | None = None,
+    after: tuple[datetime, str] | None = None,
+    order: str = "desc",
+    limit: int | None = None,
+) -> tuple[list[FileRow], bool]:
+    """One page of the tenant's files, newest first unless `order` is `asc`.
+
+    Returns the rows and whether more rows follow. `after` is the
+    `(created_at, id)` of the last row of the previous page.
+    """
+    query = select(FileRow).where(FileRow.tenant_id == tenant_id)
+    if kinds is not None:
+        query = query.where(FileRow.kind.in_(list(kinds)))
+    if purpose is not None:
+        query = query.where(FileRow.purpose == purpose)
+    if user_id is not None:
+        query = query.where(FileRow.user_id == user_id)
+    if filename_prefix:
+        query = query.where(
+            func.substr(FileRow.filename, 1, len(filename_prefix)) == filename_prefix
+        )
+    if ids is not None:
+        query = query.where(FileRow.id.in_(list(ids)))
+    if session_id is not None:
+        query = query.where(
+            exists().where(
+                SessionFileRow.tenant_id == tenant_id,
+                SessionFileRow.session_id == session_id,
+                SessionFileRow.file_id == FileRow.id,
+            )
+        )
+    query = query.where(*_after(FileRow.created_at, FileRow.id, after, order))
+    query = query.order_by(*_order(FileRow.created_at, FileRow.id, order))
+    if limit is not None:
+        query = query.limit(limit + 1)
+    rows = list(await db.scalars(query))
+    if limit is not None and len(rows) > limit:
+        return rows[:limit], True
+    return rows, False
 
 
 async def delete_file(db: AsyncSession, tenant_id: uuid.UUID, file_id: str) -> bool:
     row = await get_file(db, tenant_id, file_id)
     if row is None:
         return False
+    await db.execute(
+        delete(SessionFileRow).where(
+            SessionFileRow.tenant_id == tenant_id, SessionFileRow.file_id == file_id
+        )
+    )
     await db.delete(row)
     await db.flush()
     return True
+
+
+async def promote_attachments(
+    db: AsyncSession, tenant_id: uuid.UUID, file_ids: Collection[str]
+) -> None:
+    """Make attachments used as agent or session input files of kind `file`."""
+    if not file_ids:
+        return
+    await db.execute(
+        update(FileRow)
+        .where(
+            FileRow.tenant_id == tenant_id,
+            FileRow.id.in_(list(file_ids)),
+            FileRow.kind == "attachment",
+        )
+        .values(kind="file")
+    )
+
+
+async def bind_session_file(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    file_id: str,
+    *,
+    path: str | None = None,
+    item_id: uuid.UUID | None = None,
+) -> SessionFileRow:
+    """Bind a file to a session. A file already bound keeps its binding."""
+    row = await db.get(SessionFileRow, (tenant_id, session_id, file_id))
+    if row is not None:
+        return row
+    row = SessionFileRow(
+        tenant_id=tenant_id,
+        session_id=session_id,
+        file_id=file_id,
+        path=path,
+        item_id=item_id,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def link_session_file_item(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    file_ids: Collection[str],
+    item_id: uuid.UUID,
+) -> None:
+    """Set the user item of bound files that have none yet."""
+    if not file_ids:
+        return
+    await db.execute(
+        update(SessionFileRow)
+        .where(
+            SessionFileRow.tenant_id == tenant_id,
+            SessionFileRow.session_id == session_id,
+            SessionFileRow.file_id.in_(list(file_ids)),
+            SessionFileRow.item_id.is_(None),
+        )
+        .values(item_id=item_id)
+    )
+
+
+async def session_file_cursor(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID, file_id: str
+) -> tuple[datetime, str] | None:
+    created = await db.scalar(
+        select(SessionFileRow.created_at).where(
+            SessionFileRow.tenant_id == tenant_id,
+            SessionFileRow.session_id == session_id,
+            SessionFileRow.file_id == file_id,
+        )
+    )
+    return None if created is None else (created, file_id)
+
+
+async def list_session_files(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    *,
+    ids: Collection[str] | None = None,
+    after: tuple[datetime, str] | None = None,
+    order: str = "asc",
+    limit: int | None = None,
+) -> tuple[list[tuple[SessionFileRow, FileRow]], bool]:
+    """The files bound to a session with their bindings, in binding order."""
+    query = (
+        select(SessionFileRow, FileRow)
+        .join(
+            FileRow,
+            and_(
+                FileRow.tenant_id == SessionFileRow.tenant_id,
+                FileRow.id == SessionFileRow.file_id,
+            ),
+        )
+        .where(
+            SessionFileRow.tenant_id == tenant_id,
+            SessionFileRow.session_id == session_id,
+        )
+    )
+    if ids is not None:
+        query = query.where(SessionFileRow.file_id.in_(list(ids)))
+    created, key = SessionFileRow.created_at, SessionFileRow.file_id
+    query = query.where(*_after(created, key, after, order))
+    query = query.order_by(*_order(created, key, order))
+    if limit is not None:
+        query = query.limit(limit + 1)
+    rows = [(binding, file) for binding, file in (await db.execute(query)).all()]
+    if limit is not None and len(rows) > limit:
+        return rows[:limit], True
+    return rows, False
+
+
+SESSION_OWNED_KINDS = ("attachment", "image")
+
+
+async def unbind_session_files(
+    db: AsyncSession, tenant_id: uuid.UUID, session_id: uuid.UUID
+) -> list[str]:
+    """Delete the session's bindings and the files only this session used.
+
+    Only files of kind `attachment` or `image` are deleted. Returns the
+    ids of the deleted files so the caller can delete their bytes.
+    """
+    other = aliased(SessionFileRow)
+    owned = list(
+        await db.scalars(
+            select(FileRow.id)
+            .join(
+                SessionFileRow,
+                and_(
+                    SessionFileRow.tenant_id == FileRow.tenant_id,
+                    SessionFileRow.file_id == FileRow.id,
+                ),
+            )
+            .where(
+                SessionFileRow.tenant_id == tenant_id,
+                SessionFileRow.session_id == session_id,
+                FileRow.kind.in_(SESSION_OWNED_KINDS),
+                ~exists().where(
+                    other.tenant_id == tenant_id,
+                    other.file_id == FileRow.id,
+                    other.session_id != session_id,
+                ),
+            )
+        )
+    )
+    await db.execute(
+        delete(SessionFileRow).where(
+            SessionFileRow.tenant_id == tenant_id,
+            SessionFileRow.session_id == session_id,
+        )
+    )
+    if owned:
+        await db.execute(
+            delete(FileRow).where(FileRow.tenant_id == tenant_id, FileRow.id.in_(owned))
+        )
+    await db.flush()
+    return owned
+
+
+async def delete_unbound_attachments(
+    db: AsyncSession, *, before: datetime, limit: int
+) -> list[tuple[uuid.UUID, str]]:
+    """Delete attachments created before `before` that no session uses."""
+    unbound = ~exists().where(
+        SessionFileRow.tenant_id == FileRow.tenant_id,
+        SessionFileRow.file_id == FileRow.id,
+    )
+    found = (
+        await db.execute(
+            select(FileRow.tenant_id, FileRow.id)
+            .where(
+                FileRow.kind == "attachment",
+                FileRow.created_at < before,
+                unbound,
+            )
+            .order_by(FileRow.created_at)
+            .limit(limit)
+        )
+    ).all()
+    deleted: list[tuple[uuid.UUID, str]] = []
+    for tenant_id, file_id in found:
+        result = await db.execute(
+            delete(FileRow).where(
+                FileRow.tenant_id == tenant_id, FileRow.id == file_id, unbound
+            )
+        )
+        if getattr(result, "rowcount", 0):
+            deleted.append((tenant_id, file_id))
+    await db.flush()
+    return deleted
 
 
 async def create_skill(
@@ -1649,6 +1925,7 @@ async def create_upload(
     content_type: str,
     declared_bytes: int,
     expires_at: datetime,
+    user_id: str | None = None,
 ) -> UploadRow:
     row = UploadRow(
         tenant_id=tenant_id,
@@ -1657,6 +1934,7 @@ async def create_upload(
         filename=filename,
         content_type=content_type,
         declared_bytes=declared_bytes,
+        user_id=user_id,
         status="pending",
         expires_at=expires_at,
     )

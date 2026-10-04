@@ -85,7 +85,11 @@ from apipi.services.env_none import (
 from apipi.services.files import FileService
 from apipi.services.model_credentials import ModelCredentials
 from apipi.services.search import SearchResolver, require_search
-from apipi.services.session_defaults import merge_session_create, require_default_refs
+from apipi.services.session_defaults import (
+    environment_file_ids,
+    merge_session_create,
+    require_default_refs,
+)
 from apipi.services.session_events import event_body, persist_event
 from apipi.services.skill_store import SkillService
 from apipi.services.turn_context import build_turn_context, input_image_ref
@@ -102,6 +106,7 @@ from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import Artifact, Item, SessionRow, Turn
 from apipi.store.repo import (
+    bind_session_file,
     create_environment,
     create_session,
     delete_session,
@@ -116,6 +121,8 @@ from apipi.store.repo import (
     list_items,
     list_sessions,
     list_turns,
+    promote_attachments,
+    unbind_session_files,
     update_session,
 )
 from apipi.workerhub.execution import RemoteExecution
@@ -323,6 +330,14 @@ async def iter_session_events(
 _MAYBE_SENT = frozenset({"forward_timeout", "command_ack_timeout", "forward_failed"})
 
 
+def _image_file_ids(parts: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(part["file_id"])
+        for part in parts
+        if part.get("type") == "image" and part.get("file_id")
+    ]
+
+
 def _turn_not_sent(exc: BaseException) -> bool:
     """True when the turn command surely never reached a worker."""
     if isinstance(exc, ApiError):
@@ -403,13 +418,20 @@ class SessionService:
         tenant_id: uuid.UUID,
         content: UserContent,
         known: dict[str, tuple[str, int]],
+        *,
+        user_id: str | None,
+        session_id: uuid.UUID | None = None,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         """The `turn.start` parts with image references, and the new file ids.
 
-        Data URL images are stored as files here. The caller deletes the
-        new files when the turn does not start.
+        Data URL images are stored as files of kind `image` owned by the
+        session user. With `session_id`, every image is bound to that
+        session. The caller deletes the new files when the turn does not
+        start.
         """
-        images = await self.files.input_images(tenant_id, content.images, known)
+        images = await self.files.input_images(
+            tenant_id, content.images, known, user_id=user_id
+        )
         refs = [self._image_ref(tenant_id, *image) for image in images]
         created = [
             file_id
@@ -418,6 +440,14 @@ class SessionService:
             )
             if not image.file_id
         ]
+        if session_id is not None and images:
+            try:
+                await self.files.bind_session(
+                    tenant_id, session_id, [image[0] for image in images]
+                )
+            except BaseException:
+                await self._drop_files(tenant_id, created)
+                raise
         return content.wire_parts(refs), created
 
     def _image_ref(
@@ -433,7 +463,10 @@ class SessionService:
         )
 
     async def _drop_files(self, tenant_id: uuid.UUID, file_ids: list[str]) -> None:
-        """Delete the image files of a turn that did not start, best effort."""
+        """Delete the image files of a turn that did not start, best effort.
+
+        Deleting a file also deletes its session bindings.
+        """
         for file_id in file_ids:
             with contextlib.suppress(Exception):
                 await self.files.delete(tenant_id, file_id)
@@ -718,7 +751,7 @@ class SessionService:
         turn_content = parse_user_content(input, settings=self.settings)
         image_files = await self.files.image_files(tenant_id, turn_content.images)
         turn_parts, created = await self._turn_parts(
-            tenant_id, turn_content, image_files
+            tenant_id, turn_content, image_files, user_id=user_id
         )
         pending.extend(created)
         raw_tools: list[Any] = []
@@ -838,6 +871,9 @@ class SessionService:
                 vault_ids=vault_id_strs,
                 tools=raw_tools if agent_id is None else None,
             )
+            for file_id in dict.fromkeys(_image_file_ids(turn_parts)):
+                await bind_session_file(db, tenant_id, row.id, file_id)
+            await promote_attachments(db, tenant_id, environment_file_ids(env))
             if env.get("type") == "openai_hosted":
                 directory = session_workspace(self.settings, tenant_id, row.id)
                 caps = env.get("capability_directories")
@@ -1222,9 +1258,11 @@ class SessionService:
             wipe_workspace(Path(directory))
         await wipe_artifact_store(self.blobs, tenant_id, key_id, session_id)
         async with self.store.session() as db:
+            owned = await unbind_session_files(db, tenant_id, session_id)
             deleted = await delete_session(db, tenant_id, session_id, user_id=user_id)
             if not deleted:
                 not_found()
+        await self.files.delete_bytes(tenant_id, owned)
         return {"id": str(session_id), "deleted": True}
 
     async def post_event(
@@ -1263,6 +1301,7 @@ class SessionService:
             row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
+            session_user = row.user_id
             follow_size = sandbox_size_of(row.environment)
             if type == "agent.session.input.cancel":
                 action = "cancel"
@@ -1365,7 +1404,11 @@ class SessionService:
                     session_mem_mib=mem_mib_for_size(self.settings, follow_size),
                 )
                 turn_parts, created = await self._turn_parts(
-                    tenant_id, parsed, image_files
+                    tenant_id,
+                    parsed,
+                    image_files,
+                    user_id=session_user,
+                    session_id=session_id,
                 )
                 try:
                     await self.execution.run_turn(

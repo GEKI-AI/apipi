@@ -1,8 +1,10 @@
-from typing import Annotated, Any
+import uuid
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import Response
 
+from apipi.api.authorize import require_session_agent
 from apipi.common.objects import NS_FILES
 from apipi.gateway.auth import check_authorize, require_tenant
 from apipi.store.blobs import file_object_id
@@ -14,6 +16,11 @@ router = APIRouter()
 
 def _files(request: Request) -> Any:
     return request.app.state.gateway.files
+
+
+def _user_id(request: Request) -> str | None:
+    value = getattr(request.state, "user_id", None)
+    return value if isinstance(value, str) and value else None
 
 
 @router.post("/v1/files")
@@ -35,6 +42,7 @@ async def upload_file(
         filename=filename,
         purpose=purpose,
         content_type=content_type,
+        user_id=_user_id(request),
     )
 
 
@@ -42,18 +50,63 @@ async def upload_file(
 async def list_files(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
+    limit: int = 20,
+    after: str | None = None,
+    order: Literal["asc", "desc"] = "desc",
+    purpose: str | None = None,
+    include_attachments: bool = False,
 ) -> dict[str, Any]:
     filt = await check_authorize(
         request, action="file.list", resource_type="file", resource_id=None
     )
-    payload = await _files(request).list_objects(tenant.id)
-    if filt is not None and filt.ids is not None:
-        items = payload.get("files", payload.get("data", []))
-        key = "files" if "files" in payload else ("data" if "data" in payload else None)
-        if key is not None:
-            payload = dict(payload)
-            payload[key] = [f for f in items if str(f.get("id")) in filt.ids]
-    return payload
+    return await _files(request).list_objects(
+        tenant.id,
+        kinds=None if include_attachments else ("file",),
+        purpose=purpose,
+        ids=filt.ids if filt is not None else None,
+        after=after,
+        order=order,
+        limit=limit,
+    )
+
+
+@router.get("/v1/apipi/files")
+async def list_apipi_files(
+    request: Request,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+    kind: Annotated[list[str] | None, Query()] = None,
+    session_id: uuid.UUID | None = None,
+    user_id: str | None = None,
+    purpose: str | None = None,
+    filename: str | None = None,
+    limit: int = 20,
+    after: str | None = None,
+    order: Literal["asc", "desc"] = "desc",
+) -> dict[str, Any]:
+    if session_id is not None:
+        await require_session_agent(
+            request,
+            tenant.id,
+            session_id,
+            action="session.read",
+            user_id=_user_id(request),
+        )
+    filt = await check_authorize(
+        request, action="file.list", resource_type="file", resource_id=None
+    )
+    return await _files(request).list_objects(
+        tenant.id,
+        kinds=kind or None,
+        purpose=purpose,
+        user_id=user_id,
+        session_id=session_id,
+        filename_prefix=filename,
+        ids=filt.ids if filt is not None else None,
+        after=after,
+        order=order,
+        limit=limit,
+        apipi=True,
+    )
 
 
 @router.get("/v1/files/{file_id}")

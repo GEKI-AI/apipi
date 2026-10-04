@@ -1,4 +1,7 @@
+import contextlib
 import uuid
+from collections.abc import Collection
+from datetime import datetime
 from typing import Any
 
 from apipi.common.errors import ApiError
@@ -10,10 +13,25 @@ from apipi.gateway.content import ImagePart, image_mimes
 from apipi.gateway.errors import not_implemented
 from apipi.store.blobs import ObjectStore, file_object_id
 from apipi.store.engine import Store
-from apipi.store.models import FileRow
-from apipi.store.repo import create_file, delete_file, get_file, list_files
+from apipi.store.models import FileRow, SessionFileRow, utc_now
+from apipi.store.repo import (
+    bind_session_file,
+    create_file,
+    delete_file,
+    delete_unbound_attachments,
+    file_cursor,
+    get_file,
+    list_files,
+    list_session_files,
+    session_file_cursor,
+)
 
-FILE_PURPOSES = frozenset({"user_data", "assistants"})
+FILE_PURPOSES = frozenset({"user_data", "assistants", "vision"})
+DOCUMENT_PURPOSES = frozenset({"user_data", "assistants"})
+FILE_KINDS = ("file", "attachment", "image")
+MAX_LIST_LIMIT = 100
+DEFAULT_LIST_LIMIT = 20
+SWEEP_BATCH = 500
 
 
 def new_file_id() -> str:
@@ -32,6 +50,82 @@ def file_body(row: FileRow) -> dict[str, Any]:
     }
 
 
+def apipi_file_body(row: FileRow) -> dict[str, Any]:
+    return {
+        **file_body(row),
+        "kind": row.kind,
+        "user_id": row.user_id,
+        "content_type": row.content_type,
+    }
+
+
+def session_file_body(binding: SessionFileRow, row: FileRow) -> dict[str, Any]:
+    return {
+        "file_id": row.id,
+        "kind": row.kind,
+        "filename": row.filename,
+        "bytes": row.size,
+        "content_type": row.content_type,
+        "path": binding.path,
+        "item_id": str(binding.item_id) if binding.item_id is not None else None,
+        "created_at": int(binding.created_at.timestamp()),
+    }
+
+
+def check_image(settings: Settings, content_type: str | None, size: int) -> str:
+    """Check an image upload and return its mime type.
+
+    The type must be in `APIPI_IMAGE_MIMES` and the size within
+    `APIPI_MAX_IMAGE_BYTES`.
+    """
+    mime = (content_type or "").split(";", 1)[0].strip().lower()
+    if mime not in image_mimes(settings):
+        raise ApiError(
+            "invalid_request",
+            f"content_type {mime or 'unknown'} is not an allowed image type",
+            code="invalid_request",
+        )
+    if size > settings.max_image_bytes:
+        raise ApiError(
+            "invalid_request",
+            "Image too large",
+            code="payload_too_large",
+            status_code=413,
+        )
+    return mime
+
+
+def check_page(limit: int, order: str) -> None:
+    if limit < 1 or limit > MAX_LIST_LIMIT:
+        raise ApiError(
+            "invalid_request",
+            f"limit must be between 1 and {MAX_LIST_LIMIT}",
+            code="invalid_request",
+        )
+    if order not in ("asc", "desc"):
+        raise ApiError(
+            "invalid_request", "order must be asc or desc", code="invalid_request"
+        )
+
+
+def _unknown_after(after: str) -> None:
+    raise ApiError(
+        "invalid_request",
+        f"after {after} is not a file of this list",
+        code="invalid_request",
+    )
+
+
+def page_body(data: list[dict[str, Any]], has_more: bool, key: str) -> dict[str, Any]:
+    return {
+        "object": "list",
+        "data": data,
+        "first_id": data[0][key] if data else None,
+        "last_id": data[-1][key] if data else None,
+        "has_more": has_more,
+    }
+
+
 class FileService:
     def __init__(self, store: Store, objects: ObjectStore, settings: Settings) -> None:
         self.store = store
@@ -46,6 +140,8 @@ class FileService:
         filename: str,
         purpose: str,
         content_type: str | None = None,
+        kind: str = "file",
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         if purpose not in FILE_PURPOSES:
             not_implemented(purpose, f"purpose {purpose} is not implemented")
@@ -56,6 +152,9 @@ class FileService:
                 code="payload_too_large",
                 status_code=413,
             )
+        if purpose == "vision":
+            check_image(self.settings, content_type, len(data))
+            kind = "image"
         name = filename.strip() or "upload"
         file_id = new_file_id()
         await self.objects.put(
@@ -73,6 +172,8 @@ class FileService:
                 purpose=purpose,
                 size=len(data),
                 content_type=content_type,
+                kind=kind,
+                user_id=user_id,
             )
             return file_body(row)
 
@@ -115,8 +216,14 @@ class FileService:
         tenant_id: uuid.UUID,
         images: tuple[ImagePart, ...],
         known: dict[str, tuple[str, int]],
+        *,
+        user_id: str | None = None,
     ) -> list[tuple[str, str, int]]:
-        """Return `(file_id, mime, size)` per image, storing data URL images."""
+        """Return `(file_id, mime, size)` per image.
+
+        Data URL images are stored as files of kind `image` owned by
+        `user_id`, the user of the session.
+        """
         out: list[tuple[str, str, int]] = []
         for image in images:
             if image.file_id:
@@ -129,21 +236,146 @@ class FileService:
                 filename="image",
                 purpose="user_data",
                 content_type=image.mime,
+                kind="image",
+                user_id=user_id,
             )
             out.append((str(created["id"]), image.mime, len(image.data)))
         return out
 
-    async def list_objects(self, tenant_id: uuid.UUID) -> dict[str, Any]:
+    async def list_objects(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        kinds: Collection[str] | None = ("file",),
+        purpose: str | None = None,
+        user_id: str | None = None,
+        session_id: uuid.UUID | None = None,
+        filename_prefix: str | None = None,
+        ids: Collection[str] | None = None,
+        after: str | None = None,
+        order: str = "desc",
+        limit: int = DEFAULT_LIST_LIMIT,
+        apipi: bool = False,
+    ) -> dict[str, Any]:
+        """One page of files. `ids` is the authorization filter.
+
+        `kinds` of None lists every kind. `apipi` adds `kind`, `user_id`,
+        and `content_type` to each object.
+        """
+        check_page(limit, order)
+        if kinds is not None:
+            unknown = sorted(set(kinds) - set(FILE_KINDS))
+            if unknown:
+                raise ApiError(
+                    "invalid_request",
+                    f"kind {unknown[0]} is not file, attachment, or image",
+                    code="invalid_request",
+                )
         async with self.store.session() as db:
-            rows = await list_files(db, tenant_id)
-        data = [file_body(row) for row in rows]
-        return {
-            "object": "list",
-            "data": data,
-            "first_id": data[0]["id"] if data else None,
-            "last_id": data[-1]["id"] if data else None,
-            "has_more": False,
-        }
+            cursor: tuple[datetime, str] | None = None
+            if after is not None:
+                cursor = await file_cursor(db, tenant_id, after)
+                if cursor is None or (ids is not None and after not in ids):
+                    _unknown_after(after)
+            rows, has_more = await list_files(
+                db,
+                tenant_id,
+                kinds=kinds,
+                purpose=purpose,
+                user_id=user_id,
+                session_id=session_id,
+                filename_prefix=filename_prefix,
+                ids=ids,
+                after=cursor,
+                order=order,
+                limit=limit,
+            )
+        body = apipi_file_body if apipi else file_body
+        return page_body([body(row) for row in rows], has_more, "id")
+
+    async def list_session_files(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        ids: Collection[str] | None = None,
+        after: str | None = None,
+        order: str = "desc",
+        limit: int = DEFAULT_LIST_LIMIT,
+    ) -> dict[str, Any]:
+        """One page of the files bound to a session the caller has checked."""
+        check_page(limit, order)
+        async with self.store.session() as db:
+            cursor: tuple[datetime, str] | None = None
+            if after is not None:
+                cursor = await session_file_cursor(db, tenant_id, session_id, after)
+                if cursor is None or (ids is not None and after not in ids):
+                    _unknown_after(after)
+            rows, has_more = await list_session_files(
+                db,
+                tenant_id,
+                session_id,
+                ids=ids,
+                after=cursor,
+                order=order,
+                limit=limit,
+            )
+        data = [session_file_body(binding, row) for binding, row in rows]
+        return page_body(data, has_more, "file_id")
+
+    async def bind_session(
+        self,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        file_ids: Collection[str],
+        *,
+        path: str | None = None,
+        item_id: uuid.UUID | None = None,
+    ) -> None:
+        """Bind files of the tenant to a session.
+
+        A file already bound to the session keeps its binding. `path` is
+        the workspace path of an attachment.
+        """
+        async with self.store.session() as db:
+            for file_id in dict.fromkeys(file_ids):
+                await bind_session_file(
+                    db, tenant_id, session_id, file_id, path=path, item_id=item_id
+                )
+
+    async def bound_files(
+        self, tenant_id: uuid.UUID, session_id: uuid.UUID
+    ) -> list[tuple[SessionFileRow, FileRow]]:
+        """Every file bound to a session with its binding, oldest first."""
+        async with self.store.session() as db:
+            rows, _more = await list_session_files(
+                db, tenant_id, session_id, order="asc"
+            )
+        return rows
+
+    async def delete_bytes(self, tenant_id: uuid.UUID, file_ids: list[str]) -> None:
+        """Delete stored file bytes after their rows are gone, best effort."""
+        for file_id in file_ids:
+            with contextlib.suppress(Exception):
+                await self.objects.delete(NS_FILES, file_object_id(tenant_id, file_id))
+
+    async def sweep_attachments(self, now: datetime | None = None) -> int:
+        """Delete unbound attachments older than `APIPI_ATTACHMENT_TTL`.
+
+        Returns the number of deleted files.
+        """
+        before = (now if now is not None else utc_now()) - self.settings.attachment_ttl
+        total = 0
+        while True:
+            async with self.store.session() as db:
+                deleted = await delete_unbound_attachments(
+                    db, before=before, limit=SWEEP_BATCH
+                )
+            for tenant_id, file_id in deleted:
+                await self.delete_bytes(tenant_id, [file_id])
+            total += len(deleted)
+            if len(deleted) < SWEEP_BATCH:
+                return total
 
     async def meta(self, tenant_id: uuid.UUID, file_id: str) -> tuple[str, str | None]:
         async with self.store.session() as db:

@@ -558,3 +558,28 @@ async def delete_agent_session_artifact(
     return await _sessions(request).delete_artifact(
         tenant.id, session_id, artifact_id, user_id=_user_id(request)
     )
+
+
+@router.get("/v1/apipi/sessions/{session_id}/files")
+async def list_session_files(
+    session_id: uuid.UUID,
+    request: Request,
+    tenant: Annotated[Tenant, Depends(require_tenant)],
+    limit: int = 20,
+    after: str | None = None,
+    order: Literal["asc", "desc"] = "desc",
+) -> dict[str, Any]:
+    await require_session_agent(
+        request, tenant.id, session_id, action="session.read", user_id=_user_id(request)
+    )
+    filt = await check_authorize(
+        request, action="file.list", resource_type="file", resource_id=None
+    )
+    return await request.app.state.gateway.files.list_session_files(
+        tenant.id,
+        session_id,
+        ids=filt.ids if filt is not None else None,
+        after=after,
+        order=order,
+        limit=limit,
+    )

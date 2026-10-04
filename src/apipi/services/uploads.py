@@ -8,7 +8,12 @@ from apipi.common.skills import inspect_skill_zip
 from apipi.config import Settings
 from apipi.env.setup import SetupError
 from apipi.gateway.auth import not_found
-from apipi.services.files import FILE_PURPOSES, file_body, new_file_id
+from apipi.services.files import (
+    DOCUMENT_PURPOSES,
+    check_image,
+    file_body,
+    new_file_id,
+)
 from apipi.services.skill_store import new_skill_id, skill_body
 from apipi.store.blobs import S3Store, file_object_id, skill_object_id
 from apipi.store.engine import Store
@@ -22,7 +27,7 @@ from apipi.store.repo import (
     get_upload,
 )
 
-UploadPurpose = Literal["file", "skill", "attachment"]
+UploadPurpose = Literal["file", "skill", "attachment", "image"]
 
 
 def _s3(objects: object) -> S3Store:
@@ -50,8 +55,10 @@ class UploadService:
         content_type: str | None,
         size: int,
         file_purpose: str | None = None,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         kind = _purpose(purpose)
+        is_file = kind != "skill"
         if size < 1 or size > int(self.settings.max_file_bytes):
             raise ApiError(
                 "invalid_request",
@@ -60,23 +67,18 @@ class UploadService:
                 status_code=413,
             )
         s3 = _s3(self.objects)
-        if (
-            kind == "file"
-            and file_purpose is not None
-            and file_purpose not in FILE_PURPOSES
-        ):
-            raise ApiError(
-                "not_implemented",
-                f"purpose {file_purpose} is not implemented",
-                code=file_purpose,
-            )
+        if is_file:
+            _file_purpose(kind, file_purpose)
+        if kind == "image":
+            check_image(self.settings, content_type, size)
+            file_purpose = "vision"
         ctype = (content_type or "").strip() or "application/octet-stream"
         name = filename.strip() or "upload"
-        object_id = new_file_id() if kind == "file" else new_skill_id()
-        namespace = NS_FILES if kind == "file" else NS_SKILLS
+        object_id = new_file_id() if is_file else new_skill_id()
+        namespace = NS_FILES if is_file else NS_SKILLS
         key = (
             file_object_id(tenant_id, object_id)
-            if kind == "file"
+            if is_file
             else skill_object_id(tenant_id, object_id)
         )
         expires = utc_now() + self.settings.presign_ttl
@@ -97,6 +99,7 @@ class UploadService:
                 content_type=ctype,
                 declared_bytes=size,
                 expires_at=expires,
+                user_id=user_id,
             )
             upload_id = row.id
         return {
@@ -106,7 +109,7 @@ class UploadService:
             "url": url,
             "headers": headers,
             "expires_at": expires.isoformat(),
-            "file_purpose": file_purpose if kind == "file" else None,
+            "file_purpose": file_purpose if is_file else None,
         }
 
     async def complete(
@@ -121,8 +124,10 @@ class UploadService:
             row = await get_upload(db, tenant_id, upload_id)
             if row is None:
                 not_found()
+            is_file = row.purpose != "skill"
+            purpose = _file_purpose(row.purpose, file_purpose) if is_file else ""
             if row.status == "complete":
-                if row.purpose == "file":
+                if is_file:
                     existing = await get_file(db, tenant_id, row.object_id)
                     if existing is None:
                         not_found()
@@ -137,10 +142,10 @@ class UploadService:
                     "Upload URL expired",
                     code="upload_expired",
                 )
-            namespace = NS_FILES if row.purpose == "file" else NS_SKILLS
+            namespace = NS_FILES if is_file else NS_SKILLS
             key = (
                 file_object_id(tenant_id, row.object_id)
-                if row.purpose == "file"
+                if is_file
                 else skill_object_id(tenant_id, row.object_id)
             )
             meta = await s3.head(namespace, key)
@@ -159,8 +164,13 @@ class UploadService:
                     code="payload_too_large",
                     status_code=413,
                 )
-            if row.purpose == "file":
-                purpose = file_purpose if file_purpose in FILE_PURPOSES else "user_data"
+            if row.purpose == "image":
+                try:
+                    check_image(self.settings, row.content_type, size)
+                except ApiError:
+                    await s3.delete(namespace, key)
+                    raise
+            if is_file:
                 created = await create_file(
                     db,
                     tenant_id,
@@ -169,6 +179,8 @@ class UploadService:
                     purpose=purpose,
                     size=size,
                     content_type=row.content_type,
+                    kind=row.purpose,
+                    user_id=row.user_id,
                 )
                 row.status = "complete"
                 return file_body(created)
@@ -228,13 +240,44 @@ def _aware(value: datetime) -> datetime:
     return value
 
 
-def _purpose(raw: str) -> Literal["file", "skill"]:
-    if raw in {"file", "attachment"}:
+def _file_purpose(kind: str, file_purpose: str | None) -> str:
+    """The Files API purpose of a file upload, or an error for a wrong one."""
+    if kind == "image":
+        if file_purpose not in (None, "vision"):
+            raise ApiError(
+                "invalid_request",
+                "purpose image takes file_purpose vision",
+                code="invalid_request",
+            )
+        return "vision"
+    if file_purpose == "vision":
+        raise ApiError(
+            "invalid_request",
+            "file_purpose vision needs purpose image",
+            code="invalid_request",
+        )
+    if file_purpose is None:
+        return "user_data"
+    if file_purpose not in DOCUMENT_PURPOSES:
+        raise ApiError(
+            "not_implemented",
+            f"purpose {file_purpose} is not implemented",
+            code=file_purpose,
+        )
+    return file_purpose
+
+
+def _purpose(raw: str) -> UploadPurpose:
+    if raw == "file":
         return "file"
+    if raw == "attachment":
+        return "attachment"
+    if raw == "image":
+        return "image"
     if raw == "skill":
         return "skill"
     raise ApiError(
         "invalid_request",
-        "purpose must be file, skill, or attachment",
+        "purpose must be file, attachment, image, or skill",
         code="invalid_request",
     )

@@ -401,6 +401,19 @@ async def _store_event(
     return event_body(event)
 
 
+def _user_image_ids(data: dict[str, Any]) -> list[str]:
+    content = data.get("content")
+    if data.get("role") != "user" or not isinstance(content, list):
+        return []
+    return [
+        part["file_id"]
+        for part in content
+        if isinstance(part, dict)
+        and part.get("type") == "input_image"
+        and isinstance(part.get("file_id"), str)
+    ]
+
+
 async def _apply(
     db: AsyncSession,
     bus: Any,
@@ -425,6 +438,7 @@ async def _apply(
         get_item,
         get_session_turn,
         get_turn,
+        link_session_file_item,
         update_session,
     )
 
@@ -517,14 +531,19 @@ async def _apply(
             return
         # The row only: the runtime reports the added/done public events
         # as separate `event` envelopes, mirroring `_emit_item` one to one.
+        raw_data = payload.get("data")
+        data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
         await create_item(
             db,
             tenant_id,
             session_id,
             type=str(payload.get("item_type") or "message"),
-            data=payload.get("data") if isinstance(payload.get("data"), dict) else {},
+            data=data,
             turn_id=turn_id,
             item_id=item_id,
+        )
+        await link_session_file_item(
+            db, tenant_id, session_id, _user_image_ids(data), item_id
         )
         return
     if envelope.type == "item.done":

@@ -356,6 +356,12 @@ class Gateway:
                 metrics=self.metrics,
             ),
             spawn_loop(
+                "attachment_sweep",
+                self.files.sweep_attachments,
+                interval=3600,
+                metrics=self.metrics,
+            ),
+            spawn_loop(
                 "lease_reaper",
                 self._expire_worker_leases,
                 interval=1,
