@@ -114,7 +114,9 @@ hosted files and skills).
 | `APIPI_MODEL_REGISTRY` | `[models."id"]` | empty | JSON object, or a TOML table of model capabilities. Each entry may set `input`, `reasoning`, `thinking_levels`, `context_window`, `max_tokens`, and `compat` (for example `thinkingFormat`). Models not listed keep today's defaults. `GET /v1/apipi/models` returns this table. |
 | `APIPI_MAX_IMAGE_BYTES` | `max_image_bytes` | 5242880 | Maximum decoded bytes for one `input_image`, for a data URL and for a `file_id`. |
 | `APIPI_MAX_IMAGES` | `max_images` | 8 | Maximum images in one message. |
-| `APIPI_IMAGE_MIMES` | `image_mimes` | `image/png,image/jpeg,image/webp,image/gif` | Comma-separated MIME types allowed on `input_image`. For a `file_id` it is checked against the content type of the file. |
+| `APIPI_IMAGE_MIMES` | `image_mimes` | `image/png,image/jpeg,image/webp,image/gif` | Comma-separated MIME types allowed on `input_image`. For a `file_id` it is checked against the content type of the file. An `input_file` with one of these types goes to the model as an image. |
+| `APIPI_MAX_INLINE_FILE_BYTES` | `max_inline_file_bytes` | `256KiB` | Maximum size of one text `input_file` that goes to the model as text in a session without a computer. A larger file returns `413` with code `payload_too_large` before the turn starts. |
+| `APIPI_MAX_FILES_PER_MESSAGE` | `max_files_per_message` | 10 | Maximum `input_file` parts in one message. More return `400`. |
 | `APIPI_USAGE_STORE` | `usage_store` | `turns` | How much agent usage hits Postgres: `off` \| `rollups` \| `turns`. See [usage](usage.md). |
 | `APIPI_USAGE_RETENTION` | `usage_retention` | `15d` | Delete turn log rows older than this. Empty means no purge. Rollups stay. |
 | `APIPI_USAGE_EXPORT_URL` | `usage_export_url` | unset | HTTPS POST of one non-text agent usage event per turn. Off when unset. |

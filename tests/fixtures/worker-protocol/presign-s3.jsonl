@@ -1,7 +1,7 @@
 {"fixture": "presign-s3", "format": 1, "title": "An artifact upload with the S3 store and a presigned PUT URL", "description": "Upload with the S3 store. artifact.presign returns a presigned PUT URL, the worker uploads with a plain PUT, and artifact.completed reports size and checksum. The hello has no store_check because the store is not the filesystem.", "api": {"artifact_store": "s3"}}
 {"step": "connect"}
-{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
-{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "revoke": [], "ttl": {}, "features": ["image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "worker", "frame": {"type": "register", "protocol": 2, "capabilities": {}, "accepts": ["none"], "running": [], "capacity": 4, "run_mode": "none", "arch": "<string>", "version": "<string>", "features": ["file_refs", "image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
+{"from": "api", "frame": {"type": "hello", "ok": true, "protocol": 2, "worker_id": "<uuid:worker>", "generation": "<int>", "connection_id": "<string>", "lease_ttl_seconds": 30.0, "heartbeat_seconds": 10.0, "sessions": {}, "revoke": [], "ttl": {}, "features": ["file_refs", "image_refs", "lease_cursor", "presign", "search", "session_stopped"]}}
 {"step": "action", "for": "api", "name": "create_session"}
 {"step": "action", "for": "api", "name": "lease_session"}
 {"step": "action", "for": "worker", "name": "upload", "args": {"kind": "artifact", "filename": "out.txt", "content_type": "text/plain", "text": "hello"}}

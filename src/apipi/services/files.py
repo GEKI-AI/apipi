@@ -9,7 +9,13 @@ from apipi.common.objects import NS_FILES
 from apipi.config import Settings
 from apipi.env.setup import SetupError, file_id_refs_from
 from apipi.gateway.auth import not_found
-from apipi.gateway.content import ImagePart, image_mimes
+from apipi.gateway.content import (
+    FilePart,
+    ImagePart,
+    InputFile,
+    file_model_input,
+    image_mimes,
+)
 from apipi.gateway.errors import not_implemented
 from apipi.store.blobs import ObjectStore, file_object_id
 from apipi.store.engine import Store
@@ -214,6 +220,89 @@ class FileService:
                     )
                 known[image.file_id] = (mime, row.size)
         return known
+
+    async def input_files(
+        self,
+        tenant_id: uuid.UUID,
+        files: tuple[FilePart, ...],
+        *,
+        user_id: str | None = None,
+    ) -> list[InputFile]:
+        """Check the `input_file` parts of a session without a computer.
+
+        Each must be a file of the tenant that the caller with `user_id`
+        can see. An allowed image type within
+        `APIPI_MAX_IMAGE_BYTES` goes to the model as an image. A text type
+        within `APIPI_MAX_INLINE_FILE_BYTES` whose bytes are UTF-8 goes to
+        the model as text. Anything else is `unsupported_file_type`.
+        """
+        if not files:
+            return []
+        rows: dict[str, FileRow] = {}
+        async with self.store.session() as db:
+            for part in files:
+                if part.file_id in rows:
+                    continue
+                row = await get_file(db, tenant_id, part.file_id, user_id=user_id)
+                if row is None:
+                    not_found()
+                rows[part.file_id] = row
+        checked: set[str] = set()
+        out: list[InputFile] = []
+        for part in files:
+            row = rows[part.file_id]
+            name = part.filename or row.filename
+            mime = (row.content_type or "").split(";", 1)[0].strip().lower()
+            model_input = file_model_input(self.settings, mime, name)
+            if model_input is None:
+                raise ApiError(
+                    "invalid_request",
+                    f"input_file {name} has the type {mime or 'unknown'}. "
+                    "A session needs a computer for this file type.",
+                    code="unsupported_file_type",
+                )
+            limit = (
+                self.settings.max_image_bytes
+                if model_input == "image"
+                else int(self.settings.max_inline_file_bytes)
+            )
+            if row.size > limit:
+                raise ApiError(
+                    "invalid_request",
+                    f"input_file {name} is {row.size} bytes, more than the "
+                    f"{limit} bytes a {model_input} file may have",
+                    code="payload_too_large",
+                    status_code=413,
+                )
+            if model_input == "text" and row.id not in checked:
+                await self._require_utf8(tenant_id, row.id, name)
+                checked.add(row.id)
+            out.append(
+                InputFile(
+                    file_id=row.id,
+                    filename=name,
+                    mime=mime,
+                    size=row.size,
+                    model_input=model_input,
+                )
+            )
+        return out
+
+    async def _require_utf8(
+        self, tenant_id: uuid.UUID, file_id: str, name: str
+    ) -> None:
+        data = await self.objects.get(NS_FILES, file_object_id(tenant_id, file_id))
+        if data is None:
+            not_found()
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ApiError(
+                "invalid_request",
+                f"input_file {name} is not UTF-8 text. "
+                "A session needs a computer for this file.",
+                code="unsupported_file_type",
+            ) from exc
 
     async def input_images(
         self,

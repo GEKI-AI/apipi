@@ -126,7 +126,7 @@ class WorkerHub:
         bus: EventBus,
         *,
         context_factory: Any | None = None,
-        image_factory: Any | None = None,
+        part_factory: Any | None = None,
         stop_local: Any | None = None,
     ) -> None:
         """Serve forwards from other replicas and send ours, if the bus can."""
@@ -137,7 +137,7 @@ class WorkerHub:
             store,
             cast(InstanceBus, bus),
             context_factory=context_factory,
-            image_factory=image_factory,
+            part_factory=part_factory,
             stop_local=stop_local,
             poll_interval=min(
                 max(self.settings.event_bus_fallback_poll.total_seconds(), 0.01),

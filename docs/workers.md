@@ -202,7 +202,7 @@ API to worker:
 | `type` | Fields | What |
 | --- | --- | --- |
 | `hello` | `ok`, `protocol`, `worker_id`, `generation`, `connection_id`, `lease_ttl_seconds`, `heartbeat_seconds`, `sessions`, `store_check`, `revoke`, `ttl`, `features` | Register succeeded. `store_check` is present only for the filesystem store. |
-| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. `turn.start`, `turn.continue`, and `sandbox.boot` carry `payload.last_seq`, the session sequence cursor (see [Sequence on a new lease](#sequence-on-a-new-lease)). `turn.start` carries input images in `payload.parts` as store references (`file_id`, `object_id`, `url` or `local_path`, `mime_type`, `size_bytes`), never as bytes, and only to a worker that listed the feature `image_refs`. |
+| `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. `turn.start`, `turn.continue`, and `sandbox.boot` carry `payload.last_seq`, the session sequence cursor (see [Sequence on a new lease](#sequence-on-a-new-lease)). `turn.start` carries input images in `payload.parts` as store references (`file_id`, `object_id`, `url` or `local_path`, `mime_type`, `size_bytes`), never as bytes, and only to a worker that listed the feature `image_refs`. In a session without a computer it carries `input_file` parts the same way (`type: "file"`, plus `filename` and `model_input` `text` or `image`), only to a worker that listed the feature `file_refs`. |
 | `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part; only workers without the feature `image_refs` send it); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. `expires_at` is an RFC 3339 UTC time with `Z` and milliseconds, for example `2026-01-02T03:04:05.678Z`. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
 | `search.reply` | `session_id`, `request_id`, `ok`, `results`, `code`, `message` | Answer to one `search.request`. `results` is a list of `title`, `url`, `snippet`, and `published_date` (nullable), the same for every provider. On failure `ok` is false, `code` is one of `search_denied`, `search_unavailable`, `search_timeout`, `search_failed`, or `invalid_request`, and `message` is a short text that is safe to show the model. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
@@ -526,14 +526,16 @@ protocol as it was before features existed, so old peers keep working.
 | `lease_cursor` | `payload.last_seq` in `turn.start`, `turn.continue`, and `sandbox.boot` | Yes |
 | `session_stopped` | The worker acks `session.stop` on receipt, and the durable `session.stopped` envelope is the completion that the API waits for | No |
 | `image_refs` | `turn.start` carries input images as store references in `parts`, and the worker no longer uploads them as `input_image` | No |
+| `file_refs` | `turn.start` carries the `input_file` parts of a session without a computer as store references in `parts` | No |
 
 The worker does not wire web search when the API did not list `search`,
 and it fails an upload with a clear error, instead of sending an
 envelope, when the API did not list `presign`. The API refuses a command
 op that needs a feature the worker did not list, and a `turn.start` with
-images for a worker that did not list `image_refs` (`501`,
-`unsupported_op`). Placement prefers a worker on the same replica that
-lists `image_refs` for a turn with images. A worker on another replica is
+images for a worker that did not list `image_refs`, or with files for a
+worker that did not list `file_refs` (`501`, `unsupported_op`). Placement
+prefers a worker on the same replica that lists `image_refs` for a turn
+with images, and `file_refs` for a turn with files. A worker on another replica is
 not filtered, because its features are known only to the replica that
 holds its socket.
 

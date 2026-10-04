@@ -9,6 +9,7 @@ from apipi.common.sandbox import sandbox_size_of
 from apipi.protocol import (
     COMMAND_PAYLOAD_MODELS,
     CURSOR_OPS,
+    FEATURE_FILE_REFS,
     FEATURE_IMAGE_REFS,
     OP_FEATURES,
     BaseCommandPayload,
@@ -78,13 +79,15 @@ def command_features(wire: dict[str, Any]) -> list[str]:
         needed.append(feature)
     payload = wire.get("payload")
     parts = payload.get("parts") if isinstance(payload, dict) else None
-    images = [
-        item
+    kinds = {
+        item.get("type")
         for item in (parts if isinstance(parts, list) else [])
-        if isinstance(item, dict) and item.get("type") == "image"
-    ]
-    if op == "turn.start" and images:
+        if isinstance(item, dict)
+    }
+    if op == "turn.start" and "image" in kinds:
         needed.append(FEATURE_IMAGE_REFS)
+    if op == "turn.start" and "file" in kinds:
+        needed.append(FEATURE_FILE_REFS)
     return needed
 
 

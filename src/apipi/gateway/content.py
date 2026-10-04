@@ -1,12 +1,60 @@
 import base64
 import binascii
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from apipi.common.errors import ApiError
 from apipi.config import Settings
 
 _DEFAULT_MIMES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
+TEXT_FILE_MIMES = frozenset(
+    {
+        "application/json",
+        "application/xml",
+        "application/yaml",
+        "application/x-yaml",
+        "application/javascript",
+    }
+)
+TEXT_FILE_EXTENSIONS = frozenset(
+    {
+        "txt",
+        "md",
+        "markdown",
+        "csv",
+        "tsv",
+        "json",
+        "jsonl",
+        "yaml",
+        "yml",
+        "xml",
+        "toml",
+        "ini",
+        "log",
+        "py",
+        "js",
+        "ts",
+        "tsx",
+        "jsx",
+        "sql",
+        "sh",
+        "html",
+        "css",
+        "java",
+        "go",
+        "rs",
+        "rb",
+        "php",
+        "c",
+        "h",
+        "cpp",
+        "cs",
+        "kt",
+        "swift",
+    }
+)
+ModelInput = Literal["text", "image"]
 
 
 @dataclass(frozen=True)
@@ -17,20 +65,45 @@ class ImagePart:
 
 
 @dataclass(frozen=True)
+class FilePart:
+    file_id: str
+    filename: str = ""
+
+
+@dataclass(frozen=True)
+class InputFile:
+    """An `input_file` after its checks: how it goes to the model."""
+
+    file_id: str
+    filename: str
+    mime: str
+    size: int
+    model_input: ModelInput
+
+
+@dataclass(frozen=True)
 class UserContent:
     text: str
     images: tuple[ImagePart, ...]
     parts: tuple[dict[str, Any], ...]
+    files: tuple[FilePart, ...] = ()
 
-    def wire_parts(self, refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def wire_parts(
+        self,
+        refs: list[dict[str, Any]],
+        file_refs: Sequence[dict[str, Any]] = (),
+    ) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
-        index = 0
+        images = iter(refs)
+        files = iter(file_refs)
         for part in self.parts:
-            if part.get("type") == "input_text":
+            kind = part.get("type")
+            if kind == "input_text":
                 out.append({"type": "input_text", "text": str(part.get("text") or "")})
+            elif kind == "input_file":
+                out.append(next(files))
             else:
-                out.append(refs[index])
-                index += 1
+                out.append(next(images))
         return out
 
 
@@ -39,6 +112,30 @@ def image_mimes(settings: Settings) -> frozenset[str]:
     if not raw:
         return _DEFAULT_MIMES
     return frozenset(item.strip().lower() for item in raw.split(",") if item.strip())
+
+
+def file_model_input(
+    settings: Settings, content_type: str | None, filename: str
+) -> ModelInput | None:
+    """How a file goes to the model without a computer, or None.
+
+    An allowed image type is an image. `text/*` and the text types of
+    `TEXT_FILE_MIMES` are text, and so is a known text extension when
+    the content type is missing or `application/octet-stream`.
+    """
+    mime = (content_type or "").split(";", 1)[0].strip().lower()
+    if mime in image_mimes(settings):
+        return "image"
+    if mime.startswith("text/") or mime in TEXT_FILE_MIMES:
+        return "text"
+    _stem, dot, extension = filename.rpartition(".")
+    if (
+        mime in ("", "application/octet-stream")
+        and dot
+        and extension.lower() in TEXT_FILE_EXTENSIONS
+    ):
+        return "text"
+    return None
 
 
 def _decode_data_url(value: str, *, settings: Settings) -> ImagePart:
@@ -103,6 +200,32 @@ def _image_part(item: dict[str, Any], settings: Settings) -> ImagePart:
     return _decode_data_url(str(url), settings=settings)
 
 
+def _file_part(item: dict[str, Any]) -> FilePart:
+    for field in ("file_data", "file_url"):
+        if item.get(field) is not None:
+            raise ApiError(
+                "not_implemented",
+                f"input_file {field} is not implemented. Upload the file and "
+                "send its file_id.",
+                code=field,
+            )
+    file_id = item.get("file_id")
+    if not isinstance(file_id, str) or not file_id.strip():
+        raise ApiError(
+            "invalid_request",
+            "input_file needs file_id",
+            code="invalid_request",
+        )
+    filename = item.get("filename")
+    if filename is not None and not isinstance(filename, str):
+        raise ApiError(
+            "invalid_request",
+            "input_file filename must be a string",
+            code="invalid_request",
+        )
+    return FilePart(file_id=file_id.strip(), filename=(filename or "").strip())
+
+
 def _parts_from_content(content: object, *, settings: Settings) -> list[dict[str, Any]]:
     if isinstance(content, str):
         return [{"type": "input_text", "text": content}] if content else []
@@ -132,6 +255,8 @@ def _parts_from_content(content: object, *, settings: Settings) -> list[dict[str
             parts.append({"type": "input_text", "text": text})
         elif kind == "input_image":
             parts.append({"type": "input_image", "image": _image_part(item, settings)})
+        elif kind == "input_file":
+            parts.append({"type": "input_file", "file": _file_part(item)})
         else:
             raise ApiError(
                 "not_implemented",
@@ -142,10 +267,22 @@ def _parts_from_content(content: object, *, settings: Settings) -> list[dict[str
 
 
 def require_image_model(
-    settings: Settings, model: str | None, content: UserContent
+    settings: Settings,
+    model: str | None,
+    content: UserContent,
+    files: Sequence[InputFile] = (),
 ) -> None:
-    if not content.images:
+    count = len(content.images) + sum(
+        1 for item in files if item.model_input == "image"
+    )
+    if not count:
         return
+    if count > settings.max_images:
+        raise ApiError(
+            "invalid_request",
+            "too many images",
+            code="invalid_request",
+        )
     from apipi.common.model_caps import model_accepts_image
 
     if model_accepts_image(settings.model_registry, model):
@@ -203,10 +340,20 @@ def parse_user_content(value: object, *, settings: Settings) -> UserContent:
             "too many images",
             code="invalid_request",
         )
+    files = tuple(
+        part["file"] for part in parts if isinstance(part.get("file"), FilePart)
+    )
+    if len(files) > settings.max_files_per_message:
+        raise ApiError(
+            "invalid_request",
+            f"too many files: a message can carry at most "
+            f"{settings.max_files_per_message} input_file parts",
+            code="invalid_request",
+        )
     stored = tuple(
         {"type": "input_text", "text": str(part["text"])}
         if part.get("type") == "input_text"
-        else {"type": "input_image"}
+        else {"type": str(part.get("type"))}
         for part in parts
     )
-    return UserContent(text="\n".join(texts), images=images, parts=stored)
+    return UserContent(text="\n".join(texts), images=images, parts=stored, files=files)

@@ -373,6 +373,88 @@
       "title": "ContextSkillRef",
       "type": "object"
     },
+    "InputFileRef": {
+      "description": "One `input_file` of a session without a computer, as a store reference.\n\n`model_input` says how the worker passes it to the model: `text`\n(UTF-8 text in a `<file name=\"…\">` block of the prompt) or `image`.\nThe bytes never travel in the command.",
+      "properties": {
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        },
+        "filename": {
+          "title": "Filename",
+          "type": "string"
+        },
+        "local_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Local Path"
+        },
+        "mime_type": {
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "model_input": {
+          "enum": [
+            "text",
+            "image"
+          ],
+          "title": "Model Input",
+          "type": "string"
+        },
+        "object_id": {
+          "title": "Object Id",
+          "type": "string"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        },
+        "type": {
+          "const": "file",
+          "default": "file",
+          "title": "Type",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "file_id",
+        "filename",
+        "mime_type",
+        "model_input",
+        "object_id",
+        "type"
+      ],
+      "title": "InputFileRef",
+      "type": "object"
+    },
     "InputImageRef": {
       "description": "One input image as a store reference, like a context file reference.\n\n`url` is a presigned GET URL (S3 store) and `local_path` a path\nrelative to the shared store root (filesystem store). The bytes\nnever travel in the command.",
       "properties": {
@@ -482,7 +564,7 @@
       "type": "string"
     },
     "payload": {
-      "description": "`images` is always empty; image parts travel in `parts` as references.",
+      "description": "`images` is always empty; images and files travel in `parts` as references.",
       "properties": {
         "context": {
           "properties": {
@@ -584,6 +666,7 @@
               "items": {
                 "discriminator": {
                   "mapping": {
+                    "file": "#/$defs/InputFileRef",
                     "image": "#/$defs/InputImageRef",
                     "input_text": "#/$defs/InputTextPart"
                   },
@@ -595,6 +678,9 @@
                   },
                   {
                     "$ref": "#/$defs/InputImageRef"
+                  },
+                  {
+                    "$ref": "#/$defs/InputFileRef"
                   }
                 ]
               },

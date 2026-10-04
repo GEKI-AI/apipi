@@ -341,7 +341,7 @@ class Gateway:
             self.store,
             self.event_hub,
             context_factory=self.sessions.forward_context,
-            image_factory=self.sessions.forward_image_parts,
+            part_factory=self.sessions.forward_parts,
             stop_local=self.execution.stop_local,
         )
         emitter = self.lifecycle

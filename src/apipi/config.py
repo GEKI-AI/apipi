@@ -908,6 +908,20 @@ class Settings(BaseSettings):
         default="image/png,image/jpeg,image/webp,image/gif",
         validation_alias=AliasChoices("APIPI_IMAGE_MIMES", "image_mimes"),
     )
+    max_inline_file_bytes: ByteSize = Field(
+        default=256 * 1024,
+        ge=1,
+        validation_alias=AliasChoices(
+            "APIPI_MAX_INLINE_FILE_BYTES", "max_inline_file_bytes"
+        ),
+    )
+    max_files_per_message: int = Field(
+        default=10,
+        ge=1,
+        validation_alias=AliasChoices(
+            "APIPI_MAX_FILES_PER_MESSAGE", "max_files_per_message"
+        ),
+    )
     microvm_kernel: str | None = Field(
         default=None,
         validation_alias=AliasChoices("APIPI_MICROVM_KERNEL", "microvm_kernel"),
@@ -1636,6 +1650,10 @@ def _settings_message(exc: ValidationError) -> str:
             return "APIPI_MAX_WORKSPACE_BYTES must be like 1GiB"
         if "max_artifact_bytes" in loc:
             return "APIPI_MAX_ARTIFACT_BYTES must be like 512MiB"
+        if "max_inline_file_bytes" in loc or "APIPI_MAX_INLINE_FILE_BYTES" in loc:
+            return "APIPI_MAX_INLINE_FILE_BYTES must be like 256KiB"
+        if "max_files_per_message" in loc or "APIPI_MAX_FILES_PER_MESSAGE" in loc:
+            return "APIPI_MAX_FILES_PER_MESSAGE must be at least 1"
         if "max_file_bytes" in loc:
             return "APIPI_MAX_FILE_BYTES must be like 50MiB"
         if "log_level" in loc:

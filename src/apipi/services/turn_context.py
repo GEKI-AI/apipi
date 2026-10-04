@@ -32,7 +32,8 @@ from apipi.common.objects import (
 from apipi.config import Settings
 from apipi.env.setup import file_id_refs_from, skill_refs_from
 from apipi.gateway.auth import not_found
-from apipi.protocol import InputImageRef, TurnContext
+from apipi.gateway.content import InputFile
+from apipi.protocol import InputFileRef, InputImageRef, TurnContext
 from apipi.services.agents import definition_for_session
 from apipi.services.search import SearchResolver, web_search_tool
 from apipi.store.blobs import (
@@ -90,6 +91,31 @@ def input_image_ref(
         object_id=object_id,
         mime_type=mime_type,
         size_bytes=size_bytes,
+    )
+    if ref["url"] is not None:
+        part.url = ref["url"]
+    if ref["local_path"] is not None:
+        part.local_path = ref["local_path"]
+    return part.to_wire()
+
+
+def input_file_ref(
+    settings: Settings,
+    tenant_id: Any,
+    file: InputFile,
+    *,
+    objects: ObjectStore | None = None,
+) -> dict[str, Any]:
+    """One `file` part of `turn.start`: a store reference, never the bytes."""
+    object_id = file_object_id(tenant_id, file.file_id)
+    ref = _store_ref(settings, NS_FILES, object_id, objects=objects)
+    part = InputFileRef(
+        file_id=file.file_id,
+        filename=file.filename,
+        object_id=object_id,
+        mime_type=file.mime or "application/octet-stream",
+        size_bytes=file.size,
+        model_input=file.model_input,
     )
     if ref["url"] is not None:
         part.url = ref["url"]

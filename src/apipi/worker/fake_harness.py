@@ -26,6 +26,7 @@ class FakeHarness:
         self.tools: bool | None = None
         self.api_keys: list[str | None] = []
         self.images: list[list[dict[str, str]]] = []
+        self.prompts: list[str] = []
         self.hold = False
         self.fail_message: str | None = None
         self.usage: dict[str, int] = dict(FAKE_USAGE)
@@ -54,6 +55,8 @@ class FakeHarness:
         self.tools = tools
         raw_key = _kwargs.get("api_key")
         self.api_keys.append(raw_key if isinstance(raw_key, str) else None)
+        if tool_result is None:
+            self.prompts.append(text)
         raw_images = _kwargs.get("images")
         if isinstance(raw_images, list) and raw_images:
             self.images.append(list(raw_images))
