@@ -200,7 +200,9 @@ async def export_agent(
     await check_authorize(
         request, action="agent.read", resource_type="agent", resource_id=str(agent_id)
     )
-    filename, data = await _templates(request).export_agent(tenant.id, agent_id)
+    filename, data = await _templates(request).export_agent(
+        tenant.id, agent_id, user_id=_user_id(request)
+    )
     return Response(
         content=data,
         media_type="application/zip",

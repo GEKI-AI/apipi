@@ -16,8 +16,9 @@ the bearer to `key_id` and `tenant_id`, or rejects with a status,
 `unauthorized`. An auth plugin may return `429` for a rate limit or
 quota. See [auth](auth.md). Every query is tenant-scoped. When the
 auth identity includes `user_id`, session reads and writes also
-require that user. An id that belongs to another tenant or another
-user returns `404`, not `403`.
+require that user, and attachments and images of another user are not
+visible (see [files](#files)). An id that belongs to another tenant or
+another user returns `404`, not `403`.
 
 Clients send a bearer and talk to `/v1`.
 
@@ -231,6 +232,24 @@ the same way a session keeps its `user_id`. Images take the `user_id`
 of their session. The value is null when the identity has no
 `user_id`.
 
+Files of kind `attachment` and `image` are user files. When the auth
+identity has a `user_id`, a user file is visible only when its
+`user_id` is the same or null. A user file of another user behaves
+like a file of another tenant: `GET /v1/files/{file_id}`, `/content`,
+`POST /v1/apipi/files/{file_id}/download`, and `DELETE
+/v1/files/{file_id}` return `404`, the lists leave it out, an `after`
+cursor on it is `400`, and an `input_image` with its `file_id` or an
+`environment.files` entry with its `file_id` (on session create, or in
+`session_defaults` on agent create and update) is `404`. Files of kind
+`file` are agent files and stay visible to every identity of the
+tenant, whoever uploaded them, so an agent file in `session_defaults`
+works in every user's sessions. Agent export
+(`GET /v1/apipi/agents/{agent_id}/export`) and `POST
+/v1/apipi/templates` read the files of the agent's `session_defaults`
+with the same rule, so an agent that still references a user file of
+another user (saved before such files became agent files) is `404`
+there. An identity without `user_id` sees every file of the tenant.
+
 A file can be bound to one or more sessions. An image is bound to the
 session whose message carried it, and an image sent by `file_id` is
 bound to that session too, whatever its kind. A binding has a `path`
@@ -247,7 +266,7 @@ list is paginated:
 | Parameter | Meaning |
 | --- | --- |
 | `limit` | Page size, 1 to 100, default 20. Other values are `400`. |
-| `after` | A file id from the previous page. The next page starts after it. An id that is not a file of the tenant (or, for the session route, not bound to the session), or that the authorization hook's `file.list` filter does not allow, is `400`. |
+| `after` | A file id from the previous page. The next page starts after it. An id that is not a file of the tenant (or, for the session route, not bound to the session), that is a user file of another user, or that the authorization hook's `file.list` filter does not allow, is `400`. |
 | `order` | `desc` (newest first, the default) or `asc`. |
 | `purpose` | Only files with this purpose. |
 
@@ -263,7 +282,7 @@ for an empty page.
 | --- | --- |
 | `kind` | `file`, `attachment`, or `image`. Repeat it for several kinds (`?kind=attachment&kind=image`). Another value is `400`. |
 | `session_id` | Only files bound to this session. The session must be readable by the caller, as for `GET /v1/apipi/sessions/{session_id}/files` (`session.read`). A session of another tenant, or of another user when the identity has a `user_id`, is `404`. |
-| `user_id` | Only files with this `user_id`. It never matches files of another tenant. |
+| `user_id` | Only files with this `user_id`. It never matches files of another tenant. When the identity has a `user_id`, it never matches user files of another user, so `user_id` of another user lists only that user's files of kind `file`. |
 | `filename` | Only files whose name starts with this text. The match is case-sensitive. |
 
 Each object is the file object plus `kind`, `user_id`, and
@@ -274,8 +293,9 @@ session with the same `limit`, `after`, and `order`. Each entry is
 `{ file_id, kind, filename, bytes, content_type, path, item_id,
 created_at }`, where `created_at` is the time of the binding and the
 order follows it. `first_id` and `last_id` are file ids. The session
-must be readable by the caller, like the other session routes. The
-authorization hook's `file.list` filter applies to all three lists.
+must be readable by the caller, like the other session routes, and
+user files of another user are left out. The authorization hook's
+`file.list` filter applies to all three lists.
 
 Deleting a session deletes its bindings and every bound file of kind
 `attachment` or `image` that no other session still uses, both the row
@@ -290,7 +310,13 @@ input becomes a file of kind `file`, so the check never deletes it:
 this happens when its id is in `environment.files` (`type: "file_id"`)
 of a session create, including files that come from the agent's
 `session_defaults`, or in `session_defaults` saved on an agent (also
-an agent made from a template). Images stay images.
+an agent made from a template). A file that an agent's
+`session_defaults` references is an agent file, so on agent create and
+update an image there becomes kind `file` as well, and every user of
+the tenant can start a session from that agent and export it. An image
+in `environment.files` of a session create stays an image. A user file
+of another user is `404` in both places, so a caller never changes its
+kind.
 
 Browser and BFF uploads that must not proxy bytes through the gateway
 use [presigned uploads](#uploads) instead of this multipart route.
@@ -333,7 +359,10 @@ response is a PUT URL and
 headers. PUT the bytes to object storage, then complete. Complete
 checks the object with `HeadObject`, enforces `APIPI_MAX_FILE_BYTES`,
 and writes Files or Skills metadata. Complete before PUT is `400` with
-code `upload_incomplete`. Wrong tenant is `404`. The Pi harness session
+code `upload_incomplete`. Wrong tenant is `404`. When the identity has
+a `user_id`, complete also needs the upload to have the same `user_id`
+or none, for every `purpose` including `skill`; another user's upload
+is `404`. The Pi harness session
 cache is not exposed this way.
 
 A presigned GET forces a download. The URL sets

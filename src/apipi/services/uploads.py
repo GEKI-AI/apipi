@@ -118,17 +118,20 @@ class UploadService:
         upload_id: uuid.UUID,
         *,
         file_purpose: str | None = None,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         s3 = _s3(self.objects)
         async with self.store.session() as db:
-            row = await get_upload(db, tenant_id, upload_id)
+            row = await get_upload(db, tenant_id, upload_id, user_id=user_id)
             if row is None:
                 not_found()
             is_file = row.purpose != "skill"
             purpose = _file_purpose(row.purpose, file_purpose) if is_file else ""
             if row.status == "complete":
                 if is_file:
-                    existing = await get_file(db, tenant_id, row.object_id)
+                    existing = await get_file(
+                        db, tenant_id, row.object_id, user_id=user_id
+                    )
                     if existing is None:
                         not_found()
                     return file_body(existing)

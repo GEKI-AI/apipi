@@ -12,7 +12,13 @@ from apipi.common.sandbox import (
 from apipi.config import Settings
 from apipi.env.spec import EnvironmentSpec, environment_payload
 from apipi.gateway.auth import not_found
-from apipi.store.repo import get_file, get_skill, get_vault, promote_attachments
+from apipi.store.repo import (
+    USER_FILE_KINDS,
+    get_file,
+    get_skill,
+    get_vault,
+    promote_attachments,
+)
 
 _HOSTED = "openai_hosted"
 
@@ -126,6 +132,7 @@ async def require_default_refs(
     *,
     agent_label: str | None = None,
     dangling: bool = False,
+    user_id: str | None = None,
 ) -> None:
     if not defaults:
         return
@@ -144,7 +151,7 @@ async def require_default_refs(
         file_id = item.get("file_id")
         if not isinstance(file_id, str) or not file_id:
             continue
-        if await get_file(db, tenant_id, file_id) is None:
+        if await get_file(db, tenant_id, file_id, user_id=user_id) is None:
             _missing(agent_label, "file", file_id, dangling=dangling)
     for raw in defaults.get("vault_ids") or []:
         vault_id = _as_uuid(raw)
@@ -164,11 +171,23 @@ def environment_file_ids(environment: dict[str, Any] | None) -> list[str]:
 
 
 async def promote_default_files(
-    db: Any, tenant_id: uuid.UUID, defaults: dict[str, Any] | None
+    db: Any,
+    tenant_id: uuid.UUID,
+    defaults: dict[str, Any] | None,
+    *,
+    user_id: str | None = None,
 ) -> None:
-    """Make attachments in the defaults' `environment.files` files of kind `file`."""
+    """Make user files in the defaults' `environment.files` files of kind `file`.
+
+    A file an agent references is an agent file, so attachments and
+    images both become kind `file`.
+    """
     await promote_attachments(
-        db, tenant_id, environment_file_ids(_environment_dict(defaults))
+        db,
+        tenant_id,
+        environment_file_ids(_environment_dict(defaults)),
+        user_id=user_id,
+        kinds=USER_FILE_KINDS,
     )
 
 

@@ -23,6 +23,10 @@ def _user_id(request: Request) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+async def _require_file(request: Request, tenant_id: uuid.UUID, file_id: str) -> None:
+    await _files(request).meta(tenant_id, file_id, user_id=_user_id(request))
+
+
 @router.post("/v1/files")
 async def upload_file(
     request: Request,
@@ -67,6 +71,7 @@ async def list_files(
         after=after,
         order=order,
         limit=limit,
+        user_id=_user_id(request),
     )
 
 
@@ -98,7 +103,7 @@ async def list_apipi_files(
         tenant.id,
         kinds=kind or None,
         purpose=purpose,
-        user_id=user_id,
+        owner_id=user_id,
         session_id=session_id,
         filename_prefix=filename,
         ids=filt.ids if filt is not None else None,
@@ -106,6 +111,7 @@ async def list_apipi_files(
         order=order,
         limit=limit,
         apipi=True,
+        user_id=_user_id(request),
     )
 
 
@@ -115,17 +121,11 @@ async def read_file(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    async with request.app.state.store.session() as _db:
-        from apipi.store.repo import get_file as _gf
-
-        if await _gf(_db, tenant.id, file_id) is None:
-            from apipi.gateway.auth import not_found as _nf
-
-            _nf()
+    await _require_file(request, tenant.id, file_id)
     await check_authorize(
         request, action="file.read", resource_type="file", resource_id=str(file_id)
     )
-    return await _files(request).get(tenant.id, file_id)
+    return await _files(request).get(tenant.id, file_id, user_id=_user_id(request))
 
 
 @router.get("/v1/files/{file_id}/content")
@@ -134,17 +134,13 @@ async def read_file_content(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> Response:
-    async with request.app.state.store.session() as _db:
-        from apipi.store.repo import get_file as _gf
-
-        if await _gf(_db, tenant.id, file_id) is None:
-            from apipi.gateway.auth import not_found as _nf
-
-            _nf()
+    await _require_file(request, tenant.id, file_id)
     await check_authorize(
         request, action="file.read", resource_type="file", resource_id=str(file_id)
     )
-    data, content_type, filename = await _files(request).content(tenant.id, file_id)
+    data, content_type, filename = await _files(request).content(
+        tenant.id, file_id, user_id=_user_id(request)
+    )
     media = content_type if content_type else "application/octet-stream"
     return Response(
         content=data,
@@ -162,17 +158,13 @@ async def download_file(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    async with request.app.state.store.session() as _db:
-        from apipi.store.repo import get_file as _gf
-
-        if await _gf(_db, tenant.id, file_id) is None:
-            from apipi.gateway.auth import not_found as _nf
-
-            _nf()
+    await _require_file(request, tenant.id, file_id)
     await check_authorize(
         request, action="file.read", resource_type="file", resource_id=str(file_id)
     )
-    filename, content_type = await _files(request).meta(tenant.id, file_id)
+    filename, content_type = await _files(request).meta(
+        tenant.id, file_id, user_id=_user_id(request)
+    )
     return request.app.state.gateway.uploads.download(
         NS_FILES,
         file_object_id(tenant.id, file_id),
@@ -187,14 +179,8 @@ async def remove_file(
     request: Request,
     tenant: Annotated[Tenant, Depends(require_tenant)],
 ) -> dict[str, Any]:
-    async with request.app.state.store.session() as _db:
-        from apipi.store.repo import get_file as _gf
-
-        if await _gf(_db, tenant.id, file_id) is None:
-            from apipi.gateway.auth import not_found as _nf
-
-            _nf()
+    await _require_file(request, tenant.id, file_id)
     await check_authorize(
         request, action="file.write", resource_type="file", resource_id=str(file_id)
     )
-    return await _files(request).delete(tenant.id, file_id)
+    return await _files(request).delete(tenant.id, file_id, user_id=_user_id(request))

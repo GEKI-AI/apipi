@@ -178,12 +178,16 @@ class FileService:
             return file_body(row)
 
     async def image_files(
-        self, tenant_id: uuid.UUID, images: tuple[ImagePart, ...]
+        self,
+        tenant_id: uuid.UUID,
+        images: tuple[ImagePart, ...],
+        *,
+        user_id: str | None = None,
     ) -> dict[str, tuple[str, int]]:
         """Check the `file_id` images and return `{file_id: (mime, size)}`.
 
-        Each must be a file of the tenant with an allowed image type
-        within the image size limit.
+        Each must be a file of the tenant that the caller with `user_id`
+        can see, with an allowed image type within the image size limit.
         """
         mimes = image_mimes(self.settings)
         known: dict[str, tuple[str, int]] = {}
@@ -191,7 +195,7 @@ class FileService:
             for image in images:
                 if not image.file_id or image.file_id in known:
                     continue
-                row = await get_file(db, tenant_id, image.file_id)
+                row = await get_file(db, tenant_id, image.file_id, user_id=user_id)
                 if row is None:
                     not_found()
                 mime = (row.content_type or "").split(";", 1)[0].strip().lower()
@@ -248,7 +252,7 @@ class FileService:
         *,
         kinds: Collection[str] | None = ("file",),
         purpose: str | None = None,
-        user_id: str | None = None,
+        owner_id: str | None = None,
         session_id: uuid.UUID | None = None,
         filename_prefix: str | None = None,
         ids: Collection[str] | None = None,
@@ -256,11 +260,13 @@ class FileService:
         order: str = "desc",
         limit: int = DEFAULT_LIST_LIMIT,
         apipi: bool = False,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
-        """One page of files. `ids` is the authorization filter.
+        """One page of the files the caller with `user_id` can see.
 
-        `kinds` of None lists every kind. `apipi` adds `kind`, `user_id`,
-        and `content_type` to each object.
+        `ids` is the authorization filter and `owner_id` filters by the
+        file's `user_id`. `kinds` of None lists every kind. `apipi` adds
+        `kind`, `user_id`, and `content_type` to each object.
         """
         check_page(limit, order)
         if kinds is not None:
@@ -274,7 +280,7 @@ class FileService:
         async with self.store.session() as db:
             cursor: tuple[datetime, str] | None = None
             if after is not None:
-                cursor = await file_cursor(db, tenant_id, after)
+                cursor = await file_cursor(db, tenant_id, after, user_id=user_id)
                 if cursor is None or (ids is not None and after not in ids):
                     _unknown_after(after)
             rows, has_more = await list_files(
@@ -282,13 +288,14 @@ class FileService:
                 tenant_id,
                 kinds=kinds,
                 purpose=purpose,
-                user_id=user_id,
+                owner_id=owner_id,
                 session_id=session_id,
                 filename_prefix=filename_prefix,
                 ids=ids,
                 after=cursor,
                 order=order,
                 limit=limit,
+                user_id=user_id,
             )
         body = apipi_file_body if apipi else file_body
         return page_body([body(row) for row in rows], has_more, "id")
@@ -302,13 +309,16 @@ class FileService:
         after: str | None = None,
         order: str = "desc",
         limit: int = DEFAULT_LIST_LIMIT,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
         """One page of the files bound to a session the caller has checked."""
         check_page(limit, order)
         async with self.store.session() as db:
             cursor: tuple[datetime, str] | None = None
             if after is not None:
-                cursor = await session_file_cursor(db, tenant_id, session_id, after)
+                cursor = await session_file_cursor(
+                    db, tenant_id, session_id, after, user_id=user_id
+                )
                 if cursor is None or (ids is not None and after not in ids):
                     _unknown_after(after)
             rows, has_more = await list_session_files(
@@ -319,6 +329,7 @@ class FileService:
                 after=cursor,
                 order=order,
                 limit=limit,
+                user_id=user_id,
             )
         data = [session_file_body(binding, row) for binding, row in rows]
         return page_body(data, has_more, "file_id")
@@ -377,25 +388,29 @@ class FileService:
             if len(deleted) < SWEEP_BATCH:
                 return total
 
-    async def meta(self, tenant_id: uuid.UUID, file_id: str) -> tuple[str, str | None]:
+    async def meta(
+        self, tenant_id: uuid.UUID, file_id: str, *, user_id: str | None = None
+    ) -> tuple[str, str | None]:
         async with self.store.session() as db:
-            row = await get_file(db, tenant_id, file_id)
+            row = await get_file(db, tenant_id, file_id, user_id=user_id)
         if row is None:
             not_found()
         return row.filename, row.content_type
 
-    async def get(self, tenant_id: uuid.UUID, file_id: str) -> dict[str, Any]:
+    async def get(
+        self, tenant_id: uuid.UUID, file_id: str, *, user_id: str | None = None
+    ) -> dict[str, Any]:
         async with self.store.session() as db:
-            row = await get_file(db, tenant_id, file_id)
+            row = await get_file(db, tenant_id, file_id, user_id=user_id)
         if row is None:
             not_found()
         return file_body(row)
 
     async def content(
-        self, tenant_id: uuid.UUID, file_id: str
+        self, tenant_id: uuid.UUID, file_id: str, *, user_id: str | None = None
     ) -> tuple[bytes, str | None, str]:
         async with self.store.session() as db:
-            row = await get_file(db, tenant_id, file_id)
+            row = await get_file(db, tenant_id, file_id, user_id=user_id)
         if row is None:
             not_found()
         data = await self.objects.get(NS_FILES, file_object_id(tenant_id, file_id))
@@ -403,15 +418,21 @@ class FileService:
             not_found()
         return data, row.content_type, row.filename
 
-    async def delete(self, tenant_id: uuid.UUID, file_id: str) -> dict[str, Any]:
+    async def delete(
+        self, tenant_id: uuid.UUID, file_id: str, *, user_id: str | None = None
+    ) -> dict[str, Any]:
         async with self.store.session() as db:
-            if not await delete_file(db, tenant_id, file_id):
+            if not await delete_file(db, tenant_id, file_id, user_id=user_id):
                 not_found()
         await self.objects.delete(NS_FILES, file_object_id(tenant_id, file_id))
         return {"id": file_id, "object": "file", "deleted": True}
 
     async def workspace_files(
-        self, tenant_id: uuid.UUID, environment: dict[str, Any]
+        self,
+        tenant_id: uuid.UUID,
+        environment: dict[str, Any],
+        *,
+        user_id: str | None = None,
     ) -> list[tuple[str, bytes]]:
         try:
             refs = file_id_refs_from(environment)
@@ -424,7 +445,7 @@ class FileService:
         files: list[tuple[str, bytes]] = []
         async with self.store.session() as db:
             for path, file_id in refs:
-                row = await get_file(db, tenant_id, file_id)
+                row = await get_file(db, tenant_id, file_id, user_id=user_id)
                 if row is None:
                     not_found()
                 data = await self.objects.get(

@@ -430,3 +430,72 @@ async def test_image_upload_is_an_image_within_the_image_limits(
     assert lying_kept is False
     assert [row["id"] for row in listed.json()["data"]] == [file_id]
     assert [row["id"] for row in default.json()["data"]] == [plain_id]
+
+
+async def test_uploads_and_downloads_of_user_files_match_the_user(
+    settings: Settings, store: Store
+) -> None:
+    client_s3 = FakeS3()
+    s3_settings = _s3_settings(settings)
+    app = create_app(
+        api_settings_for(s3_settings),
+        store=store,
+        objects=S3Store(s3_settings, client=client_s3),
+        authenticate=_Users(),
+    )
+    token = "upload-users"
+    tenant_id = tenant_from_key(token)
+    u1 = {**_auth(token), "X-End-User": "u1"}
+    u2 = {**_auth(token), "X-End-User": "u2"}
+
+    async def _put(client: AsyncClient, headers: dict[str, str], purpose: str) -> Any:
+        created = await client.post(
+            "/v1/apipi/uploads",
+            headers=headers,
+            json={
+                "purpose": purpose,
+                "filename": f"{purpose}.txt",
+                "bytes": 5,
+                "content_type": "text/plain",
+            },
+        )
+        assert created.status_code == 200, created.json()
+        object_id = file_object_id(tenant_id, created.json()["object_id"])
+        client_s3.put_object(
+            Key=f"apipi/files/{object_id}", Body=b"hello", ContentType="text/plain"
+        )
+        return created.json()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        attachment = await _put(client, u1, "attachment")
+        complete = f"/v1/apipi/uploads/{attachment['upload_id']}/complete"
+        u2_complete = await client.post(complete, headers=u2, json={})
+        u1_complete = await client.post(complete, headers=u1, json={})
+        u2_again = await client.post(complete, headers=u2, json={})
+        download = f"/v1/apipi/files/{attachment['object_id']}/download"
+        u2_download = await client.post(download, headers=u2)
+        u1_download = await client.post(download, headers=u1)
+        none_download = await client.post(download, headers=_auth(token))
+        agent_file = await _put(client, u1, "file")
+        await client.post(
+            f"/v1/apipi/uploads/{agent_file['upload_id']}/complete",
+            headers=u1,
+            json={},
+        )
+        u2_agent_file = await client.post(
+            f"/v1/apipi/files/{agent_file['object_id']}/download", headers=u2
+        )
+        shared = await _put(client, _auth(token), "attachment")
+        u2_shared = await client.post(
+            f"/v1/apipi/uploads/{shared['upload_id']}/complete", headers=u2, json={}
+        )
+    assert u2_complete.status_code == 404
+    assert u1_complete.status_code == 200
+    assert u2_again.status_code == 404
+    assert u2_download.status_code == 404
+    assert u1_download.status_code == 200
+    assert none_download.status_code == 200
+    assert u2_agent_file.status_code == 200
+    assert u2_shared.status_code == 200

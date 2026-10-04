@@ -729,6 +729,7 @@ class SessionService:
                     agent_defaults,
                     agent_label=label,
                     dangling=True,
+                    user_id=user_id,
                 )
         environment, vault_ids, agent_size, agent_image = merge_session_create(
             agent_defaults=agent_defaults if inherit_agent_defaults else None,
@@ -740,7 +741,9 @@ class SessionService:
         extra_files: list[tuple[str, bytes]] = []
         if env.get("type") == "openai_hosted":
             try:
-                extra_files = await self.files.workspace_files(tenant_id, env)
+                extra_files = await self.files.workspace_files(
+                    tenant_id, env, user_id=user_id
+                )
             except ObjectStoreError as exc:
                 raise ApiError(
                     "api_error",
@@ -749,7 +752,9 @@ class SessionService:
                     status_code=503,
                 ) from exc
         turn_content = parse_user_content(input, settings=self.settings)
-        image_files = await self.files.image_files(tenant_id, turn_content.images)
+        image_files = await self.files.image_files(
+            tenant_id, turn_content.images, user_id=user_id
+        )
         turn_parts, created = await self._turn_parts(
             tenant_id, turn_content, image_files, user_id=user_id
         )
@@ -873,7 +878,9 @@ class SessionService:
             )
             for file_id in dict.fromkeys(_image_file_ids(turn_parts)):
                 await bind_session_file(db, tenant_id, row.id, file_id)
-            await promote_attachments(db, tenant_id, environment_file_ids(env))
+            await promote_attachments(
+                db, tenant_id, environment_file_ids(env), user_id=user_id
+            )
             if env.get("type") == "openai_hosted":
                 directory = session_workspace(self.settings, tenant_id, row.id)
                 caps = env.get("capability_directories")
@@ -1336,7 +1343,9 @@ class SessionService:
         image_files: dict[str, tuple[str, int]] = {}
         if action == "message":
             require_image_model(self.settings, follow_model, parsed)
-            image_files = await self.files.image_files(tenant_id, parsed.images)
+            image_files = await self.files.image_files(
+                tenant_id, parsed.images, user_id=user_id
+            )
         turn_servers: list[McpHttpServer] | None = None
         if action in ("tool", "message"):
             try:
