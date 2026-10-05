@@ -322,15 +322,7 @@ class _Broker:
         return f"http://127.0.0.1:9/tok/mcp/{route_id}"
 
 
-def test_pi_env_sets_search_url_only_with_flag_and_broker() -> None:
-    settings = _settings()
-    assert "APIPI_SEARCH_URL" not in pi_env(settings, broker=_Broker())
-    on = pi_env(settings, broker=_Broker(), web_search=True)
-    assert on["APIPI_SEARCH_URL"] == "http://127.0.0.1:9/tok/search"
-    assert "APIPI_SEARCH_URL" not in pi_env(settings, web_search=True)
-
-
-def test_pi_env_search_url_cannot_be_overridden(
+def test_pi_env_sets_search_url_only_with_flag_and_broker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings()
@@ -340,6 +332,8 @@ def test_pi_env_search_url_cannot_be_overridden(
     assert "APIPI_SEARCH_URL" not in off
     on = pi_env(settings, broker=_Broker(), extra_env=extra, web_search=True)
     assert on["APIPI_SEARCH_URL"] == "http://127.0.0.1:9/tok/search"
+    no_broker = pi_env(settings, extra_env=extra, web_search=True)
+    assert "APIPI_SEARCH_URL" not in no_broker
 
 
 SECRET = "tvly-super-secret-key"
@@ -537,30 +531,9 @@ async def test_harness_passes_flag_and_hook_to_pool_and_broker() -> None:
     assert ("search", None) in pool.proc.broker.calls
 
 
-async def test_harness_ignores_a_hook_without_the_flag() -> None:
-    pool = _HarnessPool()
-    harness = PiHarness(cast(Any, pool))
-
-    async def hook(*_args: object) -> dict[str, Any]:
-        return {}
-
-    await _drain(harness, turn_id="t", web_search=False, search=hook)
-    assert [call for call in pool.proc.broker.calls if call[0] == "search"] == [
-        ("search", None)
-    ]
-
-
 def _execution(tmp_path: Path) -> LocalExecution:
     settings = _settings(tmp_path)
     return local_execution(settings, outbox=Outbox(), harness=object())
-
-
-async def test_execution_search_without_sender_fails_fast(tmp_path: Path) -> None:
-    execution = _execution(tmp_path)
-    with pytest.raises(SearchHookError) as raised:
-        await execution.search(str(uuid.uuid4()), str(uuid.uuid4()), "q", None)
-    assert raised.value.code == "search_unavailable"
-    assert execution.search_waiters == {}
 
 
 async def test_execution_search_sends_request_and_returns_reply(
@@ -596,32 +569,31 @@ async def test_execution_search_sends_request_and_returns_reply(
     assert execution.search_waiters == {}
 
 
-async def test_execution_search_times_out_and_forgets_the_waiter(
-    tmp_path: Path,
+async def _silent_sender(payload: dict[str, Any]) -> None:
+    del payload
+
+
+async def _broken_sender(payload: dict[str, Any]) -> None:
+    raise ConnectionError("socket closed")
+
+
+@pytest.mark.parametrize(
+    ("sender", "code"),
+    [
+        (None, "search_unavailable"),
+        (_silent_sender, "search_timeout"),
+        (_broken_sender, "search_unavailable"),
+    ],
+)
+async def test_execution_search_failure_is_a_tool_error(
+    tmp_path: Path, sender: Any, code: str
 ) -> None:
     execution = _execution(tmp_path)
     execution.search_timeout = 0.05
-
-    async def sender(payload: dict[str, Any]) -> None:
-        del payload
-
     execution.search_sender = sender
     with pytest.raises(SearchHookError) as raised:
         await execution.search(str(uuid.uuid4()), str(uuid.uuid4()), "q", None)
-    assert raised.value.code == "search_timeout"
-    assert execution.search_waiters == {}
-
-
-async def test_execution_search_send_failure_is_a_tool_error(tmp_path: Path) -> None:
-    execution = _execution(tmp_path)
-
-    async def sender(payload: dict[str, Any]) -> None:
-        raise ConnectionError("socket closed")
-
-    execution.search_sender = sender
-    with pytest.raises(SearchHookError) as raised:
-        await execution.search(str(uuid.uuid4()), str(uuid.uuid4()), "q", None)
-    assert raised.value.code == "search_unavailable"
+    assert raised.value.code == code
     assert execution.search_waiters == {}
 
 

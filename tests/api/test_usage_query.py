@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from httpx import AsyncClient
 
 from apipi.worker.fake_harness import FAKE_USAGE
@@ -54,23 +55,23 @@ async def _turn_id(client: AsyncClient, token: str, session_id: str) -> str:
     return str(turns.json()["data"][0]["id"])
 
 
-async def test_usage_by_session_and_turn(client: AsyncClient) -> None:
+@pytest.mark.parametrize("key", ["session_id", "turn_id", "day"])
+async def test_usage_by_session_turn_and_day(client: AsyncClient, key: str) -> None:
     token = _token()
     session_id = await _session_with_turn(client, token)
-    turn_id = await _turn_id(client, token, session_id)
-    session_usage = await client.get(
-        "/v1/apipi/usage", headers=_auth(token), params={"session_id": session_id}
+    values = {
+        "session_id": session_id,
+        "turn_id": await _turn_id(client, token, session_id),
+        "day": datetime.now(UTC).date().isoformat(),
+    }
+    response = await client.get(
+        "/v1/apipi/usage", headers=_auth(token), params={key: values[key]}
     )
-    turn_usage = await client.get(
-        "/v1/apipi/usage", headers=_auth(token), params={"turn_id": turn_id}
-    )
-    assert session_usage.status_code == 200
-    assert turn_usage.status_code == 200
-    assert session_usage.json() == _expected(1)
-    assert turn_usage.json() == _expected(1)
-    assert "cost" not in session_usage.json()
-    assert "usd" not in session_usage.json()
-    assert "hello" not in str(session_usage.json())
+    assert response.status_code == 200
+    assert response.json() == _expected(1)
+    assert "cost" not in response.json()
+    assert "usd" not in response.json()
+    assert "hello" not in str(response.json())
 
 
 async def test_usage_by_session_sums_turns(client: AsyncClient) -> None:
@@ -89,67 +90,32 @@ async def test_usage_by_session_sums_turns(client: AsyncClient) -> None:
     assert response.json() == _expected(2)
 
 
-async def test_usage_by_day(client: AsyncClient) -> None:
-    token = _token()
-    await _session_with_turn(client, token)
-    day = datetime.now(UTC).date().isoformat()
-    response = await client.get(
-        "/v1/apipi/usage", headers=_auth(token), params={"day": day}
-    )
-    assert response.status_code == 200
-    assert response.json() == _expected(1)
-
-
-async def test_usage_empty_day_is_zeros(client: AsyncClient) -> None:
-    token = _token()
-    await client.get("/v1/agents", headers=_auth(token))
-    response = await client.get(
-        "/v1/apipi/usage", headers=_auth(token), params={"day": "2020-01-02"}
-    )
-    assert response.status_code == 200
-    assert response.json() == _expected(0)
-
-
-async def test_usage_day_is_tenant_scoped(client: AsyncClient) -> None:
-    token_a = _token("a")
-    token_b = _token("b")
-    await _session_with_turn(client, token_a)
-    day = datetime.now(UTC).date().isoformat()
-    other = await client.get(
-        "/v1/apipi/usage", headers=_auth(token_b), params={"day": day}
-    )
-    assert other.status_code == 200
-    assert other.json() == _expected(0)
-
-
-async def test_usage_wrong_tenant_is_404(client: AsyncClient) -> None:
-    token_a = _token("a")
-    token_b = _token("b")
-    session_id = await _session_with_turn(client, token_a)
-    turn_id = await _turn_id(client, token_a, session_id)
-    session = await client.get(
-        "/v1/apipi/usage", headers=_auth(token_b), params={"session_id": session_id}
-    )
-    turn = await client.get(
-        "/v1/apipi/usage", headers=_auth(token_b), params={"turn_id": turn_id}
-    )
-    assert session.status_code == 404
-    assert turn.status_code == 404
-    assert session.json()["error"]["code"] == "not_found"
-    assert turn.json()["error"]["code"] == "not_found"
-
-
-async def test_usage_unknown_ids_are_404(client: AsyncClient) -> None:
-    token = _token()
-    missing = str(uuid.uuid4())
-    session = await client.get(
-        "/v1/apipi/usage", headers=_auth(token), params={"session_id": missing}
-    )
-    turn = await client.get(
-        "/v1/apipi/usage", headers=_auth(token), params={"turn_id": missing}
-    )
-    assert session.status_code == 404
-    assert turn.status_code == 404
+@pytest.mark.parametrize(
+    ("key", "status"), [("session_id", 404), ("turn_id", 404), ("day", 200)]
+)
+async def test_usage_other_tenant_and_unknown_ids(
+    client: AsyncClient, key: str, status: int
+) -> None:
+    session_id = await _session_with_turn(client, _token("a"))
+    owned = {
+        "session_id": session_id,
+        "turn_id": await _turn_id(client, _token("a"), session_id),
+        "day": datetime.now(UTC).date().isoformat(),
+    }
+    missing = {
+        "session_id": str(uuid.uuid4()),
+        "turn_id": str(uuid.uuid4()),
+        "day": "2020-01-02",
+    }
+    for token, value in ((_token("b"), owned[key]), (_token("a"), missing[key])):
+        response = await client.get(
+            "/v1/apipi/usage", headers=_auth(token), params={key: value}
+        )
+        assert response.status_code == status
+        if status == 404:
+            assert response.json()["error"]["code"] == "not_found"
+        else:
+            assert response.json() == _expected(0)
 
 
 async def test_usage_requires_one_filter(client: AsyncClient) -> None:

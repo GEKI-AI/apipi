@@ -119,5 +119,8 @@ def test_usage_event_has_no_message_text() -> None:
     assert event["prompt_tokens"] == 1
     assert event["environment_type"] == "none"
     assert event["user_id"] == "user-9"
+    assert event["search_calls"] == 0
+    assert event["search_units"] == 0
+    assert event["search_counts"] == {}
     assert "content" not in event
     assert "prompt" not in event

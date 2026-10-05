@@ -472,41 +472,30 @@ async def test_search_bad_fields_reply_invalid_request(store: Store) -> None:
     assert reply is not None and reply["code"] == "invalid_request"
 
 
-async def test_provider_timeout_is_not_charged(store: Store) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ReadTimeout("slow", request=request)
+def _read_timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("slow", request=request)
 
+
+@pytest.mark.parametrize(
+    ("handler", "code", "charged"),
+    [
+        (_read_timeout, "search_timeout", (0, 0)),
+        (lambda request: httpx.Response(500), "search_unavailable", (0, 0)),
+        (lambda request: httpx.Response(401), "search_failed", (0, 0)),
+        (lambda request: httpx.Response(200, text="not json"), "search_failed", (1, 1)),
+    ],
+    ids=["timeout", "http-500", "http-401", "unreadable-200"],
+)
+async def test_failed_search_is_counted_only_when_charged(
+    store: Store, handler: Any, code: str, charged: tuple[int, int]
+) -> None:
     case = await _case(store, handler=handler)
     reply = await case.ask()
     assert reply is not None
     assert reply["ok"] is False
-    assert reply["code"] == "search_timeout"
-    assert (await case.usage())[:2] == (0, 0)
-
-
-@pytest.mark.parametrize(
-    ("status", "code"), [(500, "search_unavailable"), (401, "search_failed")]
-)
-async def test_provider_http_error_is_not_charged(
-    store: Store, status: int, code: str
-) -> None:
-    case = await _case(store, handler=lambda request: httpx.Response(status))
-    reply = await case.ask()
-    assert reply is not None
     assert reply["code"] == code
     assert "tavily" not in str(reply["message"]).lower()
-    assert (await case.usage())[:2] == (0, 0)
-
-
-async def test_charged_failure_is_counted(store: Store) -> None:
-    case = await _case(
-        store, handler=lambda request: httpx.Response(200, text="not json")
-    )
-    reply = await case.ask()
-    assert reply is not None
-    assert reply["ok"] is False
-    assert reply["code"] == "search_failed"
-    assert (await case.usage())[:2] == (1, 1)
+    assert (await case.usage())[:2] == charged
 
 
 async def test_staan_provider_through_service(store: Store) -> None:
