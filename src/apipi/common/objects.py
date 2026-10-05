@@ -3,12 +3,13 @@
 from pathlib import Path
 from typing import Literal
 
-Namespace = Literal["artifacts", "files", "skills", "templates"]
+Namespace = Literal["artifacts", "files", "skills", "templates", "uploads"]
 
 NS_ARTIFACTS: Namespace = "artifacts"
 NS_FILES: Namespace = "files"
 NS_SKILLS: Namespace = "skills"
 NS_TEMPLATES: Namespace = "templates"
+NS_UPLOADS: Namespace = "uploads"
 
 
 def local_object_path(root: Path, namespace: Namespace, object_id: str) -> Path:

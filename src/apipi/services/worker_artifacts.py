@@ -29,6 +29,7 @@ from apipi.common.timefmt import utc_ts
 from apipi.config import DiskLimitError, Settings
 from apipi.store.blobs import (
     ArtifactBlobs,
+    ObjectHead,
     ObjectStore,
     blob_key,
     blob_prefix,
@@ -512,7 +513,7 @@ async def verify_upload_object(
                 operation="complete",
                 key=object_id,
             )
-        actual_size = meta[0] if isinstance(meta, tuple) else None
+        actual_size = meta.size if isinstance(meta, ObjectHead) else None
         if actual_size is None:
             raise _store_error("cannot verify upload size", operation="head")
         if size is not None and size != actual_size:

@@ -544,6 +544,12 @@ two forms is used, depending on the store of the API.
 | Filesystem | `local_path` | Read the file at that path, relative to the store root, which the API and the worker mount at the same place. `url` is absent. The worker MUST NOT leave the store root: it rejects a path with `..` or an absolute path. |
 
 `object_id` names the object in the store and is the same in both forms.
+A worker stops reading a reference with `size_bytes` (files, session
+files, image and file parts) after `size_bytes` bytes, and a skill
+after `APIPI_MAX_FILE_BYTES`. A larger object is never held in memory
+in full. An object larger than its limit, or a reference with
+`size_bytes` whose object has another size, fails the turn with code
+`artifact_store`.
 `path` of a file is the path in the workspace. At the start of the turn
 the worker fetches the bytes of a file of `files` or `session_files`
 only when `path` does not exist in the session directory, and writes it

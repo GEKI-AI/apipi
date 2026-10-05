@@ -392,6 +392,15 @@ name, including an RFC 5987 `filename*` when the name is not ASCII, and
 `X-Content-Type-Options: nosniff`. `POST /v1/apipi/files/{id}/download`
 returns a short-lived GET URL when the artifact store is S3.
 
+Every read of stored file or skill bytes on the gateway stops after the
+stored `bytes` plus one byte: `GET /v1/files/{file_id}/content`, the
+UTF-8 check of an `input_file` text file, `environment.files` and
+`environment.skills` at session create, agent export, and `POST
+/v1/apipi/templates`. An object whose size is not the stored `bytes`
+returns `503` with code `artifact_store`. A worker also stops reading a
+file after its size, so an object of another size fails the turn with
+code `artifact_store`.
+
 ## Uploads
 
 S3-compatible object storage only (`APIPI_ARTIFACT_STORE=s3`). Local
@@ -420,16 +429,47 @@ with complete. For `image`, the
 declared `content_type` must be in `APIPI_IMAGE_MIMES` (`400`
 otherwise) and `bytes` within `APIPI_MAX_IMAGE_BYTES` (`413` with code
 `payload_too_large` otherwise). Complete checks the stored size against
-the same limit again and deletes an object that is too large. The
-response is a PUT URL and
-headers. PUT the bytes to object storage, then complete. Complete
-checks the object with `HeadObject`, enforces `APIPI_MAX_FILE_BYTES`,
-and writes Files or Skills metadata. Complete before PUT is `400` with
-code `upload_incomplete`. Wrong tenant is `404`. When the identity has
-a `user_id`, complete also needs the upload to have the same `user_id`
-or none, for every `purpose` including `skill`; another user's upload
-is `404`. The Pi harness session
-cache is not exposed this way.
+the same limit again and deletes an object that is too large. Complete
+before PUT is `400` with code `upload_incomplete`. Wrong tenant is
+`404`. When the identity has a `user_id`, complete also needs the
+upload to have the same `user_id` or none, for every `purpose`
+including `skill`; another user's upload is `404`. The Pi harness
+session cache is not exposed this way.
+
+The response of create is a PUT URL, the `headers` to send with it, and
+`expires_at`. The URL points at an upload key of its own under the
+`uploads` prefix of the bucket, next to `files` and `skills` (see
+`APIPI_S3_PREFIX` in [configuration](config.md)), and not at the file
+or skill. Its signature covers `Content-Type` and `Content-Length`, so
+the body must have exactly `bytes` bytes and the declared content type.
+Object storage rejects a PUT of another size, usually with `403`. Most
+HTTP clients, and browsers, set `Content-Length` from the body
+themselves.
+
+PUT the bytes, then complete. Complete checks the upload key with
+`HeadObject`. The size must be within `bytes` and
+`APIPI_MAX_FILE_BYTES` (`413` with code `payload_too_large` otherwise,
+and the uploaded object is deleted). Complete then copies the object
+inside the bucket (`CopyObject`) to the final key of the file or skill,
+checks a skill zip like `POST /v1/skills` does, writes the Files or
+Skills metadata, and deletes the upload key. The final key never gets a
+PUT URL. So the bytes that a `file_id` or `skill_id` stands for cannot
+change after complete. A later PUT to the same URL, which stays valid
+until `expires_at`, only writes the upload key again. It does not
+change what `GET /v1/files/{file_id}/content`, `input_file`,
+`input_image`, `environment.files`, or `environment.skills` deliver.
+Complete of an upload that is already complete returns the existing
+file or skill. Two completes of one upload at the same time do not
+both copy: the second waits for the first and then returns its file or
+skill. If the copy fails, complete returns `503` with code
+`artifact_store`, stores nothing, and the same complete can be sent
+again. When a later step fails after the copy, the copied object is
+deleted again. The copy only takes the object that complete checked
+(`CopySourceIfMatch` with the ETag of `HeadObject`), so a PUT between
+the check and the copy also fails the copy, and complete can be sent
+again. If object storage returns no ETag, the copy runs without that
+condition, and the signed `Content-Length` still keeps the object at the
+declared size.
 
 A presigned GET forces a download. The URL sets
 `Content-Disposition: attachment` to the original file name. A name that

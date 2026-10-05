@@ -23,6 +23,7 @@ from apipi.store.blobs import (
     ObjectStore,
     S3Store,
     file_object_id,
+    get_sized,
     skill_object_id,
     template_object_id,
 )
@@ -312,8 +313,11 @@ class TemplateService:
                     row = await get_skill(db, tenant_id, skill_id)
                     if row is None:
                         not_found()
-                    blob = await self.objects.get(
-                        NS_SKILLS, skill_object_id(tenant_id, skill_id)
+                    blob = await get_sized(
+                        self.objects,
+                        NS_SKILLS,
+                        skill_object_id(tenant_id, skill_id),
+                        row.size,
                     )
                     if blob is None:
                         not_found()
@@ -339,8 +343,11 @@ class TemplateService:
                         row = await get_file(db, tenant_id, file_id, user_id=user_id)
                         if row is None:
                             not_found()
-                        blob = await self.objects.get(
-                            NS_FILES, file_object_id(tenant_id, file_id)
+                        blob = await get_sized(
+                            self.objects,
+                            NS_FILES,
+                            file_object_id(tenant_id, file_id),
+                            row.size,
                         )
                         if blob is None:
                             not_found()

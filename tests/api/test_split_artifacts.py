@@ -290,6 +290,15 @@ async def _s3_split_flow(store: Store, tmp_path: Path, monkeypatch: Any) -> None
             self.content = content
             self.status_code = 200
 
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def aiter_bytes(self) -> Any:
+            yield self.content
+
     class _FakeClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
@@ -302,6 +311,19 @@ async def _s3_split_flow(store: Store, tmp_path: Path, monkeypatch: Any) -> None
 
         async def get(self, url: str, *args: Any, **kwargs: Any) -> Any:
             return _FakeResponse(await _fake_get(url))
+
+        def stream(self, method: str, url: str) -> Any:
+            assert method == "GET"
+            return _LazyResponse(url)
+
+    class _LazyResponse(_FakeResponse):
+        def __init__(self, url: str) -> None:
+            super().__init__(b"")
+            self.url = url
+
+        async def __aenter__(self) -> Any:
+            self.content = await _fake_get(self.url)
+            return self
 
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     try:
@@ -883,6 +905,15 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
             self.content = content
             self.status_code = status
 
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def aiter_bytes(self) -> Any:
+            yield self.content
+
     class _FakeClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
@@ -905,6 +936,13 @@ async def test_split_turn_uploads_without_worker_store_or_row_writes(
             return _FakeResponse(b"", 200)
 
         async def get(self, url: str, *args: Any, **kwargs: Any) -> Any:
+            key = urlparse(url).path.lstrip("/")
+            data = fake.objects.get(key)
+            assert data is not None, f"missing fake S3 key {key}"
+            return _FakeResponse(data, 200)
+
+        def stream(self, method: str, url: str) -> Any:
+            assert method == "GET"
             key = urlparse(url).path.lstrip("/")
             data = fake.objects.get(key)
             assert data is not None, f"missing fake S3 key {key}"
