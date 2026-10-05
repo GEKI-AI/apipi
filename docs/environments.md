@@ -379,8 +379,10 @@ forwarded: the resolver answers it with a placeholder address from
 first in alphabetical order), so the guest never learns the internal
 address. A connection to a placeholder on port 80, 443, or 8443 goes to the
 gateway like any other, and the gateway resolves the name from the
-server name or `Host` header on the worker. Other ports to the
-placeholder are rejected.
+server name or `Host` header on the worker. The server name or `Host`
+must be the name that the placeholder stands for. Otherwise the gateway
+rejects the connection, so a placeholder cannot be used to reach
+another host. Other ports to the placeholder are rejected.
 
 On TLS connections that are passed through, `restricted` checks only
 the server name. The gateway does not see the encrypted request, so it
@@ -396,6 +398,26 @@ gateway connects to the address the guest asked for after checking that
 it is not private, so `curl --resolve` and `/etc/hosts` in the guest
 work as before. Other ports use the direct NAT path, and DNS goes
 directly to the public resolvers. `disabled` does not start a gateway.
+
+An `enabled` session can also reach a host on a private network by
+name when that host is a credential host of one of the session's vault
+environment credentials and the operator lists it by name in
+`private_hosts` (see [configuration](config.md#networking)). Such a
+session gets the guest DNS filter too. The filter answers those names
+with their placeholder address, numbered the same way as in
+`restricted`, and forwards every other standard query to the public
+resolvers as the guest sent it, so all other names resolve as before.
+A query with a non-zero opcode gets `NOTIMP`, and a query with more
+than one question, a compressed question, or a name that is not ASCII
+gets `FORMERR`. In such a session all guest DNS on UDP and TCP port 53
+goes to the filter and is answered through the fixed public resolvers
+`1.1.1.1` and `8.8.8.8`, whatever server the guest asks, with at most
+64 UDP queries in flight and 3 seconds per upstream resolver. A connection to such a placeholder goes
+to the gateway, which checks that the server name is the name the
+placeholder stands for, resolves that name on the worker, and connects
+to the address it resolved. Other private names in `private_hosts` get
+no placeholder in `enabled`. An `enabled` session without a private
+credential host has no DNS filter.
 
 Allowed connections are passed through unchanged, so the guest still
 sees the real certificate of the server. A connection that sends no
@@ -456,6 +478,9 @@ only: a plain HTTP connection on port 80 to one of them is rejected with
 These credentials depend on `network.access`:
 
 - `enabled`: the credential hosts are reachable like any public host.
+  A credential host on a private network that the operator lists in
+  `private_hosts` resolves in the guest to a placeholder address, as
+  described above.
 - `restricted`: the `allowed_hosts` of every attached environment
   credential are added to `allowed_domains` when the sandbox starts.
   You do not list them twice. The stored `environment.network` keeps

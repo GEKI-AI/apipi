@@ -7,6 +7,7 @@ from apipi.worker.egress.policy import (
     PLACEHOLDER_NET,
     Decision,
     EgressPolicy,
+    is_placeholder,
     split_host_port,
     valid_hostname,
 )
@@ -120,6 +121,50 @@ def test_private_name_needs_the_session_and_the_operator() -> None:
         "disabled", allowed_hosts=("git.internal",), private_hosts=("git.internal",)
     )
     assert not disabled.private_name("git.internal")
+
+
+def test_enabled_private_names_are_its_private_credential_hosts() -> None:
+    plain = EgressPolicy.build("enabled", private_hosts=("git.internal",))
+    assert plain.private_names() == ()
+    assert not plain.needs_dns()
+    assert plain.placeholder("git.internal") is None
+    public = plain.with_intercept(["github.com"])
+    assert public.private_names() == ()
+    assert not public.needs_dns()
+    enabled = EgressPolicy.build(
+        "enabled",
+        private_hosts=("wiki.internal", "git.internal", "10.0.0.0/8"),
+        intercept_hosts=("Git.Internal", "github.com"),
+    )
+    assert enabled.private_names() == ("git.internal",)
+    assert enabled.needs_dns()
+    assert enabled.placeholder("git.internal") == "198.18.0.1"
+    assert enabled.placeholder("wiki.internal") is None
+    assert enabled.placeholder("github.com") is None
+    assert EgressPolicy.build("restricted", allowed_hosts=("a.test",)).needs_dns()
+    disabled = EgressPolicy.build(
+        "disabled", private_hosts=("git.internal",), intercept_hosts=("git.internal",)
+    )
+    assert not disabled.needs_dns()
+
+
+def test_placeholder_name_maps_an_address_back() -> None:
+    policy = EgressPolicy.build(
+        "restricted",
+        allowed_hosts=("git.internal", "wiki.internal"),
+        private_hosts=("wiki.internal", "git.internal", "aa.internal"),
+    )
+    for name in policy.private_names():
+        address = policy.placeholder(name)
+        assert address is not None
+        assert is_placeholder(address)
+        assert policy.placeholder_name(address) == name
+    for address in ("198.18.0.0", "198.18.0.3", "198.19.255.255", "93.184.216.34"):
+        assert policy.placeholder_name(address) is None
+    assert policy.placeholder_name("::ffff:198.18.0.1") is None
+    assert policy.placeholder_name("not an address") is None
+    assert not is_placeholder("10.0.0.1")
+    assert not is_placeholder("2001:db8::1")
 
 
 def test_hostnames_are_validated() -> None:

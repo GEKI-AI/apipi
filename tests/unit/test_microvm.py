@@ -534,7 +534,7 @@ def test_tap_setup_nat_without_host_loopback() -> None:
 
 def test_tap_setup_enabled_sends_web_ports_to_gateway() -> None:
     net = tap_net(NET_ID)
-    argv = _tap_argv("enabled")
+    argv = _tap_argv("enabled", TapPorts(broker=40000, gateway=40001))
     flat = _flat(argv)
     assert (
         f"-t nat -A {net.name}gw -p tcp -m multiport --dports 80,443,8443 "
@@ -551,6 +551,40 @@ def test_tap_setup_enabled_sends_web_ports_to_gateway() -> None:
     )
     reject_at = next(i for i, cmd in enumerate(argv) if "172.16.0.0/12" in cmd)
     assert accept_at < reject_at
+
+
+def test_tap_setup_enabled_sends_dns_to_the_filter_when_it_runs() -> None:
+    net = tap_net(NET_ID)
+    argv = _tap_argv("enabled")
+    flat = _flat(argv)
+    assert (
+        f"-t nat -A {net.name}gw -p udp --dport 53 -j DNAT "
+        f"--to-destination {net.host_ip}:40002"
+    ) in flat
+    assert (
+        f"-t nat -A {net.name}gw -p tcp --dport 53 -j DNAT "
+        f"--to-destination {net.host_ip}:40003"
+    ) in flat
+    chain = [cmd for cmd in argv if len(cmd) > 3 and cmd[3] == f"{net.name}eg"]
+    assert chain[-1] == ["/sbin/iptables", "-w", "-A", f"{net.name}eg", "-j", "ACCEPT"]
+    inbound = [cmd for cmd in argv if len(cmd) > 3 and cmd[3] == f"{net.name}in"]
+    assert [cmd[cmd.index("--dport") + 1] for cmd in inbound if "--dport" in cmd] == [
+        "40000",
+        "40001",
+        "40002",
+        "40003",
+    ]
+    teardown = _flat(
+        tap_teardown_argv(
+            net,
+            ip="/sbin/ip",
+            iptables="/sbin/iptables",
+            ip6tables="/sbin/ip6tables",
+            mode="enabled",
+        )
+    )
+    assert f"-t nat -F {net.name}gw" in teardown
+    assert f"-F {net.name}in" in teardown
 
 
 def test_tap_setup_restricted_rejects_other_ports_and_filters_dns() -> None:

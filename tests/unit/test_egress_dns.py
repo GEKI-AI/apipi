@@ -226,6 +226,54 @@ async def test_private_names_get_the_placeholder(resolver: FakeResolver) -> None
         await filt.stop()
 
 
+async def test_passthrough_answers_private_names_and_forwards_the_rest_unchanged(
+    resolver: FakeResolver,
+) -> None:
+    filt = DnsFilter(
+        host="127.0.0.1",
+        allow=lambda _name: True,
+        placeholder=lambda name: "198.18.0.1" if name == "git.internal" else None,
+        passthrough=True,
+        upstreams=(("127.0.0.1", resolver.port),),
+        timeout=1.0,
+    )
+    await filt.start()
+    try:
+        private = query("Git.Internal", ident=0x4242)
+        for reply in (
+            await udp_ask(filt.udp_port, private),
+            await tcp_ask(filt.tcp_port, private),
+        ):
+            assert reply[:2] == private[:2]
+            assert reply.endswith(socket.inet_aton("198.18.0.1"))
+        reply = await udp_ask(filt.udp_port, query("git.internal", qtype=28))
+        assert rcode(reply) == 0
+        assert int.from_bytes(reply[6:8], "big") == 0
+        assert resolver.udp == [] and resolver.tcp == []
+        packet = bytearray(query("ExAmple.COM", ident=0x0BAD))
+        packet[3] |= 0x10
+        packet[11] = 1
+        packet += b"\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x05guest"
+        reply = await udp_ask(filt.udp_port, bytes(packet))
+        assert answered(reply, bytes(packet))
+        sent = resolver.raw[-1]
+        assert sent[2:] == bytes(packet)[2:]
+        reply = await tcp_ask(filt.tcp_port, bytes(packet))
+        assert answered(reply, bytes(packet))
+        assert resolver.raw[-1][2:] == bytes(packet)[2:]
+        for qtype in (64, 65):
+            reply = await udp_ask(filt.udp_port, query("other.internal", qtype=qtype))
+            assert answered(reply, query("other.internal", qtype=qtype))
+        chaos = bytearray(query("version.bind", qtype=16))
+        chaos[-1] = 3
+        reply = await udp_ask(filt.udp_port, bytes(chaos))
+        assert reply[:2] == chaos[:2] and rcode(reply) == 0
+        assert resolver.raw[-1][2:] == bytes(chaos)[2:]
+        assert resolver.udp[-3:] == ["other.internal", "other.internal", "version.bind"]
+    finally:
+        await filt.stop()
+
+
 async def test_multi_question_and_other_class_are_refused(
     dns: DnsFilter, resolver: FakeResolver
 ) -> None:

@@ -10,9 +10,11 @@ from typing import Any
 
 import pytest
 from tests.e2e.test_microvm_pi import _image_paths, _microvm_or_skip
+from tests.unit.test_egress_git import BACKEND, SECRET, GitServer, _bare_repo
 
 from apipi.config import Settings
 from apipi.env.setup import NetworkPolicy, write_network_policy
+from apipi.protocol import ContextEnvCredential
 from apipi.worker.egress import WorkerCA
 from apipi.worker.egress.policy import PLACEHOLDER_NET
 from apipi.worker.pi.microvm import spawn_microvm_pi
@@ -312,6 +314,109 @@ async def test_enabled_guest_egress(tmp_path: Path, workspace: Path) -> None:
     assert results["curl_ip_literal"]["rc"] == 0, report
     assert _failed(results, "curl_metadata"), report
     assert _failed(results, "curl_private_resolve"), report
+
+
+ENABLED_PRIVATE_PROBE_SOURCE = r"""
+import json
+import os
+import socket
+import subprocess
+import sys
+from pathlib import Path
+
+private = json.loads(Path("/workspace/egress_probe.json").read_text())["private"]
+results = {}
+curl = ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "20"]
+
+
+def run(name, argv):
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=60, env=env)
+    results[name] = {"rc": done.returncode, "out": done.stdout, "err": done.stderr}
+
+
+def check(name, func):
+    try:
+        results[name] = {"rc": 0, "out": str(func()), "err": ""}
+    except Exception as exc:
+        results[name] = {"rc": 1, "out": "", "err": repr(exc)}
+
+
+check("dns_private", lambda: socket.getaddrinfo(private, 443)[0][4][0])
+check("dns_public", lambda: socket.getaddrinfo("example.com", 443)[0][4][0])
+run("git_clone", ["git", "clone", f"https://{private}/org/repo.git", "/tmp/repo"])
+check("readme", lambda: Path("/tmp/repo/README").read_text())
+run("curl_public", [*curl, "https://example.com/"])
+placeholder = results["dns_private"]["out"] or "198.18.0.1"
+run(
+    "curl_placeholder_other_name",
+    [
+        *curl,
+        "-k",
+        "--resolve",
+        f"example.com:443:{placeholder}",
+        "https://example.com/",
+    ],
+)
+print(json.dumps({"type": "egress_probe", "results": results}), flush=True)
+sys.stdin.read()
+"""
+
+
+class _PrivateGit(GitServer):
+    async def start(self) -> None:
+        try:
+            self.server = await asyncio.start_server(
+                self._serve, "127.0.0.1", 443, ssl=self.ca.server_context(PRIVATE)
+            )
+        except OSError as exc:
+            pytest.skip(f"cannot bind 127.0.0.1:443 for the private git server: {exc}")
+
+
+async def test_enabled_guest_clones_from_a_private_credential_host(
+    tmp_path: Path, workspace: Path
+) -> None:
+    if BACKEND is None:
+        pytest.skip("needs git and git-http-backend")
+    upstream_ca = WorkerCA()
+    ca_file = tmp_path / "private-ca.pem"
+    ca_file.write_bytes(upstream_ca.cert_pem)
+    settings = _settings(
+        tmp_path,
+        microvm_egress_private_hosts=PRIVATE,
+        microvm_egress_upstream_ca=str(ca_file),
+    )
+    _bare_repo(tmp_path)
+    server = _PrivateGit(tmp_path / "srv", upstream_ca)
+    await server.start()
+    (workspace / "egress_probe.py").write_text(ENABLED_PRIVATE_PROBE_SOURCE)
+    (workspace / "egress_probe.json").write_text(json.dumps({"private": PRIVATE}))
+    credential = ContextEnvCredential(
+        credential_id="cred_git",
+        secret_name="GIT_TOKEN",
+        secret_value=SECRET,
+        allowed_hosts=[PRIVATE],
+    )
+    try:
+        proc = await spawn_microvm_pi(
+            settings, cwd=str(workspace), tools=True, env_credentials=[credential]
+        )
+        try:
+            results = await _probe(proc)
+        finally:
+            await proc.terminate()
+    finally:
+        server.close()
+    report = json.dumps(results, indent=2)
+    assert results["dns_private"]["out"] == str(PLACEHOLDER_NET[1]), report
+    assert results["dns_public"]["rc"] == 0, report
+    assert results["dns_public"]["out"] != str(PLACEHOLDER_NET[1]), report
+    assert results["git_clone"]["rc"] == 0, report
+    assert results["readme"]["out"] == "hello\n", report
+    assert SECRET not in report
+    assert server.auth, report
+    assert results["curl_public"]["rc"] == 0, report
+    assert _failed(results, "curl_placeholder_other_name"), report
 
 
 DISABLED_PROBE_SOURCE = r"""

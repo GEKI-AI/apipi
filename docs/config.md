@@ -807,8 +807,25 @@ internal address. A connection to a placeholder on port 80, 443, or
 reads the hostname from the server name or the `Host` header, resolves
 it on the worker, and checks the addresses as described below. So
 `git clone https://forgejo.internal/org/repo.git` works in the guest
-without an `/etc/hosts` entry. A session with `enabled` has no DNS
-filter. Its guest uses the public resolvers, which usually cannot
+without an `/etc/hosts` entry. The server name or `Host` header must
+be the name that the placeholder stands for, or the gateway rejects the
+connection with reason `placeholder_mismatch`, so a guest cannot use
+one placeholder to reach another host.
+
+A session with `enabled` gets the DNS filter only when one of its vault
+environment credentials names a host that is listed in `private_hosts`
+by name. Only those credential hosts get a placeholder, because they
+are the only private names such a session may use. The filter sends
+every other standard query to the public resolvers as the guest sent
+it (only the query id changes), so the guest resolves public names as
+before. A query with a non-zero opcode gets `NOTIMP`, and a query with
+more than one question, a compressed question, or a name that is not
+ASCII gets `FORMERR`. Every guest DNS query on port 53 goes to the
+filter, whatever server the guest asks. The gateway treats a connection to such a
+placeholder like one in `restricted`: it checks the server name,
+resolves the name on the worker, and connects to the address it
+resolved. An `enabled` session without such a credential host has no
+DNS filter. Its guest uses the public resolvers, which usually cannot
 resolve an internal name.
 
 CIDR entries open nothing on their own, so a tenant cannot reach your

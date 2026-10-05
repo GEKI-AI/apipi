@@ -56,7 +56,8 @@ The gateway decides by hostname, not by IP address:
   cannot carry data out.
 * `enabled` allows public hosts, IP literals included, as today. Other
   ports keep the direct NAT path, and guest DNS goes directly to the
-  public resolvers.
+  public resolvers, unless the session has private credential hosts
+  (see below).
 * `disabled` blocks all guest egress, DNS included. The guest reaches
   only its broker on the TAP host IP. No gateway is started.
 * Private and special-use ranges stay rejected in every mode. In
@@ -66,7 +67,8 @@ The gateway decides by hostname, not by IP address:
   `/etc/hosts` in the guest do not matter. In `enabled` the gateway
   splices to the address the guest connected to after checking that it
   is not in a blocked range, so `curl --resolve` and `/etc/hosts` keep
-  working for public hosts.
+  working for public hosts. A placeholder address is the exception
+  (see below).
 * The only exception to the private ranges is an operator list of
   private hosts (`private_hosts`) that the gateway, never the guest, may
   reach, for example a self-hosted Forgejo. A listed name opens a
@@ -82,8 +84,31 @@ The gateway decides by hostname, not by IP address:
   connection to another that shares its certificate. The guest's
   connection to a placeholder on 80, 443, or 8443 is sent to the
   gateway like any other, and the gateway still decides and resolves
-  by SNI or `Host` on the worker. The guest never learns the internal
-  address.
+  by SNI or `Host` on the worker. The SNI or `Host` must be the name
+  the placeholder stands for, or the connection is rejected
+  (`placeholder_mismatch`), so a placeholder is never a way to reach
+  another host. The guest never learns the internal address.
+* An `enabled` session may use a private name only when it is a
+  credential host of the session (a host whose TLS the gateway
+  terminates), because an `enabled` session names no other hosts. When
+  such a name is listed in `private_hosts` by name, the session gets the
+  DNS resolver too, and iptables sends all guest DNS on port 53 to it.
+  In `enabled` the resolver answers the private credential hosts with
+  their placeholders and forwards every other standard query as the
+  guest sent it (only the query id is replaced), so `enabled` keeps open
+  DNS for all other names, EDNS and DNSSEC included. A query with a
+  non-zero opcode gets `NOTIMP`, and a query with more than one
+  question, a compressed question, or a name that is not ASCII gets
+  `FORMERR`, as in `restricted`. The resolver forwards to the fixed
+  public resolvers, whatever server the guest asked. Data could leave through DNS in
+  `enabled` before too, so rebuilding the query buys nothing there. The
+  gateway does not splice a connection to a placeholder to the address
+  the guest chose, because the placeholder is not a real destination:
+  it checks the name as above, resolves it on the worker with the
+  `private_hosts` rule, and connects to the address it resolved. An
+  `enabled` session without a private credential host keeps the setup
+  without a resolver. The resolver is per session and goes away with
+  the session's gateway and iptables chains; IPv6 stays closed.
 
 This replaces the current allowlist, which resolves hostnames to IP
 addresses once at boot and opens those addresses on every port. That

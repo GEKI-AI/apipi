@@ -406,8 +406,12 @@ private addresses that the named hosts may resolve to. If the server
 certificate comes from an internal certificate authority, the operator
 also sets `APIPI_MICROVM_EGRESS_UPSTREAM_CA`
 (`[sandbox.network].upstream_ca`) to a PEM bundle with that authority.
-The guest never reaches a private address directly. See
-[configuration](config.md#networking).
+The guest never reaches a private address directly. The guest DNS
+filter answers a private credential host with a placeholder address,
+with `network.access` `enabled` as well as `restricted`, so
+`git clone https://git.example.com/...` works without an `/etc/hosts`
+entry. With `enabled`, every other name still resolves through the
+public resolvers. See [configuration](config.md#networking).
 
 The worker must list the protocol feature `env_credentials`. A worker
 from an older ApiPi version does not list it, and the API does not send

@@ -1022,9 +1022,10 @@ def _gateway_nat_cmds(
         ],
         _dnat(iptables, chain, "tcp", web, f"{net.host_ip}:{ports.gateway}"),
     ]
-    if mode == "restricted":
-        if ports.dns_udp is None or ports.dns_tcp is None:
+    if ports.dns_udp is None or ports.dns_tcp is None:
+        if mode == "restricted":
             raise ValueError("microvm egress DNS filter is not running")
+    else:
         cmds.append(
             _dnat(iptables, chain, "udp", "53", f"{net.host_ip}:{ports.dns_udp}")
         )
