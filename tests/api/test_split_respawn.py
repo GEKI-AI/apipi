@@ -8,11 +8,16 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 from tests.support.procs import fake_pi_shim
-from tests.support.split_worker import split_client_for, worker_settings_for
+from tests.support.split_worker import (
+    HeldRelease,
+    split_client_for,
+    worker_settings_for,
+)
 
 from apipi.config import CapacityError, Settings
 from apipi.env.setup import SetupError
 from apipi.protocol import LeaseRelease
+from apipi.services.turn_context import build_turn_context
 from apipi.store.engine import Store
 from apipi.store.repo import get_session_by_id
 from apipi.worker.fake_harness import FakeHarness
@@ -617,3 +622,122 @@ async def test_a_turn_that_fails_before_pi_starts_releases_its_lease(
     assert placed == 0
     assert status == "idle"
     assert kept is not None
+
+
+async def _boot(app: Any, store: Store, session_id: str) -> None:
+    sid = uuid.UUID(session_id)
+    async with store.session() as db:
+        row = await get_session_by_id(db, sid)
+    assert row is not None
+    context = await build_turn_context(store, app.state.settings, row.tenant_id, sid)
+    await app.state.execution.boot_hosted(row.tenant_id, sid, turn_context=context)
+
+
+async def _post(client: AsyncClient, token: str, session_id: str, text: str) -> Any:
+    return await asyncio.wait_for(
+        client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json=_message(text),
+        ),
+        timeout=15,
+    )
+
+
+@pytest.mark.parametrize("request_kind", ["turn", "boot"])
+async def test_a_request_during_a_lease_release_waits_and_gets_a_new_lease(
+    settings: Settings,
+    store: Store,
+    worker_secret: str,
+    tmp_path: Path,
+    request_kind: str,
+) -> None:
+    token = f"split-release-window-{request_kind}"
+    environment = "none" if request_kind == "turn" else "openai_hosted"
+    async with split_client_for(
+        settings,
+        store,
+        token=worker_secret,
+        worker_settings=_pi_worker_settings(settings, tmp_path),
+    ) as (app, client, worker):
+        execution = worker.execution
+        execution.harness = PiHarness(execution.pool)
+        session_id = await _session(client, token, environment)
+        assert await _send(client, token, session_id, "first") == "idle"
+        first = await _lease_settles(store, worker, session_id, leased=True)
+        held = HeldRelease(app.state.workers)
+        await execution.pool.kill(uuid.UUID(session_id), reason="idle")
+        await asyncio.wait_for(held.entered.wait(), timeout=10)
+        if request_kind == "turn":
+            request = asyncio.create_task(_send(client, token, session_id, "second"))
+        else:
+            request = asyncio.create_task(_boot(app, store, session_id))
+        await asyncio.wait_for(held.settling.wait(), timeout=10)
+        waiting = not request.done()
+        held.gate.set()
+        result = await request
+        kept = await _lease_settles(store, worker, session_id, leased=True)
+        after = await _send(client, token, session_id, "third")
+        types = [event["type"] for event in await _events(client, token, session_id)]
+    assert waiting
+    assert result == ("idle" if request_kind == "turn" else None)
+    assert after == "idle"
+    assert kept is not None and kept != first
+    assert "agent.session.environment.failed" not in types
+    assert "agent.session.turn.failed" not in types
+    assert types.count("agent.session.turn.completed") == (
+        3 if request_kind == "turn" else 2
+    ), types
+
+
+@pytest.mark.parametrize("request_kind", ["turn", "boot"])
+async def test_a_release_that_never_finishes_fails_the_request_after_the_wait(
+    settings: Settings,
+    store: Store,
+    worker_secret: str,
+    tmp_path: Path,
+    request_kind: str,
+) -> None:
+    token = f"split-release-stuck-{request_kind}"
+    environment = "none" if request_kind == "turn" else "openai_hosted"
+    async with split_client_for(
+        settings,
+        store,
+        token=worker_secret,
+        worker_settings=_pi_worker_settings(settings, tmp_path),
+    ) as (app, client, worker):
+        execution = worker.execution
+        execution.harness = PiHarness(execution.pool)
+        hub = app.state.workers
+        session_id = await _session(client, token, environment)
+        assert await _send(client, token, session_id, "first") == "idle"
+        first = await _lease_settles(store, worker, session_id, leased=True)
+        hub.release_wait = 0.5
+        held = HeldRelease(hub)
+        await execution.pool.kill(uuid.UUID(session_id), reason="idle")
+        await asyncio.wait_for(held.entered.wait(), timeout=10)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        response = None
+        if request_kind == "turn":
+            response = await _post(client, token, session_id, "second")
+        else:
+            await asyncio.wait_for(_boot(app, store, session_id), timeout=15)
+        elapsed = loop.time() - started
+        events = await _events(client, token, session_id)
+        stuck = await _api_lease(store, session_id)
+        held.gate.set()
+        await _api_released(store, session_id)
+    assert 0.3 <= elapsed < 5, elapsed
+    assert stuck == first
+    if response is not None:
+        assert response.status_code == 429, response.json()
+        assert response.json()["error"]["code"] == "capacity"
+    else:
+        failed = [
+            event["data"]
+            for event in events
+            if event["type"] == "agent.session.environment.failed"
+        ]
+        assert len(failed) == 1, events
+        assert "No worker available" in json.dumps(failed[0])

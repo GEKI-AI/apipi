@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The legacy worker upload kind `input_image` (#540). Since 0.15.0 the API sends input images to workers as references (`image_refs`) and gives a worker without that feature no turn with images, so only workers older than 0.15.0 used the kind. The API now answers an `artifact.presign` with the kind `input_image` with `ok: false`, code `artifact_store`, and a message that asks to upgrade the worker. It reserves no upload slot and presigns no URL, so no presigned PUT URL points at a `files` or `skills` key anymore. An `artifact.completed` for an `input_image` upload slot reserved before the upgrade is rejected with `artifact_store` and creates no file. The worker protocol stays version 2: the kind stays in the schema so that the refusal reaches an older worker, and `file_id` in `artifact.presign.reply` is never set. Upgrade note: workers older than 0.15.0 must be upgraded. Since 0.15.0 they get no turns with images, and with this version the API also refuses their input image uploads.
 
+### Fixed
+
+- A request that arrives while the API clears a released lease no longer fails (#542). Since #538 the API takes the lease out of the worker connection before it clears it on the session row, and a message or a `sandbox.boot` in that short window got `429` `capacity` ("Too many live sessions") or an `agent.session.environment.failed` with "No worker available". A command or a placement for that session now waits until the release has finished, up to 5 seconds, and then places the session on a new lease as usual. When the release does not finish in that time, the request fails as before and the API logs `worker.lease.release_wait_timeout`. A command forwarded to the replica that holds the socket waits there in the same way, and when the lease is gone by then, the requesting replica places the session again instead of answering `503` `worker_unreachable`.
+
 ## [0.15.0] - 2026-10-05
 
 ### Added

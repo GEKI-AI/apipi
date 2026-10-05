@@ -240,7 +240,10 @@ takes the lease back when that command arrives. Otherwise the API
 clears the lease, and when the session still has a turn `in_progress`,
 it ends that turn as `failed` with `turn_interrupted`: the release
 comes after the envelopes of the session, so that turn can never
-finish.
+finish. A command for the session that the API wants to send while it
+handles the release waits until the release has finished (up to 5
+seconds) and then goes out with a new `lease_id`, so the worker never
+gets a command for the lease it has just released.
 
 #### `lease.revoke` (API to worker)
 

@@ -20,6 +20,7 @@ from sqlalchemy import select, update
 from tests.support.notify_bus import NotifyNetwork
 from tests.support.procs import fake_pi_shim
 from tests.support.split_worker import (
+    HeldRelease,
     SplitWorker,
     api_settings_for,
     spawn_split_worker,
@@ -31,6 +32,7 @@ from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import AuthIdentity
 from apipi.gateway.tokens import hash_token
+from apipi.protocol import LeaseRelease
 from apipi.services.turn_context import build_turn_context
 from apipi.services.worker_tokens import create_token
 from apipi.store.engine import Store
@@ -396,6 +398,30 @@ async def test_a_forwarded_boot_that_fails_releases_its_lease(
         )
 
     await _until(released)
+
+
+async def test_a_forwarded_turn_during_a_lease_release_gets_a_new_lease(
+    replicas: Replicas,
+) -> None:
+    session_id = await _new_session(replicas.client_a)
+    first = await _message(replicas.client_a, session_id, "one")
+    assert first.status_code == 200, first.text
+    _worker_id, lease_id = await _lease(replicas.store, session_id)
+    assert lease_id is not None
+    held = HeldRelease(replicas.hub_a)
+    await replicas.worker._ws.send_json(
+        LeaseRelease(session_id=session_id, lease_id=lease_id).to_wire()
+    )
+    await asyncio.wait_for(held.entered.wait(), timeout=10)
+    second = asyncio.create_task(_message(replicas.client_b, session_id, "two"))
+    await asyncio.wait_for(held.settling.wait(), timeout=10)
+    held.gate.set()
+    posted = await asyncio.wait_for(second, timeout=20)
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["status"] == "idle"
+    assert replicas.calls == [("command", "turn.start"), ("acquire", "turn.start")]
+    _worker_id, new_lease = await _lease(replicas.store, session_id)
+    assert new_lease is not None and new_lease != lease_id
 
 
 async def test_lease_revoke_from_the_reaper_reaches_the_socket(

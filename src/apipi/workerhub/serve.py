@@ -464,13 +464,21 @@ class ConnectionServer:
     async def _run_control(self) -> None:
         while True:
             item = await self._control.get()
-            await self._guarded(
-                item.label,
-                lambda item=item: self._handle(item.parsed, item.turns),
-                attempts=RELEASE_ATTEMPTS
-                if isinstance(item.parsed, LeaseRelease)
-                else 1,
+            await self._run_item(
+                item, lambda item=item: self._handle(item.parsed, item.turns)
             )
+
+    async def _run_item(
+        self, item: _Control, handler: Callable[[], Awaitable[object]]
+    ) -> None:
+        parsed = item.parsed
+        if not isinstance(parsed, LeaseRelease):
+            await self._guarded(item.label, handler)
+            return
+        try:
+            await self._guarded(item.label, handler, attempts=RELEASE_ATTEMPTS)
+        finally:
+            self.hub.end_release(parsed.lease_id)
 
     async def _handle(self, parsed: BaseModel, turns: int | None = None) -> None:
         conn = self.conn
@@ -554,6 +562,7 @@ class ConnectionServer:
                 tenant_id = row.tenant_id
                 self._releasing[parsed.lease_id] = tenant_id
                 conn.leases.discard(parsed.lease_id)
+                hub.begin_release(row.id, parsed.lease_id)
             await hub.release(store, tenant_id, parsed.session_id, parsed.lease_id)
             async with store.session() as db:
                 await fail_stale_in_progress(
@@ -615,12 +624,9 @@ class ConnectionServer:
             if isinstance(item, _Control):
                 if isinstance(item.parsed, LeaseRelease):
                     await self._flush(batcher)
-                await self._guarded(
-                    item.label,
+                await self._run_item(
+                    item,
                     lambda item=item: self._handle_ordered(item.parsed, item.turns),
-                    attempts=RELEASE_ATTEMPTS
-                    if isinstance(item.parsed, LeaseRelease)
-                    else 1,
                 )
                 continue
             if item is not None:

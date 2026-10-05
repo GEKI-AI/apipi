@@ -164,6 +164,19 @@ chosen over a new release field or a release acknowledgement, because
 the command already carries its `lease_id` and the API can decide from
 the order of the socket alone.
 
+**A request waits for a release that is in flight.** The API takes
+the lease out of the connection before it clears the session row, so
+that a command sent meanwhile cannot use it. A command or a placement
+for that session waits on the replica that handles the release until
+the release ended, then places the session on a new lease. The wait is
+bounded (5 seconds from the start of the release, below the 10 second
+forward timeout, so a forwarded command still gets its answer), and a
+release that does not finish leaves the request with the error it had
+before. A requesting replica whose forwarded command found the lease
+gone places the session itself. This was chosen over sending the
+command on the half-released lease, which the worker would take back
+only to have the API clear it, and over a new protocol message.
+
 ## Semantics
 
 * Losing the socket does not abort a turn. A session is orphaned only
