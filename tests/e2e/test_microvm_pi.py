@@ -145,7 +145,7 @@ async def test_microvm_openai_hosted_streams_fake_pi_text(
 
 
 @pytest.mark.slow
-def test_prepare_serve_boots_throwaway_guest(microvm_settings: Settings) -> None:
+def test_worker_probe_boots_throwaway_guest(microvm_settings: Settings) -> None:
     probe_run_mode(microvm_settings)
 
 

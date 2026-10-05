@@ -55,7 +55,7 @@ def fake_pi_shim(directory: Path) -> Path:
     return shim
 
 
-def _free_port() -> int:
+def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
@@ -110,7 +110,7 @@ async def split_processes(
     timeout: float = 30.0,
 ) -> AsyncIterator[SplitProcesses]:
     """Start the API and one worker as subprocesses; stop both on exit."""
-    port = _free_port()
+    port = free_port()
     base_url = f"http://127.0.0.1:{port}"
     created = await create_token(store, name="e2e-worker")
     token_file = tmp_path / "worker.token"

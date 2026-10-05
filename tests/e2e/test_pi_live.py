@@ -4,14 +4,8 @@ import shutil
 import pytest
 
 from apipi.worker.pi.proc import PiProc
-from apipi.worker.pi.version import PINNED_PI
 
 pytestmark = pytest.mark.slow
-
-
-@pytest.mark.skipif(shutil.which("pi") is None, reason="pi not installed")
-def test_real_pi_is_local_only() -> None:
-    assert shutil.which("pi") is not None
 
 
 @pytest.mark.skipif(shutil.which("pi") is None, reason="pi not installed")
@@ -44,4 +38,3 @@ def test_real_pi_slash_command_ends_turn() -> None:
     first = messages[0]
     assert isinstance(first, dict)
     assert str(first.get("errorMessage")).startswith("input_handled_by_command")
-    assert PINNED_PI == "1.0.0"

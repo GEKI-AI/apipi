@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
-from tests.support.procs import _free_port, fake_pi_shim
+from tests.support.procs import fake_pi_shim, free_port
 
+from apipi.dev import STOP_GRACE
 from apipi.store.engine import Store, create_engine
 from apipi.store.models import WorkerRow
 
@@ -68,7 +69,7 @@ class DevProcess:
 async def dev(tmp_path: Path) -> AsyncIterator[DevProcess]:
     cwd = tmp_path / "project"
     cwd.mkdir()
-    port = _free_port()
+    port = free_port()
     shim = fake_pi_shim(tmp_path)
     env = {
         key: value
@@ -99,21 +100,18 @@ async def dev(tmp_path: Path) -> AsyncIterator[DevProcess]:
         stdout=log,
         stderr=asyncio.subprocess.STDOUT,
     )
-    running = DevProcess(proc, cwd, port)
     try:
-        yield running
-    except BaseException:
-        print((tmp_path / "dev.log").read_text(errors="replace")[-4000:])
-        raise
+        yield DevProcess(proc, cwd, port)
     finally:
         if proc.returncode is None:
             proc.send_signal(signal.SIGINT)
             try:
-                await asyncio.wait_for(proc.wait(), timeout=20)
+                await asyncio.wait_for(proc.wait(), timeout=40)
             except TimeoutError:
                 proc.kill()
                 await proc.wait()
         log.close()
+        print((tmp_path / "dev.log").read_text(errors="replace")[-4000:])
 
 
 async def _ready(dev: DevProcess) -> None:
@@ -139,11 +137,10 @@ async def _ready(dev: DevProcess) -> None:
         await store.dispose()
 
 
-async def test_dev_runs_two_processes_and_completes_a_turn(dev: DevProcess) -> None:
+async def test_dev_completes_a_turn_and_sigint_stops_both(dev: DevProcess) -> None:
     await _ready(dev)
     children = _children(dev.proc.pid)
     assert len(children) == 2
-    assert len(set(children)) == 2
     token_file = dev.cwd / ".apipi" / "dev-worker-token"
     assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
     assert (dev.cwd / ".apipi" / "store").is_dir()
@@ -168,40 +165,21 @@ async def test_dev_runs_two_processes_and_completes_a_turn(dev: DevProcess) -> N
         )
     types = [event["type"] for event in events.json()["data"]]
     assert "agent.session.turn.completed" in types
-
-
-async def test_ctrl_c_stops_both_children(dev: DevProcess) -> None:
-    await _ready(dev)
-    children = _children(dev.proc.pid)
-    assert len(children) == 2
     dev.proc.send_signal(signal.SIGINT)
-    await asyncio.wait_for(dev.proc.wait(), timeout=30)
+    await asyncio.wait_for(dev.proc.wait(), timeout=STOP_GRACE - 5)
     assert not any(_alive(pid) for pid in children)
 
 
-async def test_worker_exit_stops_the_api(dev: DevProcess) -> None:
+@pytest.mark.parametrize("command", [b"worker", b"serve"], ids=["worker", "api"])
+async def test_child_exit_stops_the_other(dev: DevProcess, command: bytes) -> None:
     await _ready(dev)
     children = _children(dev.proc.pid)
     assert len(children) == 2
-    worker = next(
+    child = next(
         pid
         for pid in children
-        if b"worker" in (Path("/proc") / str(pid) / "cmdline").read_bytes()
+        if command in (Path("/proc") / str(pid) / "cmdline").read_bytes().split(b"\0")
     )
-    os.kill(worker, signal.SIGKILL)
-    await asyncio.wait_for(dev.proc.wait(), timeout=30)
-    assert not any(_alive(pid) for pid in children)
-
-
-async def test_api_exit_stops_the_worker(dev: DevProcess) -> None:
-    await _ready(dev)
-    children = _children(dev.proc.pid)
-    assert len(children) == 2
-    api = next(
-        pid
-        for pid in children
-        if b"serve" in (Path("/proc") / str(pid) / "cmdline").read_bytes()
-    )
-    os.kill(api, signal.SIGKILL)
+    os.kill(child, signal.SIGKILL)
     await asyncio.wait_for(dev.proc.wait(), timeout=30)
     assert not any(_alive(pid) for pid in children)

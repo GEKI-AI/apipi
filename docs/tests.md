@@ -4,7 +4,10 @@ Pytest lives in `tests/`. Product pages say what is true. Tests check
 the public API and the constitution, not Pi internals. Mock Pi RPC
 except in the live e2e files. The same change as the code.
 
-Local pytest uses SQLite in memory. Optional Postgres:
+Local pytest uses a SQLite file in the temporary directory of each test.
+The file is a copy of a schema template that each pytest process builds
+once, and it runs with `PRAGMA synchronous=OFF` because test data does
+not need to survive a crash. Optional Postgres:
 
 ```
 export APIPI_TEST_DATABASE_URL=postgresql+asyncpg://apipi:apipi@localhost:5432/apipi
@@ -38,11 +41,12 @@ requires the mode it asked for.
 | --- | --- | --- | --- |
 | `tests/unit/` | none | Internals with mocks: config, store, isolation contract, microvm image packing, artifacts | yes |
 | `tests/api/` | none | Public HTTP vs [api.md](api.md). Every API test runs the API app (`create_app`, which is always the API) through an in-process worker (`split_client_for`, `tests/support/split_worker.py`) that connects over the real worker socket and runs FakeHarness. The API and the worker talk only over that socket, the same as in production. There is no combined test mode. Tenant isolation. `test_compat.py` has one named test per yes row on the API page. `test_worker_accepts.py` is the worker accepts placement and `type=none` tool-policy matrix | yes |
-| `tests/e2e/test_none_pi.py` | `e2e` | Real `apipi serve` and `apipi worker` subprocesses (`tests/support/procs.py`, ephemeral loopback port, tmp dirs) with a fake Pi in `none` mode | yes |
+| `tests/e2e/test_none_pi.py` | `e2e` | Real `apipi serve` and `apipi worker` subprocesses (`tests/support/procs.py`, ephemeral loopback port, tmp dirs) with a fake Pi in `none` mode. One turn checks the stored usage and the `/metrics` scrape of the API | yes |
+| `tests/e2e/test_dev_processes.py` | `e2e` | `apipi dev` as a subprocess with a fake Pi: its two children run a turn, SIGINT stops both, and when one child exits, `apipi dev` stops the other | yes |
 | `tests/e2e/test_microvm_pi.py` | `e2e`, `microvm` | Same two-process shape with a microvm worker, inside a real Firecracker guest | no (skips without KVM) |
-| `tests/e2e/test_metrics_scrape.py` | `e2e` | `/metrics` scrape from the same two-process setup | yes |
-| `tests/e2e/test_pi_live.py` | `slow` | `pi` is on `PATH` | no |
-| `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against the same two-process setup | no |
+| `tests/e2e/test_microvm_egress.py` | `e2e`, `microvm`, `slow` | The egress gateway from inside a real Firecracker guest (see [Microvm e2e](#microvm-e2e)) | no |
+| `tests/e2e/test_pi_live.py` | `slow` | A real `pi --mode rpc` from `PATH` ends a turn on a slash command | no |
+| `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against the in-process `client` fixture (the API app and an in-process worker, as in `tests/api/`) | no |
 | `tests/unit/test_worker_protocol_schema.py`, `tests/api/test_conformance_api.py`, `tests/unit/test_conformance_worker.py` | none | The worker protocol contract: the committed JSON Schema matches the models and every frame the API and the worker send validates against it, and the real API and the real worker each play the golden transcripts in `tests/fixtures/worker-protocol/` (see [worker protocol](worker-protocol.md#json-schema-and-golden-transcripts)) | yes |
 | `tests/support/` | — | FakeHarness helpers, fake Pi, fake worker, and the transcript player (`conformance.py`). Not a suite | — |
 
