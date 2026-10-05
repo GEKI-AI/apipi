@@ -1,4 +1,5 @@
 import ipaddress
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -76,7 +77,6 @@ def test_private_hosts_only_for_named_hosts() -> None:
     assert enabled.with_intercept(["git.internal"]).private_allowed("git.internal")
 
 
-@pytest.mark.timeout(300)
 def test_each_private_name_gets_its_own_placeholder() -> None:
     policy = EgressPolicy.build(
         "restricted",
@@ -104,6 +104,31 @@ def test_each_private_name_gets_its_own_placeholder() -> None:
         in PLACEHOLDER_NET
         for i in range(300)
     )
+
+
+def test_replace_and_with_intercept_compute_fresh_placeholders() -> None:
+    policy = EgressPolicy.build(
+        "enabled",
+        private_hosts=("wiki.internal", "git.internal"),
+        intercept_hosts=("wiki.internal",),
+    )
+    assert policy.placeholder("wiki.internal") == "198.18.0.1"
+    assert policy.placeholder_name("198.18.0.1") == "wiki.internal"
+    both = policy.with_intercept(["git.internal", "wiki.internal"])
+    assert both.private_names() == ("git.internal", "wiki.internal")
+    assert both.placeholder("git.internal") == "198.18.0.1"
+    assert both.placeholder("wiki.internal") == "198.18.0.2"
+    assert both.placeholder_name("198.18.0.2") == "wiki.internal"
+    assert both.with_intercept([]).private_names() == ()
+    assert both.with_intercept([]).placeholder("git.internal") is None
+    fewer = replace(both, private_hosts=("wiki.internal",))
+    assert fewer.placeholder("wiki.internal") == "198.18.0.1"
+    assert fewer.placeholder("git.internal") is None
+    assert fewer.placeholder_name("198.18.0.2") is None
+    assert policy.placeholder("wiki.internal") == "198.18.0.1"
+    assert policy.placeholder("git.internal") is None
+    assert both == policy.with_intercept(["wiki.internal", "git.internal"])
+    assert hash(both) == hash(policy.with_intercept(["git.internal", "wiki.internal"]))
 
 
 def test_private_name_needs_the_session_and_the_operator() -> None:

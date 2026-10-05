@@ -2,6 +2,7 @@ import ipaddress
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from typing import Literal
 
 from apipi.common.netguard import allowed_names
@@ -96,25 +97,33 @@ class EgressPolicy:
             return True
         return norm_host(host) in self.allowed_hosts
 
+    @cached_property
+    def _private_entries(self) -> frozenset[str]:
+        return allowed_names(self.private_hosts)
+
+    @cached_property
+    def _private_names(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(name for name in self._private_entries if self.private_name(name))
+        )
+
+    @cached_property
+    def _placeholder_index(self) -> dict[str, int]:
+        return {name: index for index, name in enumerate(self._private_names, 1)}
+
     def private_name(self, host: str) -> bool:
         if not self.allows_name(host) or not self.private_allowed(host):
             return False
-        return norm_host(host) in allowed_names(self.private_hosts)
+        return norm_host(host) in self._private_entries
 
     def private_names(self) -> tuple[str, ...]:
-        return tuple(
-            sorted(
-                name
-                for name in allowed_names(self.private_hosts)
-                if self.private_name(name)
-            )
-        )
+        return self._private_names
 
     def placeholder(self, host: str) -> str | None:
         if not self.private_name(host):
             return None
-        index = self.private_names().index(norm_host(host)) + 1
-        if index >= PLACEHOLDER_NET.num_addresses - 1:
+        index = self._placeholder_index.get(norm_host(host))
+        if index is None or index >= PLACEHOLDER_NET.num_addresses - 1:
             return None
         return str(PLACEHOLDER_NET[index])
 
@@ -124,7 +133,7 @@ class EgressPolicy:
         index = int(ipaddress.IPv4Address(address)) - int(
             PLACEHOLDER_NET.network_address
         )
-        names = self.private_names()
+        names = self._private_names
         if not 1 <= index <= len(names) or index >= PLACEHOLDER_NET.num_addresses - 1:
             return None
         return names[index - 1]
