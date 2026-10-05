@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import secrets
 import time
@@ -84,7 +85,7 @@ from apipi.services.env_none import (
     reject_builtin_tools_for_env_none,
     validate_env_none,
 )
-from apipi.services.files import FileService
+from apipi.services.files import Bindings, FileService, attach_session_files
 from apipi.services.model_credentials import ModelCredentials
 from apipi.services.search import SearchResolver, require_search
 from apipi.services.session_defaults import (
@@ -347,19 +348,19 @@ def _part_file_ids(parts: list[dict[str, Any]]) -> list[str]:
     ]
 
 
-def _require_no_computer(
-    environment: dict[str, Any] | None, content: UserContent
-) -> None:
-    """`input_file` works only in a session without a computer for now."""
-    if content.files and not is_env_none(environment):
-        raise ApiError(
-            "not_implemented",
-            "input_file is not implemented yet for a session with a computer. "
-            "Use a session with environment.type none, or send an image as "
-            "input_image.",
-            code="input_file",
-            status_code=501,
-        )
+def _workspace_part(part: dict[str, Any]) -> bool:
+    return part.get("type") == "file" and part.get("model_input") == "workspace"
+
+
+def _with_paths(
+    parts: list[dict[str, Any]], files: list[InputFile]
+) -> list[dict[str, Any]]:
+    """The `turn.start` parts with the bound path of each workspace file."""
+    paths = iter(item.path for item in files)
+    return [
+        {**part, "path": next(paths)} if _workspace_part(part) else part
+        for part in parts
+    ]
 
 
 def _turn_not_sent(exc: BaseException) -> bool:
@@ -446,19 +447,23 @@ class SessionService:
         user_id: str | None,
         session_id: uuid.UUID | None = None,
         files: list[InputFile] | None = None,
-    ) -> tuple[list[dict[str, Any]], list[str]]:
-        """The `turn.start` parts with references, and the new file ids.
+        environment: dict[str, Any] | None = None,
+        caller_id: str | None = None,
+    ) -> tuple[list[dict[str, Any]], list[str], Bindings]:
+        """The `turn.start` parts, the new file ids, and the new bindings.
 
         Data URL images are stored as files of kind `image` owned by the
         session user. With `session_id`, every image and every
-        `input_file` is bound to that session, without a path. The caller
-        deletes the new files when the turn does not start.
+        `input_file` of a session without a computer is bound to that
+        session without a path, and every `input_file` of a session with a
+        computer is bound with its path in `attachments/` (the caller with
+        `caller_id` must see it). The caller deletes the new files and the
+        new bindings when the turn does not start.
         """
         images = await self.files.input_images(
             tenant_id, content.images, known, user_id=user_id
         )
         refs = [self._image_ref(tenant_id, *image) for image in images]
-        file_refs = [self._file_ref(tenant_id, item) for item in files or []]
         created = [
             file_id
             for image, (file_id, _mime, _size) in zip(
@@ -466,14 +471,35 @@ class SessionService:
             )
             if not image.file_id
         ]
-        bound = [image[0] for image in images] + [item.file_id for item in files or []]
-        if session_id is not None and bound:
+        items = files or []
+        workspace = [item for item in items if item.model_input == "workspace"]
+        bound = [image[0] for image in images] + [
+            item.file_id for item in items if item.model_input != "workspace"
+        ]
+        attached = Bindings()
+        if session_id is not None:
             try:
-                await self.files.bind_session(tenant_id, session_id, bound)
+                if workspace:
+                    paths, attached = await self.files.attach(
+                        tenant_id,
+                        session_id,
+                        workspace,
+                        environment=environment or {},
+                        user_id=caller_id,
+                    )
+                    placed = iter(paths)
+                    items = [
+                        next(placed) if item.model_input == "workspace" else item
+                        for item in items
+                    ]
+                if bound:
+                    await self.files.bind_session(tenant_id, session_id, bound)
             except BaseException:
+                await self.files.unbind(tenant_id, session_id, attached)
                 await self._drop_files(tenant_id, created)
                 raise
-        return content.wire_parts(refs, file_refs), created
+        file_refs = [self._file_ref(tenant_id, item) for item in items]
+        return content.wire_parts(refs, file_refs), created, attached
 
     def _image_ref(
         self, tenant_id: uuid.UUID, file_id: str, mime: str, size: int
@@ -508,8 +534,9 @@ class SessionService:
         """Sign the image and file parts of a forwarded `turn.start` here.
 
         The forward row keeps only `file_id` (and `filename` of a file
-        part). Each file is checked for the tenant again and the reference
-        is built from the tenant on this replica.
+        part, and `path` of a workspace file). Each file is checked for the
+        tenant again and the reference is built from the tenant on this
+        replica. A workspace file keeps the path the request bound.
         """
         refs = [
             part
@@ -528,18 +555,20 @@ class SessionService:
             if part.get("type") == "image"
         )
         known = await self.files.image_files(tenant_id, images)
-        files = iter(
-            await self.files.input_files(
-                tenant_id,
-                tuple(
-                    FilePart(
-                        file_id=str(part["file_id"]),
-                        filename=str(part.get("filename") or ""),
-                    )
-                    for part in refs
-                    if part.get("type") == "file"
-                ),
+
+        def _file_parts(workspace: bool) -> tuple[FilePart, ...]:
+            return tuple(
+                FilePart(
+                    file_id=str(part["file_id"]),
+                    filename=str(part.get("filename") or ""),
+                )
+                for part in refs
+                if part.get("type") == "file" and bool(part.get("path")) == workspace
             )
+
+        files = iter(await self.files.input_files(tenant_id, _file_parts(False)))
+        placed = iter(
+            await self.files.input_files(tenant_id, _file_parts(True), workspace=True)
         )
         out: list[dict[str, Any]] = []
         for part in parts:
@@ -547,6 +576,9 @@ class SessionService:
             if kind == "image":
                 file_id = str(part["file_id"])
                 out.append(self._image_ref(tenant_id, file_id, *known[file_id]))
+            elif kind == "file" and part.get("path"):
+                item = dataclasses.replace(next(placed), path=str(part["path"]))
+                out.append(self._file_ref(tenant_id, item))
             elif kind == "file":
                 out.append(self._file_ref(tenant_id, next(files)))
             else:
@@ -804,14 +836,16 @@ class SessionService:
                     status_code=503,
                 ) from exc
         turn_content = parse_user_content(input, settings=self.settings)
-        _require_no_computer(env, turn_content)
         input_files = await self.files.input_files(
-            tenant_id, turn_content.files, user_id=user_id
+            tenant_id,
+            turn_content.files,
+            user_id=user_id,
+            workspace=not is_env_none(env),
         )
         image_files = await self.files.image_files(
             tenant_id, turn_content.images, user_id=user_id
         )
-        turn_parts, created = await self._turn_parts(
+        turn_parts, created, _attached = await self._turn_parts(
             tenant_id, turn_content, image_files, user_id=user_id, files=input_files
         )
         pending.extend(created)
@@ -932,6 +966,16 @@ class SessionService:
                 vault_ids=vault_id_strs,
                 tools=raw_tools if agent_id is None else None,
             )
+            attached, _bound = await attach_session_files(
+                db,
+                self.settings,
+                tenant_id,
+                row.id,
+                [item for item in input_files if item.model_input == "workspace"],
+                environment=env,
+                user_id=user_id,
+            )
+            turn_parts = _with_paths(turn_parts, attached)
             for file_id in dict.fromkeys(_part_file_ids(turn_parts)):
                 await bind_session_file(db, tenant_id, row.id, file_id)
             await promote_attachments(
@@ -1400,9 +1444,11 @@ class SessionService:
         image_files: dict[str, tuple[str, int]] = {}
         input_files: list[InputFile] = []
         if action == "message":
-            _require_no_computer(session_env, parsed)
             input_files = await self.files.input_files(
-                tenant_id, parsed.files, user_id=user_id
+                tenant_id,
+                parsed.files,
+                user_id=user_id,
+                workspace=not is_env_none(session_env),
             )
             require_image_model(self.settings, follow_model, parsed, input_files)
             image_files = await self.files.image_files(
@@ -1461,8 +1507,6 @@ class SessionService:
                     ),
                 )
         else:
-            if stale:
-                await self.execution.prepare_for_new_turn(tenant_id, session_id)
             with start_span(
                 self.tracing,
                 "session",
@@ -1474,15 +1518,19 @@ class SessionService:
                     tenant_id,
                     session_mem_mib=mem_mib_for_size(self.settings, follow_size),
                 )
-                turn_parts, created = await self._turn_parts(
+                turn_parts, created, attached = await self._turn_parts(
                     tenant_id,
                     parsed,
                     image_files,
                     user_id=session_user,
                     session_id=session_id,
                     files=input_files,
+                    environment=session_env,
+                    caller_id=user_id,
                 )
                 try:
+                    if stale:
+                        await self.execution.prepare_for_new_turn(tenant_id, session_id)
                     await self.execution.run_turn(
                         tenant_id,
                         session_id,
@@ -1507,6 +1555,7 @@ class SessionService:
                 except Exception as exc:
                     if _turn_not_sent(exc):
                         await self._drop_files(tenant_id, created)
+                        await self.files.unbind(tenant_id, session_id, attached)
                     raise
         async with self.store.session() as db:
             row = await get_session(db, tenant_id, session_id)

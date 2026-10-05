@@ -3,6 +3,7 @@ import fcntl
 import io
 import json
 import os
+import shutil
 import socket
 import struct
 import subprocess
@@ -11,11 +12,14 @@ import tarfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 ARTIFACT_PORT = 53
 WORKSPACE_PORT = 54
 SESSION_PORT = 55
 METRICS_PORT = 56
+PUSH_PORT = 57
+MAX_PUSH_HEADER = 32
 PUBLISH_DIRS = ("outputs",)
 SESSION_REL = ".apipi/pi-session.jsonl"
 RNDADDENTROPY = 0x40085203
@@ -96,6 +100,104 @@ def workspace_tar_bytes(root: Path) -> bytes:
                 continue
             tar.add(str(path), arcname=rel)
     return buf.getvalue()
+
+
+class _Limited(io.RawIOBase):
+    """A reader that returns at most `size` bytes of `source`."""
+
+    def __init__(self, source: io.BufferedIOBase, size: int) -> None:
+        self.source = source
+        self.left = size
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        if self.left <= 0:
+            return 0
+        view = memoryview(buffer)[: min(len(buffer), self.left)]
+        count = self.source.readinto(view)
+        if not count:
+            raise OSError("push ended early")
+        self.left -= count
+        return count
+
+
+def _push_target(root: Path, info: tarfile.TarInfo) -> Path | None:
+    if not info.isfile() or info.name.startswith("/"):
+        return None
+    parts = Path(info.name).parts
+    if not parts or ".." in parts or parts[0] == ".apipi":
+        return None
+    return root / info.name
+
+
+def unpack_push_stream(source: io.BufferedIOBase, root: Path) -> int:
+    """Write each file of a pushed tar stream under `root`.
+
+    A file at the same path is replaced through a temp file and a rename.
+    Names outside `root` and names under `.apipi/` are skipped. Returns
+    the number of written files.
+    """
+    written = 0
+    with tarfile.open(fileobj=source, mode="r|") as tar:
+        for info in tar:
+            target = _push_target(root, info)
+            if target is None:
+                continue
+            handle = tar.extractfile(info)
+            if handle is None:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temp = target.with_name(f".{target.name}.apipi-tmp")
+            try:
+                with temp.open("wb") as out:
+                    shutil.copyfileobj(handle, out)
+                os.replace(temp, target)
+            except BaseException:
+                temp.unlink(missing_ok=True)
+                raise
+            written += 1
+    return written
+
+
+def _read_header(source: io.BufferedIOBase) -> int:
+    header = source.readline(MAX_PUSH_HEADER)
+    if not header.endswith(b"\n"):
+        raise OSError("bad push header")
+    return int(header)
+
+
+def handle_push(conn: socket.socket, root: Path) -> None:
+    """Take one push: a line with the size, then a tar of that size."""
+    try:
+        with conn.makefile("rb") as source:
+            limited = _Limited(source, _read_header(source))
+            reader = io.BufferedReader(limited)
+            unpack_push_stream(reader, root)
+            while reader.read(65536):
+                pass
+    except Exception as exc:
+        conn.sendall(f"ERR {type(exc).__name__}\n".encode())
+        return
+    conn.sendall(b"OK\n")
+
+
+def _serve_push(port: int) -> None:
+    sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((socket.VMADDR_CID_ANY, port))
+    sock.listen(8)
+    root = Path(os.environ.get("HOME", "/workspace"))
+    while True:
+        conn, peer = sock.accept()
+        try:
+            if peer[0] == socket.VMADDR_CID_HOST:
+                handle_push(conn, root)
+        except Exception:
+            pass
+        finally:
+            conn.close()
 
 
 def _serve_tar(port: int, build: Callable[[Path], bytes]) -> None:
@@ -248,6 +350,7 @@ def main(argv: list[str] | None = None) -> None:
     threading.Thread(
         target=_serve_tar, args=(METRICS_PORT, guest_sample_bytes), daemon=True
     ).start()
+    threading.Thread(target=_serve_push, args=(PUSH_PORT,), daemon=True).start()
     _serve_rpc(_pi_args(), port)
 
 

@@ -11,6 +11,7 @@ from apipi.protocol import (
     CURSOR_OPS,
     FEATURE_FILE_REFS,
     FEATURE_IMAGE_REFS,
+    FEATURE_SESSION_FILES,
     OP_FEATURES,
     BaseCommandPayload,
     CommandTooLarge,
@@ -78,16 +79,23 @@ def command_features(wire: dict[str, Any]) -> list[str]:
     if feature is not None:
         needed.append(feature)
     payload = wire.get("payload")
-    parts = payload.get("parts") if isinstance(payload, dict) else None
-    kinds = {
-        item.get("type")
+    body = payload if isinstance(payload, dict) else {}
+    parts = body.get("parts")
+    items = [
+        item
         for item in (parts if isinstance(parts, list) else [])
         if isinstance(item, dict)
-    }
+    ]
+    kinds = {item.get("type") for item in items}
     if op == "turn.start" and "image" in kinds:
         needed.append(FEATURE_IMAGE_REFS)
     if op == "turn.start" and "file" in kinds:
         needed.append(FEATURE_FILE_REFS)
+    context = body.get("context")
+    session_files = context.get("session_files") if isinstance(context, dict) else None
+    workspace = any(item.get("model_input") == "workspace" for item in items)
+    if (op == "turn.start" and workspace) or session_files:
+        needed.append(FEATURE_SESSION_FILES)
     return needed
 
 

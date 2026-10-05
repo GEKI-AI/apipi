@@ -88,6 +88,7 @@ after a disconnect today. That mode is not implemented.
 | `pi_memory` | internal | Host Pi killed by `APIPI_PI_MEM_MIB` | no | error |
 | `spawn_failed` | internal | Pi failed to start | yes | error |
 | `sandbox_boot_failed` | internal | MicroVM jailer or vsock attach failed. Log only | yes | error |
+| `attachment_push_failed` | internal | The worker could not copy the files of a message into a running microVM guest. The turn did not start and the guest was stopped. Send the message again | yes | error |
 | `artifact_store` | internal | Object store failure during the turn | yes | error |
 | `worker_lease_expired` | internal | Worker lease elapsed | yes | error |
 | `worker_command_timeout` | internal | The worker did not ack a command within the lease TTL, so the API cleared the lease | yes | error |

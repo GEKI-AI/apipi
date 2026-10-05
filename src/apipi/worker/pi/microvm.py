@@ -51,6 +51,8 @@ VSOCK_ARTIFACT_PORT = 53
 VSOCK_WORKSPACE_PORT = 54
 VSOCK_SESSION_PORT = 55
 VSOCK_METRICS_PORT = 56
+VSOCK_PUSH_PORT = 57
+PUSH_TIMEOUT = 60.0
 VSOCK_UDS = "vsock.sock"
 MEM_MIB = 512
 VCPU_COUNT = 1
@@ -675,6 +677,44 @@ def _add_bytes(tar: tarfile.TarFile, name: str, data: bytes, *, mode: int) -> No
     info.mtime = 0
     info.mode = mode
     tar.addfile(info, io.BytesIO(data))
+
+
+def push_tar_bytes(files: list[tuple[str, bytes]]) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for path, data in files:
+            _add_bytes(tar, path, data, mode=0o644)
+    return buf.getvalue()
+
+
+async def push_workspace_files(
+    vsock: Path,
+    files: list[tuple[str, bytes]],
+    *,
+    process: asyncio.subprocess.Process | None = None,
+    timeout: float = PUSH_TIMEOUT,
+) -> None:
+    """Copy files into the workspace of a running guest.
+
+    The host sends a line with the size and then a tar of that size on
+    the push port. The guest replaces each file under `/workspace` and
+    answers `OK`. The whole exchange must end within `timeout`. Raises
+    `ConfigError` when the guest does not answer `OK`.
+    """
+    data = push_tar_bytes(files)
+    async with asyncio.timeout(timeout):
+        reader, writer = await connect_vsock(
+            vsock, VSOCK_PUSH_PORT, timeout=5.0, process=process
+        )
+        try:
+            writer.write(f"{len(data)}\n".encode())
+            writer.write(data)
+            await writer.drain()
+            line = await reader.readline()
+        finally:
+            await _close_writer(writer)
+    if not line.startswith(b"OK"):
+        raise ConfigError("microvm guest did not take the files")
 
 
 def write_workspace_image(
@@ -1613,6 +1653,9 @@ async def spawn_microvm_pi(
     async def pull_metrics() -> bytes:
         return await _pull(VSOCK_METRICS_PORT)
 
+    async def push_files(files: list[tuple[str, bytes]]) -> None:
+        await push_workspace_files(started.vsock, files, process=process)
+
     return PiProc(
         process,
         stdin=writer,
@@ -1623,6 +1666,7 @@ async def spawn_microvm_pi(
         pull_workspace=pull_workspace,
         pull_session=pull_session,
         pull_metrics=pull_metrics,
+        push_files=push_files,
         vm_id=started.chroot_dir.parent.name,
         image=started.image,
     )

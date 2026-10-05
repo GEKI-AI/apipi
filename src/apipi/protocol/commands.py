@@ -70,22 +70,26 @@ class InputImageRef(ContextPart):
 
 
 class InputFileRef(ContextPart):
-    """One `input_file` of a session without a computer, as a store reference.
+    """One `input_file` of a turn.
 
-    `model_input` says how the worker passes it to the model: `text`
-    (UTF-8 text in a `<file name="…">` block of the prompt) or `image`.
-    The bytes never travel in the command.
+    `model_input` says what the worker does with it: `text` (UTF-8 text
+    in a `<file name="…">` block of the prompt) or `image` for a session
+    without a computer, as a store reference. `workspace` is a file of a
+    session with a computer: it has a `path` in the workspace and no
+    store reference, because the worker writes it from the context's
+    `session_files`. The bytes never travel in the command.
     """
 
     type: Literal["file"] = "file"
     file_id: str
     filename: str
-    object_id: str
+    object_id: str | None = None
     url: str | None = None
     local_path: str | None = None
     mime_type: str
     size_bytes: int | None = Field(default=None, ge=0)
-    model_input: Literal["text", "image"]
+    model_input: Literal["text", "image", "workspace"]
+    path: str | None = None
 
 
 TurnInputPart = Annotated[

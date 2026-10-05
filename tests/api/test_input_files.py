@@ -369,41 +369,6 @@ async def test_input_file_part_validation_and_count_limit(
     assert len(harness.prompts) == 1
 
 
-async def test_session_with_a_computer_does_not_take_input_file_yet(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    harness = FakeHarness()
-    async with split_client_for(
-        settings, store, harness=harness, token=worker_secret
-    ) as (_app, client, _worker):
-        token = "file-hosted"
-        file_id = await _upload(client, token, b"a", "a.txt", "text/plain")
-        session_id = await _session(client, token, environment="openai_hosted")
-        sent = await client.post(
-            f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
-            json=_message(_file(file_id)),
-        )
-        created = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={
-                "agent_id": await _agent(client, token),
-                "input": {"role": "user", "content": [_file(file_id)]},
-            },
-        )
-        bound = await client.get(
-            f"/v1/apipi/sessions/{session_id}/files", headers=_auth(token)
-        )
-    for response in (sent, created):
-        assert response.status_code == 501
-        error = response.json()["error"]
-        assert error["type"] == "not_implemented"
-        assert error["code"] == "input_file"
-    assert bound.json()["data"] == []
-    assert harness.prompts == []
-
-
 class _Users:
     def __call__(self, token: str, request: AuthRequest) -> dict[str, object]:
         user = request.headers.get("x-end-user")

@@ -122,6 +122,7 @@ class PiProc:
         pull_workspace: Callable[[], Awaitable[bytes]] | None = None,
         pull_session: Callable[[], Awaitable[bytes]] | None = None,
         pull_metrics: Callable[[], Awaitable[bytes]] | None = None,
+        push_files: Callable[[list[tuple[str, bytes]]], Awaitable[None]] | None = None,
         vm_id: str | None = None,
         image: Any | None = None,
         process_group: bool = False,
@@ -137,6 +138,7 @@ class PiProc:
         self.pull_workspace = pull_workspace
         self.pull_session = pull_session
         self.pull_metrics = pull_metrics
+        self.push_files = push_files
         self.vm_id = vm_id
         self.image = image
         self.process_group = process_group

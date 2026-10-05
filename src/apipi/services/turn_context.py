@@ -44,7 +44,7 @@ from apipi.store.blobs import (
     skill_object_id,
 )
 from apipi.store.engine import Store
-from apipi.store.repo import get_file, get_session, get_skill
+from apipi.store.repo import get_file, get_session, get_skill, list_session_files
 
 PRESIGN_TTL = timedelta(minutes=15)
 
@@ -106,7 +106,22 @@ def input_file_ref(
     *,
     objects: ObjectStore | None = None,
 ) -> dict[str, Any]:
-    """One `file` part of `turn.start`: a store reference, never the bytes."""
+    """One `file` part of `turn.start`: a store reference, never the bytes.
+
+    A workspace file carries its `path` and no store reference. The worker
+    writes it from the context's `session_files`.
+    """
+    if file.model_input == "workspace":
+        workspace = InputFileRef(
+            file_id=file.file_id,
+            filename=file.filename,
+            mime_type=file.mime or "application/octet-stream",
+            size_bytes=file.size,
+            model_input="workspace",
+        )
+        if file.path:
+            workspace.path = file.path
+        return workspace.to_wire()
     object_id = file_object_id(tenant_id, file.file_id)
     ref = _store_ref(settings, NS_FILES, object_id, objects=objects)
     part = InputFileRef(
@@ -231,6 +246,24 @@ async def build_turn_context(
                     "content_type": file_row.content_type,
                 }
             )
+        session_files: list[dict[str, Any]] = []
+        if env_type == "openai_hosted":
+            bound, _more = await list_session_files(db, tenant_id, session_id)
+            for binding, file_row in bound:
+                if binding.path is None:
+                    continue
+                object_id = file_object_id(tenant_id, file_row.id)
+                ref = _store_ref(settings, NS_FILES, object_id, objects=objects)
+                session_files.append(
+                    {
+                        "path": binding.path,
+                        "object_id": object_id,
+                        "url": ref["url"],
+                        "local_path": ref["local_path"],
+                        "size_bytes": file_row.size,
+                        "content_type": file_row.content_type,
+                    }
+                )
         skills: list[dict[str, Any]] = []
         for skill_id in skill_refs_from(environment):
             skill_row = await get_skill(db, tenant_id, skill_id)
@@ -293,6 +326,7 @@ async def build_turn_context(
             },
             "mcp": [_serialize_mcp_server(server) for server in (mcp_servers or [])],
             "files": files,
+            "session_files": session_files,
             "skills": skills,
             "pi_session": pi_session,
         }

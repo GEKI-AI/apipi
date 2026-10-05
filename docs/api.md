@@ -255,7 +255,8 @@ A file can be bound to one or more sessions. An image is bound to the
 session whose message carried it, and an image sent by `file_id` is
 bound to that session too, whatever its kind. So is a file sent as
 `input_file` (see [events](#events)). A binding has a `path`
-(the workspace path of an attachment, null for images) and the
+(the workspace path of a file attached in a session with a computer,
+for example `attachments/report.xlsx`, and null otherwise) and the
 `item_id` of the user item the file came with. `item_id` is set when
 the worker stores that user item and the item lists the file, so it is
 null until then, and stays null for a file that no item lists.
@@ -500,8 +501,8 @@ one shape or the other, not both.
 
 A message event starts a turn. Nested form: `type`
 `agent.session.input.message` and `input` with a `user` message whose
-`content` has `input_text`, `input_image` (for a vision model), and,
-in a session without a computer, `input_file`.
+`content` has `input_text`, `input_image` (for a vision model), and
+`input_file`.
 A model that is not in the registry, or whose `input` does not include
 `image`, returns `400` with code `unsupported_input`. Flat form: `type`
 `agent.session.input.message` and `content` or `text`.
@@ -539,9 +540,9 @@ with an optional `filename`. `file_id` is the id of a file of the
 tenant that the caller can see (`404` otherwise, see
 [files](#files)), uploaded with `POST /v1/files` or a
 [presigned upload](#uploads), for example with `purpose: "attachment"`.
-`filename` replaces the stored file name in the prompt and in the item.
-A part without `file_id` is `400`; `file_data` and `file_url` are not
-implemented. A message may carry up to `APIPI_MAX_FILES_PER_MESSAGE`
+`filename` replaces the stored file name in the prompt, in the item,
+and in the workspace path. A part without `file_id` is `400`;
+`file_data` and `file_url` are not implemented. A message may carry up to `APIPI_MAX_FILES_PER_MESSAGE`
 (default 10) `input_file` parts, and a message with only `input_file`
 parts starts a turn too.
 
@@ -574,15 +575,45 @@ Each file is bound to the session without a `path` (see
 stays a `file` and an attachment stays an attachment. The user item
 keeps `{"type": "input_file", "file_id": "file-…", "filename": "…"}`,
 never the text. The worker reads the file from the store, like an
-image. A session with a computer (`openai_hosted`, which is also the
-default when create omits `environment`) does not take `input_file`
-yet: the request fails with `501`, type `not_implemented`, and code
-`input_file`, and nothing is dropped silently.
+image.
+
+In a session with a computer (`openai_hosted`, which is also the
+default when create omits `environment`), every file type is accepted,
+and the file goes to the workspace instead of the model. The gateway
+binds it to the session with the path `attachments/<filename>`, or a
+free name like `attachments/report (2).xlsx` when the session already
+has a file at that path. A `file_id` that is already bound to the
+session with a path keeps it. Before Pi starts the turn, the worker
+writes the file into the workspace and replaces what is at that path,
+so attaching the same `file_id` again resets the file to its original
+content. If the file cannot be copied into a running sandbox, the turn
+does not start and the session gets an error with code
+`attachment_push_failed`; send the message again. The prompt gets one
+line per file at the place of the part:
+
+```
+Attached: attachments/report.xlsx (xlsx, 240 KB)
+```
+
+The file keeps its kind and is not added to `environment.files`. After
+a sandbox restart or a TTL wipe, the next turn restores every file
+bound to the session under the same path, and a file deleted from the
+Files API is simply not restored. Each file must be within
+`APIPI_MAX_FILE_BYTES`, and the agent inputs (`environment.files`) and
+all attached files of the session together must fit
+`APIPI_MAX_WORKSPACE_BYTES`: otherwise the request fails with `413` and
+code `payload_too_large` before the turn starts. The user item keeps
+`{"type": "input_file", "file_id": "file-…", "filename": "…", "path":
+"attachments/…"}`, so a client can show the attachment in the history.
+See [environments](environments.md#attachments).
 
 Follow-up messages work the same way after the session is idle. A message while
 the session is `in_progress` cancels that turn (or fails it if the
 process no longer owns it) and starts a new turn, so a hung Pi cannot
-block the next command. `GET` of a session that is `in_progress` with
+block the next command. The message is checked first: its images and
+files are stored and bound, and the limits are checked, before the
+running turn is cancelled, so a message that fails with `4xx` leaves
+that turn running. `GET` of a session that is `in_progress` with
 no live turn on this process does the same fail-and-idle recovery.
 A message while the session is `requires_action` is rejected; send a
 tool result instead.

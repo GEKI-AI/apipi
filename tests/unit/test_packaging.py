@@ -51,4 +51,5 @@ def test_alembic_revisions_chain() -> None:
         "0029_upload_request_id.py",
         "0030_worker_forwards.py",
         "0031_file_kinds.py",
+        "0032_session_file_paths.py",
     ]

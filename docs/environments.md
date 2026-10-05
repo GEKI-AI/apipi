@@ -265,6 +265,71 @@ deleted file is written again from the store before the next turn. In
 `microvm` it stays missing until the guest stops, and the next boot
 starts from the original files. See the restore rules below.
 
+### Attachments
+
+Hosted workspaces also have an `attachments/` directory for files that
+users attach to messages. A message may carry `input_file` parts (see
+[events](api.md#events)). In a session with a computer each file goes
+to `attachments/<filename>` in the workspace, not to the model, and Pi
+can open it with its tools in the same turn. Agent inputs and session
+files are two kinds of workspace files and stay separate:
+
+| Kind | Directory | Comes from | Belongs to |
+| --- | --- | --- | --- |
+| Agent inputs | `inputs/` (or any path) | `environment.files` at session create, or the agent's `session_defaults` | The starting state of every session of the agent |
+| Session files | `attachments/` | `input_file` parts of user messages | One session. Other sessions, also of the same agent, never see them. |
+
+The gateway binds each attached file to the session with its path
+before the turn starts. Session files are not added to
+`environment.files`, and the session's `environment` does not change.
+The name is the `filename` of the part, or the stored file name, cut to
+its last path segment. When the session already has a file at that
+path, or an agent input uses it, the file gets a free name like
+`report (2).xlsx`. The name is chosen on the API in one transaction
+with the binding, so two messages that arrive at the same time get two
+names. A file that is already bound to the session with a path keeps
+that path when it is attached again. The user item and the prompt carry
+the final path.
+
+The turn context lists every session file of the session, not only the
+new ones. Before Pi starts the turn, the worker writes the files of the
+current message at their paths, and replaces whatever is there: a file
+the agent created or changed at that path, or an older attachment whose
+file was deleted from the Files API, so its path was free again. The
+agent always sees the file the user attached with this message. This
+also means that attaching the same `file_id` again resets the file to
+its original content. The other session files of earlier messages are
+restored with the same "write only when missing" rule as
+`environment.files`: a file the agent changed stays changed until the
+sandbox is wiped, and after a TTL wipe or a restart the next turn writes
+every session file again under the same path. A file deleted from the
+Files API is no longer bound to the session, so it is not restored, and
+the turn does not fail.
+
+In `microvm` a guest that is already running does not see new files in
+the session directory, so the worker also copies the files of the
+current message into the running guest over a vsock port before the
+turn, and the guest replaces a file at the same path. If that copy
+fails, the turn does not start: the session gets
+`agent.session.environment.failed` and `agent.session.error` with code
+`attachment_push_failed`, which is retryable, and the worker stops the
+guest (stop reason `push_failed`). Send the message again. The next turn
+boots a new guest from the session directory, which already has the
+files.
+
+Pi learns about the new files of a turn from one line per file in the
+user message, at the place of the part, for example
+`Attached: attachments/report.xlsx (xlsx, 240 KB)`. The hosted prompt
+tells the agent that `attachments/` holds files from the conversation
+that are restored after a restart like `inputs/`.
+
+Each file must be within `APIPI_MAX_FILE_BYTES`. A message may carry up
+to `APIPI_MAX_FILES_PER_MESSAGE` files. The agent inputs and all
+session files of the session together must fit
+`APIPI_MAX_WORKSPACE_BYTES`. The gateway checks these limits from the
+stored file sizes before the turn starts and answers `413` with code
+`payload_too_large` when one is exceeded.
+
 `network.access` is `enabled`, `disabled`, or `restricted`.
 `restricted` requires `allowed_domains` (1–100 exact hostnames).
 `enabled` allows outbound traffic to the public internet. Private and

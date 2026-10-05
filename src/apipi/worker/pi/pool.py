@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
@@ -24,6 +25,7 @@ _EVENT_REASON = {
     "crash": "crash",
     "drain": "drain",
     "shutdown": "shutdown",
+    "push_failed": "push_failed",
 }
 
 OnKill = Callable[[uuid.UUID, PiProc | None], Awaitable[None]]
@@ -488,6 +490,14 @@ class PiPool:
             return None
         return proc
 
+    async def settled(self, session_id: uuid.UUID) -> PiProc | None:
+        """The live process of a session after a boot in flight has ended."""
+        inflight = self._inflight.get(session_id)
+        if inflight is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.shield(inflight)
+        return self.peek(session_id)
+
     def touch(self, session_id: uuid.UUID) -> None:
         self._last[session_id] = time.monotonic()
 
@@ -508,7 +518,14 @@ class PiPool:
                 "sandbox transition failed", extra={"session_id": str(session_id)}
             )
 
-    async def kill(self, session_id: uuid.UUID, *, reason: str = "session") -> None:
+    async def kill(
+        self, session_id: uuid.UUID, *, reason: str = "session", hook: bool = True
+    ) -> None:
+        """Stop the process of a session.
+
+        With `hook` False the kill hook does not run, so the worker keeps
+        the lease and a turn of the session can go on with a new process.
+        """
         live = self._live.pop(session_id, None)
         env_type = self._env_types.get(session_id)
         tenant_id = self._tenants.get(session_id)
@@ -552,7 +569,7 @@ class PiPool:
             self.metrics.observe_sandbox_destroy(size=size, hold_seconds=hold)
             if proc.vm_id is None:
                 self.metrics.observe_pi_kill(reason)
-        if self.on_kill is not None:
+        if hook and self.on_kill is not None:
             await self.on_kill(session_id, proc)
         if proc is not None:
             proc.stop_reason = reason

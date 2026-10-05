@@ -359,6 +359,7 @@ taken at spawn, so an NTP step does not change the billed duration.
 | `crash` | The process exited by itself |
 | `drain` | Worker drain killed sessions that were not in a turn |
 | `shutdown` | The pool owner is exiting |
+| `push_failed` | The attachments of a message could not be copied into the running guest |
 
 `session.live.heartbeat` is one event per API replica per interval,
 covering the sessions that replica's workers report as live in

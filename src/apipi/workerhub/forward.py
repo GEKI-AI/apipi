@@ -102,15 +102,21 @@ def forward_body(
 
 
 def _forward_part(part: Any) -> Any:
-    """An image or file part without its store reference; the owner signs it."""
+    """An image or file part without its store reference; the owner signs it.
+
+    A workspace file part keeps its `path`, which the request already bound.
+    """
     if isinstance(part, dict) and part.get("type") == "image":
         return {"type": "image", "file_id": part.get("file_id")}
     if isinstance(part, dict) and part.get("type") == "file":
-        return {
+        kept = {
             "type": "file",
             "file_id": part.get("file_id"),
             "filename": part.get("filename"),
         }
+        if part.get("model_input") == "workspace":
+            kept["path"] = part.get("path")
+        return kept
     return part
 
 

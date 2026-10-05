@@ -423,6 +423,13 @@
             "session": {
               "$ref": "#/$defs/ContextSession"
             },
+            "session_files": {
+              "items": {
+                "$ref": "#/$defs/ContextFileRef"
+              },
+              "title": "Session Files",
+              "type": "array"
+            },
             "skills": {
               "items": {
                 "$ref": "#/$defs/ContextSkillRef"
