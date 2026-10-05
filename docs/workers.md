@@ -608,8 +608,9 @@ What is still lost, exactly:
   and replayed: the reaper expired the lease because the worker was away
   longer than the lease TTL, or the lease was released. The API rejects
   them as `not_leased` and acks past them. The turn was already failed
-  with `worker_lease_expired`, so its `usage` and later artifacts are
-  not recorded.
+  when the lease expired (`worker_lease_expired` on the session,
+  `turn_interrupted` on the turn), so its `usage` and later artifacts
+  are not recorded.
 - Envelopes of a worker that registers with a non-empty claim of other
   sessions: those sessions that it does not claim are orphaned at once,
   as before.
@@ -1027,7 +1028,8 @@ the command arrives, because every command carries its `lease_id`, so
 the new turn runs under the lease the API still holds.
 
 When the API handles a `lease.release` and the session still has a
-turn `in_progress`, it ends that turn as `failed` with
+turn `in_progress`, or a turn that waits for tool results in
+`requires_action`, it ends that turn as `failed` with
 `turn_interrupted`, the same way it ends a turn after an orphaned
 lease, a command timeout, or a cancel without a worker. The release
 comes after every envelope the worker buffered for the session, so a
@@ -1070,11 +1072,13 @@ crosses the release as described above, so the worker keeps that
 lease.
 
 When `lease_until` passes, API processes expire rows with
-`FOR UPDATE SKIP LOCKED` so two reapers do not double-clear. The API
-clears ownership, emits `agent.session.error` with code
-`worker_lease_expired`, and sends `lease.revoke` if the worker is
-still connected. It does not assign the session to another worker in
-this version.
+`FOR UPDATE SKIP LOCKED`, in the order of tenant and session, so two
+reapers do not double-clear. The API clears ownership, emits
+`agent.session.error` with code `worker_lease_expired`, sends
+`lease.revoke` if the worker is still connected, and then ends a turn
+that was still `in_progress` or waiting in `requires_action` as
+`turn_interrupted`. It does not assign the session to another worker
+in this version.
 
 `workers.api_instance_id` is the instance id of the API process that
 currently holds that worker's WebSocket. Register and heartbeat write
@@ -1325,18 +1329,23 @@ wait; the example drop-in is `deploy/systemd/apipi-worker-drain.conf`
 unit keeps `TimeoutStopSec=15` so a Firecracker stop still fails fast
 unless you install the drop-in.
 
-When `lease_until` passes, the lease is cleared and the session gets
-`worker_lease_expired`. The turn is not moved to another worker: the
-guest and workspace were on the expired host. Start a new turn after
-that error. Heartbeats extend `lease_until` so a live worker does not
-expire mid-turn, even when its socket is busy with envelopes. The
-reaper clears the rows and stores the error events in one transaction.
-Only after that commit does it write the log lines, forget the
-in-memory lease, and send `lease.revoke` to the worker if it is
-connected to this replica. Each revoke has a 5 second timeout and goes
-through the connection's writer, so a stuck socket cannot hold the row
-locks or stop the loop. A failed revoke is logged as
-`worker.lease.revoke_failed`.
+When `lease_until` passes, the lease is cleared, the session gets
+`worker_lease_expired`, and a turn that was still running or waiting
+for tool results fails with `turn_interrupted`. The turn is not moved
+to another worker: the guest and workspace were on the expired host.
+Start a new turn after that error. Heartbeats extend `lease_until` so a
+live worker does not expire mid-turn, even when its socket is busy with
+envelopes. The reaper clears the rows and stores the error events in
+one transaction. Only after that commit does it write the log lines,
+forget the in-memory lease, and send `lease.revoke` to the worker if it
+is connected to this replica. Each revoke has a 5 second timeout and
+goes through the connection's writer, so a stuck socket cannot hold the
+row locks or stop the loop. A failed revoke is logged as
+`worker.lease.revoke_failed`. Then the reaper ends the open turn of
+each expired session in a short transaction of its own, the same way
+as after a `lease.release`. When that fails for one session, it logs
+`worker.lease.turn_end_failed` and goes on with the others; that turn
+is ended on the next session `GET` or list, message, or tool result.
 
 Host Pi (`none`) is a child of the worker. A graceful stop
 runs pool teardown. A `kill -9` of the worker leaves those children.

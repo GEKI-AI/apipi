@@ -728,9 +728,42 @@ no live turn on this process does the same fail-and-idle recovery.
 A message while the session is `requires_action` is rejected; send a
 tool result instead.
 
+A turn that waits in `requires_action` lives on the worker that ran it.
+When that worker no longer holds the session (for example its Pi
+process stopped after the idle TTL, or its lease expired), the turn can
+no longer continue. The gateway then ends it as
+`agent.session.turn.failed` with code `turn_interrupted`, followed by
+`agent.session.error` and `agent.session.idle`. It does this when the
+worker releases the lease or when the lease expires, or at the latest on
+the next session `GET` or list, message, or tool result for the
+session. The session is then `idle`: a tool
+result for that turn fails with `400` and `Session is not
+requires_action`, and a new message starts a new turn.
+
 Tool result: `agent.session.input.tool_result` with `turn_id`,
 `call_id`, `success`, and `output` (on success) or `error` (on
-failure), either nested in `events` or flat.
+failure), either nested in `events` or flat. The gateway checks the
+tool result before it sends anything to a worker. The session must be
+`requires_action`, `turn_id` must be the turn that is waiting (the
+`turn_id` of the last `agent.session.requires_action` event), and
+`call_id` must be one of the calls in `required_actions`. Otherwise the
+request fails with `400` and code `invalid_request`, and the session
+does not change. The message is `Session is not requires_action` for a
+session in any other status, for example a tool result sent again
+after the turn finished. It names `turn_id` or `call_id` when that
+value is not waiting.
+
+When the turn waits on more than one call, send one tool result per
+call, one after another: wait for the response to one result before you
+send the next. A tool result that leaves other calls open is answered as
+soon as the worker has taken it: the session stays `requires_action`,
+its `required_actions` lists only the calls that are still open, and the
+gateway stores another `agent.session.requires_action` event with the
+same `turn_id` and those calls. The turn continues after the result for
+the last open call. The worker checks each result against the open
+calls that the gateway sent with it, so two results for the same turn
+sent at the same time can both be answered with the other call still
+open, and the session then waits for a call that was already answered.
 
 Cancel: `agent.session.input.cancel` on a session in `in_progress`.
 The gateway persists `agent.session.turn.cancelled` then

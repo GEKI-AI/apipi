@@ -97,7 +97,7 @@ after a disconnect today. That mode is not implemented.
 | `worker_command_timeout` | internal | The worker did not ack a command within the lease TTL, so the API cleared the lease | yes | error |
 | `worker_outbox_full` | internal | The worker outbox was full, so the worker could not buffer the next result | yes | error |
 | `worker_message_too_large` | internal | One envelope was over `MAX_MESSAGE_BYTES` (1,048,576 bytes) | no | error |
-| `turn_interrupted` | internal | A restart, a lost worker, or a released lease left a turn `in_progress` | yes | error |
+| `turn_interrupted` | internal | A restart, a lost worker, or a released lease left a turn `in_progress`, or left a turn that waits for tool results in `requires_action` | yes | error |
 | `internal` | internal | Unexpected exception | no | error |
 
 Request-time HTTP errors that are not turn failures keep their codes.
@@ -111,6 +111,13 @@ seconds. A cancel that cannot be delivered returns one of them. See
 request, because the `model_credential` callback raised or returned no
 value, or because a forwarded turn had no operator key and no callback.
 The turn does not start. See [auth](auth.md#model-credential).
+A tool result for a session that is not `requires_action`, or for a
+`turn_id` or `call_id` that is not waiting, is `400`
+`invalid_request`. The gateway rejects it before it sends anything to a
+worker. A tool result that passed this check can still get `429`
+`capacity` when the lease of the session ends while the result is on
+its way, because the worker released it or it expired: that ends the
+waiting turn. See [events](api.md#events).
 `capacity` and `capacity_tenant` are `429`. `payload_too_large` is
 `413`. Auth `unauthorized` is `401`. Their `failure_source` is `user`
 when a worker command logs them. They are warning, not error.

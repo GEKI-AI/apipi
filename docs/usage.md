@@ -238,6 +238,7 @@ a `count` of the occurrences since the last line.
 | `worker.forward.replica_stale` | warning | A command needed a worker whose replica stopped heartbeating, so it failed at once with `worker_unreachable`. Carries `worker_id` and `instance`. Rate limited. |
 | `worker.stop.undelivered` | warning | A delete could not deliver `session.stop` to another replica, so the lease was released anyway. |
 | `worker.lease.revoke_failed` | warning | The reaper could not send `lease.revoke` (timeout or closed socket). The lease is already cleared. Rate limited. |
+| `worker.lease.turn_end_failed` | error | The reaper cleared an expired lease but could not end the turn the session still had open. Carries `session_id` and `error`. The turn is ended on the next session `GET` or list, message, or tool result. |
 | `worker.connection.failed` | error | A task of one worker connection ended with an unexpected exception. The socket closes with the reason `error`. |
 | `worker.detach.failed` | warning | The API could not clear `api_instance_id` after a disconnect. The next heartbeat or register sets it again. |
 | `worker.message` | debug | One socket message, with `type` and `size`. Only with `APIPI_LOG_LEVEL=debug`. |

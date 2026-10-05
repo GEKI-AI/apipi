@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC
 from typing import Any, cast
 
+from apipi.common.background import cancelling
 from apipi.common.errors import ApiError
 from apipi.common.event_bus import EventBus, InstanceBus
 from apipi.common.failures import (
@@ -1100,13 +1101,16 @@ class WorkerHub:
             )
 
     async def expire(self, store: Store, hub: EventBus) -> list[uuid.UUID]:
-        """Clear expired leases, then tell the connected workers.
+        """Clear expired leases, tell the connected workers, end the turns.
 
         The rows are cleared and the failure events stored in one
         transaction. Everything that touches memory or a socket (the
         log lines, the delta state, the `lease.revoke` frames) happens
         after that transaction committed, so a failed commit changes
-        nothing in memory and no socket write holds the row locks.
+        nothing in memory and no socket write holds the row locks. Then
+        the turn each session still had open is ended, one session per
+        transaction, so a session that fails there does not stop the
+        others from expiring.
         """
         ttl = self.settings.worker_lease_ttl.total_seconds()
         cleared: list[tuple[Any, ...]] = []
@@ -1188,7 +1192,36 @@ class WorkerHub:
                     for session_id, tenant_id, worker_id, lease_id in remote
                 ),
             )
+        for session_id, tenant_id, *_rest in cleared:
+            await self._end_expired_turn(store, hub, tenant_id, session_id)
         return expired
+
+    async def _end_expired_turn(
+        self,
+        store: Store,
+        hub: EventBus,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+    ) -> None:
+        try:
+            async with store.session() as db:
+                await fail_stale_in_progress(db, hub, tenant_id, session_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if cancelling():
+                raise asyncio.CancelledError from exc
+            log_event(
+                log,
+                logging.ERROR,
+                "turn of an expired lease not ended",
+                event="worker.lease.turn_end_failed",
+                error_code="turn_end_failed",
+                exc_info=exc,
+                tenant_id=tenant_id,
+                session_id=session_id,
+                error=type(exc).__name__,
+            )
 
     async def _send_revoke(self, conn: WorkerConnection, revoke: LeaseRevoke) -> None:
         try:

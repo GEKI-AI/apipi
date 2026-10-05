@@ -20,6 +20,7 @@ from apipi.store.repo import (
     get_session,
     get_session_turn,
     list_turns,
+    lock_session,
     update_session,
 )
 
@@ -39,8 +40,8 @@ async def fail_stale_in_progress(
     *,
     message: str = "Turn interrupted",
 ) -> SessionRow | None:
-    row = await get_session(db, tenant_id, session_id)
-    if row is None or row.status != "in_progress":
+    row = await lock_session(db, tenant_id, session_id)
+    if row is None or row.status not in ("in_progress", "requires_action"):
         return row
     if lease_live(row.lease_until):
         return row

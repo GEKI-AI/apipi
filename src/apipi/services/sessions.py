@@ -101,7 +101,11 @@ from apipi.services.turn_context import (
     input_file_ref,
     input_image_ref,
 )
-from apipi.services.turn_state import fail_session, fail_stale_in_progress
+from apipi.services.turn_state import (
+    fail_session,
+    fail_stale_in_progress,
+    lease_live,
+)
 from apipi.services.vault_crypto import (
     VaultCryptoError,
     decrypt_vault_token,
@@ -120,6 +124,7 @@ from apipi.store.repo import (
     delete_session,
     delete_session_artifact,
     get_agent,
+    get_latest_turn,
     get_session,
     get_session_artifact,
     get_session_turn,
@@ -371,6 +376,30 @@ def _turn_not_sent(exc: BaseException) -> bool:
     if isinstance(exc, ApiError):
         return exc.code not in _MAYBE_SENT
     return isinstance(exc, ObjectStoreError)
+
+
+async def _not_waiting(
+    db: Any,
+    tenant_id: uuid.UUID,
+    row: SessionRow,
+    *,
+    turn_id: uuid.UUID,
+    call_id: str,
+) -> str | None:
+    if row.status != "requires_action":
+        return "Session is not requires_action"
+    waiting = await get_latest_turn(db, tenant_id, row.id)
+    if waiting is None or waiting.id != turn_id:
+        return "turn_id is not the turn waiting for a tool result"
+    actions = row.required_actions if isinstance(row.required_actions, list) else []
+    if not any(
+        isinstance(action, dict)
+        and action.get("type") == "function_call"
+        and action.get("call_id") == call_id
+        for action in actions
+    ):
+        return "call_id is not waiting for a tool result"
+    return None
 
 
 class SessionService:
@@ -1223,7 +1252,8 @@ class SessionService:
             out: list[dict[str, Any]] = []
             for row in rows:
                 if (
-                    row.status == "in_progress"
+                    row.status in ("in_progress", "requires_action")
+                    and not lease_live(row.lease_until)
                     and self.event_hub.turn_abort(row.id) is None
                 ):
                     recovered = await fail_stale_in_progress(
@@ -1246,7 +1276,8 @@ class SessionService:
             if row is None:
                 not_found()
             if (
-                row.status == "in_progress"
+                row.status in ("in_progress", "requires_action")
+                and not lease_live(row.lease_until)
                 and self.event_hub.turn_abort(session_id) is None
             ):
                 recovered = await fail_stale_in_progress(
@@ -1413,10 +1444,17 @@ class SessionService:
         cancel_status = ""
         follow_size = "S"
         follow_model: str | None = None
+        not_waiting: str | None = None
         async with self.store.session() as db:
             row = await get_session(db, tenant_id, session_id, user_id=user_id)
             if row is None:
                 not_found()
+            if row.status == "requires_action" and not lease_live(row.lease_until):
+                recovered = await fail_stale_in_progress(
+                    db, self.event_hub, tenant_id, session_id
+                )
+                if recovered is not None:
+                    row = recovered
             session_user = row.user_id
             session_env = row.environment
             follow_size = sandbox_size_of(row.environment)
@@ -1430,6 +1468,9 @@ class SessionService:
                         "tool_result needs turn_id, call_id, and success",
                         code="invalid_request",
                     )
+                not_waiting = await _not_waiting(
+                    db, tenant_id, row, turn_id=turn_id, call_id=call_id
+                )
                 action = "tool"
             else:
                 if row.status == "requires_action":
@@ -1450,6 +1491,8 @@ class SessionService:
                     )
                     if isinstance(raw_model, str):
                         follow_model = raw_model
+        if not_waiting is not None:
+            raise ApiError("invalid_request", not_waiting, code="invalid_request")
         image_files: dict[str, tuple[str, int]] = {}
         input_files: list[InputFile] = []
         if action == "message":
