@@ -340,6 +340,72 @@ async def test_follow_up_turn_survives_a_wall_clock_step_back(
         assert [turn.status for turn in turns] == ["completed", "completed"]
 
 
+async def test_items_keep_creation_order_when_the_wall_clock_steps_back(
+    store: Store, settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime
+
+    class SteppedBack(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(hours=1)
+
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    first = uuid.uuid4()
+    outcome = await _flush(store, worker_id, _turn_flow(session_id, first), settings)
+    assert outcome.rejected == []
+    monkeypatch.setattr("apipi.store.models.datetime", SteppedBack)
+    second = uuid.uuid4()
+    follow_up = [
+        envelope.model_copy(update={"seq": envelope.seq + 13})
+        for envelope in _turn_flow(session_id, second)
+    ]
+    outcome = await _flush(store, worker_id, follow_up, settings)
+    assert outcome.rejected == []
+    async with store.session() as db:
+        items = await list_items(db, tenant_id, session_id)
+        assert items is not None
+        assert [item.turn_id for item in items] == [first, second]
+        assert items[0].created_at < items[1].created_at
+
+
+async def test_items_of_one_batch_keep_creation_order_when_the_clock_steps_back(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from apipi.store.repo import create_item
+
+    stamps = iter(
+        [
+            datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC),
+            datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
+            datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
+        ]
+    )
+
+    class Stepping(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(stamps)
+
+    async with store.session() as db:
+        tenant = await create_tenant(db, name="t")
+        row = await create_session(db, tenant.id, environment={"type": "none"})
+        monkeypatch.setattr("apipi.store.models.datetime", Stepping)
+        created = [
+            await create_item(db, tenant.id, row.id, type="message", data={"n": n})
+            for n in range(3)
+        ]
+        monkeypatch.undo()
+    async with store.session() as db:
+        items = await list_items(db, tenant.id, row.id)
+        assert items is not None
+        assert [item.id for item in items] == [item.id for item in created]
+        assert len({item.created_at for item in items}) == 3
+
+
 async def test_unknown_and_live_events_rejected(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
     _tenant, session_id, _lease = await _leased(store, worker_id)

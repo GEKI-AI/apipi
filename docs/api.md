@@ -825,11 +825,22 @@ See [failure codes](errors.md).
 | `GET` | `/v1/agents/sessions/{session_id}/artifacts/{id}/content` |
 | `DELETE` | `/v1/agents/sessions/{session_id}/artifacts/{id}` |
 
+Turns, items, and artifacts are listed in the order they were created,
+oldest first. Each new turn, item, or artifact gets a `created_at` that
+is later than the `created_at` of every earlier one of the same kind
+in its session. This holds even when the server's wall clock steps
+back, for example after an NTP or virtual machine time correction, and
+when API replicas disagree about the time. Right after such a step,
+`created_at` can be a little ahead of the wall clock. Rows that share
+a `created_at`, which only data stored before this rule can have, are
+ordered by id. The export uses the same order.
+
 When a turn completes, files under `outputs/` on the computer are
 copied into the artifact store. Copies are immutable and include
 `turn_id`. A later turn that writes the same path publishes another
-artifact. Rows already stored with a path under `artifacts/` stay
-readable; new publishes use `outputs/`. `GET` content works as soon as the turn has
+artifact, unless the bytes are the same as in the newest artifact at
+that path, which is the one created last in the order above. Rows
+already stored with a path under `artifacts/` stay readable; new publishes use `outputs/`. `GET` content works as soon as the turn has
 completed, even if Pi is still alive. Harvest on Pi stop is a safety
 net for files written after the last completed turn. `410` if nothing
 was published. `DELETE` removes the metadata and the stored bytes. The
