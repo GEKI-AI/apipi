@@ -806,12 +806,16 @@ async def test_a_second_complete_waits_and_keeps_the_first_bytes(
         fake.put_url(url, data, content_type)
         path = f"/v1/apipi/uploads/{created.json()['upload_id']}/complete"
         first = asyncio.create_task(client.post(path, headers=_auth(token), json={}))
-        assert await asyncio.to_thread(fake.copied.wait, 10)
-        assert fake.put_url(url, b"\xff" * len(data), content_type) == 200
-        second = asyncio.create_task(client.post(path, headers=_auth(token), json={}))
-        await asyncio.sleep(0.1)
-        fake.release.set()
-        done, again = await first, await second
+        try:
+            assert await asyncio.to_thread(fake.copied.wait, 10)
+            assert fake.put_url(url, b"\xff" * len(data), content_type) == 200
+            second = asyncio.create_task(
+                client.post(path, headers=_auth(token), json={})
+            )
+            await asyncio.sleep(0.1)
+        finally:
+            fake.release.set()
+        done, again = await asyncio.wait_for(asyncio.gather(first, second), 30)
     object_id = created.json()["object_id"]
     key = (
         f"apipi/skills/{skill_object_id(tenant_id, object_id)}"
