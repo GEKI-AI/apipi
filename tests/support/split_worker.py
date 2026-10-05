@@ -78,6 +78,36 @@ class _AsgiWorkerSocket:
             continue
 
 
+class HeldRelease:
+    """Hold the API's next `hub.release` until `gate` opens.
+
+    `entered` is set once a `lease.release` reached `hub.release` (the
+    lease is out of the connection but not yet cleared), and `settling`
+    once a command or a placement waits for that release.
+    """
+
+    def __init__(self, hub: Any) -> None:
+        self.entered = asyncio.Event()
+        self.gate = asyncio.Event()
+        self.settling = asyncio.Event()
+        release = hub.release
+        settle = hub.settle_release
+
+        async def held(*args: Any, **kwargs: Any) -> Any:
+            hub.release = release
+            self.entered.set()
+            await self.gate.wait()
+            return await release(*args, **kwargs)
+
+        async def settling(*args: Any, **kwargs: Any) -> bool:
+            if hub._releases:
+                self.settling.set()
+            return await settle(*args, **kwargs)
+
+        hub.release = held
+        hub.settle_release = settling
+
+
 class SplitWorker:
     """A running in-process worker connected to `app` over the socket."""
 

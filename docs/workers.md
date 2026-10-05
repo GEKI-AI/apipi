@@ -1008,6 +1008,35 @@ ended as `turn_interrupted` later by the usual recovery for a turn
 without a lease, at the latest when the waiting request reaches the
 turn timeout.
 
+While the API handles a `lease.release`, the lease is already out of
+the worker connection but still on the session row, and a new grant
+needs a row without a live lease. A request in that short window does
+not act on the half released lease. A command for the session and a
+new placement wait until the release handler has finished, including
+its retries and the end of a turn that was still `in_progress`, and
+then the request answers as it would right after the release:
+
+- A message and `sandbox.boot` find no lease and place the session on
+  a new lease as usual, so the message runs its turn and an eager boot
+  starts its computer.
+- A cancel and a stop find no lease and answer as for a session without
+  a lease: the cancel returns the session (`idle` once the release
+  ended the turn), and the stop or delete goes on without a command.
+- A function result (`agent.session.input.tool_result`) needs the turn
+  that waited for it, and that turn ended with the release, so it gets
+  `429` `capacity`, the same answer as after the release.
+
+The wait is bounded: it ends 5 seconds after the release started. When
+the release has not finished by then, the API logs
+`worker.lease.release_wait_timeout`, and the request answers as it
+would without the wait (`429` `capacity` for a message,
+`agent.session.environment.failed` with "No worker available" for a
+boot). When every try of the release failed, the lease stays on the
+row until it expires, and the waiting request gets the same answer at
+once. A command that the API sends before it handles the release still
+crosses the release as described above, so the worker keeps that
+lease.
+
 When `lease_until` passes, API processes expire rows with
 `FOR UPDATE SKIP LOCKED` so two reapers do not double-clear. The API
 clears ownership, emits `agent.session.error` with code
@@ -1101,6 +1130,7 @@ How it fails:
 | The replica holding the socket stopped heartbeating (its worker's `last_seen` is older than `APIPI_WORKER_LEASE_TTL`) | At once: `503` `worker_unreachable`. The worker reconnects to another replica and the lease is taken over as usual. |
 | The replica is slow or gone inside that window and never claims the row | After 10 seconds: `504` `forward_timeout`. |
 | The worker disconnected from that replica meanwhile | `503` `worker_unreachable`. |
+| That replica is clearing the lease after a `lease.release` | It waits for the release as described in [Leases](#leases). When the lease is gone by then, the requesting replica answers as for a session without a lease, so a message is placed again. When the row holds another lease by then, the requesting replica sends the command once more on that lease. |
 | The replica rejected the command (`capacity`, `unsupported_op`, `image_unavailable`, `payload_too_large`) | The same error and status a local send gives. |
 
 `turn.cancel` is never a silent success. If the session holds a live

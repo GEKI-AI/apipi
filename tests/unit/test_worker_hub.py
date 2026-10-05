@@ -259,3 +259,24 @@ def test_pick_no_matching_worker_is_none() -> None:
     )
     hub._conns[microvm_only.worker_id] = microvm_only
     assert hub.pick(kind="none") is None
+
+
+async def test_a_release_ends_only_when_every_handler_of_it_ended() -> None:
+    hub = WorkerHub(_settings())
+    hub.release_wait = 0.0
+    session_id, lease_id = uuid.uuid4(), uuid.uuid4()
+    first = hub.begin_release(session_id, lease_id)
+    second = hub.begin_release(session_id, lease_id)
+    assert second is first
+    hub.end_release(first)
+    assert not first.done.is_set()
+    assert await hub.settle_release(session_id, lease_id) is False
+    hub.end_release(second)
+    assert first.done.is_set()
+    assert await hub.settle_release(session_id) is False
+    again = hub.begin_release(session_id, lease_id)
+    assert again is not first
+    hub.end_release(first)
+    assert not again.done.is_set()
+    hub.end_release(again)
+    assert again.done.is_set()

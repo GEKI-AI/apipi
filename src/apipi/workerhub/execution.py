@@ -337,15 +337,22 @@ class RemoteExecution:
             # turn never aborts.
             payload=TurnCancelCommandPayload(tenant_id=row.tenant_id),
         )
-        if command is None and strict and lease_live(row.lease_until):
-            raise ApiError(
-                "api_error",
-                "The worker running this turn is not reachable, so the cancel "
-                "was not delivered",
-                code="worker_unreachable",
-                status_code=503,
-                session_id=str(session_id),
-            )
+        if command is None and strict:
+            async with store.session() as db:
+                row = await get_session_by_id(db, session_id)
+            if (
+                row is not None
+                and row.lease_id is not None
+                and lease_live(row.lease_until)
+            ):
+                raise ApiError(
+                    "api_error",
+                    "The worker running this turn is not reachable, so the cancel "
+                    "was not delivered",
+                    code="worker_unreachable",
+                    status_code=503,
+                    session_id=str(session_id),
+                )
         return command is not None
 
     async def prepare_for_new_turn(
@@ -372,8 +379,12 @@ class RemoteExecution:
             # (expired, or the worker restarted without it): release it
             # and fail the stale turn instead of waiting for events that
             # will never arrive.
+            async with store.session() as db:
+                row = await get_session_by_id(db, session_id)
             if (
-                row.worker_id is not None
+                row is not None
+                and row.lease_id == lease_id
+                and row.worker_id is not None
                 and self.workers.get(row.worker_id) is None
                 and lease_live(row.lease_until)
             ):

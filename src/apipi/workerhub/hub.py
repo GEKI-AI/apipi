@@ -4,6 +4,7 @@ import socket
 import time
 import uuid
 from collections.abc import Collection, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC
 from typing import Any, cast
 
@@ -38,7 +39,7 @@ from apipi.protocol import (
 from apipi.services.session_events import persist_event
 from apipi.services.turn_state import fail_stale_in_progress
 from apipi.store.engine import Store
-from apipi.store.models import utc_now
+from apipi.store.models import SessionRow, utc_now
 from apipi.store.repo import (
     clear_session_lease,
     extend_worker_leases,
@@ -73,9 +74,19 @@ from apipi.workerhub.forward import RESULT_POLL, Forwarder, forward_body, unreac
 log = logging.getLogger("apipi.worker")
 
 REVOKE_TIMEOUT = 5.0
+RELEASE_WAIT_SECONDS = 5.0
 COMMAND_RETRANSMIT_SECONDS = 5.0
 MAX_HEARTBEAT_SECONDS = 10.0
 MIN_HEARTBEAT_SECONDS = 0.05
+
+
+@dataclass
+class PendingRelease:
+    session_id: uuid.UUID
+    lease_id: uuid.UUID
+    deadline: float
+    holders: int = 1
+    done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 def _request_id(payload: BaseCommandPayload | dict[str, Any] | None) -> Any:
@@ -122,6 +133,8 @@ class WorkerHub:
         self.commands = CommandQueue()
         self._stopped: dict[uuid.UUID, asyncio.Event] = {}
         self.retransmit_seconds = COMMAND_RETRANSMIT_SECONDS
+        self.release_wait = RELEASE_WAIT_SECONDS
+        self._releases: dict[uuid.UUID, PendingRelease] = {}
         self._warnings = RateLimitedLog(log)
         self._delta_hits: dict[uuid.UUID, list[float]] = {}
         self._delta_leases: dict[uuid.UUID, DeltaLease] = {}
@@ -494,6 +507,7 @@ class WorkerHub:
         command_id: uuid.UUID | None = None,
         pin_worker: uuid.UUID | None = None,
     ) -> dict[str, Any] | None:
+        await self.settle_release(session_id)
         async with store.session() as db:
             session = await get_session(db, tenant_id, session_id)
         if session is None:
@@ -695,35 +709,89 @@ class WorkerHub:
         socket is on another replica gets the command forwarded and the
         caller sees the same result, or the `ApiError` of the failure. A
         forwarded `session.stop` returns once the stop is finished
-        (`done`).
+        (`done`). A lease this replica is releasing is waited for first
+        (`settle_release`), and a forward that finds the lease gone
+        returns None too, so the caller places the session again. A
+        forward that finds another lease on the row is sent once more on
+        that lease.
         """
         if op not in COMMAND_OPS:
             raise ValueError(op)
-        async with store.session() as db:
-            row = await get_session(db, tenant_id, session_id)
-            if row is None or row.lease_id is None or row.worker_id is None:
-                return None
-            worker_id = row.worker_id
-            lease_id = row.lease_id
-            cursor = row.worker_seq
-            required = placement_for(environment=row.environment)
+        return await self._command(
+            store,
+            tenant_id,
+            session_id,
+            op=op,
+            payload=payload,
+            command_id=command_id,
+            local_only=local_only,
+            again=True,
+        )
+
+    async def _command(
+        self,
+        store: Store,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        op: str,
+        payload: BaseCommandPayload | dict[str, Any] | None,
+        command_id: uuid.UUID | None,
+        local_only: bool,
+        again: bool,
+    ) -> dict[str, Any] | None:
+        leased = await self._leased(store, tenant_id, session_id)
+        if leased is None:
+            return None
+        row, worker_id, lease_id = leased
         conn = self._conns.get(worker_id)
+        if (
+            conn is not None
+            and lease_id not in conn.leases
+            and await self.settle_release(session_id, lease_id)
+        ):
+            leased = await self._leased(store, tenant_id, session_id)
+            if leased is None:
+                return None
+            row, worker_id, lease_id = leased
+            conn = self._conns.get(worker_id)
+        cursor = row.worker_seq
+        required = placement_for(environment=row.environment)
         if conn is None or lease_id not in conn.leases:
             if local_only or conn is not None:
                 return None
             target = await self._remote_instance(store, worker_id)
             if target is None:
                 return None
-            return await self._forward_command(
-                target,
-                tenant_id,
-                session_id,
-                worker_id,
-                lease_id,
-                op=op,
-                payload=payload,
-                command_id=command_id,
-            )
+            try:
+                return await self._forward_command(
+                    target,
+                    tenant_id,
+                    session_id,
+                    worker_id,
+                    lease_id,
+                    op=op,
+                    payload=payload,
+                    command_id=command_id,
+                )
+            except ApiError as exc:
+                if exc.code != "worker_unreachable":
+                    raise
+                now = await self._leased(store, tenant_id, session_id)
+                if now is None:
+                    return None
+                if now[2] == lease_id or not again:
+                    raise
+                return await self._command(
+                    store,
+                    tenant_id,
+                    session_id,
+                    op=op,
+                    payload=payload,
+                    command_id=command_id,
+                    local_only=local_only,
+                    again=False,
+                )
         self._note_delta_lease(
             session_id,
             worker_id=worker_id,
@@ -760,6 +828,78 @@ class WorkerHub:
             raise
         self._note_sent(entry)
         return wire
+
+    async def _leased(
+        self, store: Store, tenant_id: uuid.UUID, session_id: uuid.UUID
+    ) -> tuple[SessionRow, uuid.UUID, uuid.UUID] | None:
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+        if row is None or row.lease_id is None or row.worker_id is None:
+            return None
+        return row, row.worker_id, row.lease_id
+
+    def begin_release(
+        self, session_id: uuid.UUID, lease_id: uuid.UUID
+    ) -> PendingRelease:
+        """Note that this replica is clearing the lease after a `lease.release`.
+
+        Until every `end_release` of it, a command or a placement for the
+        session waits for the release (`settle_release`) instead of
+        failing because the lease is half gone. A second handler of the
+        same lease joins the release that is already in flight.
+        """
+        release = self._releases.get(lease_id)
+        if release is not None:
+            release.holders += 1
+            return release
+        release = PendingRelease(
+            session_id, lease_id, time.monotonic() + self.release_wait
+        )
+        self._releases[lease_id] = release
+        return release
+
+    def end_release(self, release: PendingRelease) -> None:
+        release.holders -= 1
+        if release.holders > 0:
+            return
+        if self._releases.get(release.lease_id) is release:
+            del self._releases[release.lease_id]
+        release.done.set()
+
+    async def settle_release(
+        self, session_id: uuid.UUID, lease_id: uuid.UUID | None = None
+    ) -> bool:
+        """Wait until a release of the session's lease on this replica ended.
+
+        True when a release was in flight and it ended. False when none
+        was in flight, or when it is still in flight at its deadline
+        (`release_wait` after it began).
+        """
+        release = next(
+            (
+                item
+                for item in self._releases.values()
+                if item.session_id == session_id and lease_id in (None, item.lease_id)
+            ),
+            None,
+        )
+        if release is None:
+            return False
+        try:
+            await asyncio.wait_for(
+                release.done.wait(), max(release.deadline - time.monotonic(), 0.0)
+            )
+        except TimeoutError:
+            self._warnings.warning(
+                "worker lease release did not finish in time",
+                event="worker.lease.release_wait_timeout",
+                error_code="release_wait_timeout",
+                session_id=session_id,
+                lease_id=release.lease_id,
+                timeout_seconds=self.release_wait,
+            )
+            return False
+        return True
 
     async def _forward_command(
         self,
