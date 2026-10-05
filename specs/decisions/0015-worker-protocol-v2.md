@@ -154,6 +154,16 @@ without a lease and without a ledger row; it changes nothing.
 `session.stop` runs as its own task, because waiting for acks inside
 the receive loop would block the acks it waits for.
 
+**A release does not end a lease that a new command already uses.**
+The worker keeps the lease while a turn command runs and releases it
+only after the command ended without a live process. A release can
+still cross a `turn.start`, `turn.continue`, or `sandbox.boot` that
+the API already sent on that lease; the API ignores such a release,
+because the worker takes the lease back from the command. This was
+chosen over a new release field or a release acknowledgement, because
+the command already carries its `lease_id` and the API can decide from
+the order of the socket alone.
+
 ## Semantics
 
 * Losing the socket does not abort a turn. A session is orphaned only

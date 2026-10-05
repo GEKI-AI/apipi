@@ -89,6 +89,15 @@ class _Pool:
     def held(self, session_id: uuid.UUID) -> bool:
         return False
 
+    def hold(self, session_id: uuid.UUID) -> None:
+        del session_id
+
+    def release(self, session_id: uuid.UUID) -> None:
+        del session_id
+
+    async def after_turn(self, session_id: uuid.UUID) -> None:
+        del session_id
+
     async def kill_unheld(self, reason: str = "") -> None:
         del reason
 

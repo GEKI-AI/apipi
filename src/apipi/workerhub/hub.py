@@ -353,6 +353,8 @@ class WorkerHub:
             if conn is not None and current is not conn:
                 return False
             del self._conns[worker_id]
+        for lease_id in current.leases:
+            self.commands.forget_turns(lease_id)
         self._observe()
         self.observe_send_queue()
         self._forget_worker_deltas(worker_id)

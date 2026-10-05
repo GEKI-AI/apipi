@@ -14,6 +14,8 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from apipi.protocol import CURSOR_OPS
+
 MAX_PENDING_PER_LEASE = 16
 
 
@@ -44,6 +46,7 @@ class PendingCommand:
 class CommandQueue:
     clock: Callable[[], float] = time.monotonic
     _by_lease: dict[uuid.UUID, list[PendingCommand]] = field(default_factory=dict)
+    _turns: dict[uuid.UUID, int] = field(default_factory=dict)
 
     def push(
         self, wire: dict[str, Any], *, worker_id: uuid.UUID | None = None
@@ -61,7 +64,13 @@ class CommandQueue:
             created=self.clock(),
         )
         queue.append(entry)
+        if entry.op in CURSOR_OPS:
+            self._turns[lease_id] = self._turns.get(lease_id, 0) + 1
         return entry
+
+    def turns(self, lease_id: uuid.UUID) -> int:
+        """How many `turn.start`, `turn.continue`, and `sandbox.boot` the lease got."""
+        return self._turns.get(lease_id, 0)
 
     def get(self, lease_id: uuid.UUID, command_id: str) -> PendingCommand | None:
         for entry in self._by_lease.get(lease_id, []):
@@ -85,7 +94,12 @@ class CommandQueue:
         if not queue:
             del self._by_lease[entry.lease_id]
 
+    def forget_turns(self, lease_id: uuid.UUID) -> None:
+        if not self._by_lease.get(lease_id):
+            self._turns.pop(lease_id, None)
+
     def drop_lease(self, lease_id: uuid.UUID) -> list[PendingCommand]:
+        self._turns.pop(lease_id, None)
         return self._by_lease.pop(lease_id, [])
 
     def for_lease(self, lease_id: uuid.UUID) -> list[PendingCommand]:

@@ -100,6 +100,8 @@ class LocalExecution:
             pool.on_kill = self._harvest_killed
         if pool.on_transition is None:
             pool.on_transition = self._sandbox_transition
+        if pool.on_release is None:
+            pool.on_release = self._release_stopped
 
     def note_context_ttl(self, session_id: uuid.UUID, context: Any) -> None:
         """Remember the effective idle TTL from a command context."""
@@ -576,6 +578,7 @@ class LocalExecution:
         sink = self.sink_for(tenant_id, session_id)
 
         async def fail(message: str, code: str | None) -> None:
+            self.pool.release_after_turn(session_id)
             await report_environment_failed(
                 sink, self.hub, tenant_id, session_id, message, code=code
             )
@@ -597,6 +600,7 @@ class LocalExecution:
                 await fail("Cannot read artifacts", "artifact_store")
                 return
             if kwargs is None:
+                self.pool.release_after_turn(session_id)
                 return
             if context_web_search(turn_context):
                 kwargs["web_search"] = True
@@ -629,6 +633,11 @@ class LocalExecution:
             note = self.note_stopped
             if release and note is not None:
                 await note(session_id)
+
+    async def _release_stopped(self, session_id: uuid.UUID) -> None:
+        note = self.note_stopped
+        if note is not None:
+            await note(session_id)
 
     async def _upload_killed(self, session_id: uuid.UUID, proc: PiProc | None) -> None:
         """Upload a killed session's files through presigned URLs.

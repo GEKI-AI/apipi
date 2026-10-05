@@ -218,9 +218,29 @@ shutdown. When a turn starts a new process for the same session,
 because the turn needs a different configuration (`respawn`) or the old
 process exited (`crash`), the worker reports the stop of the old
 process and harvests its files, but it keeps the lease and sends no
-`lease.release`, because the turn goes on under that lease. It keeps
-the lease too when it stops a guest because the attachments of a
-message could not be copied into it (`push_failed`).
+`lease.release`, because the turn goes on under that lease.
+
+A session is busy on the worker from the moment a `turn.start`,
+`turn.continue`, or `sandbox.boot` arrives until that command has
+finished. When the process of a busy session stops, for example at the
+memory limit, after a crash, at the idle TTL, or because the
+attachments of a message could not be copied into its guest
+(`push_failed`), the worker reports the stop and harvests the files of
+the process at once, but it sends `lease.release` only after the
+command has finished, and only when the session has no live process
+then. When a new process runs by then, the worker keeps the lease. The
+worker also sends `lease.release` when a turn or a boot fails before
+any process started, so a lease never stays without a process.
+
+The API ignores a `lease.release` when it sent a `turn.start`,
+`turn.continue`, or `sandbox.boot` on the same lease that the worker
+had not acked before the release, in the order of the socket, or when
+it sends such a command before it has handled the release. The worker
+takes the lease back when that command arrives. Otherwise the API
+clears the lease, and when the session still has a turn `in_progress`,
+it ends that turn as `failed` with `turn_interrupted`: the release
+comes after the envelopes of the session, so that turn can never
+finish.
 
 #### `lease.revoke` (API to worker)
 
@@ -707,7 +727,7 @@ A lease is owned by the API. It is stored on the session row.
 | --- | --- | --- |
 | Granted | The API places a session and sends `turn.start` or `sandbox.boot` with a new `lease_id`. | The command is not acked yet. |
 | Active | The worker acks the command. | Every heartbeat, command ack, and committed batch renews it to now plus the lease TTL. |
-| Released | The worker sends `lease.release`, or a `session.stop` completes. | The API cleared the lease. |
+| Released | The worker sends `lease.release` that crosses no `turn.start`, `turn.continue`, or `sandbox.boot` on the lease, or a `session.stop` completes. | The API cleared the lease and ended a turn that was still `in_progress` with `turn_interrupted`. |
 | Expired | The lease TTL passes without a renewal. | The API clears the lease, stores `agent.session.error` with `worker_lease_expired`, fails the turn, and sends `lease.revoke`. The turn is not moved to another worker. |
 | Orphaned | An inventory does not list a leased session and no command for it is unacked. | The API stores `agent.session.error` with `worker_orphaned` and clears the lease. |
 | Revoked | `lease.revoke`, or a `revoke` entry in `hello` or `inventory.reply`. | The worker drops the session. |

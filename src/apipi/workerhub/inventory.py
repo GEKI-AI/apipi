@@ -116,6 +116,8 @@ async def reconcile_inventory(
                 await clear_session_lease(db, row.tenant_id, row.id)
                 await fail_stale_in_progress(db, bus, row.tenant_id, row.id)
                 hub._forget_delta(session_id)
+                if row.lease_id is not None:
+                    hub.commands.forget_turns(row.lease_id)
                 if conn is not None and row.lease_id is not None:
                     conn.leases.discard(row.lease_id)
                     conn.lease_mem.pop(row.lease_id, None)
