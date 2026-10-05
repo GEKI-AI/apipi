@@ -85,18 +85,20 @@ def _handshake_bytes(data: bytes) -> bytes:
 
 def _server_name(raw: bytes) -> str | None:
     names = _Reader(_Reader(raw).vector(2))
-    while not names.done:
-        kind = names.u8()
-        value = names.vector(2)
-        if kind != _NAME_HOST:
-            continue
-        try:
-            text = value.decode("ascii")
-        except UnicodeDecodeError as exc:
-            raise NotTls("server name is not ASCII") from exc
-        host = text.rstrip(".").lower()
-        return host or None
-    return None
+    if names.done:
+        return None
+    kind = names.u8()
+    value = names.vector(2)
+    if not names.done:
+        raise NotTls("server_name lists more than one name")
+    if kind != _NAME_HOST:
+        return None
+    try:
+        text = value.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise NotTls("server name is not ASCII") from exc
+    host = text.rstrip(".").lower()
+    return host or None
 
 
 def _alpn(raw: bytes) -> tuple[str, ...]:
@@ -121,10 +123,14 @@ def parse_client_hello(data: bytes) -> ClientHello:
     extensions = _Reader(hello.vector(2))
     server_name: str | None = None
     alpn: tuple[str, ...] = ()
+    named = False
     while not extensions.done:
         kind = extensions.u16()
         value = extensions.vector(2)
         if kind == _EXT_SERVER_NAME:
+            if named:
+                raise NotTls("duplicate server_name extension")
+            named = True
             server_name = _server_name(value)
         elif kind == _EXT_ALPN:
             alpn = _alpn(value)

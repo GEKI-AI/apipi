@@ -3,6 +3,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
+from apipi.common.netguard import allowed_names
 from apipi.worker.egress.sni import is_ip_literal
 
 EgressMode = Literal["enabled", "restricted", "disabled"]
@@ -84,6 +85,11 @@ class EgressPolicy:
         if self.mode == "enabled":
             return True
         return norm_host(host) in self.allowed_hosts
+
+    def private_name(self, host: str) -> bool:
+        if not self.allows_name(host) or not self.private_allowed(host):
+            return False
+        return norm_host(host) in allowed_names(self.private_hosts)
 
     def private_allowed(self, host: str | None) -> bool:
         if not host:

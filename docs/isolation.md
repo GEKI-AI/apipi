@@ -108,7 +108,8 @@ turn completes.
 `microvm` and a custom backend that sets `needs_probe` boot a
 throwaway guest and tear it down before the process accepts work. That
 needs `/dev/kvm`, `firecracker`, `jailer` on `PATH` when you use it,
-kernel and rootfs images, and host net tools (`ip`, `iptables`, `tc`).
+kernel and rootfs images, and host net tools (`ip`, `iptables`,
+`ip6tables`, `tc`).
 `apipi install --microvm` can fetch Firecracker and build images.
 
 `apipi worker` always probes. `apipi serve` never probes, so a rootless

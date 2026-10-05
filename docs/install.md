@@ -101,7 +101,7 @@ A pulled image set
 uses the kernel published with that set. Pull after this
 change so guests are not still on the old 4.14 kernel.
 
-`--microvm` checks `/dev/kvm`, `ip`, `iptables`, and `tc` (it names
+`--microvm` checks `/dev/kvm`, `ip`, `iptables`, `ip6tables`, and `tc` (it names
 the packages; it does not run apt). It downloads pinned Firecracker
 1.17.0 and jailer into `$XDG_DATA_HOME/apipi/firecracker` (or
 `~/.local/share/apipi/firecracker`). With `APIPI_IMAGE_SOURCE` set it
@@ -416,7 +416,7 @@ does not start Firecracker, so it can run in rootless Docker.
 
 Production operators set `APIPI_RUN_MODE=microvm` on each worker so each
 session boots in a Firecracker guest. The worker starts when `/dev/kvm`,
-Firecracker, jailer, guest images, `ip`, `iptables`, and `tc` are
+Firecracker, jailer, guest images, `ip`, `iptables`, `ip6tables`, and `tc` are
 present, and after a throwaway guest has booted and been torn down:
 
 ```

@@ -68,10 +68,10 @@ tools, and point at operator-provided guest images:
 | --- | --- |
 | Firecracker and jailer | Binaries from the [Firecracker release](https://github.com/firecracker-microvm/firecracker/releases) on `PATH` |
 | `ip` and `tc` | `iproute2` |
-| `iptables` | `iptables` |
+| `iptables` and `ip6tables` | `iptables` |
 | Guest kernel | From the image store (`apipi images pull`). `APIPI_MICROVM_KERNEL` is a dev-only override (a `vmlinux` file). |
 | Guest rootfs | From the image store (`apipi images pull <id>`). `APIPI_MICROVM_ROOTFS` is a dev-only override (ext4). Include Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest` from `src/apipi/worker/pi/guest.sh`. |
-| TAP / NAT | Permission to create a TAP device, set `ip_forward`, and add iptables rules. Root or `CAP_NET_ADMIN` is the usual setup. |
+| TAP / NAT | Permission to create a TAP device, set `ip_forward` and `disable_ipv6`, and add iptables and ip6tables rules. Root or `CAP_NET_ADMIN` is the usual setup. |
 
 `apipi install --microvm` downloads Firecracker and jailer and pulls
 a guest image when `APIPI_IMAGE_SOURCE` is set. The runtime uses the
@@ -170,7 +170,7 @@ session booted.
 If the kernel download fails, get a Firecracker 6.1 `vmlinux` and
 point `APIPI_MICROVM_KERNEL` at it. The pin is `images/kernel.env`.
 Missing `/dev/kvm`,
-binaries, images, `ip`, `iptables`, or `tc` exits the process. How to run
+binaries, images, `ip`, `iptables`, `ip6tables`, or `tc` exits the process. How to run
 the live microvm tests is in [tests](tests.md).
 
 ## Storage
@@ -252,9 +252,10 @@ model host is reached through that broker even when it is private.
 Each TAP is rate-limited with
 `tc` (`APIPI_MICROVM_EGRESS_MBIT`, default 50). Guest TCP to ports 80,
 443, and 8443 goes through the egress gateway in the worker, which
-checks the hostname from TLS SNI or the `Host` header. The guest can
-reach the worker host only on the broker, gateway, and DNS filter
-ports of its session.
+checks the hostname from TLS SNI or the `Host` header. The guest has
+no IPv6: it is turned off on the TAP and `ip6tables` drops guest IPv6
+packets. The guest can reach the worker host only on the broker,
+gateway, and DNS filter ports of its session.
 
 To lock destinations, set `APIPI_MICROVM_EGRESS_ALLOWLIST=on`. Then the
 guest may reach only the model host, HTTP MCP hosts for that session,
@@ -289,7 +290,7 @@ into guest `/workspace` the same way `openai_hosted` does. Unset, the
 guest gets an empty scratch workspace.
 
 Requirements match `apipi check` without `--fast`: KVM, Firecracker,
-jailer, `ip`, `iptables`, `tc`, and the selected image in the images dir
+jailer, `ip`, `iptables`, `ip6tables`, `tc`, and the selected image in the images dir
 (`apipi images pull`). The command does not need `APIPI_RUN_MODE=microvm`.
 If you are not root, the command re-runs itself with `sudo -E`, the
 absolute interpreter, and `PATH` / `HOME` kept. It does not run

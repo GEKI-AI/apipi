@@ -26,10 +26,10 @@ from apipi.worker.egress.resolve import (
     Blocked,
     EgressBlocked,
     Resolver,
+    SystemResolver,
     address_blocked,
     check_address,
     resolve_upstream,
-    system_resolve,
 )
 from apipi.worker.egress.sni import Incomplete, NotTls, parse_client_hello
 from apipi.worker.egress.sockets import (
@@ -176,7 +176,7 @@ class EgressGateway:
         session_id: str | None = None,
         upstream_ca: str | None = None,
         hooks: EgressHooks | None = None,
-        resolve: Resolver = system_resolve,
+        resolve: Resolver | None = None,
         original_dst: OriginalDst = original_dst,
         blocked: Blocked = address_blocked,
         dns_upstreams: tuple[Upstream, ...] = (),
@@ -196,6 +196,10 @@ class EgressGateway:
         self.session_id = session_id
         self.hooks = hooks if hooks is not None else EgressHooks()
         self.upstream = upstream_context(upstream_ca)
+        self._system: SystemResolver | None = None
+        if resolve is None:
+            self._system = SystemResolver(max_lookups)
+            resolve = self._system
         self.resolve = resolve
         self.original_dst = original_dst
         self.blocked = blocked
@@ -246,6 +250,7 @@ class EgressGateway:
             self.dns = DnsFilter(
                 host=self.host,
                 allow=lambda name: self.policy.allows_name(name),
+                private=lambda name: self.policy.private_name(name),
                 upstreams=self.dns_upstreams,
                 freebind=self.freebind,
             )
@@ -273,6 +278,8 @@ class EgressGateway:
             listener.close()
         if self.dns is not None:
             self.dns.close()
+        if self._system is not None:
+            self._system.close()
         for task in list(self._tasks):
             task.cancel()
 

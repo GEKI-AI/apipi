@@ -14,6 +14,7 @@ from tests.e2e.test_microvm_pi import _image_paths, _microvm_or_skip
 from apipi.config import Settings
 from apipi.env.setup import NetworkPolicy, write_network_policy
 from apipi.worker.egress import WorkerCA
+from apipi.worker.egress.dns import PLACEHOLDER_IP
 from apipi.worker.pi.microvm import spawn_microvm_pi
 from apipi.worker.pi.proc import PiProc
 
@@ -118,16 +119,10 @@ run(
 run("git_ls_remote", ["git", "ls-remote", config["git_repo"], "HEAD"])
 if config.get("private"):
     private = config["private"]
+    check("dns_private", lambda: socket.getaddrinfo(private, 443)[0][4][0])
     run(
         "curl_private",
-        [
-            *curl,
-            "--cacert",
-            "/workspace/private-ca.pem",
-            "--resolve",
-            f"{private}:443:203.0.113.20",
-            f"https://{private}/",
-        ],
+        [*curl, "--cacert", "/workspace/private-ca.pem", f"https://{private}/"],
     )
     check("tcp_host_direct", lambda: tcp(gateway, config["private_direct_port"]))
 print(json.dumps({"type": "egress_probe", "results": results}), flush=True)
@@ -298,6 +293,7 @@ async def test_restricted_guest_egress(
     assert results["requests_intercepted"]["rc"] == 0, report
     assert results["node_fetch_intercepted"]["rc"] == 0, report
     assert results["git_ls_remote"]["rc"] == 0, report
+    assert results["dns_private"]["out"] == PLACEHOLDER_IP, report
     assert results["curl_private"]["rc"] == 0, report
     assert results["curl_private"]["out"] == "200", report
     assert _failed(results, "tcp_host_direct"), report

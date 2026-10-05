@@ -77,6 +77,7 @@ GIT_CREDENTIALS_REL = ".apipi/git-credentials"
 GIT_HELPER_COMMAND = (
     f"{GUEST_WORKSPACE}/{GIT_HELPER_REL} {GUEST_WORKSPACE}/{GIT_CREDENTIALS_REL}"
 )
+IPV6_SYS = Path("/proc/sys/net/ipv6")
 TAP_NET_BASE = 0xAC100000
 TAP_NET_SLOTS = 16384
 SHELL_WARNING = (
@@ -205,17 +206,20 @@ def microvm_binaries() -> tuple[str, str]:
     return firecracker, jailer
 
 
-def microvm_net_binaries() -> tuple[str, str, str]:
+def microvm_net_binaries() -> tuple[str, str, str, str]:
     ip = shutil.which("ip")
     if ip is None:
         raise ConfigError("microvm requires ip (install iproute2)")
     iptables = shutil.which("iptables")
     if iptables is None:
         raise ConfigError("microvm requires iptables (install iptables)")
+    ip6tables = shutil.which("ip6tables")
+    if ip6tables is None:
+        raise ConfigError("microvm requires ip6tables (install iptables)")
     tc = shutil.which("tc")
     if tc is None:
         raise ConfigError("microvm requires tc (install iproute2)")
-    return ip, iptables, tc
+    return ip, iptables, ip6tables, tc
 
 
 def _resolve_override_file(configured: str | None, name: str) -> str | None:
@@ -1050,6 +1054,22 @@ def _gateway_jump(
     ]
 
 
+def _ipv6_drop(ip6tables: str, net: TapNet, action: list[str]) -> list[str]:
+    return [
+        ip6tables,
+        "-w",
+        *action,
+        "-i",
+        net.name,
+        "-m",
+        "comment",
+        "--comment",
+        f"apipi-{net.name}",
+        "-j",
+        "DROP",
+    ]
+
+
 def tap_ports(broker_port: int, gateway: EgressGateway | None) -> TapPorts:
     if gateway is None:
         return TapPorts(broker=broker_port)
@@ -1066,6 +1086,7 @@ def tap_setup_argv(
     *,
     ip: str,
     iptables: str,
+    ip6tables: str | None,
     uid: int,
     gid: int,
     ports: TapPorts,
@@ -1088,7 +1109,12 @@ def tap_setup_argv(
             str(uid),
             "group",
             str(gid),
-        ],
+        ]
+    ]
+    if ip6tables is not None:
+        for builtin in ("INPUT", "FORWARD"):
+            cmds.append(_ipv6_drop(ip6tables, net, ["-I", builtin, "1"]))
+    cmds += [
         [ip, "addr", "add", f"{net.host_ip}/{net.prefix}", "dev", net.name],
         [ip, "link", "set", "dev", net.name, "up"],
         [
@@ -1217,6 +1243,7 @@ def tap_teardown_argv(
     *,
     ip: str,
     iptables: str,
+    ip6tables: str | None = None,
     tc: str | None = None,
     mode: EgressMode = "enabled",
 ) -> list[list[str]]:
@@ -1302,9 +1329,12 @@ def tap_teardown_argv(
                 "--comment",
                 comment,
             ],
-            [ip, "link", "delete", "dev", net.name],
         ]
     )
+    if ip6tables is not None:
+        for builtin in ("INPUT", "FORWARD"):
+            cmds.append(_ipv6_drop(ip6tables, net, ["-D", builtin]))
+    cmds.append([ip, "link", "delete", "dev", net.name])
     return cmds
 
 
@@ -1340,6 +1370,8 @@ def _host_step(argv: list[str]) -> str:
         return "configure the TAP device"
     if name == "iptables":
         return "add iptables NAT or filter rules"
+    if name == "ip6tables":
+        return "add ip6tables filter rules"
     if name == "tc":
         return "rate-limit TAP egress with tc"
     return f"run {name}"
@@ -1368,6 +1400,21 @@ def _enable_forward() -> None:
         raise ConfigError(f"microvm cannot set ip_forward: {detail}") from exc
 
 
+def _disable_ipv6(net: TapNet) -> None:
+    path = IPV6_SYS / "conf" / net.name / "disable_ipv6"
+    try:
+        path.write_text("1")
+    except OSError as exc:
+        detail = _exc_detail(exc)
+        if _permission_denied(detail, exc):
+            raise ConfigError(
+                f"microvm cannot disable IPv6 on the TAP device: {detail}. {NET_RIGHTS}"
+            ) from exc
+        raise ConfigError(
+            f"microvm cannot disable IPv6 on the TAP device: {detail}"
+        ) from exc
+
+
 def _run(argv: list[str]) -> None:
     try:
         subprocess.run(argv, check=True, capture_output=True)
@@ -1380,6 +1427,7 @@ def setup_tap(
     *,
     ip: str,
     iptables: str,
+    ip6tables: str,
     uid: int,
     gid: int,
     ports: TapPorts,
@@ -1388,17 +1436,23 @@ def setup_tap(
     egress_mbit: int = 50,
 ) -> None:
     _enable_forward()
-    for argv in tap_setup_argv(
+    ipv6 = IPV6_SYS.is_dir()
+    create, *rest = tap_setup_argv(
         net,
         ip=ip,
         iptables=iptables,
+        ip6tables=ip6tables if ipv6 else None,
         uid=uid,
         gid=gid,
         ports=ports,
         tc=tc,
         mode=mode,
         egress_mbit=egress_mbit,
-    ):
+    )
+    _run(create)
+    if ipv6:
+        _disable_ipv6(net)
+    for argv in rest:
         _run(argv)
 
 
@@ -1407,10 +1461,13 @@ def teardown_tap(
     *,
     ip: str,
     iptables: str,
+    ip6tables: str | None = None,
     tc: str | None = None,
     mode: EgressMode = "enabled",
 ) -> None:
-    for argv in tap_teardown_argv(net, ip=ip, iptables=iptables, tc=tc, mode=mode):
+    for argv in tap_teardown_argv(
+        net, ip=ip, iptables=iptables, ip6tables=ip6tables, tc=tc, mode=mode
+    ):
         with contextlib.suppress(OSError):
             subprocess.run(argv, check=False, capture_output=True)
 
@@ -1531,7 +1588,7 @@ async def start_microvm(
         }
         git_credentials = injector.git_credentials()
     firecracker, jailer = microvm_binaries()
-    ip_bin, iptables_bin, tc_bin = microvm_net_binaries()
+    ip_bin, iptables_bin, ip6tables_bin, tc_bin = microvm_net_binaries()
     selected = image if image is not None else settings.sandbox_default_image
     kernel, rootfs = microvm_images(settings, image=selected)
     resolved = resolve_spawn_image(settings, selected, rootfs)
@@ -1587,6 +1644,7 @@ async def start_microvm(
             net,
             ip=ip_bin,
             iptables=iptables_bin,
+            ip6tables=ip6tables_bin,
             tc=tc_bin,
             mode=tap.mode,
         )
@@ -1626,6 +1684,7 @@ async def start_microvm(
             net,
             ip=ip_bin,
             iptables=iptables_bin,
+            ip6tables=ip6tables_bin,
             uid=uid,
             gid=gid,
             ports=tap_ports(broker.port, egress),

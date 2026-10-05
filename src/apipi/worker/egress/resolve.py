@@ -2,7 +2,6 @@ import asyncio
 import functools
 import ipaddress
 import socket
-import threading
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 
@@ -25,19 +24,6 @@ RESOLVE_THREADS = 8
 Resolver = Callable[[str, int], Awaitable[list[str]]]
 Blocked = Callable[[str], bool]
 
-_executor: ThreadPoolExecutor | None = None
-_executor_lock = threading.Lock()
-
-
-def resolver_executor() -> ThreadPoolExecutor:
-    global _executor
-    with _executor_lock:
-        if _executor is None:
-            _executor = ThreadPoolExecutor(
-                max_workers=RESOLVE_THREADS, thread_name_prefix="apipi-egress-dns"
-            )
-        return _executor
-
 
 class EgressBlocked(Exception):
     def __init__(self, reason: str) -> None:
@@ -45,16 +31,27 @@ class EgressBlocked(Exception):
         self.reason = reason
 
 
-async def system_resolve(host: str, port: int) -> list[str]:
-    loop = asyncio.get_running_loop()
-    lookup = functools.partial(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM)
-    infos = await loop.run_in_executor(resolver_executor(), lookup)
-    found: list[str] = []
-    for info in infos:
-        address = str(info[4][0])
-        if address not in found:
-            found.append(address)
-    return found
+class SystemResolver:
+    def __init__(self, threads: int = RESOLVE_THREADS) -> None:
+        self._executor = ThreadPoolExecutor(
+            max_workers=threads, thread_name_prefix="apipi-egress-dns"
+        )
+
+    async def __call__(self, host: str, port: int) -> list[str]:
+        loop = asyncio.get_running_loop()
+        lookup = functools.partial(
+            socket.getaddrinfo, host, port, type=socket.SOCK_STREAM
+        )
+        infos = await loop.run_in_executor(self._executor, lookup)
+        found: list[str] = []
+        for info in infos:
+            address = str(info[4][0])
+            if address not in found:
+                found.append(address)
+        return found
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
 
 def address_blocked(address: str) -> bool:
@@ -83,8 +80,8 @@ async def resolve_upstream(
     host: str,
     port: int,
     *,
+    resolve: Resolver,
     private_hosts: tuple[str, ...] = (),
-    resolve: Resolver = system_resolve,
     blocked: Blocked = address_blocked,
 ) -> list[str]:
     name = norm_host(host)
