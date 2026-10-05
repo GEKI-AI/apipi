@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from apipi.common.background import cancelling
 from apipi.common.event_bus import EventBus
 from apipi.protocol import MAX_MESSAGE_BYTES, PAYLOAD_MODELS, WorkerEnvelope
 from apipi.worker.outbox import envelope_size
@@ -99,7 +100,9 @@ class DeltaRelay:
             await self.flush()
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            if cancelling():
+                raise asyncio.CancelledError from exc
             self._note_dropped("disconnected")
             log.debug("delta relay flush failed; dropping batch")
 
@@ -147,7 +150,9 @@ class DeltaRelay:
                 log.debug("delta relay fragment over the message limit; dropping")
                 return
             await send(wire)
-        except Exception:
+        except Exception as exc:
+            if cancelling():
+                raise asyncio.CancelledError from exc
             # At-most-once: a dead socket drops the batch. Never let
             # a send error escape into the turn via the flush task.
             log.debug("delta relay send failed; dropping fragment")

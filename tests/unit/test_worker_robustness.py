@@ -1,6 +1,7 @@
 """Worker side robustness of the socket (#487)."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
@@ -967,6 +968,226 @@ async def test_observe_loop_survives_a_failing_round(
     try:
         await _wait_for(lambda: calls >= 3)
         assert not task.done()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def _closed_on_cancel(entered: asyncio.Event) -> None:
+    entered.set()
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        raise ValueError("Connection closed") from None
+
+
+async def _swallowed_cancel(entered: asyncio.Event) -> None:
+    with contextlib.suppress(ValueError):
+        await _closed_on_cancel(entered)
+
+
+async def _ends_cancelled(task: "asyncio.Task[Any]") -> None:
+    task.cancel()
+    done, _pending = await asyncio.wait({task}, timeout=5)
+    assert task in done
+    assert task.cancelled()
+
+
+class _SwallowingSock(_Sock):
+    def __init__(self, block: str, entered: asyncio.Event) -> None:
+        super().__init__([_hello(), {"type": "noop"}])
+        self.block = block
+        self.entered = entered
+        self.received = 0
+        self.blocked = False
+
+    async def send(self, data: str) -> None:
+        message = json.loads(data)
+        if message.get("type") == self.block and not self.blocked:
+            self.blocked = True
+            await _swallowed_cancel(self.entered)
+        self.sent.append(message)
+
+    async def recv(self) -> Any:
+        received = await super().recv()
+        self.received += 1
+        if self.block == "recv" and self.received == 2:
+            self.blocked = True
+            await _swallowed_cancel(self.entered)
+        return received
+
+
+@pytest.mark.parametrize("block", ["recv", "heartbeat", "usage", "inventory", "drain"])
+async def test_a_cancel_ends_the_connection_when_a_lane_swallows_it(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, block: str
+) -> None:
+    monkeypatch.setattr("apipi.worker.client.FIRST_INVENTORY_DELAY", 0.01)
+    monkeypatch.setattr("apipi.worker.client.INVENTORY_INTERVAL", 0.05)
+    entered = asyncio.Event()
+    outbox = Outbox()
+    outbox.append(uuid.uuid4(), "usage", {"input": 1})
+    execution = _Execution(settings, outbox)
+    draining = asyncio.Event()
+    if block == "drain":
+        draining.set()
+        killed = 0
+
+        async def kill_unheld(reason: str = "") -> None:
+            nonlocal killed
+            del reason
+            killed += 1
+            if killed == 1:
+                await _swallowed_cancel(entered)
+
+        monkeypatch.setattr(execution.pool, "kill_unheld", kill_unheld)
+    run = _start(
+        settings,
+        _SwallowingSock(block, entered),
+        execution=execution,
+        outbox=outbox,
+        draining=draining,
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        await _ends_cancelled(run.task)
+    finally:
+        await run.stop()
+
+
+async def test_a_lease_release_cancelled_while_it_is_sent_goes_out_after_the_next_hello(
+    settings: Settings,
+) -> None:
+    session_id = uuid.uuid4()
+    lease = str(uuid.uuid4())
+    entered = asyncio.Event()
+
+    class _BlockingSock(_Sock):
+        async def send(self, data: str) -> None:
+            if json.loads(data).get("type") == "lease.release":
+                entered.set()
+                await asyncio.Event().wait()
+            await super().send(data)
+
+    leases = {session_id: lease}
+    pending: dict[uuid.UUID, str] = {}
+    sock = _BlockingSock([_hello(sessions={str(session_id): 0})])
+    run = _start(settings, sock, leases=leases, pending=pending)
+    try:
+        await _wait_for(lambda: sock.of("heartbeat"))
+        release = asyncio.create_task(run.execution.note_stopped(session_id))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert leases == {}
+        release.cancel()
+        await asyncio.gather(release, return_exceptions=True)
+        assert pending == {session_id: lease}
+    finally:
+        await run.stop()
+    after = _Sock([_hello()])
+    second = _start(settings, after, leases=leases, pending=pending)
+    try:
+        await _wait_for(lambda: after.of("lease.release"))
+        assert after.of("lease.release")[0]["lease_id"] == lease
+        assert pending == {}
+    finally:
+        await second.stop()
+
+
+async def test_a_cancel_ends_the_reconnect_loop_when_the_socket_turns_it_into_an_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = _worker_settings(tmp_path)
+    execution = _RunExecution(settings, Outbox())
+    _patch_run_worker(monkeypatch, execution)
+    entered = asyncio.Event()
+
+    class _ClosingSock(_Sock):
+        async def recv(self) -> Any:
+            await _closed_on_cancel(entered)
+
+    connects = _Connects([_ClosingSock()])
+    task = asyncio.create_task(
+        run_worker(settings, url="http://127.0.0.1:8000", connect=connects)
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        await _ends_cancelled(task)
+        assert connects.calls == 1
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("op", ["turn.cancel", "session.stop"])
+async def test_a_command_that_turns_a_cancel_into_an_error_is_not_reported(
+    settings: Settings, op: str
+) -> None:
+    outbox = Outbox()
+    execution = _Execution(settings, outbox)
+    entered = asyncio.Event()
+
+    async def closing(_sid: uuid.UUID) -> None:
+        await _closed_on_cancel(entered)
+
+    execution.on_cancel = closing
+    execution.on_teardown = closing
+    session_id = uuid.uuid4()
+    lease = str(uuid.uuid4())
+    sock = _Sock([_hello(), _command(session_id, lease, op)])
+    run = _start(settings, sock, execution=execution, outbox=outbox)
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        (command,) = [
+            task
+            for task in run.tasks
+            if task.get_name() in {"worker_command", "worker_stop"}
+        ]
+        await _ends_cancelled(command)
+        assert outbox.pending(session_id) == []
+    finally:
+        await run.stop()
+
+
+async def test_a_cancel_ends_the_delta_flush_when_the_send_turns_it_into_an_error() -> (
+    None
+):
+    entered = asyncio.Event()
+
+    async def send(_wire: dict[str, Any]) -> None:
+        await _closed_on_cancel(entered)
+
+    relay = DeltaRelay(send, window=0)
+    await relay.submit(uuid.uuid4(), uuid.uuid4(), "hello")
+    task = relay._flush_task
+    assert task is not None
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    await _ends_cancelled(task)
+    assert relay.dropped == 0
+
+
+async def test_a_cancel_ends_a_worker_loop_whose_round_swallows_it(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    from apipi.worker import execution as execution_module
+    from apipi.worker.execution import local_execution
+
+    real = execution_module.run_loop
+
+    async def fast(*args: Any, **kwargs: Any) -> None:
+        kwargs["interval"] = 0
+        await real(*args, **kwargs)
+
+    monkeypatch.setattr(execution_module, "run_loop", fast)
+    execution = local_execution(settings, outbox=Outbox(), metrics=Metrics())
+    entered = asyncio.Event()
+
+    async def seen(_ids: list[uuid.UUID]) -> None:
+        await _closed_on_cancel(entered)
+
+    execution.seen_hook = seen
+    task = asyncio.create_task(execution.sandbox_seen_loop())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        await _ends_cancelled(task)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
