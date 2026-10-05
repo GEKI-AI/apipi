@@ -1,3 +1,4 @@
+import base64
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -10,18 +11,51 @@ from apipi.common.dirs import sessions_root, store_root
 from apipi.common.errors import ObjectStoreError
 from apipi.common.objects import NS_FILES, local_object_path
 from apipi.config import Settings
+from apipi.gateway.content import file_model_input
 from apipi.protocol import (
     MAX_COMMAND_BYTES,
     CommandTooLarge,
     ContextBytes,
+    TurnStartCommandPayload,
     check_command_size,
     check_context_op,
     parse_turn_context,
     redact_context,
+    strict_parse,
     summarize_context,
 )
 from apipi.store.blobs import file_object_id
 from apipi.worker.pi.pool import PiPool
+from apipi.worker.turn_context import fetch_input_files, fetch_input_images, file_block
+
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_TEXT_PART = {
+    "type": "file",
+    "file_id": "file-1",
+    "filename": "a.md",
+    "object_id": "files/t/file-1",
+    "local_path": "files/t/file-1",
+    "mime_type": "text/markdown",
+    "size_bytes": 3,
+    "model_input": "text",
+}
+_IMAGE_PART = {
+    "type": "image",
+    "file_id": "file-1",
+    "object_id": "files/t/file-1",
+    "local_path": "files/t/file-1",
+    "mime_type": "image/png",
+    "size_bytes": 3,
+}
+_WORKSPACE_PART = {
+    "type": "file",
+    "file_id": "file-1",
+    "filename": "report.xlsx",
+    "mime_type": _XLSX,
+    "size_bytes": 245760,
+    "model_input": "workspace",
+    "path": "attachments/report.xlsx",
+}
 
 
 def _context(**overrides: object) -> dict:
@@ -91,6 +125,30 @@ async def test_parse_turn_context_rejects_raw_bytes() -> None:
     raw["session"]["environment"] = {"type": "none", "blob": b"nope"}
     with pytest.raises(ContextBytes):
         parse_turn_context(raw)
+
+
+def _wire_parts(part: dict[str, object]) -> list[object]:
+    payload = TurnStartCommandPayload.model_validate({"parts": [part]})
+    return payload.to_wire()["parts"]
+
+
+@pytest.mark.parametrize(
+    ("part", "invalid"),
+    [
+        (_TEXT_PART, {"model_input": "pdf"}),
+        (_IMAGE_PART, {"data": "AAAA"}),
+        (_WORKSPACE_PART, {"data": "AAAA"}),
+    ],
+    ids=["text", "image", "workspace"],
+)
+def test_input_parts_on_the_wire_have_no_bytes(
+    part: dict[str, object], invalid: dict[str, object]
+) -> None:
+    assert _wire_parts(part) == [part]
+    with strict_parse(False):
+        assert _wire_parts({**part, "data": "AAAA", "mimeType": "image/png"}) == [part]
+    with pytest.raises(ValueError):
+        _wire_parts({**part, **invalid})
 
 
 async def test_check_command_size_limit() -> None:
@@ -387,6 +445,8 @@ async def test_fetch_ref_bytes_stops_at_the_size(
     local = {"local_path": str(path.relative_to(root)), "size_bytes": 5}
     with pytest.raises(ObjectStoreError, match="larger than 5 bytes"):
         await fetch_ref_bytes(local, settings)
+    with pytest.raises(ObjectStoreError, match="expected 100001"):
+        await fetch_ref_bytes({**local, "size_bytes": 100_001}, settings)
     assert len(await fetch_ref_bytes({**local, "size_bytes": 100_000}, settings)) == (
         100_000
     )
@@ -413,3 +473,97 @@ async def test_fetch_ref_bytes_stops_at_the_size(
     small = settings.model_copy(update={"max_file_bytes": 4096})
     with pytest.raises(ObjectStoreError, match="larger than 4096 bytes"):
         await materialize_skill_zips([remote], small)
+
+
+@pytest.mark.parametrize(
+    ("content_type", "filename", "expected"),
+    [
+        ("text/markdown", "x", "text"),
+        ("text/plain; charset=utf-8", "x", "text"),
+        ("application/json", "x", "text"),
+        ("application/x-yaml", "x", "text"),
+        ("application/javascript", "x", "text"),
+        (None, "notes.MD", "text"),
+        ("application/octet-stream", "run.sql", "text"),
+        ("application/octet-stream", "data", None),
+        ("application/pdf", "doc.txt", None),
+        (_XLSX, "report.xlsx", None),
+        ("image/png", "a.png", "image"),
+        ("image/svg+xml", "a.svg", None),
+    ],
+)
+def test_file_model_input(
+    settings: Settings, content_type: str | None, filename: str, expected: str | None
+) -> None:
+    assert file_model_input(settings, content_type, filename) == expected
+
+
+async def test_worker_decodes_text_files_into_blocks(settings: Settings) -> None:
+    root = store_root(settings)
+    (root / "files").mkdir(parents=True, exist_ok=True)
+    (root / "files" / "a").write_bytes(b"\xef\xbb\xbfline\n")
+    (root / "files" / "b").write_bytes(b"\xff\xfe")
+    ref = {
+        "type": "file",
+        "file_id": "file-1",
+        "filename": 'say "hi".txt',
+        "object_id": "files/a",
+        "local_path": "files/a",
+        "mime_type": "text/plain",
+        "size_bytes": 8,
+        "model_input": "text",
+    }
+    image = {**ref, "model_input": "image", "local_path": "files/b"}
+    assert await fetch_input_files([ref, image], settings) == [
+        '<file name="say &quot;hi&quot;.txt">\nline\n</file>'
+    ]
+    with pytest.raises(UnicodeDecodeError):
+        await fetch_input_files(
+            [{**ref, "local_path": "files/b", "size_bytes": 2}], settings
+        )
+    assert file_block("a.md", "x") == '<file name="a.md">\nx\n</file>'
+
+
+async def test_worker_reads_images_and_hides_the_url(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    root = store_root(settings)
+    (root / "files").mkdir(parents=True, exist_ok=True)
+    (root / "files" / "image").write_bytes(b"12345")
+    ref = {
+        "type": "image",
+        "file_id": "file-1",
+        "object_id": "files/image",
+        "local_path": "files/image",
+        "mime_type": "image/png",
+        "size_bytes": 5,
+    }
+    assert await fetch_input_images([ref], settings) == [
+        {
+            "type": "image",
+            "data": base64.b64encode(b"12345").decode(),
+            "mimeType": "image/png",
+        }
+    ]
+
+    class _Broken:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        def stream(self, method: str, url: str) -> Any:
+            raise httpx.ConnectError(f"cannot reach {url}")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Broken)
+    url = "https://bucket.example/files/image?X-Amz-Signature=secret"
+    with pytest.raises(ObjectStoreError) as caught:
+        await fetch_input_images([{**ref, "url": url, "local_path": None}], settings)
+    assert "secret" not in str(caught.value)
+    assert "secret" not in caught.value.key

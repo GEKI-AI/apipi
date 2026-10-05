@@ -10,7 +10,6 @@ from typing import Any, cast
 import pytest
 
 from apipi.config import ConfigError, Settings
-from apipi.protocol import TurnStartCommandPayload
 from apipi.services.files import attachment_name, free_attachment_path
 from apipi.worker.pi.guest import handle_push, unpack_push_stream
 from apipi.worker.pi.microvm import (
@@ -19,7 +18,7 @@ from apipi.worker.pi.microvm import (
     push_workspace_files,
 )
 from apipi.worker.pi.pool import PiPool
-from apipi.worker.runtime import _prompt_text, _push_attachments, _user_item_content
+from apipi.worker.runtime import _push_attachments
 from apipi.worker.turn_context import attached_line, size_text
 from apipi.workerhub.commands import command_features
 
@@ -98,27 +97,6 @@ def test_attached_line_and_size_text() -> None:
     assert size_text(512) == "512 B"
     assert size_text(1536 * 1024) == "1.5 MB"
     assert size_text(3 * 1024**3) == "3.0 GB"
-
-
-def test_prompt_and_item_carry_the_path() -> None:
-    parts = [{"type": "input_text", "text": "sum column C"}, _PART]
-    assert _prompt_text("sum column C", parts, []) == (
-        "sum column C\nAttached: attachments/report.xlsx (xlsx, 240 KB)"
-    )
-    assert _user_item_content("sum column C", parts) == [
-        {"type": "input_text", "text": "sum column C"},
-        {
-            "type": "input_file",
-            "file_id": "file-1",
-            "filename": "report.xlsx",
-            "path": "attachments/report.xlsx",
-        },
-    ]
-
-
-def test_workspace_part_on_the_wire_has_no_store_reference() -> None:
-    body = TurnStartCommandPayload.model_validate({"parts": [_PART]})
-    assert body.to_wire()["parts"] == [_PART]
 
 
 def test_session_files_need_the_feature() -> None:
@@ -283,6 +261,7 @@ async def test_settled_waits_for_a_boot_in_flight(settings: Settings) -> None:
 
 async def test_host_push_times_out_when_the_guest_hangs(tmp_path: Path) -> None:
     path = tmp_path / "vsock.sock"
+    release = asyncio.Event()
 
     async def handler(
         reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -290,9 +269,11 @@ async def test_host_push_times_out_when_the_guest_hangs(tmp_path: Path) -> None:
         await reader.readline()
         writer.write(f"OK {VSOCK_PUSH_PORT}\n".encode())
         await writer.drain()
-        await asyncio.sleep(5)
+        await release.wait()
+        writer.close()
 
     server = await asyncio.start_unix_server(handler, path=str(path))
     async with server:
         with pytest.raises(TimeoutError):
             await push_workspace_files(path, [("attachments/a", b"a")], timeout=0.3)
+        release.set()

@@ -1,9 +1,8 @@
 import asyncio
 import base64
-import io
 import threading
 import uuid
-import zipfile
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 from uuid import NAMESPACE_URL, uuid5
@@ -11,13 +10,13 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 from botocore.exceptions import ClientError
 from httpx import ASGITransport, AsyncClient
+from tests.support.files import Users, message, vision, zip_skill
 from tests.support.split_worker import api_settings_for, split_client_for
 from tests.unit.test_blobs import FakeS3
 
 from apipi.common.objects import NS_FILES
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.auth import AuthRequest, tenant_from_key
 from apipi.gateway.tokens import hash_token
 from apipi.services.uploads import UploadService
 from apipi.store.blobs import S3Store, file_object_id, skill_object_id
@@ -51,13 +50,6 @@ def _key(url: str) -> str:
     return urlsplit(url).path.lstrip("/")
 
 
-def _zip_skill() -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("demo/SKILL.md", "---\nname: demo\n---\n")
-    return buffer.getvalue()
-
-
 async def test_presign_requires_s3(client: AsyncClient) -> None:
     created = await client.post(
         "/v1/apipi/uploads",
@@ -73,7 +65,30 @@ async def test_presign_requires_s3(client: AsyncClient) -> None:
     assert created.json()["error"]["code"] == "presign_unsupported"
 
 
-async def test_file_presign_put_then_complete(settings: Settings, store: Store) -> None:
+@pytest.mark.parametrize(
+    ("purpose", "filename", "content_type", "namespace", "object_key", "expected"),
+    [
+        ("attachment", "a.txt", "text/plain", "files", file_object_id, {"bytes": 5}),
+        (
+            "skill",
+            "demo.zip",
+            "application/zip",
+            "skills",
+            skill_object_id,
+            {"name": "demo"},
+        ),
+    ],
+)
+async def test_presign_put_then_complete(
+    settings: Settings,
+    store: Store,
+    purpose: str,
+    filename: str,
+    content_type: str,
+    namespace: str,
+    object_key: Callable[[uuid.UUID, str], str],
+    expected: dict[str, Any],
+) -> None:
     client_s3 = FakeS3()
     s3_settings = _s3_settings(settings)
     app = create_app(
@@ -81,113 +96,54 @@ async def test_file_presign_put_then_complete(settings: Settings, store: Store) 
         store=store,
         objects=S3Store(s3_settings, client=client_s3),
     )
+    data = zip_skill() if purpose == "skill" else b"hello"
+    token = "up2"
+    tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        token = "up2"
         created = await client.post(
             "/v1/apipi/uploads",
             headers=_auth(token),
             json={
-                "purpose": "attachment",
-                "filename": "a.txt",
-                "bytes": 5,
-                "content_type": "text/plain",
-            },
-        )
-        assert created.status_code == 200
-        file_id = created.json()["object_id"]
-        upload_id = created.json()["upload_id"]
-        missing = await client.post(
-            f"/v1/apipi/uploads/{upload_id}/complete",
-            headers=_auth(token),
-            json={},
-        )
-        assert missing.status_code == 400
-        assert missing.json()["error"]["code"] == "upload_incomplete"
-        tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
-        upload_key = f"apipi/uploads/{tenant_id}/{upload_id}"
-        assert _key(created.json()["url"]) == upload_key
-        put = client_s3.put_url(created.json()["url"], b"hello", "text/plain")
-        assert put == 200
-        done = await client.post(
-            f"/v1/apipi/uploads/{upload_id}/complete",
-            headers=_auth(token),
-            json={},
-        )
-        assert done.status_code == 200
-        assert done.json()["id"] == file_id
-        assert done.json()["bytes"] == 5
-        object_id = file_object_id(tenant_id, file_id)
-        assert client_s3.objects[f"apipi/files/{object_id}"] == b"hello"
-        assert upload_key not in client_s3.objects
-        other = await client.post(
-            f"/v1/apipi/uploads/{upload_id}/complete",
-            headers=_auth("other"),
-            json={},
-        )
-        assert other.status_code == 404
-        download = await client.post(
-            f"/v1/apipi/files/{file_id}/download", headers=_auth(token)
-        )
-        assert download.status_code == 200
-        assert download.json()["method"] == "GET"
-        query = _query(download.json()["url"])
-        assert "presign=1" in download.json()["url"]
-        disposition = query["response-content-disposition"][0]
-        assert disposition == 'attachment; filename="a.txt"'
-        assert query["response-content-type"] == ["text/plain"]
-
-
-async def test_skill_presign_complete(settings: Settings, store: Store) -> None:
-    client_s3 = FakeS3()
-    s3_settings = _s3_settings(settings)
-    app = create_app(
-        api_settings_for(s3_settings),
-        store=store,
-        objects=S3Store(s3_settings, client=client_s3),
-    )
-    data = _zip_skill()
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        token = "sk"
-        created = await client.post(
-            "/v1/apipi/uploads",
-            headers=_auth(token),
-            json={
-                "purpose": "skill",
-                "filename": "demo.zip",
+                "purpose": purpose,
+                "filename": filename,
                 "bytes": len(data),
-                "content_type": "application/zip",
+                "content_type": content_type,
             },
         )
         assert created.status_code == 200
-        skill_id = created.json()["object_id"]
-        upload_id = created.json()["upload_id"]
-        tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
-        put = client_s3.put_url(created.json()["url"], data, "application/zip")
-        assert put == 200
-        done = await client.post(
-            f"/v1/apipi/uploads/{upload_id}/complete",
-            headers=_auth(token),
-            json={},
-        )
-        assert done.status_code == 200
-        assert done.json()["id"] == skill_id
-        assert done.json()["name"] == "demo"
-        key = f"apipi/skills/{skill_object_id(tenant_id, skill_id)}"
-        assert client_s3.objects[key] == data
+        object_id = created.json()["object_id"]
+        complete = f"/v1/apipi/uploads/{created.json()['upload_id']}/complete"
+        missing = await client.post(complete, headers=_auth(token), json={})
+        put = client_s3.put_url(created.json()["url"], data, content_type)
+        done = await client.post(complete, headers=_auth(token), json={})
+        other = await client.post(complete, headers=_auth("other"), json={})
         download = await client.post(
-            f"/v1/apipi/skills/{skill_id}/download", headers=_auth(token)
+            f"/v1/apipi/{namespace}/{object_id}/download", headers=_auth(token)
         )
-        assert download.status_code == 200
-        assert download.json()["method"] == "GET"
-        query = _query(download.json()["url"])
-        assert query["response-content-disposition"] == [
-            'attachment; filename="demo.zip"'
-        ]
-        assert query["response-content-type"] == ["application/zip"]
+    upload_key = f"apipi/uploads/{tenant_id}/{created.json()['upload_id']}"
+    assert _key(created.json()["url"]) == upload_key
+    assert missing.status_code == 400
+    assert missing.json()["error"]["code"] == "upload_incomplete"
+    assert put == 200
+    assert done.status_code == 200
+    assert done.json()["id"] == object_id
+    assert {key: done.json()[key] for key in expected} == expected
+    assert (
+        client_s3.objects[f"apipi/{namespace}/{object_key(tenant_id, object_id)}"]
+        == data
+    )
+    assert upload_key not in client_s3.objects
+    assert other.status_code == 404
+    assert download.status_code == 200
+    assert download.json()["method"] == "GET"
+    assert "presign=1" in download.json()["url"]
+    query = _query(download.json()["url"])
+    assert query["response-content-disposition"] == [
+        f'attachment; filename="{filename}"'
+    ]
+    assert query["response-content-type"] == [content_type]
 
 
 async def test_upload_oversize_rejected(client: AsyncClient) -> None:
@@ -250,20 +206,6 @@ async def test_artifact_download_forces_attachment(
         assert query["response-content-type"] == ["application/octet-stream"]
 
 
-class _Users:
-    def __call__(self, token: str, request: AuthRequest) -> dict[str, object]:
-        user = request.headers.get("x-end-user")
-        return {
-            "key_id": hash_token(token),
-            "tenant_id": tenant_from_key(token),
-            "user_id": user,
-            "cache_key": f"{token}:{user}",
-        }
-
-    def cache_key(self, token: str, request: AuthRequest) -> str:
-        return f"{token}:{request.headers.get('x-end-user')}"
-
-
 async def test_upload_purpose_sets_the_file_kind(
     settings: Settings, store: Store
 ) -> None:
@@ -273,7 +215,7 @@ async def test_upload_purpose_sets_the_file_kind(
         api_settings_for(s3_settings),
         store=store,
         objects=S3Store(s3_settings, client=client_s3),
-        authenticate=_Users(),
+        authenticate=Users(),
     )
     token = "kinds"
     headers = {**_auth(token), "X-End-User": "ada"}
@@ -445,7 +387,7 @@ async def test_uploads_and_downloads_of_user_files_match_the_user(
         api_settings_for(s3_settings),
         store=store,
         objects=S3Store(s3_settings, client=client_s3),
-        authenticate=_Users(),
+        authenticate=Users(),
     )
     token = "upload-users"
     u1 = {**_auth(token), "X-End-User": "u1"}
@@ -531,26 +473,13 @@ async def _presigned(
     return {**created.json(), "content_type": content_type}
 
 
-def _message(*parts: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "events": [
-            {
-                "type": "agent.session.input.message",
-                "input": [{"role": "user", "content": list(parts)}],
-            }
-        ]
-    }
-
-
 async def test_a_put_after_complete_does_not_change_what_the_id_delivers(
     settings: Settings,
     store: Store,
     worker_secret: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    s3_settings = _s3_settings(settings).model_copy(
-        update={"model_registry": {"test": {"input": ["text", "image"]}}}
-    )
+    s3_settings = vision(_s3_settings(settings))
     fake = FakeS3()
 
     async def _fetch(
@@ -566,7 +495,7 @@ async def test_a_put_after_complete_does_not_change_what_the_id_delivers(
     token = "re-put"
     tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
     png = b"\x89PNG\r\n\x1a\nimage"
-    skill = _zip_skill()
+    skill = zip_skill()
     async with split_client_for(
         s3_settings,
         store,
@@ -601,7 +530,7 @@ async def test_a_put_after_complete_does_not_change_what_the_id_delivers(
         sent = await client.post(
             f"/v1/agents/sessions/{session.json()['id']}/events",
             headers=_auth(token),
-            json=_message(
+            json=message(
                 {"type": "input_file", "file_id": text["object_id"]},
                 {"type": "input_image", "file_id": image["object_id"]},
             ),
@@ -678,7 +607,7 @@ async def test_complete_after_a_failed_copy_can_be_retried(
         store=store,
         objects=S3Store(s3_settings, client=fake),
     )
-    data = _zip_skill()
+    data = zip_skill()
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -741,7 +670,7 @@ async def test_reads_of_a_stored_object_stop_at_its_size(
         text = await client.post(
             f"/v1/agents/sessions/{session.json()['id']}/events",
             headers=_auth(token),
-            json=_message({"type": "input_file", "file_id": file_id}),
+            json=message({"type": "input_file", "file_id": file_id}),
         )
         hosted = await client.post(
             "/v1/agents/sessions",
@@ -789,7 +718,7 @@ async def test_a_second_complete_waits_and_keeps_the_first_bytes(
     )
     token = "race"
     tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
-    data = _zip_skill() if purpose == "skill" else b"first"
+    data = zip_skill() if purpose == "skill" else b"first"
     content_type = "application/zip" if purpose == "skill" else "text/plain"
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

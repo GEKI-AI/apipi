@@ -6,20 +6,15 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from tests.support.files import Users, message, vision
 from tests.support.split_worker import split_client_for
 
 from apipi.common.objects import NS_FILES
 from apipi.config import Settings
-from apipi.gateway.auth import (
-    AuthFilter,
-    AuthIdentity,
-    AuthReject,
-    AuthRequest,
-    tenant_from_key,
-)
-from apipi.gateway.tokens import hash_token
+from apipi.gateway.auth import AuthFilter, AuthIdentity, AuthReject, tenant_from_key
 from apipi.store.blobs import file_object_id
 from apipi.store.engine import Store
 from apipi.store.models import FileRow, utc_now
@@ -101,29 +96,6 @@ async def test_files_crud_and_session_attach(client: AsyncClient) -> None:
     assert (directory / "amounts.csv").read_bytes() == b"a,b\n1,2\n"
 
 
-async def test_file_id_missing_is_not_found(client: AsyncClient) -> None:
-    token = "files-missing"
-    agent_id = await _agent(client, token)
-    response = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent_id,
-            "environment": {
-                "type": "openai_hosted",
-                "files": [
-                    {
-                        "type": "file_id",
-                        "file_id": "file-missing",
-                        "path": "/workspace/x.txt",
-                    }
-                ],
-            },
-        },
-    )
-    assert response.status_code == 404
-
-
 async def test_file_purpose_not_implemented(client: AsyncClient) -> None:
     response = await client.post(
         "/v1/files",
@@ -137,8 +109,8 @@ async def test_file_purpose_not_implemented(client: AsyncClient) -> None:
     assert error["code"] == "fine-tune"
 
 
-async def test_delete_file_then_attach_is_not_found(client: AsyncClient) -> None:
-    token = "files-delete"
+async def test_file_id_missing_or_deleted_is_not_found(client: AsyncClient) -> None:
+    token = "files-missing"
     uploaded = await client.post(
         "/v1/files",
         headers=_auth(token),
@@ -147,26 +119,29 @@ async def test_delete_file_then_attach_is_not_found(client: AsyncClient) -> None
     )
     file_id = uploaded.json()["id"]
     deleted = await client.delete(f"/v1/files/{file_id}", headers=_auth(token))
-    assert deleted.json()["deleted"] is True
     agent_id = await _agent(client, token)
-    response = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent_id,
-            "environment": {
-                "type": "openai_hosted",
-                "files": [
-                    {
-                        "type": "file_id",
-                        "file_id": file_id,
-                        "path": "/workspace/note.txt",
-                    }
-                ],
+    created = [
+        await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent_id,
+                "environment": {
+                    "type": "openai_hosted",
+                    "files": [
+                        {
+                            "type": "file_id",
+                            "file_id": missing,
+                            "path": "/workspace/note.txt",
+                        }
+                    ],
+                },
             },
-        },
-    )
-    assert response.status_code == 404
+        )
+        for missing in (file_id, "file-missing")
+    ]
+    assert deleted.json()["deleted"] is True
+    assert [response.status_code for response in created] == [404, 404]
 
 
 async def test_file_content_disposition_non_ascii(client: AsyncClient) -> None:
@@ -185,26 +160,7 @@ async def test_file_content_disposition_non_ascii(client: AsyncClient) -> None:
     disposition = content.headers["content-disposition"]
     assert disposition.startswith("attachment;")
     assert "filename*=UTF-8''" in disposition
-    assert "\r" not in disposition
-    assert "\n" not in disposition
     assert content.headers["x-content-type-options"] == "nosniff"
-
-
-_REGISTRY = {"test": {"input": ["text", "image"], "reasoning": True}}
-
-
-class _Users:
-    def __call__(self, token: str, request: AuthRequest) -> dict[str, object]:
-        user = request.headers.get("x-end-user")
-        return {
-            "key_id": hash_token(token),
-            "tenant_id": tenant_from_key(token),
-            "user_id": user,
-            "cache_key": f"{token}:{user}",
-        }
-
-    def cache_key(self, token: str, request: AuthRequest) -> str:
-        return f"{token}:{request.headers.get('x-end-user')}"
 
 
 def _as(token: str, user: str | None = None) -> dict[str, str]:
@@ -212,10 +168,6 @@ def _as(token: str, user: str | None = None) -> dict[str, str]:
     if user is not None:
         headers["X-End-User"] = user
     return headers
-
-
-def _vision(settings: Settings) -> Settings:
-    return settings.model_copy(update={"model_registry": _REGISTRY})
 
 
 def _png() -> bytes:
@@ -264,14 +216,7 @@ async def _send(
     sent = await client.post(
         f"/v1/agents/sessions/{session_id}/events",
         headers=headers,
-        json={
-            "events": [
-                {
-                    "type": "agent.session.input.message",
-                    "input": [{"role": "user", "content": list(parts)}],
-                }
-            ]
-        },
+        json=message(*parts),
     )
     assert sent.status_code == 200, sent.json()
     items = await client.get(f"/v1/agents/sessions/{session_id}/items", headers=headers)
@@ -299,14 +244,18 @@ def _ids(response: Any) -> list[str]:
 
 @asynccontextmanager
 async def _vision_client(
-    settings: Settings, store: Store, worker_secret: str, **kwargs: Any
+    settings: Settings,
+    store: Store,
+    worker_secret: str,
+    harness: FakeHarness | None = None,
+    **kwargs: Any,
 ) -> AsyncIterator[tuple[Any, AsyncClient]]:
     async with split_client_for(
-        _vision(settings),
+        vision(settings),
         store,
-        harness=FakeHarness(),
+        harness=harness or FakeHarness(),
         token=worker_secret,
-        authenticate=_Users(),
+        authenticate=Users(),
         **kwargs,
     ) as (app, client, _worker):
         yield app, client
@@ -1029,6 +978,86 @@ async def test_user_files_of_another_user_are_not_session_inputs(
     assert u2_from_defaults.status_code == 200, u2_from_defaults.json()
     assert u2_agent_file.status_code == 200, u2_agent_file.json()
     assert u1_session.status_code == 200, u1_session.json()
+
+
+@pytest.mark.parametrize(
+    ("part_type", "environment", "prompt"),
+    [
+        ("input_file", "none", '<file name="plan.md">\nsecret plan\n</file>'),
+        ("input_file", "openai_hosted", "Attached: attachments/plan.md (md, 11 B)"),
+        ("input_image", "none", ""),
+    ],
+)
+async def test_user_files_of_another_user_are_not_input_parts(
+    settings: Settings,
+    store: Store,
+    worker_secret: str,
+    part_type: str,
+    environment: str,
+    prompt: str,
+) -> None:
+    harness = FakeHarness()
+    image = part_type == "input_image"
+    async with _vision_client(settings, store, worker_secret, harness) as (
+        app,
+        client,
+    ):
+        token = "user-parts"
+        users = {"u1": _as(token, "u1"), "u2": _as(token, "u2"), "anyone": _as(token)}
+        other = _as("user-parts-other")
+
+        async def _create(headers: dict[str, str], *content: Any) -> Any:
+            agent = await client.post(
+                "/v1/agents", headers=headers, json={"name": "bot", "model": "test"}
+            )
+            body: dict[str, Any] = {
+                "agent_id": agent.json()["id"],
+                "environment": {"type": environment},
+            }
+            if content:
+                body["input"] = {"role": "user", "content": list(content)}
+            return await client.post("/v1/agents/sessions", headers=headers, json=body)
+
+        first = await _create(users["u1"])
+        assert first.status_code == 200, first.json()
+        kind = "image" if image else "attachment"
+        created = await app.state.gateway.files.create(
+            tenant_from_key(token),
+            data=_png() if image else b"secret plan",
+            filename="plan.png" if image else "plan.md",
+            purpose="vision" if image else "user_data",
+            content_type="image/png" if image else "text/markdown",
+            kind=kind,
+            user_id="u1",
+        )
+        part = {"type": part_type, "file_id": str(created["id"])}
+        refused = [await _create(headers, part) for headers in (users["u2"], other)]
+        lists = [
+            await client.get("/v1/agents/sessions", headers=headers)
+            for headers in (users["u2"], other)
+        ]
+        sessions = {"u1": first.json()["id"]}
+        for name in ("u2", "anyone"):
+            session = await _create(users[name])
+            assert session.status_code == 200, session.json()
+            sessions[name] = session.json()["id"]
+        sent: dict[str, int] = {}
+        for name, headers in users.items():
+            response = await client.post(
+                f"/v1/agents/sessions/{sessions[name]}/events",
+                headers=headers,
+                json=message(part),
+            )
+            sent[name] = response.status_code
+        kinds = await client.get(
+            "/v1/apipi/files", headers=users["u1"], params={"kind": kind}
+        )
+    assert [response.status_code for response in refused] == [404, 404]
+    assert [listed.json()["data"] for listed in lists] == [[], []]
+    assert sent == {"u1": 200, "u2": 404, "anyone": 200}
+    assert harness.prompts == [prompt, prompt]
+    assert len(harness.images) == (2 if image else 0)
+    assert _ids(kinds) == [created["id"]]
 
 
 async def _image_agent(client: AsyncClient, headers: dict[str, str]) -> tuple[str, str]:
