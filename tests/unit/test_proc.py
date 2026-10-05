@@ -4,7 +4,7 @@ import os
 import signal
 import sys
 from asyncio.subprocess import Process
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -103,7 +103,9 @@ while True:
 """
 
 
-async def test_terminate_process_group_kills_grandchild() -> None:
+async def test_terminate_process_group_kills_grandchild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
@@ -120,7 +122,14 @@ async def test_terminate_process_group_kills_grandchild() -> None:
         assert _pid_running(process.pid)
         assert _pid_running(grandchild)
         proc = PiProc(process, process_group=True)
-        await proc.terminate()
+        wait_for = asyncio.wait_for
+
+        async def short_wait_for(aw: Any, timeout: float) -> Any:
+            return await wait_for(aw, timeout=min(timeout, 0.1))
+
+        with monkeypatch.context() as patch:
+            patch.setattr("apipi.worker.pi.proc.asyncio.wait_for", short_wait_for)
+            await proc.terminate()
         assert not proc.alive
         deadline = asyncio.get_running_loop().time() + 2
         while _pid_running(grandchild):

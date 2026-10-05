@@ -73,6 +73,14 @@ async def test_agent_metadata_sandbox_size_is_rejected(client: AsyncClient) -> N
     )
     assert created.status_code == 400
     assert "container_size" in created.json()["error"]["message"]
+    agent_id = await _agent(client, token)
+    updated = await client.post(
+        f"/v1/agents/{agent_id}",
+        headers=_auth(token),
+        json={"metadata": {"apipi.sandbox_size": "M"}},
+    )
+    assert updated.status_code == 400
+    assert "container_size" in updated.json()["error"]["message"]
 
 
 async def test_removed_size_key_fails_with_env_size(client: AsyncClient) -> None:
@@ -164,19 +172,3 @@ async def test_gateway_default_size(settings: Settings, store: Store) -> None:
         )
         assert created.status_code == 200
         assert created.json()["environment"]["sandbox_size"] == "L"
-
-
-async def test_removed_metadata_size_is_rejected(client: AsyncClient) -> None:
-    token = "size-meta-bad"
-    agent_id = await _agent(client, token)
-    response = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent_id,
-            "environment": {"type": "none"},
-            "metadata": {"apipi.sandbox_size": "XL"},
-        },
-    )
-    assert response.status_code == 400
-    assert "container_size" in response.json()["error"]["message"]

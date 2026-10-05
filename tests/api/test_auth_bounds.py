@@ -2,6 +2,7 @@ import asyncio
 import time
 from pathlib import Path
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.split_worker import api_settings_for
 
@@ -30,7 +31,7 @@ async def _client(settings: Settings, store: Store) -> AsyncClient:
 
 
 async def test_off_loop_sync_plugin_does_not_serialise(
-    store: Store, tmp_path: Path
+    store: Store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def slow_block(bearer: str) -> dict[str, object]:
         time.sleep(0.2)
@@ -42,9 +43,7 @@ async def test_off_loop_sync_plugin_does_not_serialise(
             "cache_key": f"{bearer}-{time.monotonic_ns()}",
         }
 
-    import tests.support.auth_plugin as plugin_mod
-
-    plugin_mod.slow_block = slow_block  # ty: ignore[invalid-assignment]
+    monkeypatch.setattr("tests.support.auth_plugin.slow_block", slow_block)
     settings = _settings(tmp_path, auth="tests.support.auth_plugin:slow_block")
     app = create_app(api_settings_for(settings), store=store)
     async with AsyncClient(

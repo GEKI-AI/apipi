@@ -203,7 +203,7 @@ async def test_thinking_metadata_key_is_rejected(client: AsyncClient) -> None:
     assert "reasoning.effort" in created.json()["error"]["message"]
 
 
-async def test_metadata_update_replaces_title(client: AsyncClient) -> None:
+async def test_session_metadata_update_replaces_all_keys(client: AsyncClient) -> None:
     token = "pi-title-replace"
     agent = await client.post(
         "/v1/agents",

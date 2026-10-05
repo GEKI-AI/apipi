@@ -1036,6 +1036,8 @@ async def test_connect_vsock_handshake(tmp_path: Path) -> None:
         got["line"] = await reader.readline()
         writer.write(b"OK 1073741824\n")
         await writer.drain()
+        writer.close()
+        await writer.wait_closed()
 
     server = await asyncio.start_unix_server(handler, path=str(sock))
     async with server:
@@ -1094,6 +1096,7 @@ async def test_spawn_pi_microvm_uses_jailer_and_vsock(
     await proc.send({"type": "prompt", "message": "hi"})
     assert b'"type": "prompt"' in writer.buf
     assert proc._stdin is writer
+    await proc.terminate()
 
 
 async def test_spawn_microvm_does_not_fallback_to_host(
@@ -1188,7 +1191,8 @@ async def test_spawn_microvm_sets_up_tap(
         "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
     )
     monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", fake_connect)
-    await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
+    proc = await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
+    await proc.terminate()
     assert len(taps) == 1
 
 
@@ -1364,6 +1368,9 @@ async def test_start_microvm_shell_inherits_stdio_and_skips_vsock(
     assert captured["args"][0] == "/usr/bin/jailer"
     assert "--no-api" in captured["args"]
     assert started.process.pid == 4242
+    assert started.broker is not None
+    await started.broker.stop()
+    started.cleanup()
 
 
 async def test_spawn_microvm_pi_does_not_set_shell(
@@ -1389,7 +1396,8 @@ async def test_spawn_microvm_pi_does_not_set_shell(
         "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
     )
     monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", fake_connect)
-    await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
+    proc = await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
+    await proc.terminate()
     assert packed.get("shell") is False
 
 

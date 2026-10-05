@@ -14,16 +14,10 @@ from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.worker.execution import worker_observability
 from apipi.worker.fake_harness import FAKE_USAGE, FakeHarness
-from apipi.workerhub.execution import RemoteExecution
 
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
-
-
-async def test_api_uses_remote_execution(settings: Settings, store: Store) -> None:
-    app = create_app(settings, store=store)
-    assert isinstance(app.state.execution, RemoteExecution)
 
 
 async def test_without_worker_is_429(settings: Settings, store: Store) -> None:

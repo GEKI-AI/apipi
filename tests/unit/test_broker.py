@@ -1,5 +1,8 @@
 import threading
 import uuid
+from collections.abc import Iterator
+from dataclasses import dataclass
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -24,15 +27,23 @@ def _settings(tmp_path: Path, base: str) -> Settings:
     )
 
 
-async def test_broker_injects_model_key_and_strips_guest_auth(
-    tmp_path: Path,
-) -> None:
-    seen: dict[str, str] = {}
+@dataclass
+class _Upstream:
+    url: str
+    requests: list[tuple[str, Message]]
+
+    @property
+    def headers(self) -> Message:
+        return self.requests[-1][1]
+
+
+@pytest.fixture(scope="module")
+def _upstream_server() -> Iterator[_Upstream]:
+    requests: list[tuple[str, Message]] = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
-            seen["authorization"] = self.headers.get("Authorization", "")
-            seen["path"] = self.path
+            requests.append((self.path, self.headers))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -42,10 +53,26 @@ async def test_broker_injects_model_key_and_strips_guest_auth(
             del format, args
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True)
     thread.start()
-    port = server.server_address[1]
-    settings = _settings(tmp_path, f"http://127.0.0.1:{port}/v1")
+    try:
+        yield _Upstream(f"http://127.0.0.1:{server.server_address[1]}", requests)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.fixture
+def upstream(_upstream_server: _Upstream) -> _Upstream:
+    _upstream_server.requests.clear()
+    return _upstream_server
+
+
+async def test_broker_injects_model_key_and_strips_guest_auth(
+    tmp_path: Path, upstream: _Upstream
+) -> None:
+    settings = _settings(tmp_path, f"{upstream.url}/v1")
     broker = await start_broker(
         settings,
         api_key="from-request",
@@ -61,40 +88,16 @@ async def test_broker_injects_model_key_and_strips_guest_auth(
                 json={"model": "test"},
             )
         assert response.status_code == 200
-        assert seen["authorization"] == "Bearer from-request"
-        assert "chat/completions" in seen["path"]
+        assert upstream.headers["Authorization"] == "Bearer from-request"
+        assert "chat/completions" in upstream.requests[-1][0]
     finally:
         await broker.stop()
-        server.shutdown()
 
 
 async def test_broker_stamps_attribution_and_strips_forged(
-    tmp_path: Path,
+    tmp_path: Path, upstream: _Upstream
 ) -> None:
-    seen: dict[str, str] = {}
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            for name in (
-                "x-apipi-session-id",
-                "x-apipi-turn-id",
-                "x-apipi-agent-id",
-            ):
-                seen[name] = self.headers.get(name, "")
-            seen["authorization"] = self.headers.get("Authorization", "")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok":true}')
-
-        def log_message(self, format: str, *args: object) -> None:
-            del format, args
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    port = server.server_address[1]
-    settings = _settings(tmp_path, f"http://127.0.0.1:{port}/v1")
+    settings = _settings(tmp_path, f"{upstream.url}/v1")
     broker = await start_broker(
         settings,
         api_key="from-request",
@@ -116,39 +119,23 @@ async def test_broker_stamps_attribution_and_strips_forged(
                 json={"model": "test"},
             )
         assert response.status_code == 200
-        assert seen["x-apipi-session-id"] == "sess-1"
-        assert seen["x-apipi-turn-id"] == "turn-7"
-        assert seen["x-apipi-agent-id"] == "agent-9"
-        assert seen["authorization"] == "Bearer from-request"
+        assert upstream.headers["x-apipi-session-id"] == "sess-1"
+        assert upstream.headers["x-apipi-turn-id"] == "turn-7"
+        assert upstream.headers["x-apipi-agent-id"] == "agent-9"
+        assert upstream.headers["Authorization"] == "Bearer from-request"
         broker.clear_turn()
         async with AsyncClient(base_url=broker.openai_base_url) as client:
             await client.post("/chat/completions", json={"model": "test"})
-        assert seen["x-apipi-turn-id"] == ""
-        assert seen["x-apipi-session-id"] == "sess-1"
+        assert "x-apipi-turn-id" not in upstream.headers
+        assert upstream.headers["x-apipi-session-id"] == "sess-1"
     finally:
         await broker.stop()
-        server.shutdown()
 
 
-async def test_broker_attribution_toggle_still_strips(tmp_path: Path) -> None:
-    seen: dict[str, str] = {}
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            seen["session"] = self.headers.get("x-apipi-session-id", "")
-            seen["other"] = self.headers.get("x-other", "")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok":true}')
-
-        def log_message(self, format: str, *args: object) -> None:
-            del format, args
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    port = server.server_address[1]
-    settings = _settings(tmp_path, f"http://127.0.0.1:{port}/v1")
+async def test_broker_attribution_toggle_still_strips(
+    tmp_path: Path, upstream: _Upstream
+) -> None:
+    settings = _settings(tmp_path, f"{upstream.url}/v1")
     broker = await start_broker(
         settings,
         api_key="k",
@@ -166,32 +153,16 @@ async def test_broker_attribution_toggle_still_strips(tmp_path: Path) -> None:
                 headers={"x-apipi-session-id": "forged", "x-other": "kept"},
                 json={},
             )
-        assert seen["session"] == ""
-        assert seen["other"] == "kept"
+        assert "x-apipi-session-id" not in upstream.headers
+        assert upstream.headers["x-other"] == "kept"
     finally:
         await broker.stop()
-        server.shutdown()
 
 
-async def test_broker_omits_agent_headers_for_inline(tmp_path: Path) -> None:
-    seen: dict[str, str] = {}
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            seen["agent"] = self.headers.get("x-apipi-agent-id", "")
-            seen["turn"] = self.headers.get("x-apipi-turn-id", "")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok":true}')
-
-        def log_message(self, format: str, *args: object) -> None:
-            del format, args
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    port = server.server_address[1]
-    settings = _settings(tmp_path, f"http://127.0.0.1:{port}/v1")
+async def test_broker_omits_agent_headers_for_inline(
+    tmp_path: Path, upstream: _Upstream
+) -> None:
+    settings = _settings(tmp_path, f"{upstream.url}/v1")
     broker = await start_broker(
         settings, api_key="k", mcp_http=None, host="127.0.0.1", port=0
     )
@@ -200,36 +171,41 @@ async def test_broker_omits_agent_headers_for_inline(tmp_path: Path) -> None:
         broker.set_turn("turn-1")
         async with AsyncClient(base_url=broker.openai_base_url) as client:
             await client.post("/chat/completions", json={})
-        assert seen["turn"] == "turn-1"
-        assert seen["agent"] == ""
+        assert upstream.headers["x-apipi-turn-id"] == "turn-1"
+        assert "x-apipi-agent-id" not in upstream.headers
     finally:
         await broker.stop()
-        server.shutdown()
 
 
-async def test_broker_injects_mcp_header(tmp_path: Path) -> None:
-    seen: dict[str, str] = {}
+async def test_consecutive_turns_change_turn_id(
+    tmp_path: Path, upstream: _Upstream
+) -> None:
+    settings = _settings(tmp_path, f"{upstream.url}/v1")
+    broker = await start_broker(
+        settings, api_key="k", mcp_http=None, host="127.0.0.1", port=0
+    )
+    try:
+        broker.set_context("sess-1", None)
+        async with AsyncClient(base_url=broker.openai_base_url) as client:
+            broker.set_turn("turn-1")
+            await client.post("/chat/completions", json={})
+            broker.set_turn("turn-2")
+            await client.post("/chat/completions", json={})
+            broker.clear_turn()
+            await client.post("/chat/completions", json={})
+        turns = [headers.get("x-apipi-turn-id", "") for _, headers in upstream.requests]
+        assert turns == ["turn-1", "turn-2", ""]
+    finally:
+        await broker.stop()
 
-    class McpHandler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            seen["authorization"] = self.headers.get("Authorization", "")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"jsonrpc":"2.0","id":1,"result":{}}')
 
-        def log_message(self, format: str, *args: object) -> None:
-            del format, args
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), McpHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    port = server.server_address[1]
+async def test_broker_injects_mcp_header(tmp_path: Path, upstream: _Upstream) -> None:
     settings = _settings(tmp_path, "http://127.0.0.1/v1")
     settings = settings.model_copy(update={"mcp_allow_hosts": "127.0.0.1"})
     mcp = [
         McpHttpServer(
             server_label="mock",
-            server_url=f"http://127.0.0.1:{port}/mcp",
+            server_url=f"{upstream.url}/mcp",
             headers={"Authorization": "Bearer vault-secret"},
         )
     ]
@@ -244,10 +220,9 @@ async def test_broker_injects_mcp_header(tmp_path: Path) -> None:
                 json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
             )
         assert response.status_code == 200
-        assert seen["authorization"] == "Bearer vault-secret"
+        assert upstream.headers["Authorization"] == "Bearer vault-secret"
     finally:
         await broker.stop()
-        server.shutdown()
 
 
 async def test_broker_unknown_mcp_is_404(tmp_path: Path) -> None:
@@ -359,29 +334,15 @@ async def test_broker_rejects_private_mcp_host_by_default(tmp_path: Path) -> Non
         )
 
 
-async def test_broker_allowlists_private_mcp_host(tmp_path: Path) -> None:
-    seen: dict[str, str] = {}
-
-    class McpHandler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            seen["hit"] = "yes"
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"jsonrpc":"2.0","id":1,"result":{}}')
-
-        def log_message(self, format: str, *args: object) -> None:
-            del format, args
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), McpHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    port = server.server_address[1]
+async def test_broker_allowlists_private_mcp_host(
+    tmp_path: Path, upstream: _Upstream
+) -> None:
     settings = _settings(tmp_path, "http://127.0.0.1/v1")
     settings = settings.model_copy(update={"mcp_allow_hosts": "127.0.0.1"})
     mcp = [
         McpHttpServer(
             server_label="mock",
-            server_url=f"http://127.0.0.1:{port}/mcp",
+            server_url=f"{upstream.url}/mcp",
             headers={},
         )
     ]
@@ -392,33 +353,19 @@ async def test_broker_allowlists_private_mcp_host(tmp_path: Path) -> None:
         async with AsyncClient() as client:
             response = await client.post(broker.mcp_url("0"), json={})
         assert response.status_code == 200
-        assert seen.get("hit") == "yes"
+        assert len(upstream.requests) == 1
     finally:
         await broker.stop()
-        server.shutdown()
 
 
-async def test_pi_harness_applies_the_model_key_every_turn(tmp_path: Path) -> None:
+async def test_pi_harness_applies_the_model_key_every_turn(
+    tmp_path: Path, upstream: _Upstream
+) -> None:
     from typing import Any
 
     from apipi.worker.pi.harness import PiHarness
 
-    seen: list[str] = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            seen.append(self.headers.get("Authorization", ""))
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok":true}')
-
-        def log_message(self, format: str, *args: object) -> None:
-            del format, args
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    settings = _settings(tmp_path, f"http://127.0.0.1:{server.server_address[1]}/v1")
+    settings = _settings(tmp_path, f"{upstream.url}/v1")
     settings = settings.model_copy(update={"model_api_key_overwrite": None})
     broker = await start_broker(
         settings, api_key="first", mcp_http=None, host="127.0.0.1", port=0
@@ -454,7 +401,9 @@ async def test_pi_harness_applies_the_model_key_every_turn(tmp_path: Path) -> No
                     "hi", session_id=session_id, api_key=key
                 )
             ]
-        assert seen == ["Bearer first", "Bearer rotated"]
+        assert [headers["Authorization"] for _path, headers in upstream.requests] == [
+            "Bearer first",
+            "Bearer rotated",
+        ]
     finally:
         await broker.stop()
-        server.shutdown()

@@ -4,7 +4,7 @@ from pathlib import Path
 from apipi import __version__
 
 
-def test_version_is_first_public_release() -> None:
+def test_version_is_current_release() -> None:
     assert __version__ == "0.15.0"
 
 

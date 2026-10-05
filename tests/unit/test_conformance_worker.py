@@ -262,7 +262,25 @@ async def test_the_real_worker_follows_the_transcript(
     await player.run()
 
 
-def test_every_transcript_names_its_modes() -> None:
+def test_the_transcripts_are_the_documented_scenarios() -> None:
+    assert conformance.names() == [
+        "cancel",
+        "drain",
+        "inventory-unleased",
+        "new-lease",
+        "presign-filesystem",
+        "presign-s3",
+        "reconnect-replay",
+        "register-hello",
+        "register-rejected",
+        "revoke",
+        "search",
+        "session-stop",
+        "turn-continue",
+        "turn-text",
+    ]
     for name in conformance.names():
-        assert conformance.load(name).header["format"] == 1
-    assert uuid.UUID(str(uuid.uuid4()))
+        header = conformance.load(name).header
+        assert header["fixture"] == name
+        assert header["format"] == 1
+    assert "register-rejected" not in conformance.names("worker")

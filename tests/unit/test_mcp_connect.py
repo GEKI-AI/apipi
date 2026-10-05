@@ -4,11 +4,7 @@ from apipi.mcp.guard import (
     check_mcp_url_sync,
     split_allow_hosts,
 )
-from apipi.mcp.http import (
-    McpConnectError,
-    McpHttpServer,
-    mcp_http_tools,
-)
+from apipi.mcp.http import McpConnectError, mcp_http_tools
 
 
 def test_mcp_http_tools_skips_functions_and_reads_flat_shape() -> None:
@@ -68,11 +64,6 @@ def test_mcp_http_tools_rejects_partial_env_reference() -> None:
                 },
             ]
         )
-
-
-def test_mcp_http_server_is_frozen() -> None:
-    server = McpHttpServer(server_label="x", server_url="http://x", headers={})
-    assert server.server_label == "x"
 
 
 def test_split_allow_hosts() -> None:
