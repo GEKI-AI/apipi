@@ -839,7 +839,11 @@ When a turn completes, files under `outputs/` on the computer are
 copied into the artifact store. Copies are immutable and include
 `turn_id`. A later turn that writes the same path publishes another
 artifact, unless the bytes are the same as in the newest artifact at
-that path, which is the one created last in the order above. Rows
+that path, which is the one created last in the order above. When the
+worker reports that newest artifact and the next write of the path
+together, for example after a reconnect, the next write is published
+even if its bytes are the same (see
+[Workers](workers.md#artifacts)). Rows
 already stored with a path under `artifacts/` stay readable; new publishes use `outputs/`. `GET` content works as soon as the turn has
 completed, even if Pi is still alive. Harvest on Pi stop is a safety
 net for files written after the last completed turn. `410` if nothing
