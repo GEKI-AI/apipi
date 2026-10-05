@@ -1,6 +1,4 @@
-import io
 import uuid
-import zipfile
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -8,6 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 from botocore.exceptions import ClientError
 from httpx import ASGITransport, AsyncClient
+from tests.support.files import zip_skill
 from tests.support.split_worker import api_settings_for, split_client_for
 from tests.support.workspace import hosted_dir
 from tests.unit.test_blobs import FakeS3
@@ -69,13 +68,6 @@ class _Publish(FakeHarness):
             (out / "note.txt").write_text("hello", encoding="utf-8")
         async for item in super().generate(text, cwd=cwd, **kwargs):
             yield item
-
-
-def _zip_skill() -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("demo/SKILL.md", "---\nname: demo\n---\n")
-    return buffer.getvalue()
 
 
 def _error(events: list[dict]) -> dict:
@@ -261,113 +253,59 @@ async def test_expected_cache_restore_fails_turn(
         assert "internal" not in codes
 
 
-async def test_workspace_file_s3_get_fails_environment(
-    settings: Settings, store: Store
-) -> None:
+async def test_s3_get_error_is_503(settings: Settings, store: Store) -> None:
     s3_settings = _s3_settings(settings)
-    client_s3 = _FailGet()
     app = create_app(
         api_settings_for(s3_settings),
         store=store,
-        objects=S3Store(s3_settings, client=client_s3),
+        objects=S3Store(s3_settings, client=_FailGet()),
     )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        token = "s3-file"
+        token = "s3-get"
         uploaded = await client.post(
             "/v1/files",
             headers=_auth(token),
             data={"purpose": "user_data"},
             files={"file": ("note.txt", b"hi", "text/plain")},
         )
-        assert uploaded.status_code == 200
-        file_id = uploaded.json()["id"]
-        agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-        )
-        created = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={
-                "agent_id": agent.json()["id"],
-                "input": "hello",
-                "environment": {
-                    "type": "openai_hosted",
-                    "files": [
-                        {
-                            "type": "file_id",
-                            "file_id": file_id,
-                            "path": "/workspace/note.txt",
-                        }
-                    ],
-                },
-            },
-        )
-        assert created.status_code == 503
-        assert created.json()["error"]["code"] == "artifact_store"
-
-
-async def test_skill_s3_get_fails_environment(settings: Settings, store: Store) -> None:
-    s3_settings = _s3_settings(settings)
-    client_s3 = _FailGet()
-    app = create_app(
-        api_settings_for(s3_settings),
-        store=store,
-        objects=S3Store(s3_settings, client=client_s3),
-    )
-    data = _zip_skill()
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        token = "s3-skill"
-        uploaded = await client.post(
+        skill = await client.post(
             "/v1/skills",
             headers=_auth(token),
-            files={"files": ("demo.zip", data, "application/zip")},
+            files={"files": ("demo.zip", zip_skill(), "application/zip")},
         )
         assert uploaded.status_code == 200
-        skill_id = uploaded.json()["id"]
+        assert skill.status_code == 200
+        file_id = uploaded.json()["id"]
+        content = await client.get(f"/v1/files/{file_id}/content", headers=_auth(token))
         agent = await client.post(
             "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
         )
-        created = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={
-                "agent_id": agent.json()["id"],
-                "input": "hello",
-                "environment": {
-                    "type": "openai_hosted",
-                    "skills": [{"type": "skill_reference", "skill_id": skill_id}],
-                },
+        inputs = [
+            {
+                "files": [
+                    {
+                        "type": "file_id",
+                        "file_id": file_id,
+                        "path": "/workspace/note.txt",
+                    }
+                ]
             },
-        )
-        assert created.status_code == 503
-        assert created.json()["error"]["code"] == "artifact_store"
-
-
-async def test_file_content_s3_error_is_503(settings: Settings, store: Store) -> None:
-    s3_settings = _s3_settings(settings)
-    client_s3 = _FailGet()
-    app = create_app(
-        api_settings_for(s3_settings),
-        store=store,
-        objects=S3Store(s3_settings, client=client_s3),
-    )
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        token = "s3-content"
-        uploaded = await client.post(
-            "/v1/files",
-            headers=_auth(token),
-            data={"purpose": "user_data"},
-            files={"file": ("note.txt", b"hi", "text/plain")},
-        )
-        assert uploaded.status_code == 200
-        content = await client.get(
-            f"/v1/files/{uploaded.json()['id']}/content", headers=_auth(token)
-        )
-        assert content.status_code == 503
-        assert content.json()["error"]["code"] == "artifact_store"
+            {"skills": [{"type": "skill_reference", "skill_id": skill.json()["id"]}]},
+        ]
+        created = [
+            await client.post(
+                "/v1/agents/sessions",
+                headers=_auth(token),
+                json={
+                    "agent_id": agent.json()["id"],
+                    "input": "hello",
+                    "environment": {"type": "openai_hosted", **environment},
+                },
+            )
+            for environment in inputs
+        ]
+    for response in (content, *created):
+        assert response.status_code == 503, response.json()
+        assert response.json()["error"]["code"] == "artifact_store"

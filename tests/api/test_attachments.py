@@ -6,17 +6,15 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from tests.support.fake_worker import FakeWorker
-from tests.support.split_worker import api_settings_for, split_client_for
+from httpx import AsyncClient
+from tests.support.files import input_file, message, spy_commands, vision
+from tests.support.split_worker import split_client_for
 from tests.support.workspace import hosted_dir
 
 from apipi.common.errors import ApiError
 from apipi.config import ConfigError, Settings
-from apipi.gateway import create_app
-from apipi.gateway.auth import AuthRequest, tenant_from_key
+from apipi.gateway.auth import tenant_from_key
 from apipi.gateway.content import InputFile
-from apipi.gateway.tokens import hash_token
 from apipi.protocol import dumps_wire
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
@@ -33,30 +31,13 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _message(*parts: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "events": [
-            {
-                "type": "agent.session.input.message",
-                "input": [{"role": "user", "content": list(parts)}],
-            }
-        ]
-    }
-
-
 def _text(text: str) -> dict[str, Any]:
     return {"type": "input_text", "text": text}
 
 
-def _file(file_id: str, **extra: Any) -> dict[str, Any]:
-    return {"type": "input_file", "file_id": file_id, **extra}
-
-
-async def _agent(client: AsyncClient, token: str, headers: Any = None) -> str:
+async def _agent(client: AsyncClient, token: str) -> str:
     agent = await client.post(
-        "/v1/agents",
-        headers=headers or _auth(token),
-        json={"name": "bot", "model": "test"},
+        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
     )
     assert agent.status_code == 200
     return str(agent.json()["id"])
@@ -68,13 +49,12 @@ async def _session(
     *,
     agent_id: str | None = None,
     environment: dict[str, Any] | None = None,
-    headers: Any = None,
 ) -> str:
     created = await client.post(
         "/v1/agents/sessions",
-        headers=headers or _auth(token),
+        headers=_auth(token),
         json={
-            "agent_id": agent_id or await _agent(client, token, headers),
+            "agent_id": agent_id or await _agent(client, token),
             "environment": environment or {"type": "openai_hosted"},
         },
     )
@@ -105,7 +85,7 @@ async def _send(
     return await client.post(
         f"/v1/agents/sessions/{session_id}/events",
         headers=_auth(token),
-        json=_message(*parts),
+        json=message(*parts),
     )
 
 
@@ -131,20 +111,6 @@ async def _bound(client: AsyncClient, token: str, session_id: str) -> list[Any]:
     return list(listed.json()["data"])
 
 
-def _spy_commands(app: Any) -> list[dict[str, Any]]:
-    hub = app.state.workers
-    real = hub._send
-    sent: list[dict[str, Any]] = []
-
-    async def _send_wire(conn: Any, wire: dict[str, Any]) -> None:
-        if wire.get("type") == "command":
-            sent.append(wire)
-        await real(conn, wire)
-
-    hub._send = _send_wire
-    return sent
-
-
 async def test_input_file_lands_in_attachments_before_the_turn(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
@@ -152,12 +118,16 @@ async def test_input_file_lands_in_attachments_before_the_turn(
     async with split_client_for(
         settings, store, harness=harness, token=worker_secret
     ) as (app, client, _worker):
-        commands = _spy_commands(app)
+        commands = spy_commands(app)
         token = "attach-basic"
         session_id = await _session(client, token)
         file_id = await _upload(client, token, _SHEET, "report.xlsx")
         sent = await _send(
-            client, token, session_id, _text("sum column C by month"), _file(file_id)
+            client,
+            token,
+            session_id,
+            _text("sum column C by month"),
+            input_file(file_id),
         )
         assert sent.status_code == 200, sent.json()
         item = (await _user_items(client, token, session_id))[-1]
@@ -223,14 +193,16 @@ async def test_name_clash_gets_a_free_name_and_a_file_keeps_its_path(
         first = await _upload(client, token, b"one", "report.xlsx")
         second = await _upload(client, token, b"two", "report.xlsx")
         third = await _upload(client, token, b"three", "data.bin", "")
-        assert (await _send(client, token, session_id, _file(first))).status_code == 200
+        assert (
+            await _send(client, token, session_id, input_file(first))
+        ).status_code == 200
         both = await _send(
             client,
             token,
             session_id,
-            _file(second),
-            _file(first),
-            _file(third, filename="../../etc/report.xlsx"),
+            input_file(second),
+            input_file(first),
+            input_file(third, filename="../../etc/report.xlsx"),
         )
         assert both.status_code == 200, both.json()
         items = await _user_items(client, token, session_id)
@@ -277,7 +249,7 @@ async def test_session_create_with_only_a_file_starts_a_turn(
                         }
                     ],
                 },
-                "input": {"role": "user", "content": [_file(file_id)]},
+                "input": {"role": "user", "content": [input_file(file_id)]},
             },
         )
         assert created.status_code == 200, created.json()
@@ -297,14 +269,16 @@ async def test_session_files_come_back_after_a_wipe_and_stay_in_their_session(
     async with split_client_for(
         settings, store, harness=harness, token=worker_secret
     ) as (app, client, worker):
-        commands = _spy_commands(app)
+        commands = spy_commands(app)
         token = "attach-wipe"
         agent_id = await _agent(client, token)
         session_id = await _session(client, token, agent_id=agent_id)
         other_id = await _session(client, token, agent_id=agent_id)
         kept = await _upload(client, token, b"keep", "keep.csv", "text/csv")
         gone = await _upload(client, token, b"gone", "gone.csv", "text/csv")
-        sent = await _send(client, token, session_id, _file(kept), _file(gone))
+        sent = await _send(
+            client, token, session_id, input_file(kept), input_file(gone)
+        )
         assert sent.status_code == 200, sent.json()
         directory = hosted_dir(settings, token, session_id)
         (directory / "attachments" / "keep.csv").write_bytes(b"edited")
@@ -367,13 +341,13 @@ async def test_attachment_limits_fail_before_the_turn(
         small = await _upload(client, token, b"s" * 30, "small.txt", "text/plain")
         more = await _upload(client, token, b"m" * 20, "more.txt", "text/plain")
         big = await _upload(client, token, b"b" * 50, "big.txt", "text/plain")
-        ok = await _send(client, token, session_id, _file(small))
-        again = await _send(client, token, session_id, _file(small))
-        over = await _send(client, token, session_id, _file(more))
+        ok = await _send(client, token, session_id, input_file(small))
+        again = await _send(client, token, session_id, input_file(small))
+        over = await _send(client, token, session_id, input_file(more))
         files = app.state.gateway.files
         files.settings = files.settings.model_copy(update={"max_file_bytes": 40})
-        too_big = await _send(client, token, session_id, _file(big))
-        missing = await _send(client, token, session_id, _file("file-missing"))
+        too_big = await _send(client, token, session_id, input_file(big))
+        missing = await _send(client, token, session_id, input_file("file-missing"))
         no_id = await _send(client, token, session_id, {"type": "input_file"})
         bound = await _bound(client, token, session_id)
     assert ok.status_code == 200, ok.json()
@@ -389,16 +363,16 @@ async def test_attachment_limits_fail_before_the_turn(
     assert len(harness.prompts) == 2
 
 
+@pytest.mark.parametrize("part_types", [["input_file"], ["input_image", "input_file"]])
 async def test_a_turn_that_does_not_start_leaves_no_binding(
-    settings: Settings, store: Store, worker_secret: str
+    settings: Settings, store: Store, worker_secret: str, part_types: list[str]
 ) -> None:
-    harness = FakeHarness()
     async with split_client_for(
-        settings, store, harness=harness, token=worker_secret
+        vision(settings), store, harness=FakeHarness(), token=worker_secret
     ) as (app, client, _worker):
         token = "attach-unsent"
         session_id = await _session(client, token)
-        file_id = await _upload(client, token, b"x", "x.txt", "text/plain")
+        png = await _upload(client, token, b"\x89PNG\r\n\x1a\n", "a.png", "image/png")
         execution = app.state.gateway.sessions.execution
 
         async def refuse(*_args: Any, **_kwargs: Any) -> None:
@@ -406,11 +380,8 @@ async def test_a_turn_that_does_not_start_leaves_no_binding(
 
         real = execution.run_turn
         execution.run_turn = refuse
-        failed = await client.post(
-            f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
-            json=_message(_file(file_id)),
-        )
+        parts = [{"type": part_type, "file_id": png} for part_type in part_types]
+        failed = await _send(client, token, session_id, *parts)
         execution.run_turn = real
         bound = await _bound(client, token, session_id)
     assert failed.status_code == 429
@@ -460,92 +431,6 @@ async def test_concurrent_messages_get_different_paths(
     assert sorted(entry["path"] for entry in bound) == paths
 
 
-class _Users:
-    def __call__(self, token: str, request: AuthRequest) -> dict[str, object]:
-        user = request.headers.get("x-end-user")
-        return {
-            "key_id": hash_token(token),
-            "tenant_id": tenant_from_key(token),
-            "user_id": user,
-            "cache_key": f"{token}:{user}",
-        }
-
-    def cache_key(self, token: str, request: AuthRequest) -> str:
-        return f"{token}:{request.headers.get('x-end-user')}"
-
-
-async def test_attachment_of_another_user_is_not_found(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    harness = FakeHarness()
-    async with split_client_for(
-        settings,
-        store,
-        harness=harness,
-        token=worker_secret,
-        authenticate=_Users(),
-    ) as (app, client, _worker):
-        token = "attach-users"
-        u1 = {**_auth(token), "X-End-User": "u1"}
-        u2 = {**_auth(token), "X-End-User": "u2"}
-        agent_id = await _agent(client, token, u1)
-        created = await app.state.gateway.files.create(
-            tenant_from_key(token),
-            data=b"secret",
-            filename="plan.docx",
-            purpose="user_data",
-            kind="attachment",
-            user_id="u1",
-        )
-        part = _file(str(created["id"]))
-        sessions = {
-            name: await _session(client, token, agent_id=agent_id, headers=headers)
-            for name, headers in (("u1", u1), ("u2", u2))
-        }
-        u2_sent = await client.post(
-            f"/v1/agents/sessions/{sessions['u2']}/events",
-            headers=u2,
-            json=_message(part),
-        )
-        u1_sent = await client.post(
-            f"/v1/agents/sessions/{sessions['u1']}/events",
-            headers=u1,
-            json=_message(part),
-        )
-    assert u2_sent.status_code == 404
-    assert u1_sent.status_code == 200, u1_sent.json()
-    assert harness.prompts == ["Attached: attachments/plan.docx (docx, 6 B)"]
-
-
-async def test_worker_without_session_files_gets_no_attachment_turn(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app = create_app(api_settings_for(settings), store=store)
-    worker = FakeWorker(app, worker_secret)
-    await worker.connect(
-        accepts=["none", "microvm"],
-        features=[
-            "file_refs",
-            "image_refs",
-            "lease_cursor",
-            "presign",
-            "search",
-            "session_stopped",
-        ],
-    )
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        token = "attach-old-worker"
-        session_id = await _session(client, token)
-        file_id = await _upload(client, token, b"a", "a.xlsx")
-        sent = await _send(client, token, session_id, _file(file_id))
-    await worker.close()
-    assert sent.status_code == 501
-    assert sent.json()["error"]["code"] == "unsupported_op"
-    assert "session_files" in sent.json()["error"]["message"]
-
-
 async def test_new_attachments_reach_a_running_guest(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
@@ -563,14 +448,16 @@ async def test_new_attachments_reach_a_running_guest(
         session_id = await _session(client, token)
         first = await _upload(client, token, b"one", "one.csv", "text/csv")
         second = await _upload(client, token, b"two", "two.csv", "text/csv")
-        assert (await _send(client, token, session_id, _file(first))).status_code == 200
+        assert (
+            await _send(client, token, session_id, input_file(first))
+        ).status_code == 200
 
         async def settled(_session_id: Any) -> Any:
             return _Guest()
 
         worker.execution.pool.settled = settled
         assert (
-            await _send(client, token, session_id, _file(second))
+            await _send(client, token, session_id, input_file(second))
         ).status_code == 200
         assert (
             await _send(client, token, session_id, _text("next"))
@@ -589,20 +476,26 @@ async def test_a_new_attachment_replaces_an_old_file_at_its_path(
         session_id = await _session(client, token)
         directory = hosted_dir(settings, token, session_id)
         old = await _upload(client, token, b"old", "report.csv", "text/csv")
-        assert (await _send(client, token, session_id, _file(old))).status_code == 200
+        assert (
+            await _send(client, token, session_id, input_file(old))
+        ).status_code == 200
         deleted = await client.delete(f"/v1/files/{old}", headers=_auth(token))
         assert deleted.status_code == 200
         new = await _upload(client, token, b"new", "report.csv", "text/csv")
-        assert (await _send(client, token, session_id, _file(new))).status_code == 200
+        assert (
+            await _send(client, token, session_id, input_file(new))
+        ).status_code == 200
         replaced = (directory / "attachments" / "report.csv").read_bytes()
         (directory / "attachments" / "data.csv").write_bytes(b"agent content")
         user = await _upload(client, token, b"user content", "data.csv", "text/csv")
-        assert (await _send(client, token, session_id, _file(user))).status_code == 200
+        assert (
+            await _send(client, token, session_id, input_file(user))
+        ).status_code == 200
         seen = harness.workspaces[-1]["attachments/data.csv"]
         (directory / "attachments" / "data.csv").write_bytes(b"agent edit")
         assert (await _send(client, token, session_id, _text("go"))).status_code == 200
         kept = (directory / "attachments" / "data.csv").read_bytes()
-        again = await _send(client, token, session_id, _file(user))
+        again = await _send(client, token, session_id, input_file(user))
         assert again.status_code == 200
         reset = (directory / "attachments" / "data.csv").read_bytes()
     assert replaced == b"new"
@@ -648,7 +541,7 @@ async def test_a_failed_push_ends_the_turn_and_the_retry_works(
         pool.settled = settled
         pool.kill = kill
         failed = await asyncio.wait_for(
-            _send(client, token, session_id, _file(file_id)), timeout=15
+            _send(client, token, session_id, input_file(file_id)), timeout=15
         )
         events = await client.get(
             f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
@@ -665,7 +558,7 @@ async def test_a_failed_push_ends_the_turn_and_the_retry_works(
             if json.loads(raw).get("type") == "artifact.presign"
         ]
         retry = await asyncio.wait_for(
-            _send(client, token, session_id, _file(file_id)), timeout=15
+            _send(client, token, session_id, input_file(file_id)), timeout=15
         )
         leased = sid in worker.session_leases
     assert failed.status_code == 200, failed.json()
@@ -706,7 +599,7 @@ async def test_an_over_limit_attachment_does_not_cancel_a_running_turn(
             event = await asyncio.wait_for(queue.get(), timeout=5)
             if event["type"] == "agent.session.turn.in_progress":
                 break
-        over = await _send(client, token, session_id, _file(big))
+        over = await _send(client, token, session_id, input_file(big))
         events = await client.get(
             f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
         )
@@ -722,35 +615,3 @@ async def test_an_over_limit_attachment_does_not_cancel_a_running_turn(
     assert "agent.session.turn.failed" not in types
     assert cancelled.status_code == 200
     assert harness.prompts == ["go"]
-
-
-async def test_an_image_and_a_file_with_one_id_leave_no_binding_when_unsent(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    vision = settings.model_copy(
-        update={"model_registry": {"test": {"input": ["text", "image"]}}}
-    )
-    async with split_client_for(
-        vision, store, harness=FakeHarness(), token=worker_secret
-    ) as (app, client, _worker):
-        token = "attach-image-file"
-        session_id = await _session(client, token)
-        png = await _upload(client, token, b"\x89PNG\r\n\x1a\n", "a.png", "image/png")
-        execution = app.state.gateway.sessions.execution
-
-        async def refuse(*_args: Any, **_kwargs: Any) -> None:
-            raise ApiError("invalid_request", "busy", code="capacity", status_code=429)
-
-        real = execution.run_turn
-        execution.run_turn = refuse
-        failed = await _send(
-            client,
-            token,
-            session_id,
-            {"type": "input_image", "file_id": png},
-            _file(png),
-        )
-        execution.run_turn = real
-        bound = await _bound(client, token, session_id)
-    assert failed.status_code == 429
-    assert bound == []

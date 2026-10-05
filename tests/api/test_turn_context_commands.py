@@ -16,7 +16,7 @@ from apipi.common.errors import ApiError
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
-from apipi.protocol import check_command_size, redact_context
+from apipi.protocol import MAX_COMMAND_BYTES, check_command_size, redact_context
 from apipi.services.turn_context import build_turn_context
 from apipi.store.blobs import blob_store
 from apipi.store.engine import Store
@@ -460,3 +460,35 @@ async def test_command_context_is_validated_and_redacted() -> None:
     redacted = redact_context(raw)
     assert "live-secret" not in str(redacted)
     assert "sig=abc" not in str(redacted)
+
+
+async def test_command_over_the_limit_fails_with_a_clear_message(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    token = "ctx-too-long"
+    async with split_client_for(settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": await _agent(client, token),
+                "environment": {"type": "none"},
+            },
+        )
+        assert created.status_code == 200
+        sent = await client.post(
+            f"/v1/agents/sessions/{created.json()['id']}/events",
+            headers=_auth(token),
+            json={
+                "type": "agent.session.input.message",
+                "content": "x" * (MAX_COMMAND_BYTES + 1),
+            },
+        )
+    assert sent.status_code == 413
+    error = sent.json()["error"]
+    assert error["code"] == "payload_too_large"
+    assert "one turn can carry" in error["message"]
