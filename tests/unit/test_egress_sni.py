@@ -95,3 +95,40 @@ def test_not_tls() -> None:
     server_hello = b"\x16\x03\x03\x00\x04\x02\x00\x00\x00"
     with pytest.raises(NotTls):
         parse_client_hello(server_hello)
+
+
+def hello_with_extensions(extensions: bytes) -> bytes:
+    body = (
+        b"\x03\x03"
+        + b"\x11" * 32
+        + b"\x00"
+        + b"\x00\x02\x13\x01"
+        + b"\x01\x00"
+        + len(extensions).to_bytes(2, "big")
+        + extensions
+    )
+    handshake = b"\x01" + len(body).to_bytes(3, "big") + body
+    return b"\x16\x03\x01" + len(handshake).to_bytes(2, "big") + handshake
+
+
+def sni_extension(*names: str) -> bytes:
+    entries = b"".join(
+        b"\x00" + len(name).to_bytes(2, "big") + name.encode() for name in names
+    )
+    sni = len(entries).to_bytes(2, "big") + entries
+    return b"\x00\x00" + len(sni).to_bytes(2, "big") + sni
+
+
+def test_one_server_name_only() -> None:
+    hello = hello_with_extensions(sni_extension("allowed.test"))
+    assert parse_client_hello(hello).server_name == "allowed.test"
+    with pytest.raises(NotTls, match="duplicate"):
+        parse_client_hello(
+            hello_with_extensions(
+                sni_extension("allowed.test") + sni_extension("other.test")
+            )
+        )
+    with pytest.raises(NotTls, match="more than one"):
+        parse_client_hello(
+            hello_with_extensions(sni_extension("allowed.test", "other.test"))
+        )

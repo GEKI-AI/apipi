@@ -350,8 +350,11 @@ worker process. The guest needs no proxy settings. On 443 and 8443 the
 gateway reads the server name (SNI) from the TLS handshake. On 80 it
 reads the `Host` header. UDP to port 443 is rejected, so QUIC clients
 fall back to TCP. Private and special-use addresses are rejected in
-every mode. The guest can reach the worker host only on the broker,
-gateway, and DNS filter ports of its own session.
+every mode. The guest has no IPv6: the worker turns IPv6 off on the
+guest's TAP device before the link comes up and drops every IPv6
+packet from the guest with `ip6tables`, both to the worker host and to
+other networks. The guest can reach the worker host only on the
+broker, gateway, and DNS filter ports of its own session.
 
 With `restricted` (or the process-wide TAP allowlist), a hostname must
 match an allowed name exactly (case does not matter). A connection
@@ -369,13 +372,24 @@ DNS goes to a filtering resolver on the TAP host IP. It forwards
 queries for allowed names, answers `NXDOMAIN` for every other name, and
 sends upstream only a new query built from the name and type, so DNS
 cannot carry data out. It answers HTTPS and SVCB queries with no
-records.
+records. A name that the session allows and that the operator lists in
+`private_hosts` (see [configuration](config.md#networking)) is not
+forwarded: the resolver answers it with a placeholder address from
+`198.18.0.0/15`, one per allowed private name (`198.18.0.1` for the
+first in alphabetical order), so the guest never learns the internal
+address. A connection to a placeholder on port 80, 443, or 8443 goes to the
+gateway like any other, and the gateway resolves the name from the
+server name or `Host` header on the worker. Other ports to the
+placeholder are rejected.
 
 On TLS connections that are passed through, `restricted` checks only
 the server name. The gateway does not see the encrypted request, so it
 cannot stop domain fronting (a `Host` header for another site behind
-the same CDN) or read the inner name of Encrypted Client Hello. Allow
-only hosts that you trust with that.
+the same CDN) or read the inner name of Encrypted Client Hello. HTTP/2
+connection coalescing has the same effect without any trick: a client
+may send requests for another host on an open connection to an allowed
+host when the server's certificate also names that host, and the
+gateway never sees them. Allow only hosts that you trust with that.
 
 With `enabled`, public hosts are allowed, IP addresses included. The
 gateway connects to the address the guest asked for after checking that

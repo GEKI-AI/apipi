@@ -73,7 +73,7 @@ Need:
 | --- | --- |
 | `/dev/kvm` readable and writable | member of group `kvm`; `ls -l /dev/kvm` |
 | `firecracker` and `jailer` on `PATH` | `firecracker --version` |
-| `ip`, `iptables`, and `tc` | `command -v ip iptables tc` |
+| `ip`, `iptables`, `ip6tables`, and `tc` | `command -v ip iptables ip6tables tc` |
 | Guest kernel | From the image store (`apipi images pull`). `APIPI_MICROVM_KERNEL` is a dev-only override (a `vmlinux` file). |
 | Guest rootfs | From the image store (`apipi images pull <id>`). `APIPI_MICROVM_ROOTFS` is a dev-only override (ext4 with Node, Pi, `python3` or `socat`, and `/sbin/apipi-guest`). |
 | TAP | Permission to create a TAP device (`CAP_NET_ADMIN` or root) |
@@ -109,7 +109,7 @@ require a real microVM.
 
 `tests/e2e/test_microvm_egress.py` checks the egress gateway from inside
 a guest: allowed and other hosts, IP addresses, other ports, DNS,
-private hosts, the CA bundle with `curl`, Python, Node, and `git`, and
+private hosts by name through the DNS placeholder, the CA bundle with `curl`, Python, Node, and `git`, and
 that a `disabled` guest reaches only the broker.
 It needs internet access from the worker host and root, because it
 also runs a private upstream on `127.0.0.1:443`. The hosts default to
@@ -158,7 +158,7 @@ script.
 | Model id | `APIPI_MODEL` must be an id from that host (`GET /v1/models` once the API is up) |
 | Client bearer | `APIPI_EXAMPLE_TOKEN` or default `dev-token`. Default auth accepts any non-empty bearer |
 | Postgres | Compose `postgres` service, or `DATABASE_URL` pointing at a migrated database |
-| KVM | `/dev/kvm` readable and writable; Firecracker, jailer, `ip`, `iptables`, `tc` |
+| KVM | `/dev/kvm` readable and writable; Firecracker, jailer, `ip`, `iptables`, `ip6tables`, `tc` |
 | Images | `uv run apipi install --microvm --image browser` so both rootfs files exist |
 | sudo | Passwordless sudo for TAP and jailer on the worker |
 | Port 8000 | Free. The script exits if something already listens there |

@@ -732,8 +732,18 @@ are passed through byte for byte, so certificate pinning in the guest
 keeps working. UDP to port 443 is rejected so QUIC clients use TCP.
 iptables rules on the TAP also reject guest traffic to the worker host
 itself, except the broker, gateway, and DNS filter ports of that
-session. Each worker also creates a certificate authority in memory
-when it starts. It is valid for one year, and a worker restart makes a
+session. The guest has no IPv6. The worker sets
+`net.ipv6.conf.<tap>.disable_ipv6=1` before the TAP link comes up, so
+the host side of the TAP never gets a link-local address, and adds
+`ip6tables` rules that drop every IPv6 packet from the TAP in `INPUT`
+and `FORWARD`. The rules are removed with the TAP. A worker without
+`ip6tables` fails at startup like one without `iptables`. When the
+value is already `1`, for example because the host sets
+`net.ipv6.conf.default.disable_ipv6=1`, the worker does not write it,
+so a worker with a read-only `/proc/sys` still starts guests. On a kernel
+without IPv6 (`/proc/sys/net/ipv6` is missing) there is nothing to
+close, and the worker skips both steps. Each worker also creates a
+certificate authority in memory when it starts. It is valid for one year, and a worker restart makes a
 new one. The key never leaves worker memory. Only the certificate goes
 to the guest, on the workspace drive. Guest init joins the image's
 system authorities and that certificate into `/run/apipi/ca-bundle.pem`
@@ -742,8 +752,8 @@ and points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`,
 image built from this ApiPi version; an older image skips the bundle.
 The gateway uses the authority only for hosts whose HTTPS traffic it
 must read: the hosts of the session's vault environment credentials
-(see [Vaults and credentials](vaults.md#how-environment-credentials-work)). On such a connection
-the gateway forwards HTTP/1.1 requests one at a time. It rejects a
+(see [Vaults and credentials](vaults.md#how-environment-credentials-work)).
+On such a connection the gateway forwards HTTP/1.1 requests one at a time. It rejects a
 request that has both `Content-Length` and `Transfer-Encoding`, drops
 hop-by-hop headers, and allows only WebSocket upgrades. After an
 upgrade the connection is passed through unchanged, so only the upgrade
@@ -774,6 +784,33 @@ allowlist), or it is a host whose HTTPS traffic the gateway reads. An
 `enabled` session cannot reach a private host otherwise, and no
 session can reach one by IP address or without a server name.
 
+`private_hosts` is a setting of the worker, not of a tenant. Every
+session on the worker that names a listed host can reach it, so any
+tenant that knows the name can put it in `allowed_domains` and use it.
+List only hosts that every tenant on these workers may reach, protect
+them with their own authentication, or run separate workers for
+tenants that must not reach them.
+
+The worker resolves a private hostname with its own system resolver,
+not with the public resolvers that the guest uses. When a `restricted`
+session (or the allowlist) allows a listed name, the guest DNS filter
+answers an `A` query for that name with a placeholder address and
+answers every other query type for it with no records. Each private
+name that the session allows gets its own placeholder from
+`198.18.0.0/15`: `198.18.0.1` for the first name in alphabetical
+order, `198.18.0.2` for the next, and so on. Separate addresses keep
+HTTP/2 clients from sending requests for one private host on an open
+connection to another, which they could do when both hosts share a
+wildcard certificate and one address. The guest never learns the
+internal address. A connection to a placeholder on port 80, 443, or
+8443 goes to the gateway, which
+reads the hostname from the server name or the `Host` header, resolves
+it on the worker, and checks the addresses as described below. So
+`git clone https://forgejo.internal/org/repo.git` works in the guest
+without an `/etc/hosts` entry. A session with `enabled` has no DNS
+filter. Its guest uses the public resolvers, which usually cannot
+resolve an internal name.
+
 CIDR entries open nothing on their own, so a tenant cannot reach your
 network with a wildcard DNS name such as `10-0-0-5.nip.io`. When you
 list CIDRs, they restrict the private addresses that the named hosts
@@ -800,7 +837,7 @@ same on the API and on the workers. See
 | `APIPI_MICROVM_EGRESS_ALLOWLIST` | `[sandbox.network].egress_allowlist` | off | Optional fail-closed TAP allowlist when the backend is `microvm`. |
 | `APIPI_MICROVM_EGRESS_HOSTS` | `[sandbox.network].egress_hosts` | empty | Extra hostnames when the allowlist is on, comma-separated or a TOML array. |
 | `APIPI_MICROVM_EGRESS_MBIT` | `[sandbox.network].egress_mbit` | `50` | `tc` rate on each guest TAP, both directions. Always on. |
-| `APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` | `[sandbox.network].private_hosts` | empty | Private hostnames that the egress gateway (never the guest) may connect to when the session explicitly allows them, and optional CIDRs that limit where those hostnames may resolve. CIDRs alone allow nothing (see above). Comma-separated or a TOML array. |
+| `APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` | `[sandbox.network].private_hosts` | empty | Private hostnames that the egress gateway (never the guest) may connect to when the session explicitly allows them, and optional CIDRs that limit where those hostnames may resolve. CIDRs alone allow nothing (see above). The list applies to every tenant on the worker. Comma-separated or a TOML array. |
 | `APIPI_MICROVM_EGRESS_UPSTREAM_CA` | `[sandbox.network].upstream_ca` | unset | Path to a PEM bundle of extra certificate authorities the egress gateway trusts for upstream servers, in addition to the system authorities. The worker fails at startup if the file is missing or is not a valid PEM bundle. |
 
 ```toml

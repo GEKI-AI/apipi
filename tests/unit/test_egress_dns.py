@@ -188,6 +188,44 @@ async def test_https_records_get_no_data(
     assert resolver.udp == []
 
 
+async def test_private_names_get_the_placeholder(resolver: FakeResolver) -> None:
+    allowed = {"api.example.com", "git.internal", "wiki.internal"}
+    places = {"git.internal": "198.18.0.1", "wiki.internal": "198.18.0.2"}
+    filt = DnsFilter(
+        host="127.0.0.1",
+        allow=lambda name: name in allowed,
+        placeholder=lambda name: places.get(name),
+        upstreams=(("127.0.0.1", resolver.port),),
+        timeout=1.0,
+    )
+    await filt.start()
+    try:
+        packet = query("Git.Internal", ident=0x4242)
+        for reply in (
+            await udp_ask(filt.udp_port, packet),
+            await tcp_ask(filt.tcp_port, packet),
+        ):
+            assert reply[:2] == packet[:2]
+            assert rcode(reply) == 0
+            assert int.from_bytes(reply[6:8], "big") == 1
+            assert parse_question(reply).name == "git.internal"
+            assert reply.endswith(socket.inet_aton("198.18.0.1"))
+        for qtype in (28, 64, 65, 255):
+            reply = await udp_ask(filt.udp_port, query("git.internal", qtype=qtype))
+            assert rcode(reply) == 0
+            assert int.from_bytes(reply[6:8], "big") == 0
+        reply = await udp_ask(filt.udp_port, query("wiki.internal"))
+        assert reply.endswith(socket.inet_aton("198.18.0.2"))
+        reply = await udp_ask(filt.udp_port, query("other.internal"))
+        assert rcode(reply) == RCODE_NXDOMAIN
+        assert resolver.udp == [] and resolver.tcp == []
+        reply = await udp_ask(filt.udp_port, query("api.example.com"))
+        assert answered(reply, query("api.example.com"))
+        assert resolver.udp == ["api.example.com"]
+    finally:
+        await filt.stop()
+
+
 async def test_multi_question_and_other_class_are_refused(
     dns: DnsFilter, resolver: FakeResolver
 ) -> None:

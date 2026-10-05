@@ -1,8 +1,10 @@
+import ipaddress
 from typing import Any, cast
 
 import pytest
 
 from apipi.worker.egress.policy import (
+    PLACEHOLDER_NET,
     Decision,
     EgressPolicy,
     split_host_port,
@@ -11,6 +13,7 @@ from apipi.worker.egress.policy import (
 from apipi.worker.egress.resolve import (
     BLOCKED_EGRESS_CIDRS,
     EgressBlocked,
+    SystemResolver,
     resolve_upstream,
 )
 
@@ -70,6 +73,53 @@ def test_private_hosts_only_for_named_hosts() -> None:
     enabled = EgressPolicy.build("enabled", private_hosts=("git.internal",))
     assert not enabled.private_allowed("git.internal")
     assert enabled.with_intercept(["git.internal"]).private_allowed("git.internal")
+
+
+def test_each_private_name_gets_its_own_placeholder() -> None:
+    policy = EgressPolicy.build(
+        "restricted",
+        allowed_hosts=("git.internal", "wiki.internal", "api.example.com"),
+        private_hosts=(
+            "zz.internal",
+            "wiki.internal",
+            "git.internal",
+            "aa.internal",
+            "10.0.0.0/8",
+        ),
+    )
+    assert policy.placeholder("Git.Internal") == "198.18.0.1"
+    assert policy.placeholder("wiki.internal") == "198.18.0.2"
+    assert policy.placeholder("aa.internal") is None
+    assert policy.placeholder("api.example.com") is None
+    many = EgressPolicy.build(
+        "restricted",
+        allowed_hosts=[f"h{i:03}.internal" for i in range(300)],
+        private_hosts=[f"h{i:03}.internal" for i in range(300)],
+    )
+    assert many.placeholder("h299.internal") == "198.18.1.44"
+    assert all(
+        ipaddress.ip_address(many.placeholder(f"h{i:03}.internal") or "")
+        in PLACEHOLDER_NET
+        for i in range(300)
+    )
+
+
+def test_private_name_needs_the_session_and_the_operator() -> None:
+    restricted = EgressPolicy.build(
+        "restricted",
+        allowed_hosts=("git.internal", "api.example.com"),
+        private_hosts=("git.internal", "wiki.internal", "10.0.0.0/8"),
+    )
+    assert restricted.private_name("Git.Internal.")
+    assert not restricted.private_name("wiki.internal")
+    assert not restricted.private_name("api.example.com")
+    assert not restricted.private_name("10.0.0.0/8")
+    enabled = EgressPolicy.build("enabled", private_hosts=("git.internal",))
+    assert not enabled.private_name("git.internal")
+    disabled = EgressPolicy.build(
+        "disabled", allowed_hosts=("git.internal",), private_hosts=("git.internal",)
+    )
+    assert not disabled.private_name("git.internal")
 
 
 def test_hostnames_are_validated() -> None:
@@ -211,6 +261,10 @@ async def test_resolve_maps_bad_names_to_resolve_failed() -> None:
     with pytest.raises(EgressBlocked) as err:
         await resolve_upstream("a" * 64 + ".example", 443, resolve=broken)
     assert err.value.reason == "resolve_failed"
-    with pytest.raises(EgressBlocked) as err:
-        await resolve_upstream("a" * 64 + ".example", 443)
+    system = SystemResolver()
+    try:
+        with pytest.raises(EgressBlocked) as err:
+            await resolve_upstream("a" * 64 + ".example", 443, resolve=system)
+    finally:
+        system.close()
     assert err.value.reason == "resolve_failed"

@@ -1,13 +1,16 @@
+import ipaddress
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
+from apipi.common.netguard import allowed_names
 from apipi.worker.egress.sni import is_ip_literal
 
 EgressMode = Literal["enabled", "restricted", "disabled"]
 Action = Literal["splice", "intercept", "reject"]
 EGRESS_MODES: tuple[EgressMode, ...] = ("enabled", "restricted", "disabled")
+PLACEHOLDER_NET = ipaddress.IPv4Network("198.18.0.0/15")
 _LABEL = re.compile(r"[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?")
 
 
@@ -84,6 +87,24 @@ class EgressPolicy:
         if self.mode == "enabled":
             return True
         return norm_host(host) in self.allowed_hosts
+
+    def private_name(self, host: str) -> bool:
+        if not self.allows_name(host) or not self.private_allowed(host):
+            return False
+        return norm_host(host) in allowed_names(self.private_hosts)
+
+    def placeholder(self, host: str) -> str | None:
+        if not self.private_name(host):
+            return None
+        names = sorted(
+            name
+            for name in allowed_names(self.private_hosts)
+            if self.private_name(name)
+        )
+        index = names.index(norm_host(host)) + 1
+        if index >= PLACEHOLDER_NET.num_addresses - 1:
+            return None
+        return str(PLACEHOLDER_NET[index])
 
     def private_allowed(self, host: str | None) -> bool:
         if not host:

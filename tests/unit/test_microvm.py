@@ -1,5 +1,6 @@
 import asyncio
 import errno
+import ipaddress
 import json
 import logging
 import subprocess
@@ -18,6 +19,7 @@ from apipi.config import (
 from apipi.env.setup import NetworkPolicy, write_network_policy
 from apipi.mcp.http import McpConnectError, McpHttpServer
 from apipi.worker.egress import EgressHooks
+from apipi.worker.egress.policy import PLACEHOLDER_NET
 from apipi.worker.pi.artifacts import unpack_workspace_tar
 from apipi.worker.pi.guest import (
     RNDADDENTROPY,
@@ -37,6 +39,7 @@ from apipi.worker.pi.microvm import (
     StartedMicrovm,
     TapPorts,
     _console_level,
+    _disable_ipv6,
     _enable_forward,
     _run,
     connect_vsock,
@@ -50,6 +53,7 @@ from apipi.worker.pi.microvm import (
     microvm_config,
     microvm_egress_hosts,
     microvm_images,
+    microvm_net_binaries,
     microvm_shell_needs_sudo,
     microvm_shell_sudo_argv,
     require_microvm,
@@ -502,6 +506,7 @@ def _tap_argv(mode: str, ports: TapPorts = PORTS) -> list[list[str]]:
         tap_net(NET_ID),
         ip="/sbin/ip",
         iptables="/sbin/iptables",
+        ip6tables="/sbin/ip6tables",
         uid=123,
         gid=100,
         ports=ports,
@@ -575,6 +580,21 @@ def test_tap_setup_restricted_rejects_other_ports_and_filters_dns() -> None:
     assert "203.0.113.10" not in flat
 
 
+def test_dns_placeholder_is_sent_to_the_gateway() -> None:
+    net = tap_net(NET_ID)
+    tap_pool = ipaddress.ip_network(f"{tap_net(NET_ID).network}/16", strict=False)
+    assert not PLACEHOLDER_NET.overlaps(tap_pool)
+    assert not PLACEHOLDER_NET.overlaps(ipaddress.ip_network(net.subnet))
+    argv = _tap_argv("restricted")
+    nat = [cmd for cmd in argv if "nat" in cmd and f"{net.name}gw" in cmd]
+    web = [cmd for cmd in nat if "80,443,8443" in cmd]
+    assert len(web) == 1
+    assert "-d" not in web[0]
+    returns = [cmd for cmd in nat if "RETURN" in cmd]
+    assert [cmd[cmd.index("-d") + 1] for cmd in returns] == [net.subnet]
+    assert nat.index(web[0]) > nat.index(returns[0])
+
+
 def test_tap_setup_disabled_blocks_without_gateway() -> None:
     net = tap_net(NET_ID)
     argv = _tap_argv("disabled", BROKER_ONLY)
@@ -644,12 +664,13 @@ def test_tap_teardown_removes_every_rule(mode: str) -> None:
         net,
         ip="/sbin/ip",
         iptables="/sbin/iptables",
+        ip6tables="/sbin/ip6tables",
         tc="/sbin/tc",
         mode=cast(Any, mode),
     )
     builtin = {"FORWARD", "INPUT", "POSTROUTING", "PREROUTING"}
     for cmd in setup:
-        if not cmd[0].endswith("iptables"):
+        if Path(cmd[0]).name not in ("iptables", "ip6tables"):
             continue
         table = _table(cmd)
         for flag in ("-A", "-I"):
@@ -672,6 +693,127 @@ def test_tap_teardown_removes_every_rule(mode: str) -> None:
     assert "qdisc del" in teardown_flat
     if mode == "disabled":
         assert f"{net.name}gw" not in teardown_flat
+
+
+def test_tap_setup_closes_ipv6() -> None:
+    net = tap_net(NET_ID)
+    for mode in ("enabled", "restricted", "disabled"):
+        argv = _tap_argv(mode, BROKER_ONLY if mode == "disabled" else PORTS)
+        drops = [cmd for cmd in argv if cmd[0] == "/sbin/ip6tables"]
+        assert drops == [
+            [
+                "/sbin/ip6tables",
+                "-w",
+                "-I",
+                builtin,
+                "1",
+                "-i",
+                net.name,
+                "-m",
+                "comment",
+                "--comment",
+                f"apipi-{net.name}",
+                "-j",
+                "DROP",
+            ]
+            for builtin in ("INPUT", "FORWARD")
+        ]
+        up = argv.index(["/sbin/ip", "link", "set", "dev", net.name, "up"])
+        assert all(argv.index(cmd) < up for cmd in drops)
+    without = tap_setup_argv(
+        net,
+        ip="/sbin/ip",
+        iptables="/sbin/iptables",
+        ip6tables=None,
+        uid=1,
+        gid=2,
+        ports=PORTS,
+    )
+    assert not any("ip6tables" in cmd[0] for cmd in without)
+
+
+def test_setup_tap_disables_ipv6_before_link_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    net = tap_net(NET_ID)
+    ran: list[list[str]] = []
+    sysctl = tmp_path / "ipv6"
+    conf = sysctl / "conf" / net.name
+    conf.mkdir(parents=True)
+
+    def fake_run(argv: list[str]) -> None:
+        if argv[1:3] == ["tuntap", "add"]:
+            (conf / "disable_ipv6").write_text("0")
+        ran.append([*argv, (conf / "disable_ipv6").read_text()])
+
+    monkeypatch.setattr("apipi.worker.pi.microvm._enable_forward", lambda: None)
+    monkeypatch.setattr("apipi.worker.pi.microvm._run", fake_run)
+    monkeypatch.setattr("apipi.worker.pi.microvm.IPV6_SYS", sysctl)
+    setup_tap(
+        net,
+        ip="/sbin/ip",
+        iptables="/sbin/iptables",
+        ip6tables="/sbin/ip6tables",
+        uid=1,
+        gid=2,
+        ports=PORTS,
+        mode="restricted",
+    )
+    assert ran[0][1:3] == ["tuntap", "add"]
+    assert ran[0][-1] == "0"
+    assert all(cmd[-1] == "1" for cmd in ran[1:])
+    assert any(cmd[0] == "/sbin/ip6tables" for cmd in ran)
+    ran.clear()
+    monkeypatch.setattr("apipi.worker.pi.microvm.IPV6_SYS", tmp_path / "missing")
+    setup_tap(
+        net,
+        ip="/sbin/ip",
+        iptables="/sbin/iptables",
+        ip6tables="/sbin/ip6tables",
+        uid=1,
+        gid=2,
+        ports=PORTS,
+        mode="restricted",
+    )
+    assert ran and not any(cmd[0] == "/sbin/ip6tables" for cmd in ran)
+
+
+def test_disable_ipv6_failure_names_the_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("apipi.worker.pi.microvm.IPV6_SYS", tmp_path)
+    with pytest.raises(ConfigError, match="disable IPv6 on the TAP device"):
+        _disable_ipv6(tap_net(NET_ID))
+
+
+def test_disable_ipv6_skips_a_preset_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    net = tap_net(NET_ID)
+    conf = tmp_path / "conf" / net.name
+    conf.mkdir(parents=True)
+    flag = conf / "disable_ipv6"
+    flag.write_text("1\n")
+
+    def read_only(*_args: Any, **_kwargs: Any) -> int:
+        raise PermissionError("read-only file system")
+
+    monkeypatch.setattr("apipi.worker.pi.microvm.IPV6_SYS", tmp_path)
+    monkeypatch.setattr(Path, "write_text", read_only)
+    _disable_ipv6(net)
+    flag.unlink()
+    flag.touch()
+    with pytest.raises(ConfigError, match="read-only file system"):
+        _disable_ipv6(net)
+
+
+def test_microvm_needs_ip6tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.shutil.which",
+        lambda name: None if name == "ip6tables" else f"/sbin/{name}",
+    )
+    with pytest.raises(ConfigError, match="microvm requires ip6tables"):
+        microvm_net_binaries()
 
 
 def test_egress_host_and_session_hosts(tmp_path: Path) -> None:
@@ -1025,10 +1167,12 @@ def test_setup_tap_runs_ip_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("apipi.worker.pi.microvm._enable_forward", lambda: None)
     monkeypatch.setattr("apipi.worker.pi.microvm._run", fake_run)
     net = tap_net("551e7604-e35c-42b3-b825-416853441234")
+    monkeypatch.setattr("apipi.worker.pi.microvm._disable_ipv6", lambda _net: None)
     setup_tap(
         net,
         ip="/sbin/ip",
         iptables="/sbin/iptables",
+        ip6tables="/sbin/ip6tables",
         uid=1,
         gid=2,
         tc="/sbin/tc",
@@ -1337,6 +1481,7 @@ async def test_start_microvm_runs_egress_gateway(
         assert kwargs["hooks"] is hooks
         assert kwargs["dns_upstreams"] == tuple((dns, 53) for dns in GUEST_DNS)
         assert setups[0]["mode"] == "restricted"
+        assert setups[0]["ip6tables"] == "/usr/bin/ip6tables"
         assert started.broker is not None
         assert setups[0]["ports"] == TapPorts(started.broker.port, 40001, 40002, 40003)
         assert packed["ca"] == FAKE_CA
@@ -1346,6 +1491,7 @@ async def test_start_microvm_runs_egress_gateway(
         started.cleanup()
     assert gateway.closed is True
     assert teardowns[0]["mode"] == "restricted"
+    assert teardowns[0]["ip6tables"] == "/usr/bin/ip6tables"
 
 
 async def test_start_microvm_enabled_gateway_has_no_dns(

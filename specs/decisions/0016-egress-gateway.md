@@ -24,6 +24,21 @@ guest TAP for ports 80, 443, and 8443. The guest needs no proxy
 variables, and tools that ignore `HTTPS_PROXY` are covered. The
 gateway reads the original destination with `SO_ORIGINAL_DST`.
 
+The guest has no IPv6. The worker sets `disable_ipv6` on the TAP before
+the link comes up, so the host side never gets a link-local address,
+and `ip6tables` drops every IPv6 packet from the TAP in `INPUT` and
+`FORWARD`. Without this a guest could reach host services on `[::]`
+through the link-local address, and a host that forwards IPv6 would
+forward guest packets unfiltered. The worker needs `ip6tables` like
+`iptables`; on a kernel without IPv6 there is nothing to close.
+
+Each gateway resolves hostnames with the worker's system resolver on
+its own small thread pool, at most 8 lookups at a time and 5 seconds
+per lookup. A blocking `getaddrinfo` keeps its thread after the timeout
+frees the caller, so a pool shared by all sessions would let one guest
+that asks for names whose servers never answer stop the lookups of
+every other session.
+
 ## Hostname policy
 
 The gateway decides by hostname, not by IP address:
@@ -32,18 +47,43 @@ The gateway decides by hostname, not by IP address:
   consuming it. On 80 it reads the `Host` header.
 * `restricted` (session `allowed_domains`, or the operator TAP
   allowlist) allows only listed hostnames. A connection without SNI, or
-  with an IP literal as SNI or `Host`, is rejected. Other TCP ports and
-  other UDP are rejected. Guest DNS goes to a small resolver on the TAP
-  host IP that answers only allowed names and returns `NXDOMAIN` for the
-  rest, so DNS cannot carry data out.
+  with an IP literal as SNI or `Host`, is rejected. A ClientHello with
+  two `server_name` extensions, or with more than one name in the list,
+  is not read as TLS and is rejected. Other TCP ports and other UDP are
+  rejected. Guest DNS goes to a small resolver on the TAP host IP that
+  answers only allowed names and returns `NXDOMAIN` for the rest, and
+  forwards only a query it builds again from the name and type, so DNS
+  cannot carry data out.
 * `enabled` allows public hosts, IP literals included, as today. Other
-  ports keep the direct NAT path.
-* `disabled` keeps blocking all guest egress.
-* Private and special-use ranges stay rejected in every mode. The
-  gateway resolves the hostname itself and checks every address, so DNS
-  rebinding and a changed `/etc/hosts` in the guest do not matter. The
-  only exception is an operator list of private hosts that the gateway
-  (never the guest) may reach, for example a self-hosted Forgejo.
+  ports keep the direct NAT path, and guest DNS goes directly to the
+  public resolvers.
+* `disabled` blocks all guest egress, DNS included. The guest reaches
+  only its broker on the TAP host IP. No gateway is started.
+* Private and special-use ranges stay rejected in every mode. In
+  `restricted`, and for every host whose TLS the gateway terminates, the
+  gateway resolves the hostname itself, checks every address, and
+  connects to an address it resolved, so DNS rebinding and a changed
+  `/etc/hosts` in the guest do not matter. In `enabled` the gateway
+  splices to the address the guest connected to after checking that it
+  is not in a blocked range, so `curl --resolve` and `/etc/hosts` keep
+  working for public hosts.
+* The only exception to the private ranges is an operator list of
+  private hosts (`private_hosts`) that the gateway, never the guest, may
+  reach, for example a self-hosted Forgejo. A listed name opens a
+  private address only when the session allows that name, or when the
+  gateway terminates its TLS. The list is per worker, not per tenant.
+  The guest cannot resolve an internal name with public resolvers, so
+  the DNS resolver of a `restricted` guest answers an allowed listed
+  name with a placeholder address (no records for other query types).
+  Each allowed private name gets its own placeholder from
+  `198.18.0.0/15`, numbered in alphabetical order of the session's
+  allowed private names from `198.18.0.1`, so HTTP/2 connection
+  coalescing cannot send a request for one private host over a
+  connection to another that shares its certificate. The guest's
+  connection to a placeholder on 80, 443, or 8443 is sent to the
+  gateway like any other, and the gateway still decides and resolves
+  by SNI or `Host` on the worker. The guest never learns the internal
+  address.
 
 This replaces the current allowlist, which resolves hostnames to IP
 addresses once at boot and opens those addresses on every port. That
@@ -68,8 +108,8 @@ in the worker.
 The guest gets only the authority certificate, on the workspace drive.
 Guest init writes a combined bundle of the image's system authorities
 and the worker authority, and the guest environment points
-`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, and
-`NODE_EXTRA_CA_CERTS` at it.
+`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`,
+`NODE_EXTRA_CA_CERTS`, and `CURL_CA_BUNDLE` at it.
 
 On an intercepted connection the gateway:
 

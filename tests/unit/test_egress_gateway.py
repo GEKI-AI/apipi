@@ -4,6 +4,7 @@ import errno
 import logging
 import socket
 import ssl
+import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -12,6 +13,7 @@ from typing import Any, cast
 
 import h11
 import pytest
+from tests.unit.test_egress_dns import query as dns_query
 from tests.unit.test_egress_sni import handmade_hello
 
 from apipi.common.metrics import Metrics
@@ -28,6 +30,7 @@ from apipi.worker.egress import (
     start_gateway,
 )
 from apipi.worker.egress import gateway as gateway_module
+from apipi.worker.egress import resolve as resolve_module
 from apipi.worker.egress.resolve import address_blocked
 
 HOST = "allowed.test"
@@ -1086,10 +1089,6 @@ async def test_lookups_time_out_and_are_limited_per_session(
 async def test_system_resolve_uses_its_own_threads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import threading
-
-    from apipi.worker.egress import resolve as resolve_module
-
     seen: list[str] = []
 
     def fake(host: str, port: int, **_kwargs: Any) -> list[Any]:
@@ -1097,8 +1096,79 @@ async def test_system_resolve_uses_its_own_threads(
         return [(0, 0, 0, "", ("93.184.216.34", port))]
 
     monkeypatch.setattr(resolve_module.socket, "getaddrinfo", fake)
-    assert await resolve_module.system_resolve("example.com", 443) == ["93.184.216.34"]
+    system = resolve_module.SystemResolver()
+    try:
+        assert await system("example.com", 443) == ["93.184.216.34"]
+    finally:
+        system.close()
     assert seen[0].startswith("apipi-egress-dns")
+
+
+async def test_slow_lookups_in_one_session_do_not_block_another(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = threading.Event()
+
+    def fake(host: str, port: int, **_kwargs: Any) -> list[Any]:
+        if host.startswith("slow"):
+            release.wait(10)
+        return [(0, 0, 0, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(resolve_module.socket, "getaddrinfo", fake)
+    policy = EgressPolicy.build("enabled")
+    slow, fast = (
+        EgressGateway(
+            host="127.0.0.1", policy=policy, ca=env.worker_ca, resolve_timeout=0.5
+        )
+        for _ in range(2)
+    )
+    try:
+        stuck = [
+            asyncio.create_task(slow._resolve(f"slow{i}.test", 443))
+            for i in range(gateway_module.MAX_LOOKUPS * 2)
+        ]
+        await asyncio.sleep(0.05)
+        started = time.monotonic()
+        assert await fast._resolve("fast.test", 443) == ["93.184.216.34"]
+        assert time.monotonic() - started < 0.4
+        results = await asyncio.gather(*stuck, return_exceptions=True)
+        assert all(isinstance(result, TimeoutError) for result in results)
+    finally:
+        release.set()
+        slow.close()
+        fast.close()
+
+
+async def test_restricted_guest_reaches_private_host_through_placeholder(
+    env: Env,
+) -> None:
+    upstream = await env.upstream(mode="echo", bind="127.0.0.2")
+    gateway = await env.gateway(
+        "restricted",
+        port=upstream.port,
+        allowed=(HOST, "a.internal"),
+        private=(HOST, "a.internal", "z.internal"),
+        dest=("198.18.0.2", upstream.port),
+        table={HOST: ["127.0.0.2"]},
+    )
+    assert gateway.dns is not None
+    reply = await gateway.dns.answer(dns_query(HOST), tcp=False)
+    assert reply is not None
+    assert reply.endswith(socket.inet_aton("198.18.0.2"))
+    first = await gateway.dns.answer(dns_query("a.internal"), tcp=False)
+    assert first is not None
+    assert first.endswith(socket.inet_aton("198.18.0.1"))
+    assert b"\x7f\x00\x00\x02" not in reply
+    reader, writer = await tls_connect(gateway, trust(env.upstream_ca))
+    writer.write(b"forgejo")
+    await writer.drain()
+    assert await reader.readexactly(7) == b"forgejo"
+    await close(writer)
+    assert upstream.connections == 1
+    public = await env.gateway("restricted", port=upstream.port, private=(HOST,))
+    assert public.dns is not None
+    other = await public.dns.answer(dns_query("other.internal"), tcp=False)
+    assert other is not None and other[3] & 0x0F == 3
 
 
 async def test_lf_only_http_request_is_not_delayed(env: Env) -> None:
