@@ -316,7 +316,12 @@ describe the protocol that existed before features and are in the
 baseline, and `session_stopped`, `image_refs`, `file_refs`, and
 `session_files`, which are not. `image_refs` sends input images in
 `turn.start` as store references instead of base64 bytes, so an image no
-longer counts toward the command size limit. `file_refs` does the same
+longer counts toward the command size limit. Workers before it uploaded
+input images with the `artifact.presign` kind `input_image`, which the
+API presigned to the final key of the file. That kind is removed: the
+API answers it with `ok: false` and `artifact_store` and presigns no
+URL, so the API never presigns a PUT to a `files` or `skills` key for a
+worker. `file_refs` does the same
 for the `input_file` parts of a session without a computer: the worker
 reads a text file from the store and puts its text in the prompt.
 `session_files` adds the attachments of a session with a computer: the

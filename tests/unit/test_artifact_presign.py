@@ -513,6 +513,115 @@ async def test_s3_presign_ttl_short(store: Store, tmp_path: Path) -> None:
     assert outcome.presign_replies[0]["expires_at"]
 
 
+async def test_input_image_presign_is_refused(store: Store, tmp_path: Path) -> None:
+    from sqlalchemy import select
+
+    from apipi.store.models import ArtifactUploadRow
+
+    worker_id = uuid.uuid4()
+    _tenant, session_id, _lease, _key = await _leased(store, worker_id)
+    settings = _settings(
+        tmp_path,
+        artifact_store="s3",
+        s3_bucket="bucket",
+        s3_endpoint="https://s3.example",
+        s3_region="us-east-1",
+    )
+    fake = _ListableFakeS3()
+    data = b"\x89PNG-legacy"
+    envelope = parse_envelope(
+        {
+            "v": 2,
+            "session_id": str(session_id),
+            "seq": 1,
+            "type": "artifact.presign",
+            "payload": {
+                "request_id": str(uuid.uuid4()),
+                "kind": "input_image",
+                "filename": "image",
+                "content_type": "image/png",
+                "size": len(data),
+                "sha256": sha256_hex(data),
+            },
+        }
+    )
+    outcome = await _flush(
+        store, worker_id, [envelope], settings, objects=S3Store(settings, client=fake)
+    )
+    reply = outcome.presign_replies[0]
+    assert reply["ok"] is False
+    assert reply["code"] == "artifact_store"
+    assert "upgrade the worker to 0.15.0" in reply["message"]
+    assert reply.get("url") is None and reply.get("upload_id") is None
+    assert outcome.rejected == [(session_id, 1, "artifact_store")]
+    assert outcome.acks == {session_id: 1}
+    assert fake.presigns == []
+    async with store.session() as db:
+        assert (await db.scalars(select(ArtifactUploadRow))).all() == []
+
+
+async def test_old_input_image_upload_rows_are_refused(
+    store: Store, tmp_path: Path
+) -> None:
+    from sqlalchemy import select
+
+    from apipi.store.models import ArtifactUploadRow, FileRow
+    from apipi.store.repo import create_artifact_upload
+
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease, _key = await _leased(store, worker_id)
+    settings = _settings(tmp_path, local_store_dir=str(tmp_path / "shared"))
+    data = b"\x89PNG-legacy"
+    request_id = uuid.uuid4()
+    async with store.session() as db:
+        pending = await create_artifact_upload(
+            db,
+            tenant_id,
+            session_id=session_id,
+            artifact_id=uuid.uuid4(),
+            kind="input_image",
+            filename="image",
+            content_type="image/png",
+            declared_bytes=len(data),
+            sha256=sha256_hex(data),
+            expires_at=utc_now() + timedelta(minutes=5),
+            request_id=request_id,
+        )
+        pending_id = pending.id
+        await db.commit()
+    payload = _presign_payload(request_id, len(data))
+    payload["kind"] = "input_image"
+    outcome = await _flush(
+        store,
+        worker_id,
+        [
+            _envelope(session_id, 1, "artifact.presign", payload),
+            _envelope(
+                session_id,
+                2,
+                "artifact.completed",
+                {
+                    "upload_id": str(pending_id),
+                    "path": "files/image",
+                    "size": len(data),
+                    "sha256": sha256_hex(data),
+                },
+            ),
+        ],
+        settings,
+    )
+    assert [reply["ok"] for reply in outcome.presign_replies] == [False]
+    assert outcome.rejected == [
+        (session_id, 1, "artifact_store"),
+        (session_id, 2, "artifact_store"),
+    ]
+    async with store.session() as db:
+        upload = (await db.scalars(select(ArtifactUploadRow))).one()
+        assert upload.status == "pending"
+        assert (await db.scalars(select(FileRow))).all() == []
+        assert await list_artifacts(db, tenant_id, session_id) == []
+
+
 def test_completed_envelope_helper_has_no_bytes() -> None:
     payload = completed_envelope(
         uuid.uuid4(),

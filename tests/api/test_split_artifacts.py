@@ -3,9 +3,9 @@
 The worker holds no object-store credentials and performs no
 artifact/file database writes. All uploads go through
 `artifact.presign` -> reply -> PUT (S3) or shared-root write
-(filesystem) -> `artifact.completed`, for artifact, pi_session, and
-input_image kinds, via the outbox. Quota errors surface with today's
-codes.
+(filesystem) -> `artifact.completed`, for artifact and pi_session
+kinds, via the outbox. The legacy input_image kind is refused. Quota
+errors surface with today's codes.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from apipi.store.engine import Store
 from apipi.store.repo import (
     create_session,
     create_tenant,
-    get_file,
     list_artifacts,
     list_items,
     set_session_lease,
@@ -178,6 +177,60 @@ async def _upload_roundtrip(
         )
         assert outcome2.rejected == [], outcome2.rejected
     return result
+
+
+async def _refused_input_image(
+    store: Store,
+    outbox: Outbox,
+    waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]],
+    worker_settings: Settings,
+    api_settings: Settings,
+    worker_id: uuid.UUID,
+    session_id: uuid.UUID,
+    api_objects: Any | None = None,
+) -> None:
+    from sqlalchemy import select
+
+    from apipi.config import DiskLimitError
+    from apipi.store.models import ArtifactUploadRow, FileRow
+
+    task = asyncio.create_task(
+        upload_via_presign(
+            outbox,
+            waiters,
+            worker_settings,
+            session_id,
+            kind="input_image",
+            filename="image",
+            content_type="image/png",
+            data=b"\x89PNG-legacy",
+        )
+    )
+    for _ in range(100):
+        if outbox.pending(session_id):
+            break
+        await asyncio.sleep(0.01)
+    outcome = await _flush_outbox(
+        store, outbox, session_id, worker_id, api_settings, objects=api_objects
+    )
+    assert len(outcome.presign_replies) == 1
+    reply = outcome.presign_replies[0]
+    assert reply["ok"] is False
+    assert reply["code"] == "artifact_store"
+    assert "upgrade the worker to 0.15.0" in reply["message"]
+    assert not reply.get("url") and not reply.get("path")
+    assert not reply.get("upload_id") and not reply.get("file_id")
+    assert [reason for _sid, _seq, reason in outcome.rejected] == ["artifact_store"]
+    assert outbox.pending(session_id) == []
+    assert handle_presign_reply(waiters, reply) is True
+    with pytest.raises(DiskLimitError, match="upgrade the worker") as raised:
+        await asyncio.wait_for(task, timeout=10)
+    assert raised.value.code == "artifact_store"
+    assert outbox.pending(session_id) == []
+    async with store.session() as db:
+        kinds = (await db.scalars(select(ArtifactUploadRow.kind))).all()
+        assert "input_image" not in kinds
+        assert (await db.scalars(select(FileRow))).all() == []
 
 
 async def _s3_split_flow(store: Store, tmp_path: Path, monkeypatch: Any) -> None:
@@ -332,9 +385,8 @@ async def _s3_split_flow(store: Store, tmp_path: Path, monkeypatch: Any) -> None
         monkeypatch.setattr(httpx, "AsyncClient", real_client)
     assert restored == pi_data
 
-    # Input image through the same flow; the API creates the file row.
-    image = b"\x89PNG-input"
-    result = await _upload_roundtrip(
+    presigns = len(fake.presigns)
+    await _refused_input_image(
         store,
         outbox,
         waiters,
@@ -342,19 +394,9 @@ async def _s3_split_flow(store: Store, tmp_path: Path, monkeypatch: Any) -> None
         api_settings,
         worker_id,
         session_id,
-        kind="input_image",
-        filename="image",
-        content_type="image/png",
-        data=image,
         api_objects=api_objects,
     )
-    assert result.get("file_id")
-    async with store.session() as db:
-        file_row = await get_file(db, tenant_id, result["file_id"])
-        assert file_row is not None
-        assert file_row.size == len(image)
-    # The bytes live in FakeS3 under the s3 key; the file row proves
-    # the API recorded them (HEAD verified the PUT before completing).
+    assert len(fake.presigns) == presigns
 
 
 async def _fs_split_flow(store: Store, tmp_path: Path) -> None:
@@ -422,8 +464,7 @@ async def _fs_split_flow(store: Store, tmp_path: Path) -> None:
     restored = await fetch_pi_session_bytes(context["pi_session"], worker_settings)
     assert restored == pi_data
 
-    image = b"\x89PNG-fs"
-    result = await _upload_roundtrip(
+    await _refused_input_image(
         store,
         outbox,
         waiters,
@@ -431,20 +472,8 @@ async def _fs_split_flow(store: Store, tmp_path: Path) -> None:
         api_settings,
         worker_id,
         session_id,
-        kind="input_image",
-        filename="image",
-        content_type="image/png",
-        data=image,
     )
-    assert result.get("file_id")
-    async with store.session() as db:
-        from apipi.store.repo import list_session_files
-
-        file_row = await get_file(db, tenant_id, result["file_id"])
-        assert file_row is not None
-        assert file_row.kind == "image"
-        bound, _more = await list_session_files(db, tenant_id, session_id)
-        assert [binding.file_id for binding, _row in bound] == [result["file_id"]]
+    assert not (store_root(api_settings) / ".store" / "files").exists()
 
 
 @pytest.mark.anyio

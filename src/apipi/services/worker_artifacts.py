@@ -5,7 +5,7 @@ The worker never holds object-store credentials. It sends
 checks quotas and binds a key under the session prefix, and the worker
 uploads directly (S3 presigned PUT) or writes to the shared store root
 (filesystem). It then sends `artifact.completed` and the API verifies
-the object before writing artifact, file, or Pi session rows.
+the object before writing artifact or Pi session rows.
 
 Bytes never travel over the worker socket: both messages carry only
 ids, paths, sizes, and checksums. The 1 MiB durable envelope cap in
@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.common.dirs import store_root
 from apipi.common.errors import ObjectStoreError
-from apipi.common.objects import NS_ARTIFACTS, NS_FILES, Namespace, local_object_path
+from apipi.common.objects import NS_ARTIFACTS, Namespace, local_object_path
 from apipi.common.timefmt import utc_ts
 from apipi.config import DiskLimitError, Settings
 from apipi.store.blobs import (
@@ -33,7 +33,6 @@ from apipi.store.blobs import (
     ObjectStore,
     blob_key,
     blob_prefix,
-    file_object_id,
     hash_stream,
     object_store,
 )
@@ -48,7 +47,12 @@ from apipi.store.repo import (
     list_artifacts,
 )
 
-ARTIFACT_KINDS = frozenset({"artifact", "pi_session", "input_image"})
+ARTIFACT_KINDS = frozenset({"artifact", "pi_session"})
+
+REMOVED_KINDS = {
+    "input_image": "artifact kind input_image is not supported; "
+    "upgrade the worker to 0.15.0 or later",
+}
 
 PRESIGN_TTL = timedelta(minutes=15)
 
@@ -63,9 +67,11 @@ def _store_error(message: str, *, operation: str, key: str = "") -> ObjectStoreE
     )
 
 
-def check_artifact_kind(kind: str) -> str:
+def check_artifact_kind(kind: str, *, operation: str = "presign") -> str:
+    if kind in REMOVED_KINDS:
+        raise _store_error(REMOVED_KINDS[kind], operation=operation)
     if kind not in ARTIFACT_KINDS:
-        raise _store_error(f"unknown artifact kind: {kind}", operation="presign")
+        raise _store_error(f"unknown artifact kind: {kind}", operation=operation)
     return kind
 
 
@@ -129,20 +135,9 @@ def check_completed_path(path: str, *, prefix_parts: tuple[str, ...] = ()) -> st
     return text
 
 
-def _quota_for_kind(settings: Settings, kind: str, declared: int) -> None:
+def _check_declared(settings: Settings, declared: int) -> None:
     if declared < 1:
         raise DiskLimitError("Artifact is empty", code="artifact_store")
-    if kind == "input_image":
-        if declared > int(settings.max_file_bytes):
-            from apipi.common.errors import ApiError
-
-            raise ApiError(
-                "invalid_request",
-                "File too large",
-                code="payload_too_large",
-                status_code=413,
-            )
-        return
     if declared > int(settings.max_workspace_bytes):
         raise DiskLimitError("Workspace too large", code="workspace_too_large")
     if declared > int(settings.max_artifact_bytes):
@@ -154,13 +149,10 @@ async def check_quota(
     settings: Settings,
     row: SessionRow,
     *,
-    kind: str,
     declared: int,
     blobs_used_bytes: int | None = None,
 ) -> None:
-    _quota_for_kind(settings, kind, declared)
-    if kind == "input_image":
-        return
+    _check_declared(settings, declared)
     used = blobs_used_bytes
     if used is None:
         used = 0
@@ -320,7 +312,6 @@ async def issue_artifact_presign(
             "artifact_id": None,
             "object_id": None,
             "namespace": NS_ARTIFACTS,
-            "file_id": None,
             "path": None,
             "url": None,
             "headers": {},
@@ -336,9 +327,7 @@ async def issue_artifact_presign(
             upload.expires_at = expires_at
             await db.flush()
     else:
-        await check_quota(
-            db, settings, row, kind=kind, declared=size, blobs_used_bytes=used_bytes
-        )
+        await check_quota(db, settings, row, declared=size, blobs_used_bytes=used_bytes)
         if kind == "pi_session" and row.pi_session_id is not None:
             # Reuse the blob id so every save overwrites the same object
             # instead of leaking one new object per save.
@@ -360,14 +349,7 @@ async def issue_artifact_presign(
             expires_at=expires_at,
             request_id=request_id,
         )
-    if kind == "input_image":
-        file_id = f"file-{artifact_id.hex}"
-        namespace: Namespace = NS_FILES
-        object_id = file_object_id(tenant_id, file_id)
-    else:
-        file_id = None
-        namespace = NS_ARTIFACTS
-        object_id = session_object_id(tenant_id, key_id, session_id, artifact_id)
+    object_id = session_object_id(tenant_id, key_id, session_id, artifact_id)
     relative_path: str | None = None
     url: str | None = None
     headers: dict[str, str] = {}
@@ -380,7 +362,7 @@ async def issue_artifact_presign(
             )
         url, headers = presign(
             "PUT",
-            namespace,
+            NS_ARTIFACTS,
             object_id,
             expires=settings.presign_ttl,
             content_type=ctype,
@@ -389,14 +371,13 @@ async def issue_artifact_presign(
     else:
         root = store_root(settings)
         relative_path = str(
-            local_object_path(root, namespace, object_id).relative_to(root)
+            local_object_path(root, NS_ARTIFACTS, object_id).relative_to(root)
         )
     return {
         "upload_id": upload.id,
         "artifact_id": artifact_id,
         "object_id": object_id,
-        "namespace": namespace,
-        "file_id": file_id,
+        "namespace": NS_ARTIFACTS,
         "path": relative_path,
         "url": url,
         "headers": headers,
@@ -427,13 +408,11 @@ async def _digest_object(
 
 def _upload_target(
     upload: ArtifactUploadRow, tenant_id: uuid.UUID, session_id: uuid.UUID, key_id: str
-) -> tuple[Namespace, str, str | None]:
-    if upload.kind == "input_image":
-        file_id = f"file-{upload.artifact_id.hex}"
-        return NS_FILES, file_object_id(tenant_id, file_id), file_id
+) -> str:
+    check_artifact_kind(upload.kind, operation="complete")
     object_id = session_object_id(tenant_id, key_id, session_id, upload.artifact_id)
     check_session_prefix(object_id, session_prefix(tenant_id, key_id, session_id))
-    return NS_ARTIFACTS, object_id, None
+    return object_id
 
 
 def _check_local_object(
@@ -491,9 +470,7 @@ async def verify_upload_object(
     Returns the verified size.
     """
     digest = check_sha256(sha256)
-    namespace, object_id, _file_id = _upload_target(
-        upload, tenant_id, session_id, key_id
-    )
+    object_id = _upload_target(upload, tenant_id, session_id, key_id)
     expected = digest if digest is not None else upload.sha256
     if settings.artifact_store == "s3":
         if path is not None:
@@ -506,7 +483,7 @@ async def verify_upload_object(
         head = getattr(backend, "head", None)
         if head is None:
             raise _store_error("object store cannot verify uploads", operation="head")
-        meta = await head(namespace, object_id)
+        meta = await head(NS_ARTIFACTS, object_id)
         if meta is None:
             raise _store_error(
                 "Object is missing; PUT the presigned URL first",
@@ -525,7 +502,7 @@ async def verify_upload_object(
                 "upload size mismatch", operation="complete", key=object_id
             )
         if expected is not None:
-            found = await _digest_object(backend, namespace, object_id)
+            found = await _digest_object(backend, NS_ARTIFACTS, object_id)
             if found is None:
                 raise _store_error(
                     "Object is missing; PUT the presigned URL first",
@@ -539,7 +516,7 @@ async def verify_upload_object(
                 )
         return actual_size
     actual_size, actual_digest = await asyncio.to_thread(
-        _check_local_object, settings, namespace, object_id, path
+        _check_local_object, settings, NS_ARTIFACTS, object_id, path
     )
     if size is not None and size != actual_size:
         raise _store_error("upload size mismatch", operation="complete", key=path or "")
@@ -571,8 +548,6 @@ async def complete_artifact_upload(
     `verified_size` is the result of `verify_upload_object` when the
     caller already checked the object outside the row lock; without it
     the check runs here."""
-    from apipi.store.repo import bind_session_file, create_file
-
     upload = await get_artifact_upload(db, tenant_id, upload_id)
     if upload is None or upload.session_id != session_id:
         raise _store_error(
@@ -581,18 +556,13 @@ async def complete_artifact_upload(
             key=str(upload_id),
         )
     if upload.status == "complete":
-        result: dict[str, Any] = {
+        return {
             "upload_id": str(upload.id),
             "artifact_id": str(upload.artifact_id),
         }
-        if upload.kind == "input_image":
-            result["file_id"] = f"file-{upload.artifact_id.hex}"
-        return result
     if utc_now() > _aware(upload.expires_at):
         raise _store_error("upload URL expired", operation="complete")
-    _namespace, _object_id, file_id = _upload_target(
-        upload, tenant_id, session_id, key_id
-    )
+    _upload_target(upload, tenant_id, session_id, key_id)
     if verified_size is None:
         actual_size = await verify_upload_object(
             settings,
@@ -615,23 +585,6 @@ async def complete_artifact_upload(
         row.pi_session_id = upload.artifact_id
         row.pi_session_bytes = actual_size
         await db.flush()
-    elif upload.kind == "input_image":
-        assert file_id is not None
-        artifact_name = (name or upload.filename).strip() or upload.filename
-        owner = await get_session(db, tenant_id, session_id)
-        await create_file(
-            db,
-            tenant_id,
-            file_id=file_id,
-            filename=artifact_name,
-            purpose="user_data",
-            size=actual_size,
-            content_type=upload.content_type,
-            kind="image",
-            user_id=owner.user_id if owner is not None else None,
-        )
-        if owner is not None:
-            await bind_session_file(db, tenant_id, session_id, file_id)
     else:
         artifact_name = (name or upload.filename).strip() or upload.filename
         await create_artifact(
@@ -647,13 +600,10 @@ async def complete_artifact_upload(
         )
     upload.status = "complete"
     await db.flush()
-    done: dict[str, Any] = {
+    return {
         "upload_id": str(upload.id),
         "artifact_id": str(upload.artifact_id),
     }
-    if file_id is not None:
-        done["file_id"] = file_id
-    return done
 
 
 def _aware(value: Any) -> Any:

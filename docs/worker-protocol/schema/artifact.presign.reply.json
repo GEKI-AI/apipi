@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "API to worker. Answer to one `artifact.presign` envelope.\n\nS3 carries `url`, `headers`, and `expires_at` for a direct PUT with\nno store credentials on the worker. The shared filesystem carries\n`path`, the store-root relative path the worker must write, and no\nURL. `input_image` also carries `file_id` for the `input_image`\nitem part. When the latest stored bytes already match the presigned\ndigest the reply carries `unchanged` instead: no URL, no path, and\nno `upload_id`; the worker skips the upload. Quota failures arrive\nas `ok: False` with a store code (`artifact_store`,\n`artifact_too_large`, `workspace_too_large`, `payload_too_large`).",
+  "description": "API to worker. Answer to one `artifact.presign` envelope.\n\nS3 carries `url`, `headers`, and `expires_at` for a direct PUT with\nno store credentials on the worker. The shared filesystem carries\n`path`, the store-root relative path the worker must write, and no\nURL. When the latest stored bytes already match the presigned\ndigest the reply carries `unchanged` instead: no URL, no path, and\nno `upload_id`; the worker skips the upload. Quota failures arrive\nas `ok: False` with a store code (`artifact_store`,\n`artifact_too_large`, `workspace_too_large`). `file_id` was set only\nfor the kind `input_image`, which the API now refuses, so it is\nnever set.",
   "properties": {
     "artifact_id": {
       "anyOf": [

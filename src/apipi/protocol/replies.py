@@ -22,12 +22,13 @@ class ArtifactPresignReply(ControlMessage):
     S3 carries `url`, `headers`, and `expires_at` for a direct PUT with
     no store credentials on the worker. The shared filesystem carries
     `path`, the store-root relative path the worker must write, and no
-    URL. `input_image` also carries `file_id` for the `input_image`
-    item part. When the latest stored bytes already match the presigned
+    URL. When the latest stored bytes already match the presigned
     digest the reply carries `unchanged` instead: no URL, no path, and
     no `upload_id`; the worker skips the upload. Quota failures arrive
     as `ok: False` with a store code (`artifact_store`,
-    `artifact_too_large`, `workspace_too_large`, `payload_too_large`).
+    `artifact_too_large`, `workspace_too_large`). `file_id` was set only
+    for the kind `input_image`, which the API now refuses, so it is
+    never set.
     """
 
     type: Literal["artifact.presign.reply"] = "artifact.presign.reply"
