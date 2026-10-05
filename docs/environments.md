@@ -421,8 +421,10 @@ credential host has no DNS filter.
 
 Allowed connections are passed through unchanged, so the guest still
 sees the real certificate of the server. A connection that sends no
-data for 5 minutes is closed. Each session may have up to 128 open
-connections through the gateway.
+data for 5 minutes is closed. When a connection ends, the gateway waits
+at most 5 seconds for the data it still holds to be delivered, and then
+closes both sides. Each session may have up to 128 open connections
+through the gateway.
 
 After a sandbox TTL wipe, the next turn recreates `/workspace` and
 re-applies the stored files (inline and Files API ids), env, packages,

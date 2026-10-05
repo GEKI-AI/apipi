@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 import h11
 
+from apipi.common.background import stop_if_cancelled
 from apipi.worker.egress.ca import INTERCEPT_ALPN
 from apipi.worker.egress.policy import norm_host, split_host_port
 from apipi.worker.egress.sockets import (
@@ -105,6 +106,13 @@ def filtered(filters: list[BodyFilter], data: bytes, *, end: bool) -> Iterator[b
     for piece in stage(0, [data] if data else []):
         if piece:
             yield piece
+
+
+async def _stop(task: "asyncio.Task[None]") -> None:
+    task.cancel()
+    with contextlib.suppress(BaseException):
+        await task
+    stop_if_cancelled()
 
 
 class InterceptError(Exception):
@@ -406,17 +414,13 @@ class Interceptor:
         try:
             switched = await self._response(head)
         except BaseException:
-            body.cancel()
-            with contextlib.suppress(BaseException):
-                await body
+            await _stop(body)
             raise
         if not body.done():
             if switched:
                 await body
             else:
-                body.cancel()
-                with contextlib.suppress(BaseException):
-                    await body
+                await _stop(body)
                 raise InterceptError("early_response")
         body.result()
         if switched:
