@@ -589,3 +589,26 @@ async def test_env_credential_unique_constraint_maps_to_collision(
     second = await client.post(base, headers=_auth(token), json={"auth": _env_auth()})
     assert second.status_code == 400
     assert second.json()["error"]["code"] == "secret_name_collision"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {f"k{index}": "v" for index in range(17)},
+        {"k" * 65: "v"},
+        {"k": "v" * 513},
+        {"k": 5},
+    ],
+)
+async def test_credential_metadata_limits(
+    client: AsyncClient, metadata: dict[str, object]
+) -> None:
+    token = "env-meta-limits"
+    vault_id = await _vault(client, token)
+    response = await client.post(
+        f"/v1/agents/vaults/{vault_id}/credentials",
+        headers=_auth(token),
+        json={"auth": _env_auth(), "metadata": metadata},
+    )
+    assert response.status_code == 400
+    assert "metadata" in response.json()["error"]["message"]

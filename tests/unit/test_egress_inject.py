@@ -712,3 +712,29 @@ async def test_informational_response_headers_are_masked(env: Env) -> None:
     assert data.startswith(b"HTTP/1.1 103")
     assert b"real-secret-value" not in data
     assert PH.encode() in data
+
+
+def test_basic_token_stays_masked_after_cache_eviction() -> None:
+    from apipi.worker.egress.inject import MAX_BASIC_TOKENS
+
+    injector = SecretInjector(
+        [Injection("cred", "TOKEN", PH, "real-secret-value", (API,))]
+    )
+    sent = injector.request(_head([("Authorization", _basic(f"alice:{PH}"))]))
+    assert sent is not None
+    for index in range(MAX_BASIC_TOKENS + 5):
+        injector.request(_head([("Authorization", _basic(f"user{index}:{PH}"))]))
+    real = base64.b64encode(b"alice:real-secret-value").decode()
+    guest = base64.b64encode(f"alice:{PH}".encode()).decode()
+    assert all(b"alice" not in base64.b64decode(r) for _, r in injector.basic_tokens)
+    echoed = ResponseHead(
+        status=200, reason="OK", headers=(("X-Echo", f"Basic {real}"),)
+    )
+    masked = injector.response(sent, echoed)
+    assert masked is not None
+    assert masked.headers == (("X-Echo", f"Basic {guest}"),)
+    result = injector.body(sent, ResponseHead(status=200, reason="OK", headers=()))
+    assert isinstance(result, tuple)
+    _, mask = result
+    out = b"".join([*mask.feed(f"token {real} end".encode()), *mask.end()])
+    assert out == f"token {guest} end".encode()

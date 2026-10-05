@@ -48,6 +48,7 @@ from apipi.protocol import (
     LIVE_EVENT_TYPES,
     ContextBytes,
     TurnContext,
+    context_error_message,
     parse_turn_context,
 )
 from apipi.protocol import PUBLIC_EVENT_TYPES as PUBLIC_EVENT_TYPES
@@ -139,7 +140,7 @@ def _require_turn_context(raw: dict[str, Any] | None) -> TurnContext:
     except (ContextBytes, ValidationError) as exc:
         raise ApiError(
             "invalid_request",
-            f"invalid turn context: {exc}",
+            context_error_message(exc),
             code="invalid_request",
         ) from exc
 

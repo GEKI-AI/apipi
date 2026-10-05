@@ -175,7 +175,12 @@ def test_session_env_rejects_reserved() -> None:
         session_env_from({"env": {"PATH": "/bin"}})
     with pytest.raises(SetupError, match="reserved env"):
         session_env_from({"env": {"APIPI_FOO": "x"}})
+    with pytest.raises(SetupError, match="reserved env"):
+        session_env_from({"env": {"GIT_CONFIG_COUNT": "1"}})
     assert session_env_from({"env": {"REPORT": "yes"}}) == {"REPORT": "yes"}
+    assert session_env_from({"env": {"GIT_AUTHOR_NAME": "bot"}}) == {
+        "GIT_AUTHOR_NAME": "bot"
+    }
 
 
 def test_prepare_writes_inline_files_and_env(tmp_path: Path) -> None:

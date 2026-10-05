@@ -46,7 +46,7 @@ _RESERVED_ENV = frozenset(
         "PI_CODING_AGENT_DIR",
     }
 )
-_RESERVED_ENV_PREFIXES = ("APIPI_", "CODEX_", "PI_")
+_RESERVED_ENV_PREFIXES = ("APIPI_", "CODEX_", "PI_", "GIT_CONFIG_")
 
 PYPI_HOSTS = ("pypi.org", "files.pythonhosted.org", "pypi.python.org")
 NPM_HOSTS = ("registry.npmjs.org", "registry.npmjs.com")

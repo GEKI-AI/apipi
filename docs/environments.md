@@ -233,7 +233,10 @@ agent turn that needs the computer:
    and to prep. Reserved names are rejected: `PATH`, `HOME`, `USER`,
    `SHELL`, `PWD`, `LD_LIBRARY_PATH`, `LD_PRELOAD`, `OPENAI_API_KEY`,
    `OPENAI_BASE_URL`, `DATABASE_URL`, `PI_CODING_AGENT_DIR`, and any
-   name starting with `APIPI_`, `CODEX_`, or `PI_`.
+   name starting with `APIPI_`, `CODEX_`, `PI_`, or `GIT_CONFIG_`
+   (the worker uses `GIT_CONFIG_*` for the git credential helper of
+   vault credentials; other `GIT_` names such as `GIT_AUTHOR_NAME`
+   are allowed).
 3. Install `packages.python`, then `packages.system`, then
    `packages.npm`. Python packages go into a virtualenv at `.venv`
    in the session workspace, not into the system Python. The install

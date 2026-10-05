@@ -116,7 +116,7 @@ id. See [tools](tools.md#mcp) for MCP tools.
 | `auth.secret_value` | The secret: 8 to 16,384 characters of printable ASCII (`!` to `~`), without spaces, line breaks, or other control characters. Otherwise `400`. The value goes into HTTP headers, and the gateway masks it in responses, so a very short value could hide ordinary text. Never returned. |
 | `auth.networking.type` | Must be `limited`. |
 | `auth.networking.allowed_hosts` | 1 to 100 exact hostnames such as `api.github.com`. No scheme, port, path, or wildcard. IP addresses are `400`. Names are stored in lowercase, and duplicates are dropped. |
-| `metadata` | Optional key-value map, as on vaults. ApiPi reads one key: `apipi.git_username`, the user name that the git credential helper sends for this credential's hosts. It is only valid on `environment_variable` credentials. It must not contain a colon, a line break, or surrounding spaces. |
+| `metadata` | Optional map of at most 16 string keys (1 to 64 characters) to string values (at most 512 characters). ApiPi reads one key: `apipi.git_username`, the user name that the git credential helper sends for this credential's hosts. It is only valid on `environment_variable` credentials. It must not contain a colon, a line break, or surrounding spaces. |
 
 `GET` returns `type`, `secret_name`, and `networking`, never
 `secret_value`:
@@ -278,9 +278,12 @@ with the placeholder:
 - its JSON string form (with `\"` and `\\`, with and without `\/`),
 - its percent-encoded forms (as `encodeURIComponent` writes it, and
   with `/` left as it is),
-- every `Authorization: Basic` token that the gateway built for this
-  host in the session (base64 of `user:secret_value`); it is replaced
-  with the token the guest sent.
+- the `Authorization: Basic` token that the gateway built for the
+  request itself (base64 of `user:secret_value`), and the tokens it built
+  for earlier requests to this host in the session (up to 64); each is
+  replaced with the token the guest sent. The token of the request is
+  taken from that request, so it is masked in its own response even when
+  many other requests push it out of the shared list.
 
 Headers and body use the same single pass, so the longest string is
 replaced first in both. Because `Range` and `If-Range` are removed from
@@ -341,8 +344,8 @@ For each credential host it sets:
   `ssh://git@<host>/`, so a clone URL copied from the SSH tab uses
   HTTPS and goes through the gateway.
 
-If `environment.env` already sets `GIT_CONFIG_COUNT` and its keys, the
-worker appends its entries after them. The helper answers only `get`
+`environment.env` cannot set names that start with `GIT_CONFIG_`, so
+it cannot change or remove this configuration. The helper answers only `get`
 requests for `https` URLs of a listed host (with or without port 443
 or 8443). It ignores `store` and `erase`, so it never saves anything
 itself. Another credential helper that the agent configures could

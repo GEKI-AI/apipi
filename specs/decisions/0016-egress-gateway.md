@@ -115,9 +115,11 @@ identity`, and masks the response headers (also of `1xx` responses) and
 body with one longest-first pass, dropping response trailers. The mask
 strings are the exact secret, its JSON string forms (with and without
 `\/`), its percent-encoded forms (including the `encodeURIComponent`
-form), and every Basic token the gateway
-built for that host (base64 of `user:secret`, replaced with the token
-the guest sent), longest first. Other transformations (hashes, partial
+form), the Basic token the gateway built for the request itself
+(taken from that exchange, so a shared cache can never drop it while the
+response is in flight), and the Basic tokens it built for earlier
+requests to that host (a bounded cache), each replaced with the token
+the guest sent, longest first. Other transformations (hashes, partial
 copies, base64 of the bare secret built by the agent) are not masked.
 
 Body masking streams: each piece of a read is decoded, masked, and sent

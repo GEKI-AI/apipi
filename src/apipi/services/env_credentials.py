@@ -28,6 +28,9 @@ MAX_SECRET_NAME = 255
 MIN_SECRET_VALUE = 8
 MAX_SECRET_VALUE = 16_384
 MAX_GIT_USERNAME = 255
+MAX_METADATA_KEYS = 16
+MAX_METADATA_KEY = 64
+MAX_METADATA_VALUE = 512
 
 _LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -148,7 +151,19 @@ def parse_environment_update(auth: dict[str, Any], row: VaultCredential) -> str 
 def credential_metadata(
     metadata: dict[str, Any] | None, auth_type: str
 ) -> dict[str, Any] | None:
-    if metadata is None or GIT_USERNAME_KEY not in metadata:
+    if metadata is None:
+        return None
+    if len(metadata) > MAX_METADATA_KEYS:
+        _bad(f"metadata has at most {MAX_METADATA_KEYS} keys")
+    for key, value in metadata.items():
+        if not key or len(key) > MAX_METADATA_KEY:
+            _bad(f"metadata keys are 1 to {MAX_METADATA_KEY} characters")
+        if not isinstance(value, str) or len(value) > MAX_METADATA_VALUE:
+            _bad(
+                "metadata values are strings of at most "
+                f"{MAX_METADATA_VALUE} characters"
+            )
+    if GIT_USERNAME_KEY not in metadata:
         return metadata
     if auth_type != ENVIRONMENT_VARIABLE:
         _bad(f"{GIT_USERNAME_KEY} is only valid on environment_variable credentials")

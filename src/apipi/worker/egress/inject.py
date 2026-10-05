@@ -327,11 +327,35 @@ class SecretInjector:
             placeholder = injection.placeholder.encode()
             for form in secret_forms(injection.value):
                 pairs.append((form.encode(), placeholder))
+        pairs.extend(self._exchange_tokens(head, applying))
         host = norm_host(head.host)
         for (token_host, real), guest in self.basic_tokens.items():
             if token_host == host:
                 pairs.append((real, guest))
         return ordered_masks(pairs)
+
+    def _exchange_tokens(
+        self, head: RequestHead, applying: list[Injection]
+    ) -> list[tuple[bytes, bytes]]:
+        pairs: list[tuple[bytes, bytes]] = []
+        for name, value in head.headers:
+            if name.lower() != "authorization":
+                continue
+            scheme, _, token = value.strip().partition(" ")
+            if scheme.lower() != "basic" or not token.strip():
+                continue
+            try:
+                decoded = base64.b64decode(token.strip(), validate=True)
+            except (binascii.Error, ValueError):
+                continue
+            guest = decoded
+            for injection in applying:
+                guest = guest.replace(
+                    injection.value.encode(), injection.placeholder.encode()
+                )
+            if guest != decoded:
+                pairs.append((token.strip().encode(), base64.b64encode(guest)))
+        return pairs
 
     def _basic(self, value: str, injection: Injection, host: str) -> str | None:
         scheme, _, token = value.strip().partition(" ")
