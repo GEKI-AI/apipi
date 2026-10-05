@@ -76,13 +76,11 @@ def child_environments(
 
 
 def _stop(procs: list[subprocess.Popen[bytes]]) -> None:
-    for proc in procs:
+    for proc in reversed(procs):
         if proc.poll() is None:
             proc.terminate()
-    deadline = time.monotonic() + STOP_GRACE
-    for proc in procs:
         try:
-            proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+            proc.wait(timeout=STOP_GRACE)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()

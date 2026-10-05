@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
@@ -24,18 +25,34 @@ def tool_harness() -> FakeHarness:
     return harness
 
 
+def _block_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("split worker must not construct storage clients")
+
+    import apipi.store.blobs as blobs
+    import apipi.store.engine as engine
+
+    monkeypatch.setattr(engine, "create_engine", _boom)
+    monkeypatch.setattr(engine, "Store", _boom)
+    monkeypatch.setattr(blobs, "object_store", _boom)
+    monkeypatch.setattr(blobs, "blob_store", _boom)
+    monkeypatch.setattr(blobs, "S3Store", _boom)
+
+
 @pytest.fixture
 async def tool_client(
     settings: Settings,
     store: Store,
     tool_harness: FakeHarness,
     worker_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[AsyncClient]:
     from tests.support.split_worker import split_client_for
 
     async with split_client_for(
         settings, store, harness=tool_harness, token=worker_secret
     ) as (_app, client, _worker):
+        _block_storage(monkeypatch)
         yield client
 
 
