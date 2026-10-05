@@ -279,6 +279,7 @@ class Turn(Base):
     __tablename__ = "turns"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
+        Index("ix_turns_session_created", "tenant_id", "session_id", "created_at"),
         ForeignKeyConstraint(
             ["tenant_id", "session_id"],
             ["sessions.tenant_id", "sessions.id"],

@@ -686,11 +686,11 @@ async def test_unchanged_compares_the_newest_artifact_after_a_clock_step_back(
     async with store.session() as db:
         artifacts = await list_artifacts(db, tenant_id, session_id)
         assert artifacts is not None
-        assert [str(a.id) for a in artifacts][:2] == [
+        assert [str(a.id) for a in artifacts] == [
             first["artifact_id"],
             second["artifact_id"],
+            again["artifact_id"],
         ]
-        assert len(artifacts) == 3
 
 
 @pytest.mark.anyio
