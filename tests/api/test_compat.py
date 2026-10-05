@@ -610,9 +610,11 @@ async def test_unknown_field_is_rejected(
         json={**body, "foo": 1},
     )
     assert response.status_code == 400
-    error = _error(response)
-    assert error["type"] == "invalid_request"
-    assert error["code"] == "unknown_field"
+    assert _error(response) == {
+        "type": "invalid_request",
+        "code": "unknown_field",
+        "message": "Unknown field: foo",
+    }
     agents = await client.get("/v1/agents", headers=_auth(token))
     assert [row["id"] for row in agents.json()["data"]] == [agent_id]
     sessions = await client.get("/v1/agents/sessions", headers=_auth(token))
