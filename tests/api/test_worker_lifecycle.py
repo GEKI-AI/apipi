@@ -107,19 +107,21 @@ async def test_inventory_clears_orphaned_lease(
 ) -> None:
     app = create_app(api_settings_for(_worker_settings(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
-    hello = await worker.connect()
-    worker_id = uuid.UUID(str(hello["worker_id"]))
-    tenant_id, session_id, _lease = await _hosted_lease(store, worker_id)
-    await worker.send_json({"type": "inventory", "sessions": []})
-    reply = await _reply(worker)
-    assert reply["revoke"] == []
-    async with store.session() as db:
-        row = await get_session(db, tenant_id, session_id)
-        assert row is not None
-        assert row.lease_id is None
-        events = await list_events(db, tenant_id, session_id)
-    assert events[-1].type == "agent.session.error"
-    await worker.close()
+    try:
+        hello = await worker.connect()
+        worker_id = uuid.UUID(str(hello["worker_id"]))
+        tenant_id, session_id, _lease = await _hosted_lease(store, worker_id)
+        await worker.send_json({"type": "inventory", "sessions": []})
+        reply = await _reply(worker)
+        assert reply["revoke"] == []
+        async with store.session() as db:
+            row = await get_session(db, tenant_id, session_id)
+            assert row is not None
+            assert row.lease_id is None
+            events = await list_events(db, tenant_id, session_id)
+        assert events[-1].type == "agent.session.error"
+    finally:
+        await worker.close()
 
 
 async def test_hello_carries_revoke_and_ttl(
