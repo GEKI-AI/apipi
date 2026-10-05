@@ -487,10 +487,16 @@ def test_egress_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APIPI_MICROVM_EGRESS_ALLOWLIST", "on")
     monkeypatch.setenv("APIPI_MICROVM_EGRESS_HOSTS", "mcp.tavily.com, api.example.com")
     monkeypatch.setenv("APIPI_MICROVM_EGRESS_MBIT", "25")
+    monkeypatch.setenv(
+        "APIPI_MICROVM_EGRESS_PRIVATE_HOSTS", "git.internal, 10.1.0.0/16"
+    )
+    monkeypatch.setenv("APIPI_MICROVM_EGRESS_UPSTREAM_CA", "/etc/apipi/ca.pem")
     settings = Settings()
     assert settings.microvm_egress_allowlist is True
     assert settings.microvm_egress_hosts == "mcp.tavily.com, api.example.com"
     assert settings.microvm_egress_mbit == 25
+    assert settings.microvm_egress_private_hosts == "git.internal, 10.1.0.0/16"
+    assert settings.microvm_egress_upstream_ca == "/etc/apipi/ca.pem"
 
 
 def test_egress_mbit_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -669,6 +675,8 @@ def test_nested_toml_sandbox_and_pi(
         "egress_allowlist = false\n"
         'egress_hosts = "mcp.example.com"\n'
         "egress_mbit = 25\n"
+        'private_hosts = ["forgejo.internal", "10.0.0.0/8"]\n'
+        'upstream_ca = "/etc/apipi/internal-ca.pem"\n'
         "[sandbox.ttl]\n"
         'openai_hosted = "45m"\n'
         "[sandbox.browser]\n"
@@ -693,6 +701,8 @@ def test_nested_toml_sandbox_and_pi(
     assert settings.microvm_egress_allowlist is False
     assert settings.microvm_egress_hosts == "mcp.example.com"
     assert settings.microvm_egress_mbit == 25
+    assert settings.microvm_egress_private_hosts == "forgejo.internal,10.0.0.0/8"
+    assert settings.microvm_egress_upstream_ca == "/etc/apipi/internal-ca.pem"
     assert settings.sandbox_ttl_openai_hosted == timedelta(minutes=45)
     assert not hasattr(settings, "sandbox_auto_playwright")
 

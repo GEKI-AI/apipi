@@ -70,7 +70,9 @@ host broker on the TAP gateway address. The broker forwards to the
 real model host and MCP servers. By default the TAP may reach the
 public internet. Private and special-use IPv4 ranges are rejected,
 including RFC1918, link-local, and `100.64.0.0/10`. The TAP subnet
-stays open for the host broker. It is rate-limited with `tc`. An
+stays open for the host broker. It is rate-limited with `tc`. Web
+traffic (TCP 80, 443, and 8443) goes through an egress gateway in the
+worker that checks the hostname, not the IP address. An
 optional destination allowlist can lock
 the guest to named hosts; the model host is always included. Session
 `environment.network` can disable or restrict that TAP further. It

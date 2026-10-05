@@ -39,6 +39,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.40,<3",
     "uvicorn[standard]>=0.32,<1",
     "zstandard>=0.23,<1",
+    "h11>=0.16,<1",
 ]
 
 [project.optional-dependencies]

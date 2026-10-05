@@ -15,7 +15,9 @@ from apipi.config import (
     Settings,
     require_run_mode,
 )
-from apipi.mcp.http import McpHttpServer
+from apipi.env.setup import NetworkPolicy, write_network_policy
+from apipi.mcp.http import McpConnectError, McpHttpServer
+from apipi.worker.egress import EgressHooks
 from apipi.worker.pi.artifacts import unpack_workspace_tar
 from apipi.worker.pi.guest import (
     RNDADDENTROPY,
@@ -26,12 +28,14 @@ from apipi.worker.pi.guest import (
 from apipi.worker.pi.guest import main as guest_main
 from apipi.worker.pi.microvm import (
     BOOT_ARGS,
+    EGRESS_CA_REL,
     GUEST_DNS,
     GUEST_WORKSPACE,
     INSTALL_HINT,
     SHELL_SUDO_MARK,
     VSOCK_PORT,
     StartedMicrovm,
+    TapPorts,
     _console_level,
     _enable_forward,
     _run,
@@ -49,7 +53,6 @@ from apipi.worker.pi.microvm import (
     microvm_shell_needs_sudo,
     microvm_shell_sudo_argv,
     require_microvm,
-    resolve_host_ips,
     run_microvm_shell,
     setup_tap,
     spawn_microvm_pi,
@@ -60,6 +63,33 @@ from apipi.worker.pi.microvm import (
     write_workspace_image,
 )
 from apipi.worker.pi.proc import PiProc, spawn_pi
+
+FAKE_CA = b"-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n"
+
+
+class _FakeGateway:
+    def __init__(self, mode: str, kwargs: dict[str, Any]) -> None:
+        self.port = 40001
+        self.dns_ports = (40002, 40003) if mode == "restricted" else None
+        self.ca_pem = FAKE_CA
+        self.kwargs = kwargs
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture(autouse=True)
+def gateways(monkeypatch: pytest.MonkeyPatch) -> list[_FakeGateway]:
+    started: list[_FakeGateway] = []
+
+    async def fake_start(_settings: Settings, **kwargs: Any) -> _FakeGateway:
+        gateway = _FakeGateway(kwargs["mode"], kwargs)
+        started.append(gateway)
+        return gateway
+
+    monkeypatch.setattr("apipi.worker.pi.microvm.start_gateway", fake_start)
+    return started
 
 
 def _settings(
@@ -462,65 +492,55 @@ def test_guest_workspace_pull_is_source_for_next_pack(tmp_path: Path) -> None:
     assert not (host / ".apipi").exists()
 
 
-def test_tap_setup_nat_without_host_loopback() -> None:
-    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
-    argv = tap_setup_argv(
-        net,
+NET_ID = "551e7604-e35c-42b3-b825-416853441234"
+PORTS = TapPorts(broker=40000, gateway=40001, dns_udp=40002, dns_tcp=40003)
+BROKER_ONLY = TapPorts(broker=40000)
+
+
+def _tap_argv(mode: str, ports: TapPorts = PORTS) -> list[list[str]]:
+    return tap_setup_argv(
+        tap_net(NET_ID),
         ip="/sbin/ip",
         iptables="/sbin/iptables",
         uid=123,
         gid=100,
+        ports=ports,
         tc="/sbin/tc",
+        mode=cast(Any, mode),
     )
-    flat = " ".join(" ".join(part) for part in argv)
+
+
+def _flat(argv: list[list[str]]) -> str:
+    return "\n".join(" ".join(part) for part in argv)
+
+
+def test_tap_setup_nat_without_host_loopback() -> None:
+    net = tap_net(NET_ID)
+    flat = _flat(_tap_argv("enabled"))
     assert net.name in flat
     assert "tuntap" in flat
     assert "MASQUERADE" in flat
     assert "127.0.0.1" not in flat
-    assert "DNAT" not in flat
     assert "--map-host-loopback" not in flat
     assert "10.0.0.0/8" in flat
     assert "-j ACCEPT" in flat
     assert "50mbit" in flat
-    assert "198.51.100.9" not in flat
 
 
-def test_tap_setup_allowlist_on_rejects_unlisted() -> None:
-    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
-    argv = tap_setup_argv(
-        net,
-        ip="/sbin/ip",
-        iptables="/sbin/iptables",
-        uid=123,
-        gid=100,
-        tc="/sbin/tc",
-        allowlist=True,
-        allowed_ips=["203.0.113.10"],
-    )
-    flat = " ".join(" ".join(part) for part in argv)
-    assert "REJECT" in flat
-    assert "203.0.113.10" in flat
-    for dns in GUEST_DNS:
-        assert dns in flat
-    assert "198.51.100.9" not in flat
-
-
-def test_tap_setup_allowlist_off_accepts_public() -> None:
-    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
-    argv = tap_setup_argv(
-        net,
-        ip="/sbin/ip",
-        iptables="/sbin/iptables",
-        uid=123,
-        gid=100,
-        allowlist=False,
-    )
-    flat = " ".join(" ".join(part) for part in argv)
-    assert "-j ACCEPT" in flat
-    assert "10.0.0.0/8" in flat
-    assert "192.168.0.0/16" in flat
-    assert "169.254.0.0/16" in flat
-    assert "100.64.0.0/10" in flat
+def test_tap_setup_enabled_sends_web_ports_to_gateway() -> None:
+    net = tap_net(NET_ID)
+    argv = _tap_argv("enabled")
+    flat = _flat(argv)
+    assert (
+        f"-t nat -A {net.name}gw -p tcp -m multiport --dports 80,443,8443 "
+        f"-j DNAT --to-destination {net.host_ip}:40001"
+    ) in flat
+    assert f"-t nat -A {net.name}gw -d {net.subnet} -j RETURN" in flat
+    assert f"-t nat -I PREROUTING 1 -i {net.name}" in flat
+    assert "--dport 53" not in flat
+    assert f"-A {net.name}eg -p udp --dport 443 -j REJECT" in flat
+    chain = [cmd for cmd in argv if len(cmd) > 3 and cmd[3] == f"{net.name}eg"]
+    assert chain[-1] == ["/sbin/iptables", "-w", "-A", f"{net.name}eg", "-j", "ACCEPT"]
     accept_at = next(
         i for i, cmd in enumerate(argv) if net.subnet in cmd and "ACCEPT" in cmd
     )
@@ -528,19 +548,130 @@ def test_tap_setup_allowlist_off_accepts_public() -> None:
     assert accept_at < reject_at
 
 
-def test_tap_teardown_cleans_tc_and_chain() -> None:
-    net = tap_net("551e7604-e35c-42b3-b825-416853441234")
-    argv = tap_teardown_argv(
+def test_tap_setup_restricted_rejects_other_ports_and_filters_dns() -> None:
+    net = tap_net(NET_ID)
+    argv = _tap_argv("restricted")
+    flat = _flat(argv)
+    assert f"--to-destination {net.host_ip}:40001" in flat
+    assert (
+        f"-t nat -A {net.name}gw -p udp --dport 53 -j DNAT "
+        f"--to-destination {net.host_ip}:40002"
+    ) in flat
+    assert (
+        f"-t nat -A {net.name}gw -p tcp --dport 53 -j DNAT "
+        f"--to-destination {net.host_ip}:40003"
+    ) in flat
+    chain = [cmd for cmd in argv if len(cmd) > 3 and cmd[3] == f"{net.name}eg"]
+    assert chain[-1][-4:] == [
+        "-j",
+        "REJECT",
+        "--reject-with",
+        "icmp-port-unreachable",
+    ]
+    assert chain[-1][4:6] == ["-j", "REJECT"]
+    assert not any(cmd[-2:] == ["-j", "ACCEPT"] and len(cmd) == 6 for cmd in chain)
+    for dns in GUEST_DNS:
+        assert dns not in flat
+    assert "203.0.113.10" not in flat
+
+
+def test_tap_setup_disabled_blocks_without_gateway() -> None:
+    net = tap_net(NET_ID)
+    argv = _tap_argv("disabled", BROKER_ONLY)
+    flat = _flat(argv)
+    assert "DNAT" not in flat
+    assert f"{net.name}gw" not in flat
+    assert "--dport 53" not in flat
+    for dns in GUEST_DNS:
+        assert dns not in flat
+    chain = [cmd for cmd in argv if len(cmd) > 3 and cmd[3] == f"{net.name}eg"]
+    assert chain[-1][4:6] == ["-j", "REJECT"]
+    inbound = [cmd for cmd in argv if len(cmd) > 3 and cmd[3] == f"{net.name}in"]
+    accepts = [cmd for cmd in inbound if "--dport" in cmd]
+    assert [cmd[cmd.index("--dport") + 1] for cmd in accepts] == ["40000"]
+
+
+def test_tap_setup_filters_guest_to_host_input() -> None:
+    net = tap_net(NET_ID)
+    argv = _tap_argv("restricted")
+    chain = f"{net.name}in"
+    inbound = [cmd for cmd in argv if len(cmd) > 3 and cmd[3] == chain]
+    assert inbound[0] == ["/sbin/iptables", "-w", "-N", chain]
+    assert "RELATED,ESTABLISHED" in inbound[1]
+    allowed = [
+        (cmd[cmd.index("-p") + 1], cmd[cmd.index("--dport") + 1])
+        for cmd in inbound
+        if "--dport" in cmd
+    ]
+    assert allowed == [
+        ("tcp", "40000"),
+        ("tcp", "40001"),
+        ("udp", "40002"),
+        ("tcp", "40003"),
+    ]
+    for cmd in inbound:
+        if "--dport" in cmd:
+            assert cmd[cmd.index("-d") + 1] == net.host_ip
+    assert inbound[-1][4:6] == ["-j", "REJECT"]
+    jump = f"-I INPUT 1 -i {net.name} -m comment --comment apipi-{net.name} -j {chain}"
+    assert jump in _flat(argv)
+    enabled = _tap_argv("enabled", TapPorts(broker=40000, gateway=40001))
+    enabled_in = [cmd for cmd in enabled if len(cmd) > 3 and cmd[3] == chain]
+    assert [
+        cmd[cmd.index("--dport") + 1] for cmd in enabled_in if "--dport" in cmd
+    ] == [
+        "40000",
+        "40001",
+    ]
+
+
+def test_tap_setup_needs_gateway_unless_disabled() -> None:
+    with pytest.raises(ValueError, match="gateway"):
+        _tap_argv("enabled", BROKER_ONLY)
+    with pytest.raises(ValueError, match="DNS"):
+        _tap_argv("restricted", TapPorts(broker=40000, gateway=40001))
+
+
+def _table(cmd: list[str]) -> str:
+    return cmd[cmd.index("-t") + 1] if "-t" in cmd else "filter"
+
+
+@pytest.mark.parametrize("mode", ["enabled", "restricted", "disabled"])
+def test_tap_teardown_removes_every_rule(mode: str) -> None:
+    net = tap_net(NET_ID)
+    setup = _tap_argv(mode, BROKER_ONLY if mode == "disabled" else PORTS)
+    teardown = tap_teardown_argv(
         net,
         ip="/sbin/ip",
         iptables="/sbin/iptables",
         tc="/sbin/tc",
-        allowlist=True,
+        mode=cast(Any, mode),
     )
-    flat = " ".join(" ".join(part) for part in argv)
-    assert "qdisc del" in flat
-    assert f"{net.name}eg" in flat
-    assert "link delete" in flat
+    builtin = {"FORWARD", "INPUT", "POSTROUTING", "PREROUTING"}
+    for cmd in setup:
+        if not cmd[0].endswith("iptables"):
+            continue
+        table = _table(cmd)
+        for flag in ("-A", "-I"):
+            if flag in cmd and cmd[cmd.index(flag) + 1] in builtin:
+                at = cmd.index(flag)
+                rest = cmd[at + 2 :]
+                if flag == "-I" and rest and rest[0].isdigit():
+                    rest = rest[1:]
+                expected = [*cmd[:at], "-D", cmd[at + 1], *rest]
+                assert expected in teardown, expected
+        if "-N" in cmd:
+            chain = cmd[cmd.index("-N") + 1]
+            flushes = [c for c in teardown if "-F" in c and chain in c]
+            drops = [c for c in teardown if "-X" in c and chain in c]
+            assert flushes and drops
+            assert {_table(c) for c in [*flushes, *drops]} == {table}
+            assert teardown.index(flushes[0]) < teardown.index(drops[0])
+    assert ["/sbin/ip", "link", "delete", "dev", net.name] == teardown[-1]
+    teardown_flat = _flat(teardown)
+    assert "qdisc del" in teardown_flat
+    if mode == "disabled":
+        assert f"{net.name}gw" not in teardown_flat
 
 
 def test_egress_host_and_session_hosts(tmp_path: Path) -> None:
@@ -565,17 +696,6 @@ def test_egress_host_and_session_hosts(tmp_path: Path) -> None:
         settings, mcp, extra_hosts=["pypi.org", "registry.npmjs.org"]
     )
     assert with_packages[-2:] == ["pypi.org", "registry.npmjs.org"]
-
-
-def test_resolve_host_ips(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "apipi.worker.pi.microvm.socket.getaddrinfo",
-        lambda *_a, **_k: [
-            (0, 0, 0, "", ("203.0.113.10", 0)),
-            (0, 0, 0, "", ("203.0.113.10", 0)),
-        ],
-    )
-    assert resolve_host_ips("api.example.com") == ["203.0.113.10"]
 
 
 def test_guest_skill_dirs_rewrite_workspace_paths(tmp_path: Path) -> None:
@@ -912,6 +1032,7 @@ def test_setup_tap_runs_ip_commands(monkeypatch: pytest.MonkeyPatch) -> None:
         uid=1,
         gid=2,
         tc="/sbin/tc",
+        ports=TapPorts(broker=40000, gateway=40001),
         egress_mbit=25,
     )
     flat = " ".join(" ".join(part) for part in ran)
@@ -1155,3 +1276,222 @@ def test_sandbox_boot_failed_is_structured(
     assert last.levelno == logging.ERROR
     assert last.__dict__["error_code"] == "sandbox_boot_failed"
     assert last.__dict__["vm_id"] == "vm-1"
+
+
+async def test_start_microvm_runs_egress_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    gateways: list[_FakeGateway],
+) -> None:
+    _images(tmp_path)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
+    setups: list[dict[str, Any]] = []
+    teardowns: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.setup_tap", lambda net, **kw: setups.append(kw)
+    )
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.teardown_tap", lambda net, **kw: teardowns.append(kw)
+    )
+    packed: dict[str, bytes] = {}
+
+    def fake_write(dest: Path, **kwargs: Any) -> None:
+        write_workspace_image(dest, **kwargs)
+        with tarfile.open(dest, mode="r") as tar:
+            member = tar.extractfile(EGRESS_CA_REL)
+            assert member is not None
+            packed["ca"] = member.read()
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        return _Process()
+
+    monkeypatch.setattr("apipi.worker.pi.microvm.write_workspace_image", fake_write)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    cwd = tmp_path / "session"
+    cwd.mkdir()
+    write_network_policy(
+        cwd, NetworkPolicy(access="restricted", allowed_domains=("api.example.com",))
+    )
+    hooks = EgressHooks()
+    started = await start_microvm(
+        _settings(tmp_path),
+        cwd=str(cwd),
+        tools=True,
+        session_id="sess_1",
+        intercept_hosts=("api.example.com",),
+        egress_hooks=hooks,
+    )
+    try:
+        assert len(gateways) == 1
+        gateway = gateways[0]
+        assert started.egress is cast(Any, gateway)
+        kwargs = gateway.kwargs
+        assert kwargs["mode"] == "restricted"
+        assert kwargs["allowed_hosts"] == ("api.example.com",)
+        assert kwargs["host"] == tap_net(started.chroot_dir.parent.name).host_ip
+        assert kwargs["session_id"] == "sess_1"
+        assert kwargs["intercept_hosts"] == ("api.example.com",)
+        assert kwargs["hooks"] is hooks
+        assert kwargs["dns_upstreams"] == tuple((dns, 53) for dns in GUEST_DNS)
+        assert setups[0]["mode"] == "restricted"
+        assert started.broker is not None
+        assert setups[0]["ports"] == TapPorts(started.broker.port, 40001, 40002, 40003)
+        assert packed["ca"] == FAKE_CA
+    finally:
+        if started.broker is not None:
+            await started.broker.stop()
+        started.cleanup()
+    assert gateway.closed is True
+    assert teardowns[0]["mode"] == "restricted"
+
+
+async def test_start_microvm_enabled_gateway_has_no_dns(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    gateways: list[_FakeGateway],
+) -> None:
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+    setups: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.setup_tap", lambda net, **kw: setups.append(kw)
+    )
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        return _Process()
+
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    started = await start_microvm(_settings(tmp_path), cwd=None, tools=True)
+    try:
+        assert gateways[0].kwargs["mode"] == "enabled"
+        assert gateways[0].kwargs["intercept_hosts"] == ()
+        assert started.broker is not None
+        assert setups[0]["ports"] == TapPorts(started.broker.port, 40001)
+    finally:
+        if started.broker is not None:
+            await started.broker.stop()
+        started.cleanup()
+
+
+async def test_start_microvm_disabled_runs_no_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    gateways: list[_FakeGateway],
+) -> None:
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+    setups: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.setup_tap", lambda net, **kw: setups.append(kw)
+    )
+    packed: dict[str, Any] = {}
+
+    def fake_write(dest: Path, **kwargs: Any) -> None:
+        packed.update(kwargs)
+        write_workspace_image(dest, **kwargs)
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        return _Process()
+
+    monkeypatch.setattr("apipi.worker.pi.microvm.write_workspace_image", fake_write)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    cwd = tmp_path / "session"
+    cwd.mkdir()
+    write_network_policy(cwd, NetworkPolicy(access="disabled"))
+    started = await start_microvm(_settings(tmp_path), cwd=str(cwd), tools=True)
+    try:
+        assert gateways == []
+        assert started.egress is None
+        assert started.broker is not None
+        assert setups[0]["mode"] == "disabled"
+        assert setups[0]["ports"] == TapPorts(started.broker.port)
+        assert packed["egress_ca"] is None
+    finally:
+        if started.broker is not None:
+            await started.broker.stop()
+        started.cleanup()
+
+
+async def test_start_microvm_boot_failure_closes_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    gateways: list[_FakeGateway],
+) -> None:
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        raise PermissionError("Permission denied")
+
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    with pytest.raises(ConfigError):
+        await start_microvm(_settings(tmp_path), cwd=None, tools=True)
+    assert gateways[0].closed is True
+
+
+def test_require_microvm_checks_upstream_ca(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _images(tmp_path)
+    monkeypatch.setattr("apipi.worker.pi.microvm.kvm_available", lambda: True)
+    monkeypatch.setattr("apipi.worker.pi.microvm.shutil.which", _which_ok)
+    settings = _settings(tmp_path).model_copy(
+        update={"microvm_egress_upstream_ca": str(tmp_path / "missing.pem")}
+    )
+    with pytest.raises(ConfigError, match="APIPI_MICROVM_EGRESS_UPSTREAM_CA"):
+        require_microvm(settings)
+    bad = tmp_path / "bad.pem"
+    bad.write_text("not a certificate\n")
+    settings = settings.model_copy(update={"microvm_egress_upstream_ca": str(bad)})
+    with pytest.raises(ConfigError, match="not a valid PEM bundle"):
+        require_microvm(settings)
+
+
+def test_guest_sh_builds_ca_bundle() -> None:
+    script = Path(__file__).resolve().parents[2] / "src/apipi/worker/pi/guest.sh"
+    text = script.read_text()
+    assert f'"$WS/{EGRESS_CA_REL}"' in text
+    assert "/etc/ssl/certs/ca-certificates.crt" in text
+    assert "/run/apipi" in text
+    bundle_at = text.index('CA_BUNDLE="$CA_DIR/ca-bundle.pem"')
+    env_at = text.index('. "$WS/.apipi/env"')
+    pi_at = text.index("guest.py")
+    for name in (
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "GIT_SSL_CAINFO",
+        "NODE_EXTRA_CA_CERTS",
+    ):
+        export_at = text.index(f'export {name}="$CA_BUNDLE"')
+        assert bundle_at < env_at < export_at < pi_at
+
+
+@pytest.mark.parametrize(
+    "error", [McpConnectError("mcp blocked"), asyncio.CancelledError()]
+)
+async def test_start_microvm_closes_gateway_on_any_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    gateways: list[_FakeGateway],
+    error: BaseException,
+) -> None:
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+    torn: list[object] = []
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.teardown_tap", lambda net, **_k: torn.append(net)
+    )
+
+    async def failing_broker(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr("apipi.worker.pi.broker.start_broker", failing_broker)
+    with pytest.raises(type(error)):
+        await start_microvm(_settings(tmp_path), cwd=None, tools=True)
+    assert gateways[0].closed is True
+    assert len(torn) == 1

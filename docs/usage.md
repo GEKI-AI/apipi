@@ -201,6 +201,8 @@ a `count` of the occurrences since the last line.
 | `worker.spool.recovered` | info | The worker reloaded its disk outbox at start. Carries the number of sessions, envelopes, and bytes, `skipped_lines` (torn or invalid lines), and `spool_bytes`. |
 | `worker.outbox.spool_error` | warning | The disk spool could not be written, compacted, synced, or removed. Carries `path`. Rate limited. |
 | `worker.replay` | info | The worker resends unacked envelopes after a reconnect. Carries `envelopes` (sent before and sent again), `sessions`, and `unclaimed_sessions` (spooled sessions the worker did not claim in `register`). |
+| `egress.connection` | info | One guest connection through the microVM egress gateway ended. Carries `session_id`, `host`, `port`, `decision` (`spliced`, `intercepted`, `rejected`), `reason` when set, `bytes_up`, and `bytes_down`. Never carries header values. See [observability](observability.md#logs). |
+| `egress.accept.failed` | warning | Rate limited. The egress gateway could not accept a guest connection because the worker ran out of file descriptors or memory. Carries `session_id` and `error`. The gateway retries after half a second. |
 | `worker.harvest.skipped` | info | A killed session was not harvested because no socket was open. Carries `session_id`. |
 | `worker.outbox.oversize` | warning | An envelope was over `MAX_MESSAGE_BYTES` and the turn failed with `worker_message_too_large`. Carries `type` and `size`. Rate limited. |
 | `worker.message.failed` | warning | The worker or the API failed to handle one message and went on. On the API it is a database or store error, the socket stays open, and the line carries `type`, `error`, and `transient`. Rate limited per type. |

@@ -719,22 +719,80 @@ use **host** loopback, so it cannot open Postgres on the worker's
 when the model host itself is on a private address. A session
 allowlist cannot open a private range.
 
+Guest TCP to ports 80, 443, and 8443 goes through an egress gateway
+in the worker process. The worker starts one gateway per microVM on
+the TAP host IP and sends that traffic to it with iptables `DNAT`, so
+the guest needs no proxy settings. The gateway reads the hostname from
+the TLS server name (SNI) on 443 and 8443 and from the `Host` header on
+80. With the allowlist or a `restricted` session it resolves the
+hostname itself, rejects it if any address is private, and connects to
+the address it resolved. Otherwise it connects to the address the guest
+asked for after checking that it is not private. Allowed connections
+are passed through byte for byte, so certificate pinning in the guest
+keeps working. UDP to port 443 is rejected so QUIC clients use TCP.
+iptables rules on the TAP also reject guest traffic to the worker host
+itself, except the broker, gateway, and DNS filter ports of that
+session. Each worker also creates a certificate authority in memory
+when it starts. It is valid for one year, and a worker restart makes a
+new one. The key never leaves worker memory. Only the certificate goes
+to the guest, on the workspace drive. Guest init joins the image's
+system authorities and that certificate into `/run/apipi/ca-bundle.pem`
+and points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`,
+`NODE_EXTRA_CA_CERTS`, and `CURL_CA_BUNDLE` at it. This needs a guest
+image built from this ApiPi version; an older image skips the bundle.
+The gateway uses the authority only for hosts whose HTTPS traffic it
+must read, and no current setting turns that on. On such a connection
+the gateway forwards HTTP/1.1 requests one at a time. It rejects a
+request that has both `Content-Length` and `Transfer-Encoding`, drops
+hop-by-hop headers, and allows only WebSocket upgrades. After an
+upgrade the connection is passed through unchanged, so only the upgrade
+request itself is checked.
+
 To lock destinations, set `egress_allowlist = true`. Then the guest
 may reach only the model host, this session's HTTP MCP hosts, extra
-`egress_hosts`, package registries when `environment.packages` is set,
-and DNS, and only when those addresses are public. Unlisted TCP is
-rejected. Private ranges stay rejected even if a name resolves to
-one. Session `environment.network` can
-still disable TAP egress or restrict it to named hosts. A session
-cannot add a host that this allowlist forbids. If the allowlist is
-off, a session may still set `disabled` or `restricted`. Isolation
-`none` cannot enforce that field.
+`egress_hosts`, and package registries when `environment.packages` is
+set, and only by those exact hostnames. A connection without a server
+name, or to an IP address, is rejected. On port 80 every HTTP request
+on a connection must name the same allowed host, and `CONNECT` is
+rejected. Unlisted TCP ports and other UDP are rejected. Guest DNS goes to a filtering resolver on the TAP
+host IP that answers only listed names and returns `NXDOMAIN` for the
+rest. Private ranges stay rejected even if a name resolves to one.
+Session `environment.network` can still disable TAP egress or restrict
+it to named hosts, with the same hostname rules. A session cannot add
+a host that this allowlist forbids. If the allowlist is off, a session
+may still set `disabled` or `restricted`. Isolation `none` cannot
+enforce that field.
+
+Some upstreams live on a private network, for example a self-hosted
+Forgejo. List them in `private_hosts` (hostnames or CIDRs, the same
+format as `[mcp].allow_hosts`). A private address is allowed only for
+a hostname that is listed in `private_hosts` by name. The guest must
+connect with that name, and the session must name it too: the host is
+in the allowed hostnames of a `restricted` session (or of the
+allowlist), or it is a host whose HTTPS traffic the gateway reads. An
+`enabled` session cannot reach a private host otherwise, and no
+session can reach one by IP address or without a server name.
+
+CIDR entries open nothing on their own, so a tenant cannot reach your
+network with a wildcard DNS name such as `10-0-0-5.nip.io`. When you
+list CIDRs, they restrict the private addresses that the named hosts
+may resolve to: a named host that resolves to a private address
+outside every listed CIDR is rejected. With no CIDR listed, a named
+host may resolve to any private address. Link-local and cloud metadata
+addresses (`169.254.0.0/16`, for example `169.254.169.254`) stay
+rejected even for a named host. Loopback is allowed for a named host.
+The guest itself still cannot reach the private address. If
+such a host uses a certificate from an internal authority, put that
+authority in a PEM file and set `upstream_ca`. The gateway adds it to
+the system authorities when it checks an upstream certificate.
 
 | Env | TOML | Default | What |
 | --- | --- | --- | --- |
 | `APIPI_MICROVM_EGRESS_ALLOWLIST` | `[sandbox.network].egress_allowlist` | off | Optional fail-closed TAP allowlist when the backend is `microvm`. |
 | `APIPI_MICROVM_EGRESS_HOSTS` | `[sandbox.network].egress_hosts` | empty | Extra hostnames when the allowlist is on, comma-separated or a TOML array. |
 | `APIPI_MICROVM_EGRESS_MBIT` | `[sandbox.network].egress_mbit` | `50` | `tc` rate on each guest TAP, both directions. Always on. |
+| `APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` | `[sandbox.network].private_hosts` | empty | Private hostnames that the egress gateway (never the guest) may connect to when the session explicitly allows them, and optional CIDRs that limit where those hostnames may resolve. CIDRs alone allow nothing (see above). Comma-separated or a TOML array. |
+| `APIPI_MICROVM_EGRESS_UPSTREAM_CA` | `[sandbox.network].upstream_ca` | unset | Path to a PEM bundle of extra certificate authorities the egress gateway trusts for upstream servers, in addition to the system authorities. The worker fails at startup if the file is missing or is not a valid PEM bundle. |
 
 ```toml
 [sandbox.network]
@@ -747,8 +805,10 @@ Lock down to named hosts (model host is still included):
 ```toml
 [sandbox.network]
 egress_allowlist = true
-egress_hosts = ["mcp.tavily.com"]
+egress_hosts = ["mcp.tavily.com", "forgejo.internal"]
 egress_mbit = 50
+private_hosts = ["forgejo.internal"]
+upstream_ca = "/etc/apipi/internal-ca.pem"
 ```
 
 ### Lifetime

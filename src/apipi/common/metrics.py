@@ -449,6 +449,18 @@ class Metrics:
             registry=self.registry,
             buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
         )
+        self.egress_connections = Counter(
+            "apipi_egress_connections_total",
+            "Guest connections through the egress gateway",
+            ["decision"],
+            registry=self.registry,
+        )
+        self.egress_bytes = Counter(
+            "apipi_egress_bytes_total",
+            "Bytes through the egress gateway",
+            ["direction"],
+            registry=self.registry,
+        )
         self.sandboxes_active = Gauge(
             "apipi_sandboxes_active",
             "Live sandboxes by size",
@@ -768,6 +780,15 @@ class Metrics:
         self.sandbox_boot.labels(size=size, result=result).inc()
         if result == "ok":
             self.sandbox_boot_seconds.labels(size=size).observe(max(seconds, 0.0))
+
+    def observe_egress_connection(
+        self, decision: str, *, bytes_up: int, bytes_down: int
+    ) -> None:
+        self.egress_connections.labels(decision=decision).inc()
+        if bytes_up:
+            self.egress_bytes.labels(direction="up").inc(bytes_up)
+        if bytes_down:
+            self.egress_bytes.labels(direction="down").inc(bytes_down)
 
     def observe_sandbox_destroy(self, *, size: str, hold_seconds: float) -> None:
         self.sandbox_destroy.labels(size=size).inc()
