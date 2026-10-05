@@ -620,12 +620,14 @@ class LocalExecution:
         if emitter is not None:
             await emitter.close()
 
-    async def _harvest_killed(self, session_id: uuid.UUID, proc: PiProc | None) -> None:
+    async def _harvest_killed(
+        self, session_id: uuid.UUID, proc: PiProc | None, release: bool = True
+    ) -> None:
         try:
             await self._upload_killed(session_id, proc)
         finally:
             note = self.note_stopped
-            if note is not None:
+            if release and note is not None:
                 await note(session_id)
 
     async def _upload_killed(self, session_id: uuid.UUID, proc: PiProc | None) -> None:

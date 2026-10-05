@@ -939,6 +939,20 @@ alive without touching leases granted elsewhere. Heartbeats extend all of that
 worker's leases in one statement. Commands carry `lease_id`. A worker
 that does not hold that lease cannot ack, emit events, or release it.
 
+The worker releases a lease when the Pi process of the session stops,
+after it harvested the files of that process. A turn can also stop a
+process at its start: when the turn needs a different model,
+instructions, tools, thinking level, system prompt, key, code mode, or
+web search setting, the pool stops the old process with the reason
+`respawn`, and when the old process exited while the session was idle,
+it stops it with the reason `crash`. In both cases the worker still
+harvests the files of the old process and reports the stop
+(`session.live.stop` and, for a computer, `sandbox.status` `stopped`
+with that reason), but it keeps the lease, because the turn goes on
+under it with a new process. If the worker released the lease there,
+the API would reject every envelope of the turn as `not_leased`, and
+the turn would never finish.
+
 When `lease_until` passes, API processes expire rows with
 `FOR UPDATE SKIP LOCKED` so two reapers do not double-clear. The API
 clears ownership, emits `agent.session.error` with code
