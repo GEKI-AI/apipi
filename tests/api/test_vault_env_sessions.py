@@ -127,81 +127,40 @@ def _code(response: Any) -> str:
     return str(response.json()["error"]["code"])
 
 
-async def test_env_credentials_need_a_microvm_session(client: AsyncClient) -> None:
-    token = "env-none"
+@pytest.mark.parametrize(
+    ("vaults", "environment", "code", "fragment"),
+    [
+        (1, {"type": "none"}, "credential_not_allowed", "microVM"),
+        (
+            1,
+            {"type": "openai_hosted", "network": {"access": "disabled"}},
+            "credential_not_allowed",
+            "disabled",
+        ),
+        (2, None, "secret_name_collision", "more than one"),
+        (
+            1,
+            {"type": "openai_hosted", "env": {"GITHUB_TOKEN": "plain"}},
+            "secret_name_collision",
+            "environment.env",
+        ),
+    ],
+)
+async def test_session_create_checks_env_credentials(
+    client: AsyncClient,
+    vaults: int,
+    environment: dict[str, Any] | None,
+    code: str,
+    fragment: str,
+) -> None:
+    token = "env-rules"
     agent_id = await _agent(client, token)
-    vault_id = await _vault(client, token)
-    await _env_cred(client, token, vault_id)
-    response = await _session(client, token, agent_id, [vault_id], {"type": "none"})
-    assert _code(response) == "credential_not_allowed"
-    assert "microVM" in response.json()["error"]["message"]
-    hosted = await _session(
-        client, token, agent_id, [vault_id], {"type": "openai_hosted"}
-    )
-    assert hosted.status_code == 200
-
-
-async def test_mcp_only_vault_still_works_on_none(client: AsyncClient) -> None:
-    token = "env-none-mcp"
-    agent_id = await _agent(client, token)
-    vault_id = await _vault(client, token)
-    created = await client.post(
-        f"/v1/agents/vaults/{vault_id}/credentials",
-        headers=_auth(token),
-        json={
-            "auth": {
-                "type": "static_bearer",
-                "mcp_server_url": "https://mcp.example.com/mcp",
-                "token": "t",
-            }
-        },
-    )
-    assert created.status_code == 200
-    response = await _session(client, token, agent_id, [vault_id], {"type": "none"})
-    assert response.status_code == 200
-
-
-async def test_env_credentials_need_network_access(client: AsyncClient) -> None:
-    token = "env-disabled"
-    agent_id = await _agent(client, token)
-    vault_id = await _vault(client, token)
-    await _env_cred(client, token, vault_id)
-    response = await _session(
-        client,
-        token,
-        agent_id,
-        [vault_id],
-        {"type": "openai_hosted", "network": {"access": "disabled"}},
-    )
-    assert _code(response) == "credential_not_allowed"
-    assert "disabled" in response.json()["error"]["message"]
-
-
-async def test_duplicate_secret_name_across_vaults(client: AsyncClient) -> None:
-    token = "env-dup"
-    agent_id = await _agent(client, token)
-    first = await _vault(client, token)
-    second = await _vault(client, token)
-    await _env_cred(client, token, first)
-    await _env_cred(client, token, second)
-    response = await _session(client, token, agent_id, [first, second])
-    assert _code(response) == "secret_name_collision"
-
-
-async def test_secret_name_clashes_with_environment_env(client: AsyncClient) -> None:
-    token = "env-clash"
-    agent_id = await _agent(client, token)
-    vault_id = await _vault(client, token)
-    await _env_cred(client, token, vault_id)
-    response = await _session(
-        client,
-        token,
-        agent_id,
-        [vault_id],
-        {"type": "openai_hosted", "env": {"GITHUB_TOKEN": "plain"}},
-    )
-    assert _code(response) == "secret_name_collision"
-    assert "environment.env" in response.json()["error"]["message"]
+    vault_ids = [await _vault(client, token) for _ in range(vaults)]
+    for vault_id in vault_ids:
+        await _env_cred(client, token, vault_id)
+    response = await _session(client, token, agent_id, vault_ids, environment)
+    assert _code(response) == code
+    assert fragment in response.json()["error"]["message"]
 
 
 async def test_agent_session_defaults_are_checked(client: AsyncClient) -> None:

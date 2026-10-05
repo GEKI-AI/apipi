@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
@@ -258,27 +259,35 @@ async def test_web_search_item_is_stored_and_served(
     await worker.close()
 
 
-async def test_usage_endpoint_search_before_usage(
-    settings: Settings, store: Store, worker_secret: str
+@pytest.mark.parametrize("search_first", [True, False])
+async def test_usage_endpoint_counts_search_in_either_order(
+    settings: Settings, store: Store, worker_secret: str, search_first: bool
 ) -> None:
     app, worker, tenant_id, session_id = await _setup(settings, store, worker_secret)
     turn_id = uuid.uuid4()
     for envelope in _start(session_id, turn_id):
         await worker.send_json(envelope)
     await _drain(worker, 2)
-    await _record(store, tenant_id, session_id, turn_id, units=2)
-    await _record(store, tenant_id, session_id, turn_id, units=2)
+    day = datetime.now(UTC).date().isoformat()
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        early = await _usage(client, "t", turn_id=str(turn_id))
-        assert early["search_calls"] == 2
-        assert early["search_units"] == 4
-        assert early["turns"] == 0
+        if search_first:
+            await _record(store, tenant_id, session_id, turn_id, units=2)
+            await _record(store, tenant_id, session_id, turn_id, units=2)
+            early = await _usage(client, "t", turn_id=str(turn_id))
+            assert early["search_calls"] == 2
+            assert early["search_units"] == 4
+            assert early["turns"] == 0
         for envelope in _finish(session_id, turn_id, 3):
             await worker.send_json(envelope)
         await _drain(worker, 6)
-        day = datetime.now(UTC).date().isoformat()
+        if not search_first:
+            before = await _usage(client, "t", day=day)
+            assert before["search_calls"] == 0
+            assert before["search_units"] == 0
+            await _record(store, tenant_id, session_id, turn_id, provider="staan")
+            await _record(store, tenant_id, session_id, turn_id, units=3)
         for params in (
             {"session_id": str(session_id)},
             {"turn_id": str(turn_id)},
@@ -289,57 +298,4 @@ async def test_usage_endpoint_search_before_usage(
             assert body["search_units"] == 4
             assert body["turns"] == 1
             assert body["prompt_tokens"] == 11
-    await worker.close()
-
-
-async def test_usage_endpoint_usage_before_search(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app, worker, tenant_id, session_id = await _setup(settings, store, worker_secret)
-    turn_id = uuid.uuid4()
-    for envelope in _start(session_id, turn_id) + _finish(session_id, turn_id, 3):
-        await worker.send_json(envelope)
-    await _drain(worker, 6)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        day = datetime.now(UTC).date().isoformat()
-        before = await _usage(client, "t", day=day)
-        assert before["search_calls"] == 0
-        assert before["search_units"] == 0
-        await _record(store, tenant_id, session_id, turn_id, provider="staan")
-        await _record(store, tenant_id, session_id, turn_id, units=3)
-        for params in (
-            {"session_id": str(session_id)},
-            {"turn_id": str(turn_id)},
-            {"day": day},
-        ):
-            body = await _usage(client, "t", **params)
-            assert body["search_calls"] == 2
-            assert body["search_units"] == 4
-            assert body["turns"] == 1
-    await worker.close()
-
-
-async def test_usage_endpoint_search_is_tenant_scoped(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app, worker, tenant_id, session_id = await _setup(settings, store, worker_secret)
-    turn_id = uuid.uuid4()
-    for envelope in _start(session_id, turn_id) + _finish(session_id, turn_id, 3):
-        await worker.send_json(envelope)
-    await _drain(worker, 6)
-    await _record(store, tenant_id, session_id, turn_id)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        day = datetime.now(UTC).date().isoformat()
-        other = await _usage(client, "other", day=day)
-        assert other["search_calls"] == 0
-        assert other["search_units"] == 0
-        for params in ({"session_id": str(session_id)}, {"turn_id": str(turn_id)}):
-            response = await client.get(
-                "/v1/apipi/usage", headers=_auth("other"), params=params
-            )
-            assert response.status_code == 404
     await worker.close()

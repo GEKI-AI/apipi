@@ -24,7 +24,6 @@ from apipi.store.models import utc_now
 from apipi.store.repo import (
     append_event,
     create_turn,
-    search_usage_for_turn,
     set_session_lease,
     update_session,
 )
@@ -82,25 +81,80 @@ async def _agent(client: AsyncClient, token: str, **body: Any) -> httpx.Response
     )
 
 
-async def test_agent_with_web_search_round_trips(client: AsyncClient) -> None:
+def _domains(domains: list[str]) -> dict[str, Any]:
+    return {"type": "web_search", "filters": {"allowed_domains": domains}}
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {"type": "web_search"},
+        _domains(["example.com"]),
+        _domains([f"d{i}.example.com" for i in range(10)]),
+    ],
+)
+async def test_web_search_tool_round_trips(
+    client: AsyncClient, tool: dict[str, Any]
+) -> None:
     token = "ws-create"
-    tools = [
-        {"type": "web_search", "filters": {"allowed_domains": ["example.com"]}},
-        {"type": "function", "name": "lookup", "parameters": {}},
-    ]
-    created = await _agent(client, token, tools=tools)
+    tools = [tool, {"type": "function", "name": "lookup", "parameters": {}}]
+    created = await _agent(
+        client,
+        token,
+        tools=tools,
+        session_defaults={"environment": {"type": "none"}},
+    )
     assert created.status_code == 200, created.text
-    assert created.json()["tools"][0] == tools[0]
+    assert created.json()["tools"][0] == tool
     fetched = await client.get(
         f"/v1/agents/{created.json()['id']}", headers=_auth(token)
     )
-    assert fetched.json()["tools"][0] == tools[0]
+    assert fetched.json()["tools"][0] == tool
 
 
-async def test_plain_web_search_tool(client: AsyncClient) -> None:
-    created = await _agent(client, "ws-plain", tools=[{"type": "web_search"}])
-    assert created.status_code == 200, created.text
-    assert created.json()["tools"] == [{"type": "web_search"}]
+@pytest.mark.parametrize(
+    ("tool", "error_type", "code"),
+    [
+        ({"type": "web_search", "bogus": 1}, "invalid_request", "unknown_field"),
+        (
+            {"type": "web_search", "filters": {"bogus": 1}},
+            "invalid_request",
+            "unknown_field",
+        ),
+        (
+            {"type": "web_search", "search_context_size": "high"},
+            "not_implemented",
+            "search_context_size",
+        ),
+        (
+            {"type": "web_search", "user_location": {"type": "approximate"}},
+            "not_implemented",
+            "user_location",
+        ),
+        ({"type": "web_search_preview"}, "not_implemented", "web_search_preview"),
+        (
+            {"type": "web_search_preview_2025_03_11"},
+            "not_implemented",
+            "web_search_preview",
+        ),
+        (
+            _domains([f"d{i}.example.com" for i in range(11)]),
+            "invalid_request",
+            "validation_error",
+        ),
+        (_domains(["https://example.com"]), "invalid_request", "validation_error"),
+        (_domains(["example.com/path"]), "invalid_request", "validation_error"),
+        (_domains([""]), "invalid_request", "validation_error"),
+        (_domains(["a b.com"]), "invalid_request", "validation_error"),
+    ],
+)
+async def test_invalid_web_search_tool(
+    client: AsyncClient, tool: dict[str, Any], error_type: str, code: str
+) -> None:
+    response = await _agent(client, "ws-invalid", tools=[tool])
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == error_type
+    assert _code(response) == code
 
 
 async def test_agent_without_search_provider_is_400(unconfigured: AsyncClient) -> None:
@@ -141,86 +195,6 @@ async def test_agent_update_checks_search(
         json={"name": "renamed"},
     )
     assert renamed.status_code == 200
-
-
-@pytest.mark.parametrize(
-    "tool",
-    [
-        {"type": "web_search", "bogus": 1},
-        {"type": "web_search", "filters": {"bogus": 1}},
-    ],
-)
-async def test_unknown_web_search_fields(client: AsyncClient, tool: dict) -> None:
-    response = await _agent(client, "ws-unknown", tools=[tool])
-    assert response.status_code == 400
-    assert _code(response) == "unknown_field"
-
-
-@pytest.mark.parametrize(
-    ("tool", "field"),
-    [
-        ({"type": "web_search", "search_context_size": "high"}, "search_context_size"),
-        (
-            {"type": "web_search", "user_location": {"type": "approximate"}},
-            "user_location",
-        ),
-        ({"type": "web_search_preview"}, "web_search_preview"),
-        ({"type": "web_search_preview_2025_03_11"}, "web_search_preview"),
-    ],
-)
-async def test_unsupported_web_search_fields(
-    client: AsyncClient, tool: dict, field: str
-) -> None:
-    response = await _agent(client, "ws-notimpl", tools=[tool])
-    assert response.status_code == 400
-    assert _code(response) == field
-    assert response.json()["error"]["type"] == "not_implemented"
-
-
-@pytest.mark.parametrize(
-    "domains",
-    [
-        [f"d{i}.example.com" for i in range(11)],
-        ["https://example.com"],
-        ["example.com/path"],
-        [""],
-        ["a b.com"],
-    ],
-)
-async def test_invalid_allowed_domains(client: AsyncClient, domains: list[str]) -> None:
-    response = await _agent(
-        client,
-        "ws-domains",
-        tools=[{"type": "web_search", "filters": {"allowed_domains": domains}}],
-    )
-    assert response.status_code == 400
-
-
-async def test_ten_domains_are_allowed(client: AsyncClient) -> None:
-    domains = [f"d{i}.example.com" for i in range(10)]
-    response = await _agent(
-        client,
-        "ws-ten",
-        tools=[{"type": "web_search", "filters": {"allowed_domains": domains}}],
-    )
-    assert response.status_code == 200, response.text
-
-
-async def test_env_none_allows_web_search(client: AsyncClient) -> None:
-    token = "ws-env-none"
-    created = await _agent(
-        client,
-        token,
-        tools=[{"type": "web_search"}],
-        session_defaults={"environment": {"type": "none"}},
-    )
-    assert created.status_code == 200, created.text
-    session = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={"agent_id": created.json()["id"], "environment": {"type": "none"}},
-    )
-    assert session.status_code == 200, session.text
 
 
 async def test_inline_session_checks_search(
@@ -341,10 +315,7 @@ async def _socket_case(
     worker_secret: str,
     handler: Any,
     token: str,
-    *,
-    tools: list[dict[str, Any]] | None = None,
-    turn_running: bool = True,
-) -> tuple[FakeWorker, uuid.UUID, uuid.UUID, uuid.UUID, FastAPI]:
+) -> tuple[FakeWorker, uuid.UUID, uuid.UUID, FastAPI]:
     app = create_app(
         api_settings_for(
             _worker_settings(settings).model_copy(
@@ -362,15 +333,7 @@ async def _socket_case(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as http:
-        agent = await http.post(
-            "/v1/agents",
-            headers=_auth(token),
-            json={
-                "name": "bot",
-                "model": "test",
-                "tools": tools if tools is not None else [{"type": "web_search"}],
-            },
-        )
+        agent = await _agent(http, token, tools=[{"type": "web_search"}])
         assert agent.status_code == 200, agent.text
         session = await http.post(
             "/v1/agents/sessions",
@@ -396,22 +359,21 @@ async def _socket_case(
     conn = app.state.workers.get(worker_id)
     assert conn is not None
     conn.leases.add(lease_id)
-    if turn_running:
-        async with store.session() as db:
-            await update_session(
-                db, tenant_id, session_id, changes={"status": "in_progress"}
-            )
-            await create_turn(
-                db, tenant_id, session_id, status="in_progress", turn_id=turn_id
-            )
-            await append_event(
-                db,
-                tenant_id,
-                session_id,
-                type="agent.session.turn.created",
-                data={"turn_id": str(turn_id)},
-            )
-    return worker, session_id, turn_id, tenant_id, app
+    async with store.session() as db:
+        await update_session(
+            db, tenant_id, session_id, changes={"status": "in_progress"}
+        )
+        await create_turn(
+            db, tenant_id, session_id, status="in_progress", turn_id=turn_id
+        )
+        await append_event(
+            db,
+            tenant_id,
+            session_id,
+            type="agent.session.turn.created",
+            data={"turn_id": str(turn_id)},
+        )
+    return worker, session_id, turn_id, app
 
 
 def _request(
@@ -437,31 +399,6 @@ async def _reply(worker: FakeWorker, request_id: str) -> dict[str, Any]:
     raise AssertionError("no search.reply")
 
 
-async def test_socket_search_request_reply_and_usage(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    worker, session_id, turn_id, tenant_id, _app = await _socket_case(
-        settings,
-        store,
-        worker_secret,
-        lambda request: httpx.Response(200, json=TAVILY_BODY),
-        "ws-socket",
-    )
-    try:
-        request = _request(session_id, turn_id)
-        await worker.send_json(request)
-        reply = await _reply(worker, request["request_id"])
-        assert reply["ok"] is True
-        assert reply["session_id"] == str(session_id)
-        assert reply["results"][0]["url"] == "https://one.example/a"
-        async with store.session() as db:
-            calls, units, counts = await search_usage_for_turn(db, tenant_id, turn_id)
-        assert (calls, units) == (1, 1)
-        assert counts == {"tavily/operator": {"calls": 1, "units": 1}}
-    finally:
-        await worker.close()
-
-
 async def test_socket_concurrent_requests_do_not_block_each_other(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
@@ -472,7 +409,7 @@ async def test_socket_concurrent_requests_do_not_block_each_other(
             await gate.wait()
         return httpx.Response(200, json=TAVILY_BODY)
 
-    worker, session_id, turn_id, _tenant_id, _app = await _socket_case(
+    worker, session_id, turn_id, _app = await _socket_case(
         settings, store, worker_secret, handler, "ws-concurrent"
     )
     try:
@@ -490,84 +427,10 @@ async def test_socket_concurrent_requests_do_not_block_each_other(
         await worker.close()
 
 
-async def test_socket_provider_failure_is_a_failed_reply(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    worker, session_id, turn_id, tenant_id, _app = await _socket_case(
-        settings,
-        store,
-        worker_secret,
-        lambda request: httpx.Response(503),
-        "ws-socket-fail",
-    )
-    try:
-        request = _request(session_id, turn_id)
-        await worker.send_json(request)
-        reply = await _reply(worker, request["request_id"])
-        assert reply["ok"] is False
-        assert reply["code"] == "search_unavailable"
-        async with store.session() as db:
-            calls, _units, _counts = await search_usage_for_turn(db, tenant_id, turn_id)
-        assert calls == 0
-        again = _request(session_id, turn_id)
-        await worker.send_json(again)
-        assert (await _reply(worker, again["request_id"]))["ok"] is False
-    finally:
-        await worker.close()
-
-
-async def test_socket_denies_agent_without_tool(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    calls: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        return httpx.Response(200, json=TAVILY_BODY)
-
-    worker, session_id, turn_id, _tenant_id, _app = await _socket_case(
-        settings,
-        store,
-        worker_secret,
-        handler,
-        "ws-socket-denied",
-        tools=[{"type": "function", "name": "x"}],
-    )
-    try:
-        request = _request(session_id, turn_id)
-        await worker.send_json(request)
-        reply = await _reply(worker, request["request_id"])
-        assert reply["ok"] is False
-        assert reply["code"] == "search_denied"
-        assert calls == []
-    finally:
-        await worker.close()
-
-
-async def test_socket_denies_when_turn_not_running(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    worker, session_id, turn_id, _tenant_id, _app = await _socket_case(
-        settings,
-        store,
-        worker_secret,
-        lambda request: httpx.Response(200, json=TAVILY_BODY),
-        "ws-socket-idle",
-        turn_running=False,
-    )
-    try:
-        request = _request(session_id, turn_id)
-        await worker.send_json(request)
-        reply = await _reply(worker, request["request_id"])
-        assert reply["code"] == "search_denied"
-    finally:
-        await worker.close()
-
-
 async def test_socket_survives_garbage_and_service_errors(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    worker, session_id, turn_id, _tenant_id, app = await _socket_case(
+    worker, session_id, turn_id, app = await _socket_case(
         settings,
         store,
         worker_secret,

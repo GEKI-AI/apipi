@@ -233,36 +233,6 @@ async def test_both_providers_return_the_same_shape(provider: str) -> None:
 
 
 @pytest.mark.parametrize("provider", ["tavily", "staan"])
-async def test_redirects_are_not_followed(provider: str) -> None:
-    calls: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(str(request.url))
-        if "evil.example" in str(request.url):
-            return httpx.Response(200, json={})
-        return httpx.Response(302, headers={"location": "https://evil.example/x"})
-
-    async with _client(handler) as client:
-        with pytest.raises(SearchProviderError) as raised:
-            await build_provider(_target(provider), client).search(SearchQuery("q", 5))
-    assert raised.value.code == "search_failed"
-    assert raised.value.charged is False
-    assert len(calls) == 1
-
-
-@pytest.mark.parametrize("provider", ["tavily", "staan"])
-async def test_timeout_is_not_charged(provider: str) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ReadTimeout("slow", request=request)
-
-    async with _client(handler) as client:
-        with pytest.raises(SearchProviderError) as raised:
-            await build_provider(_target(provider), client).search(SearchQuery("q", 5))
-    assert raised.value.code == "search_timeout"
-    assert raised.value.charged is False
-
-
-@pytest.mark.parametrize("provider", ["tavily", "staan"])
 async def test_slow_provider_hits_total_timeout(provider: str) -> None:
     import asyncio
 
@@ -278,48 +248,67 @@ async def test_slow_provider_hits_total_timeout(provider: str) -> None:
     assert raised.value.charged is False
 
 
+def _read_timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("slow", request=request)
+
+
+def _connect_error(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("down", request=request)
+
+
+def _redirect(request: httpx.Request) -> httpx.Response:
+    if "evil.example" in str(request.url):
+        return httpx.Response(200, json={})
+    return httpx.Response(302, headers={"location": "https://evil.example/x"})
+
+
+def _status(status: int) -> Any:
+    return lambda request: httpx.Response(status, text="boom")
+
+
 @pytest.mark.parametrize("provider", ["tavily", "staan"])
 @pytest.mark.parametrize(
-    ("status", "code"),
+    ("handler", "code", "charged"),
     [
-        (400, "search_failed"),
-        (401, "search_failed"),
-        (429, "search_unavailable"),
-        (500, "search_unavailable"),
-        (503, "search_unavailable"),
+        (_read_timeout, "search_timeout", False),
+        (_connect_error, "search_unavailable", False),
+        (_status(400), "search_failed", False),
+        (_status(401), "search_failed", False),
+        (_status(429), "search_unavailable", False),
+        (_status(500), "search_unavailable", False),
+        (_status(503), "search_unavailable", False),
+        (lambda request: httpx.Response(200, text="not json"), "search_failed", True),
+        (_redirect, "search_failed", False),
+    ],
+    ids=[
+        "timeout",
+        "transport",
+        "http-400",
+        "http-401",
+        "http-429",
+        "http-500",
+        "http-503",
+        "invalid-json",
+        "redirect",
     ],
 )
-async def test_http_errors_are_not_charged(
-    provider: str, status: int, code: str
+async def test_provider_errors(
+    provider: str, handler: Any, code: str, charged: bool
 ) -> None:
-    async with _client(lambda request: httpx.Response(status, text="boom")) as client:
+    calls: list[httpx.Request] = []
+
+    def recording(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return handler(request)
+
+    async with _client(recording) as client:
         with pytest.raises(SearchProviderError) as raised:
             await build_provider(_target(provider), client).search(SearchQuery("q", 5))
     assert raised.value.code == code
-    assert raised.value.charged is False
+    assert raised.value.charged is charged
     assert "boom" not in raised.value.message
     assert "secret-key" not in raised.value.message
-
-
-@pytest.mark.parametrize("provider", ["tavily", "staan"])
-async def test_transport_error_is_not_charged(provider: str) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("down", request=request)
-
-    async with _client(handler) as client:
-        with pytest.raises(SearchProviderError) as raised:
-            await build_provider(_target(provider), client).search(SearchQuery("q", 5))
-    assert raised.value.code == "search_unavailable"
-    assert raised.value.charged is False
-
-
-@pytest.mark.parametrize("provider", ["tavily", "staan"])
-async def test_invalid_json_after_200_is_charged(provider: str) -> None:
-    async with _client(lambda request: httpx.Response(200, text="not json")) as client:
-        with pytest.raises(SearchProviderError) as raised:
-            await build_provider(_target(provider), client).search(SearchQuery("q", 5))
-    assert raised.value.code == "search_failed"
-    assert raised.value.charged is True
+    assert len(calls) == 1
 
 
 async def test_unknown_provider_error_hides_name() -> None:

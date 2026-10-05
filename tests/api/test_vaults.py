@@ -1,15 +1,59 @@
+from uuid import UUID
+
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import AuthFilter, AuthIdentity, AuthReject
+from apipi.services.vault_crypto import (
+    decrypt_vault_token,
+    is_vault_ciphertext,
+    vault_aad,
+    vault_key_bytes,
+)
 from apipi.store.engine import Store
+from apipi.store.models import VaultCredential
 
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _static_bearer(token: str = "t") -> dict[str, str]:
+    return {
+        "type": "static_bearer",
+        "mcp_server_url": "https://mcp.example.com/mcp",
+        "token": token,
+    }
+
+
+async def _vault(client: AsyncClient, token: str) -> str:
+    created = await client.post(
+        "/v1/agents/vaults", headers=_auth(token), json={"name": "git"}
+    )
+    assert created.status_code == 200
+    return str(created.json()["id"])
+
+
+def _env_auth(**overrides: object) -> dict[str, object]:
+    auth: dict[str, object] = {
+        "type": "environment_variable",
+        "secret_name": "GITHUB_TOKEN",
+        "secret_value": "ghp_live_secret",
+        "networking": {
+            "type": "limited",
+            "allowed_hosts": ["github.com", "API.GitHub.com"],
+        },
+    }
+    auth.update(overrides)
+    return auth
+
+
+def _hosts(*hosts: str) -> dict[str, object]:
+    return {"networking": {"type": "limited", "allowed_hosts": list(hosts)}}
 
 
 async def test_vault_crud_omits_token(client: AsyncClient) -> None:
@@ -27,14 +71,7 @@ async def test_vault_crud_omits_token(client: AsyncClient) -> None:
     cred = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials",
         headers=_auth(token),
-        json={
-            "name": "pat",
-            "auth": {
-                "type": "static_bearer",
-                "mcp_server_url": "https://mcp.example.com/mcp",
-                "token": "secret-token",
-            },
-        },
+        json={"name": "pat", "auth": _static_bearer("secret-token")},
     )
     assert cred.status_code == 200
     body = cred.json()
@@ -88,34 +125,15 @@ async def test_vault_list_applies_authorize_filter(
         assert "vaults" not in body
 
 
-async def test_vault_oauth_is_not_implemented(client: AsyncClient) -> None:
-    token = "vault-oauth"
-    created = await client.post(
-        "/v1/agents/vaults", headers=_auth(token), json={"name": "x"}
-    )
-    vault_id = created.json()["id"]
+async def test_session_vault_ids_and_unknown_vault(client: AsyncClient) -> None:
+    token = "vault-session"
+    vault_id = await _vault(client, token)
     cred = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials",
         headers=_auth(token),
-        json={
-            "name": "oauth",
-            "auth": {
-                "type": "mcp_oauth",
-                "mcp_server_url": "https://mcp.example.com/mcp",
-                "access_token": "x",
-            },
-        },
+        json={"auth": _static_bearer()},
     )
-    assert cred.status_code == 400
-    assert cred.json()["error"]["code"] == "mcp_oauth"
-
-
-async def test_session_vault_ids_and_unknown_vault(client: AsyncClient) -> None:
-    token = "vault-session"
-    vault = await client.post(
-        "/v1/agents/vaults", headers=_auth(token), json={"name": "v"}
-    )
-    vault_id = vault.json()["id"]
+    assert cred.status_code == 200
     agent = await client.post(
         "/v1/agents",
         headers=_auth(token),
@@ -144,120 +162,62 @@ async def test_session_vault_ids_and_unknown_vault(client: AsyncClient) -> None:
     assert missing.status_code == 404
 
 
-async def test_vault_token_stays_encrypted(client: AsyncClient, store: Store) -> None:
-    from uuid import UUID
-
-    from sqlalchemy import select
-
-    from apipi.services.vault_crypto import (
-        decrypt_vault_token,
-        is_vault_ciphertext,
-        vault_aad,
-        vault_key_bytes,
-    )
-    from apipi.store.models import VaultCredential
-
+@pytest.mark.parametrize(
+    ("auth", "stored"),
+    [
+        (
+            _static_bearer("keep-this-secret"),
+            {
+                "mcp_server_url": "https://mcp.example.com/mcp",
+                "secret_name": None,
+                "allowed_hosts": None,
+            },
+        ),
+        (
+            _env_auth(secret_value="keep-this-secret"),
+            {
+                "mcp_server_url": None,
+                "secret_name": "GITHUB_TOKEN",
+                "allowed_hosts": ["github.com", "api.github.com"],
+            },
+        ),
+    ],
+)
+async def test_vault_token_stays_encrypted(
+    client: AsyncClient,
+    store: Store,
+    settings: Settings,
+    auth: dict[str, object],
+    stored: dict[str, object],
+) -> None:
     token = "vault-store"
-    vault = await client.post(
-        "/v1/agents/vaults", headers=_auth(token), json={"name": "v"}
-    )
-    vault_id = vault.json()["id"]
+    vault_id = await _vault(client, token)
     cred = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials",
         headers=_auth(token),
-        json={
-            "auth": {
-                "type": "static_bearer",
-                "mcp_server_url": "https://mcp.example.com/mcp",
-                "token": "keep-me",
-            }
-        },
+        json={"auth": auth},
     )
+    assert cred.status_code == 200
     async with store.session() as db:
         found = await db.scalar(
             select(VaultCredential).where(VaultCredential.id == UUID(cred.json()["id"]))
         )
-        assert found is not None
-        assert is_vault_ciphertext(found.token)
-        assert found.token != "keep-me"
-        assert "keep-me" not in found.token
-        assert (
-            decrypt_vault_token(
-                found.token,
-                vault_key_bytes(None),
-                aad=vault_aad(found.tenant_id, found.id),
-            )
-            == "keep-me"
+    assert found is not None
+    assert {
+        "mcp_server_url": found.mcp_server_url,
+        "secret_name": found.secret_name,
+        "allowed_hosts": found.allowed_hosts,
+    } == stored
+    assert is_vault_ciphertext(found.token)
+    assert "keep-this-secret" not in found.token
+    assert (
+        decrypt_vault_token(
+            found.token,
+            vault_key_bytes(settings.vault_master_key),
+            aad=vault_aad(found.tenant_id, found.id),
         )
-
-
-async def test_encrypt_plaintext_vault_tokens(settings: Settings, store: Store) -> None:
-    from uuid import uuid4
-
-    from sqlalchemy import select
-
-    from apipi.services.vault_crypto import (
-        decrypt_vault_token,
-        is_vault_ciphertext,
-        vault_aad,
-        vault_key_bytes,
+        == "keep-this-secret"
     )
-    from apipi.services.vaults import encrypt_plaintext_vault_tokens
-    from apipi.store.models import VaultCredential
-    from apipi.store.repo import create_vault, create_vault_credential, ensure_tenant
-
-    tenant_id = uuid4()
-    async with store.session() as db:
-        await ensure_tenant(db, tenant_id)
-        vault = await create_vault(db, tenant_id, name="v")
-        row = await create_vault_credential(
-            db,
-            tenant_id,
-            vault.id,
-            auth_type="static_bearer",
-            mcp_server_url="https://mcp.example.com/mcp",
-            token="legacy-plain",
-        )
-        cred_id = row.id
-    assert await encrypt_plaintext_vault_tokens(store, settings) == 1
-    assert await encrypt_plaintext_vault_tokens(store, settings) == 0
-    async with store.session() as db:
-        found = await db.scalar(
-            select(VaultCredential).where(VaultCredential.id == cred_id)
-        )
-        assert found is not None
-        assert is_vault_ciphertext(found.token)
-        assert "legacy-plain" not in found.token
-        assert (
-            decrypt_vault_token(
-                found.token,
-                vault_key_bytes(settings.vault_master_key),
-                aad=vault_aad(tenant_id, cred_id),
-            )
-            == "legacy-plain"
-        )
-
-
-async def _vault(client: AsyncClient, token: str) -> str:
-    created = await client.post(
-        "/v1/agents/vaults", headers=_auth(token), json={"name": "git"}
-    )
-    assert created.status_code == 200
-    return str(created.json()["id"])
-
-
-def _env_auth(**overrides: object) -> dict[str, object]:
-    auth: dict[str, object] = {
-        "type": "environment_variable",
-        "secret_name": "GITHUB_TOKEN",
-        "secret_value": "ghp_live_secret",
-        "networking": {
-            "type": "limited",
-            "allowed_hosts": ["github.com", "API.GitHub.com"],
-        },
-    }
-    auth.update(overrides)
-    return auth
 
 
 async def test_env_credential_crud_never_returns_secret(client: AsyncClient) -> None:
@@ -319,53 +279,6 @@ async def test_env_credential_crud_never_returns_secret(client: AsyncClient) -> 
     assert gone.status_code == 404
 
 
-async def test_env_credential_secret_is_encrypted(
-    client: AsyncClient, store: Store, settings: Settings
-) -> None:
-    from uuid import UUID
-
-    from sqlalchemy import select
-
-    from apipi.services.vault_crypto import (
-        decrypt_vault_token,
-        is_vault_ciphertext,
-        vault_aad,
-        vault_key_bytes,
-    )
-    from apipi.store.models import VaultCredential
-
-    token = "env-store"
-    vault_id = await _vault(client, token)
-    cred = await client.post(
-        f"/v1/agents/vaults/{vault_id}/credentials",
-        headers=_auth(token),
-        json={"auth": _env_auth(secret_value="keep-env-secret")},
-    )
-    assert cred.status_code == 200
-    async with store.session() as db:
-        found = await db.scalar(
-            select(VaultCredential).where(VaultCredential.id == UUID(cred.json()["id"]))
-        )
-    assert found is not None
-    assert found.mcp_server_url is None
-    assert found.secret_name == "GITHUB_TOKEN"
-    assert found.allowed_hosts == ["github.com", "api.github.com"]
-    assert is_vault_ciphertext(found.token)
-    assert "keep-env-secret" not in found.token
-    assert (
-        decrypt_vault_token(
-            found.token,
-            vault_key_bytes(settings.vault_master_key),
-            aad=vault_aad(found.tenant_id, found.id),
-        )
-        == "keep-env-secret"
-    )
-
-
-def _hosts(*hosts: str) -> dict[str, object]:
-    return {"networking": {"type": "limited", "allowed_hosts": list(hosts)}}
-
-
 @pytest.mark.parametrize(
     ("overrides", "fragment"),
     [
@@ -388,7 +301,7 @@ def _hosts(*hosts: str) -> dict[str, object]:
         ({"secret_value": 5}, "secret_value"),
         ({"secret_value": "line\nbreak"}, "control characters"),
         ({"secret_value": "with space"}, "printable ASCII"),
-        ({"secret_value": "nonascii-\u00e9-value"}, "printable ASCII"),
+        ({"secret_value": "nonascii-é-value"}, "printable ASCII"),
         ({"secret_value": "short7!"}, "at least 8"),
         ({"secret_name": "CURL_CA_BUNDLE"}, "reserved"),
         ({"secret_name": "UV_CACHE_DIR"}, "reserved"),
@@ -429,16 +342,41 @@ async def test_env_credential_validation(
     assert fragment in error["message"]
 
 
-async def test_env_credential_unknown_auth_field(client: AsyncClient) -> None:
-    token = "env-unknown"
+@pytest.mark.parametrize(
+    ("auth", "error_type", "code"),
+    [
+        (
+            {
+                "type": "mcp_oauth",
+                "mcp_server_url": "https://mcp.example.com/mcp",
+                "access_token": "x",
+            },
+            "not_implemented",
+            "mcp_oauth",
+        ),
+        (
+            {"type": "static_bearer", "token": "x"},
+            "invalid_request",
+            "validation_error",
+        ),
+        ({"type": "basic"}, "invalid_request", "validation_error"),
+        (_env_auth(token="x"), "invalid_request", "unknown_field"),
+    ],
+)
+async def test_credential_auth_errors(
+    client: AsyncClient, auth: dict[str, object], error_type: str, code: str
+) -> None:
+    token = "auth-errors"
     vault_id = await _vault(client, token)
     response = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials",
         headers=_auth(token),
-        json={"auth": _env_auth(token="x")},
+        json={"auth": auth},
     )
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == "unknown_field"
+    error = response.json()["error"]
+    assert error["type"] == error_type
+    assert error["code"] == code
 
 
 async def test_env_credential_secret_name_unique_per_vault(client: AsyncClient) -> None:
@@ -501,14 +439,7 @@ async def test_env_credential_git_username_metadata(client: AsyncClient) -> None
     static = await client.post(
         base,
         headers=_auth(token),
-        json={
-            "auth": {
-                "type": "static_bearer",
-                "mcp_server_url": "https://mcp.example.com/mcp",
-                "token": "t",
-            },
-            "metadata": {"apipi.git_username": "bot"},
-        },
+        json={"auth": _static_bearer(), "metadata": {"apipi.git_username": "bot"}},
     )
     assert static.status_code == 400
     created = await client.post(base, headers=_auth(token), json={"auth": _env_auth()})
@@ -520,57 +451,6 @@ async def test_env_credential_git_username_metadata(client: AsyncClient) -> None
     )
     assert updated.status_code == 200
     assert updated.json()["metadata"] == {"apipi.git_username": "forgejo-bot"}
-
-
-async def test_static_bearer_errors_unchanged(client: AsyncClient) -> None:
-    token = "static-errors"
-    vault_id = await _vault(client, token)
-    base = f"/v1/agents/vaults/{vault_id}/credentials"
-    missing = await client.post(
-        base,
-        headers=_auth(token),
-        json={"auth": {"type": "static_bearer", "token": "x"}},
-    )
-    assert missing.status_code == 400
-    assert missing.json()["error"]["code"] == "validation_error"
-    unknown = await client.post(
-        base, headers=_auth(token), json={"auth": {"type": "basic"}}
-    )
-    assert unknown.status_code == 400
-    assert unknown.json()["error"]["code"] == "validation_error"
-
-
-async def test_encrypt_plaintext_env_secret(settings: Settings, store: Store) -> None:
-    from uuid import uuid4
-
-    from sqlalchemy import select
-
-    from apipi.services.vault_crypto import is_vault_ciphertext
-    from apipi.services.vaults import encrypt_plaintext_vault_tokens
-    from apipi.store.models import VaultCredential
-    from apipi.store.repo import create_vault, create_vault_credential, ensure_tenant
-
-    tenant_id = uuid4()
-    async with store.session() as db:
-        await ensure_tenant(db, tenant_id)
-        vault = await create_vault(db, tenant_id, name="v")
-        row = await create_vault_credential(
-            db,
-            tenant_id,
-            vault.id,
-            auth_type="environment_variable",
-            token="legacy-env-plain",
-            secret_name="FORGEJO_TOKEN",
-            allowed_hosts=["git.example.com"],
-        )
-        cred_id = row.id
-    assert await encrypt_plaintext_vault_tokens(store, settings) == 1
-    async with store.session() as db:
-        found = await db.scalar(
-            select(VaultCredential).where(VaultCredential.id == cred_id)
-        )
-    assert found is not None
-    assert is_vault_ciphertext(found.token)
 
 
 async def test_env_credential_unique_constraint_maps_to_collision(
