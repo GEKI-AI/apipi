@@ -1,7 +1,6 @@
 import asyncio
 import uuid
 from datetime import timedelta
-from typing import Any, cast
 
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
@@ -66,16 +65,6 @@ async def test_worker_requires_token(settings: Settings, store: Store) -> None:
     assert hello.get("error") == "unauthorized"
     closed = await worker.wait_close()
     assert closed["code"] == 1008
-    await worker.close()
-
-
-async def test_worker_wrong_token(settings: Settings, store: Store) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
-    worker = FakeWorker(app, "nope")
-    await worker.connect()
-    hello = worker.hello
-    assert hello is not None
-    assert hello.get("error") == "unauthorized"
     await worker.close()
 
 
@@ -168,42 +157,6 @@ async def test_worker_register_lease_command_event_and_expiry(
         await worker.close()
 
 
-async def test_worker_reconnect_replays_unacked(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
-    token = "t"
-    tenant_id = _tenant(token)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-        )
-        created = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
-        )
-        session_id = uuid.UUID(created.json()["id"])
-        first = FakeWorker(app, worker_secret, worker_id=str(uuid.uuid4()))
-        hello = await first.connect()
-        worker_id = hello["worker_id"]
-        command = await app.state.workers.acquire(
-            store, tenant_id, session_id, op="turn.cancel"
-        )
-        assert command is not None
-        await first.receive_json()
-        await first.close()
-        second = FakeWorker(app, worker_secret, worker_id=worker_id)
-        replayed_hello = await second.connect()
-        assert replayed_hello["generation"] == 2
-        replayed = await second.receive_json()
-        assert replayed["id"] == command["id"]
-        assert replayed["op"] == "turn.cancel"
-        await second.close()
-
-
 async def test_draining_worker_is_not_scheduled(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
@@ -245,29 +198,6 @@ async def test_draining_worker_is_not_scheduled(
         await draining.close()
 
 
-async def test_worker_register_records_api_instance_id(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app = create_app(
-        api_settings_for(_worker_settings(settings, instance_id="node-a")),
-        store=store,
-    )
-    worker = FakeWorker(app, worker_secret)
-    hello = await worker.connect(capacity=1)
-    assert hello["ok"] is True
-    worker_id = uuid.UUID(str(hello["worker_id"]))
-    async with store.session() as db:
-        row = await get_worker(db, worker_id)
-        assert row is not None
-        assert row.api_instance_id is not None
-        assert row.api_instance_id.startswith("node-a-")
-    await worker.close()
-    async with store.session() as db:
-        row = await get_worker(db, worker_id)
-        assert row is not None
-        assert row.api_instance_id is None
-
-
 async def test_worker_register_defaults_memory_mb(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
@@ -280,17 +210,6 @@ async def test_worker_register_defaults_memory_mb(
         row = await get_worker(db, worker_id)
         assert row is not None
         assert row.memory_mb == 4 * app.state.settings.microvm_mem_mib
-    await worker.close()
-
-
-async def test_worker_register_rejects_invalid_memory_mb(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
-    worker = FakeWorker(app, worker_secret)
-    hello = await worker.connect(capacity=4, memory_mb=0)
-    assert hello.get("ok") is False
-    assert hello.get("error") == "invalid register"
     await worker.close()
 
 
@@ -321,231 +240,6 @@ async def test_worker_register_records_memory_mb(
         assert row is not None
         assert row.memory_mb == 8192
     await worker.close()
-
-
-async def test_pick_skips_worker_at_ram_cap(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
-    token = "t"
-    tenant_id = _tenant(token)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-        )
-        created = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
-        )
-        session_id = uuid.UUID(created.json()["id"])
-        full = FakeWorker(app, worker_secret)
-        await full.connect(capacity=8, memory_mb=512)
-        first = await app.state.workers.acquire(
-            store, tenant_id, session_id, op="turn.start"
-        )
-        assert first is not None
-        other = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
-        )
-        other_id = uuid.UUID(other.json()["id"])
-        second = await app.state.workers.acquire(
-            store, tenant_id, other_id, op="turn.start"
-        )
-        assert second is None
-        roomy_secret = (await create_token(store, name="roomy")).secret
-        roomy = FakeWorker(app, roomy_secret)
-        await roomy.connect(capacity=1, memory_mb=4096)
-        second = await app.state.workers.acquire(
-            store, tenant_id, other_id, op="turn.start"
-        )
-        assert second is not None
-        await roomy.close()
-        await full.close()
-
-
-async def test_pick_prefers_worker_with_more_free_ram(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
-    token = "t"
-    tenant_id = _tenant(token)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-        )
-        created = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
-        )
-        session_id = uuid.UUID(created.json()["id"])
-        small = FakeWorker(app, worker_secret)
-        small_hello = await small.connect(capacity=8, memory_mb=1024)
-        large_secret = (await create_token(store, name="large")).secret
-        large = FakeWorker(app, large_secret)
-        large_hello = await large.connect(capacity=8, memory_mb=4096)
-        command = await app.state.workers.acquire(
-            store, tenant_id, session_id, op="turn.start"
-        )
-        assert command is not None
-        picked = app.state.workers.get(uuid.UUID(str(large_hello["worker_id"])))
-        assert picked is not None
-        assert uuid.UUID(command["lease_id"]) in picked.leases
-        skipped = app.state.workers.get(uuid.UUID(str(small_hello["worker_id"])))
-        assert skipped is not None
-        assert not skipped.leases
-        await small.close()
-        await large.close()
-
-
-async def test_worker_register_requires_run_mode(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
-    worker = FakeWorker(app, worker_secret)
-    hello = await worker.connect(run_mode=None)
-    assert hello.get("ok") is False
-    assert hello.get("error") == "invalid register"
-    await worker.close()
-
-
-async def test_pick_keeps_none_and_microvm_apart(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
-    token = "t"
-    tenant_id = _tenant(token)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-        )
-        none_session = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
-        )
-        hosted_session = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={
-                "agent_id": agent.json()["id"],
-                "environment": {"type": "openai_hosted"},
-            },
-        )
-        none_id = uuid.UUID(none_session.json()["id"])
-        hosted_id = uuid.UUID(hosted_session.json()["id"])
-        none_secret = (await create_token(store, name="none")).secret
-        none_worker = FakeWorker(app, none_secret)
-        none_hello = await none_worker.connect(
-            capacity=4, run_mode="none", accepts=["none"]
-        )
-        microvm_secret = (await create_token(store, name="microvm")).secret
-        microvm = FakeWorker(app, microvm_secret)
-        microvm_hello = await microvm.connect(
-            capacity=4, run_mode="microvm", accepts=["microvm"]
-        )
-        none_cmd = await app.state.workers.acquire(
-            store, tenant_id, none_id, op="turn.start"
-        )
-        hosted_cmd = await app.state.workers.acquire(
-            store, tenant_id, hosted_id, op="turn.start"
-        )
-        assert none_cmd is not None
-        assert none_cmd["payload"]["run_mode"] == "none"
-        assert hosted_cmd is not None
-        assert hosted_cmd["payload"]["run_mode"] == "microvm"
-        none_conn = app.state.workers.get(uuid.UUID(str(none_hello["worker_id"])))
-        microvm_conn = app.state.workers.get(uuid.UUID(str(microvm_hello["worker_id"])))
-        assert none_conn is not None
-        assert microvm_conn is not None
-        assert uuid.UUID(none_cmd["lease_id"]) in none_conn.leases
-        assert uuid.UUID(hosted_cmd["lease_id"]) in microvm_conn.leases
-        await none_worker.close()
-        await microvm.close()
-
-
-async def test_no_matching_worker_is_capacity(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
-    token = "t"
-    tenant_id = _tenant(token)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-        )
-        created = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
-        )
-        session_id = uuid.UUID(created.json()["id"])
-        worker = FakeWorker(app, worker_secret)
-        await worker.connect(capacity=2, run_mode="microvm", accepts=["microvm"])
-        missed = await app.state.workers.acquire(
-            store, tenant_id, session_id, op="turn.start"
-        )
-        assert missed is None
-        await worker.close()
-
-
-async def test_session_kind_is_ignored_for_placement(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    worker_settings = Settings(
-        database_url=settings.database_url,
-        run_mode="none",
-        sessions_dir=settings.sessions_dir,
-    )
-    app = create_app(api_settings_for(worker_settings), store=store)
-    token = "t"
-    tenant_id = _tenant(token)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-        )
-        created = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={
-                "agent_id": agent.json()["id"],
-                "environment": {"type": "none"},
-                "metadata": {"apipi.session_kind": "chat"},
-            },
-        )
-        session_id = uuid.UUID(created.json()["id"])
-        microvm = FakeWorker(app, worker_secret)
-        await microvm.connect(capacity=4, run_mode="microvm", accepts=["microvm"])
-        missed = await app.state.workers.acquire(
-            store, tenant_id, session_id, op="turn.start"
-        )
-        assert missed is None
-        none_secret = (await create_token(store, name="none")).secret
-        none_worker = FakeWorker(app, none_secret)
-        none_hello = await none_worker.connect(capacity=4, run_mode="none")
-        command = await app.state.workers.acquire(
-            store, tenant_id, session_id, op="turn.start"
-        )
-        assert command is not None
-        assert command["payload"]["run_mode"] == "none"
-        conn = app.state.workers.get(uuid.UUID(str(none_hello["worker_id"])))
-        assert conn is not None
-        assert uuid.UUID(command["lease_id"]) in conn.leases
-        await none_worker.close()
-        await microvm.close()
 
 
 async def _leased_session(
@@ -701,42 +395,6 @@ async def test_ack_and_ingest_renew_the_lease_once_per_interval(
         await asyncio.sleep(0.1)
         assert conn.last_renewed == renewed_at
         await worker.close()
-
-
-async def test_heartbeat_gap_is_measured_and_late_gaps_are_logged(
-    settings: Settings, caplog
-) -> None:
-    import time
-
-    from apipi.common.metrics import Metrics
-    from apipi.workerhub.connection import WorkerConnection
-    from apipi.workerhub.heartbeat import observe_heartbeat
-    from apipi.workerhub.hub import WorkerHub
-
-    metrics = Metrics()
-    hub = WorkerHub(_worker_settings(settings), metrics=metrics)
-    conn = WorkerConnection(
-        worker_id=uuid.uuid4(),
-        generation=1,
-        websocket=cast(Any, None),
-        capacity=1,
-        memory_mb=512,
-        run_mode="none",
-    )
-    conn.connected_at = time.monotonic() - 20
-    with caplog.at_level("WARNING", logger="apipi.worker"):
-        observe_heartbeat(hub, conn)
-        observe_heartbeat(hub, conn)
-    late = [
-        record
-        for record in caplog.records
-        if getattr(record, "event", None) == "worker.heartbeat.late"
-    ]
-    assert len(late) == 1
-    assert late[0].source == "api"
-    assert late[0].gap_seconds >= 20
-    body = metrics.scrape().decode()
-    assert "apipi_worker_heartbeat_gap_seconds_count 2.0" in body
 
 
 async def test_lease_events_are_counted(

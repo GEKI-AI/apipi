@@ -62,21 +62,17 @@ async def test_placement_matrix(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         agent_id = await _agent(client, token)
-        if kind == "computer":
-            created = await client.post(
-                "/v1/agents/sessions",
-                headers=_auth(token),
-                json={
-                    "agent_id": agent_id,
-                    "environment": {"type": "openai_hosted"},
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent_id,
+                "environment": {
+                    "type": "openai_hosted" if kind == "computer" else "none"
                 },
-            )
-        else:
-            created = await client.post(
-                "/v1/agents/sessions",
-                headers=_auth(token),
-                json={"agent_id": agent_id, "environment": {"type": "none"}},
-            )
+                "metadata": {"apipi.session_kind": "chat"},
+            },
+        )
         assert created.status_code == 200
         session_id = uuid.UUID(created.json()["id"])
         workers: list[FakeWorker] = []

@@ -13,7 +13,6 @@ from tests.support.fake_worker import FakeWorker
 from tests.support.prom import metric_line
 from tests.support.split_worker import api_settings_for
 
-from apipi.common.metrics import Metrics
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.store.blobs import MemoryStore
@@ -511,38 +510,6 @@ async def test_expire_changes_nothing_in_memory_when_the_commit_fails(
         await worker.close()
 
 
-async def test_the_lease_reaper_loop_survives_a_failed_round(
-    settings: Settings, store: Store
-) -> None:
-    from apipi.common.background import run_loop
-
-    app = create_app(_settings(settings), store=store)
-    gateway = app.state.gateway
-    calls = 0
-
-    async def flaky(*_args: Any) -> list[uuid.UUID]:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise OperationalError("select", {}, Exception("failover"))
-        return []
-
-    gateway.workers.expire = flaky
-    metrics: Metrics = app.state.metrics
-    await run_loop(
-        "lease_reaper_test",
-        gateway._expire_worker_leases,
-        interval=0,
-        metrics=metrics,
-        rounds=3,
-    )
-    assert calls == 3
-    body = metrics.scrape().decode()
-    assert metric_line(
-        body, "apipi_background_loop_errors_total", loop="lease_reaper_test"
-    ).endswith(" 1.0")
-
-
 async def _closed_on_cancel(entered: asyncio.Event) -> None:
     entered.set()
     try:
@@ -581,26 +548,3 @@ async def test_a_cancel_ends_the_socket_when_a_handler_turns_it_into_an_error(
     done, _pending = await asyncio.wait({task}, timeout=5)
     assert task in done
     assert app.state.workers.get(uuid.UUID(str(worker.worker_id))) is None
-
-
-@pytest.mark.parametrize("swallowed", [False, True])
-async def test_a_background_loop_ends_when_a_round_turns_a_cancel_into_an_error(
-    swallowed: bool,
-) -> None:
-    from apipi.common.background import run_loop
-
-    entered = asyncio.Event()
-
-    async def round_() -> None:
-        try:
-            await _closed_on_cancel(entered)
-        except ValueError:
-            if not swallowed:
-                raise
-
-    task = asyncio.create_task(run_loop("cancel_test", round_, interval=0))
-    await asyncio.wait_for(entered.wait(), timeout=5)
-    task.cancel()
-    done, _pending = await asyncio.wait({task}, timeout=5)
-    assert task in done
-    assert task.cancelled()

@@ -1,4 +1,5 @@
 import logging
+import time
 import uuid
 from unittest.mock import MagicMock
 
@@ -13,7 +14,7 @@ from apipi.worker.commands import dispatch_command
 from apipi.worker.outbox import Outbox
 from apipi.worker.sink import OutboxSink
 from apipi.workerhub.connection import WorkerConnection, WorkerImage
-from apipi.workerhub.heartbeat import images_from_message
+from apipi.workerhub.heartbeat import images_from_message, observe_heartbeat
 from apipi.workerhub.hub import WorkerHub
 
 
@@ -68,13 +69,36 @@ def test_pick_filters_image_before_capacity() -> None:
     assert hub.pick(512, kind="none") is none_only
 
 
-def test_legacy_worker_without_images_has_default_and_browser() -> None:
+def test_a_microvm_worker_that_omits_images_has_default_and_browser() -> None:
     images = images_from_message({"type": "register"}, "microvm")
     assert set(images) == {"default", "browser"}
     arm = images_from_message({"type": "register", "arch": "aarch64"}, "microvm")
     assert set(arm) == {"default"}
     assert images_from_message({"type": "register"}, "none") == {}
     assert images_from_message({"images": []}, "microvm") == {}
+
+
+@pytest.mark.parametrize(
+    ("pools", "none", "microvm"),
+    [
+        ([{"none"}], 0, None),
+        ([{"microvm"}], None, 0),
+        ([{"none", "microvm"}], 0, 0),
+        ([{"none"}, {"microvm"}], 0, 1),
+    ],
+)
+def test_pick_places_each_kind_only_on_a_worker_that_accepts_it(
+    pools: list[set[str]], none: int | None, microvm: int | None
+) -> None:
+    hub = WorkerHub(_settings())
+    conns = [
+        _conn(capacity=8, memory_mb=4096 * (index + 1), accepts=frozenset(accepts))
+        for index, accepts in enumerate(pools)
+    ]
+    for conn in conns:
+        hub._conns[conn.worker_id] = conn
+    for kind, want in (("none", none), ("microvm", microvm)):
+        assert hub.pick(kind=kind) is (None if want is None else conns[want])
 
 
 def test_pick_prefers_more_free_ram() -> None:
@@ -133,6 +157,28 @@ def test_observe_labels_workers_by_run_mode() -> None:
     assert metric_line(body, "apipi_workers", run_mode="none").endswith(" 1.0")
     assert metric_line(body, "apipi_workers", run_mode="microvm").endswith(" 1.0")
     assert metric_line(body, "apipi_worker_leases", run_mode="none").endswith(" 0.0")
+
+
+def test_heartbeat_gap_is_measured_and_late_gaps_are_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    metrics = Metrics()
+    hub = WorkerHub(_settings(), metrics=metrics)
+    conn = _conn(capacity=1, memory_mb=512)
+    conn.connected_at = time.monotonic() - 20
+    with caplog.at_level("WARNING", logger="apipi.worker"):
+        observe_heartbeat(hub, conn)
+        observe_heartbeat(hub, conn)
+    late = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "worker.heartbeat.late"
+    ]
+    assert len(late) == 1
+    assert late[0].__dict__["source"] == "api"
+    assert late[0].__dict__["gap_seconds"] >= 20
+    body = metrics.scrape().decode()
+    assert "apipi_worker_heartbeat_gap_seconds_count 2.0" in body
 
 
 class _SinkExecution:
@@ -219,46 +265,6 @@ async def test_dispatch_logs_4xx_and_does_not_raise(
     assert matched
     assert matched[-1].levelno == logging.WARNING
     assert matched[-1].__dict__["failure_source"] == "user"
-
-
-def test_pick_accepts_sets() -> None:
-    hub = WorkerHub(_settings())
-    both = _conn(
-        capacity=8,
-        memory_mb=8192,
-        run_mode="microvm",
-        accepts=frozenset({"none", "microvm"}),
-    )
-    hub._conns[both.worker_id] = both
-    assert hub.pick(kind="none") is both
-    assert hub.pick(kind="microvm") is both
-
-
-def test_pick_microvm_only_never_gets_none() -> None:
-    hub = WorkerHub(_settings())
-    microvm_only = _conn(
-        capacity=8, memory_mb=8192, run_mode="microvm", accepts=frozenset({"microvm"})
-    )
-    hub._conns[microvm_only.worker_id] = microvm_only
-    assert hub.pick(kind="microvm") is microvm_only
-    assert hub.pick(kind="none") is None
-
-
-def test_pick_none_only_never_gets_microvm() -> None:
-    hub = WorkerHub(_settings())
-    none_only = _conn(capacity=8, memory_mb=4096, run_mode="none")
-    hub._conns[none_only.worker_id] = none_only
-    assert hub.pick(kind="none") is none_only
-    assert hub.pick(kind="microvm") is None
-
-
-def test_pick_no_matching_worker_is_none() -> None:
-    hub = WorkerHub(_settings())
-    microvm_only = _conn(
-        capacity=8, memory_mb=8192, run_mode="microvm", accepts=frozenset({"microvm"})
-    )
-    hub._conns[microvm_only.worker_id] = microvm_only
-    assert hub.pick(kind="none") is None
 
 
 async def test_a_release_ends_only_when_every_handler_of_it_ended() -> None:

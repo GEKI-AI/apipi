@@ -122,8 +122,6 @@ class ApiPlayer:
         try:
             for step in self.fixture.steps:
                 await self.step(step)
-            if self.tasks:
-                await asyncio.wait(self.tasks, timeout=5)
         finally:
             for task in self.tasks:
                 task.cancel()

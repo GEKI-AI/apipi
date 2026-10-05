@@ -18,7 +18,7 @@ from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
-from apipi.store.repo import set_session_lease
+from apipi.store.repo import list_turns, set_session_lease
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -273,8 +273,9 @@ async def test_socket_reject_counts_and_acks_past(
     await worker.close()
 
 
-async def test_reconnect_replays_without_duplicates(
-    settings: Settings, store: Store, worker_secret: str
+@pytest.mark.parametrize("another_replica", [False, True])
+async def test_reconnect_replays_exactly_once(
+    settings: Settings, store: Store, worker_secret: str, another_replica: bool
 ) -> None:
     app = create_app(
         api_settings_for(_worker_settings(settings), batch_window_zero=False),
@@ -293,26 +294,21 @@ async def test_reconnect_replays_without_duplicates(
     acks = await _drain_acks(worker, 1)
     assert acks[-1]["last_seq"] == 6
     await worker.close()
+    if another_replica:
+        app = create_app(
+            api_settings_for(_worker_settings(settings), batch_window_zero=False),
+            store=store,
+        )
     second = FakeWorker(app, worker_secret, worker_id=str(worker_id))
-    await second.ws.connect()
-    await second.send_json(
-        {
-            "type": "register",
-            "protocol": 2,
-            "capacity": 1,
-            "run_mode": "none",
-            "accepts": ["none"],
-            "id": str(worker_id),
-            "running": [
-                {
-                    "session_id": str(session_id),
-                    "lease_id": str(lease_id),
-                    "last_seq": 6,
-                }
-            ],
-        }
+    hello = await second.connect(
+        running=[
+            {
+                "session_id": str(session_id),
+                "lease_id": str(lease_id),
+                "last_seq": 6,
+            }
+        ]
     )
-    hello = await second.receive_json()
     assert hello.get("ok") is True
     assert hello["sessions"][str(session_id)] == 6
     for envelope in flow:
@@ -321,74 +317,17 @@ async def test_reconnect_replays_without_duplicates(
     assert acks[-1]["last_seq"] == 12
     async with store.session() as db:
         events = await list_events(db, tenant_id, session_id)
-    assert len(events) >= 6
-    await second.close()
-
-
-async def test_reconnect_to_another_replica_keeps_exactly_once(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    first_app = create_app(
-        api_settings_for(_worker_settings(settings), batch_window_zero=False),
-        store=store,
-    )
-    token = "t"
-    tenant_id, session_id = await _session(first_app, token, store)
-    worker = FakeWorker(first_app, worker_secret)
-    hello = await worker.connect()
-    worker_id = uuid.UUID(str(hello["worker_id"]))
-    lease_id = await _lease(store, tenant_id, session_id, worker_id)
-    turn_id = uuid.uuid4()
-    flow = await _turn_envelopes(session_id, turn_id)
-    for envelope in flow[:4]:
-        await worker.send_json(envelope)
-    acks = await _drain_acks(worker, 1)
-    assert acks[-1]["last_seq"] == 4
-    await worker.close()
-    second_app = create_app(
-        api_settings_for(_worker_settings(settings), batch_window_zero=False),
-        store=store,
-    )
-    second = FakeWorker(second_app, worker_secret, worker_id=str(worker_id))
-    await second.ws.connect()
-    await second.send_json(
-        {
-            "type": "register",
-            "protocol": 2,
-            "capacity": 1,
-            "run_mode": "none",
-            "accepts": ["none"],
-            "id": str(worker_id),
-            "running": [
-                {
-                    "session_id": str(session_id),
-                    "lease_id": str(lease_id),
-                    "last_seq": 4,
-                }
-            ],
-        }
-    )
-    hello = await second.receive_json()
-    assert hello.get("ok") is True
-    assert hello["sessions"][str(session_id)] == 4
-    for envelope in flow[4:]:
-        await second.send_json(envelope)
-    acks = await _drain_acks(second, 1)
-    assert acks[-1]["last_seq"] == 12
-    async with store.session() as db:
-        events = await list_events(db, tenant_id, session_id)
-        assert [event.type for event in events][-6:] == [
-            "agent.session.in_progress",
-            "agent.session.turn.created",
-            "agent.session.turn.item.added",
-            "agent.session.turn.item.done",
-            "agent.session.turn.completed",
-            "agent.session.idle",
-        ]
-        from apipi.store.repo import list_turns
-
         turns = await list_turns(db, tenant_id, session_id)
-        assert turns is not None and len(turns) == 1
+    types = [event.type for event in events]
+    assert types[types.index("agent.session.in_progress") :] == [
+        "agent.session.in_progress",
+        "agent.session.turn.created",
+        "agent.session.turn.item.added",
+        "agent.session.turn.item.done",
+        "agent.session.turn.completed",
+        "agent.session.idle",
+    ]
+    assert turns is not None and len(turns) == 1
     await second.close()
 
 

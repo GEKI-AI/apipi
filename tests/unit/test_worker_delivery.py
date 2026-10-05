@@ -26,53 +26,39 @@ from apipi.worker.artifact_upload import (
 from apipi.worker.outbox import FeatureUnsupported, Outbox
 
 
-async def test_stop_is_acked_on_receipt_when_the_api_reports_session_stopped(
-    settings: Settings,
+@pytest.mark.parametrize("features", [sorted(SUPPORTED_FEATURES), None])
+async def test_stop_is_acked_on_receipt_or_after_session_stopped_is_acked(
+    settings: Settings, features: list[str] | None
 ) -> None:
     outbox = Outbox()
     execution = _Execution(settings, outbox)
     release = asyncio.Event()
 
-    async def slow_teardown(_session_id: uuid.UUID) -> None:
+    async def slow_teardown(session_id: uuid.UUID) -> None:
         await release.wait()
+        outbox.append(session_id, "lifecycle.stop", {"reason": "stop"})
+        await execution.note_stopped(session_id)
 
     execution.on_teardown = slow_teardown
     session_id = uuid.uuid4()
     command = _command(session_id, str(uuid.uuid4()), "session.stop")
-    sock = _Sock(
-        [_hello(features=sorted(SUPPORTED_FEATURES)), command],
-    )
-    run = _start(settings, sock, execution=execution, outbox=outbox)
-    try:
-        await _wait_for(lambda: sock.of("lease.ack"))
-        assert sock.of("lease.ack")[0]["id"] == command["id"]
-        assert execution.teardowns == [session_id]
-        release.set()
-    finally:
-        await run.stop()
-
-
-async def test_stop_is_acked_after_it_finished_for_an_api_without_features(
-    settings: Settings,
-) -> None:
-    outbox = Outbox()
-    execution = _Execution(settings, outbox)
-    release = asyncio.Event()
-
-    async def slow_teardown(_session_id: uuid.UUID) -> None:
-        await release.wait()
-
-    execution.on_teardown = slow_teardown
-    session_id = uuid.uuid4()
-    sock = _Sock([_hello(), _command(session_id, str(uuid.uuid4()), "session.stop")])
+    hello = _hello() if features is None else _hello(features=features)
+    sock = _Sock([hello, command])
     run = _start(settings, sock, execution=execution, outbox=outbox)
     try:
         await _wait_for(lambda: execution.teardowns)
-        await asyncio.sleep(0.1)
-        assert sock.of("lease.ack") == []
+        if features is None:
+            await asyncio.sleep(0.1)
+            assert sock.of("lease.ack") == []
+        else:
+            await _wait_for(lambda: sock.of("lease.ack"))
         release.set()
         await _wait_for(lambda: sock.of("session.stopped"))
         stopped = sock.of("session.stopped")[0]
+        assert [m["type"] for m in sock.sent if "seq" in m] == [
+            "lifecycle.stop",
+            "session.stopped",
+        ]
         sock.push(
             {
                 "type": "ack",
@@ -80,7 +66,9 @@ async def test_stop_is_acked_after_it_finished_for_an_api_without_features(
                 "last_seq": stopped["seq"],
             }
         )
-        await _wait_for(lambda: sock.of("lease.ack"))
+        await _wait_for(lambda: session_id not in run.leases and sock.of("lease.ack"))
+        assert [ack["id"] for ack in sock.of("lease.ack")] == [command["id"]]
+        assert sock.of("lease.release") == []
     finally:
         await run.stop()
 

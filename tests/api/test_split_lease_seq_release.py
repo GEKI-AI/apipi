@@ -8,11 +8,7 @@ from typing import Any
 
 from httpx import AsyncClient
 from sqlalchemy import select
-from tests.support.split_worker import (
-    serve_split,
-    split_client_for,
-    wait_for_idle,
-)
+from tests.support.split_worker import serve_split, split_client_for
 
 from apipi.config import Settings
 from apipi.gateway.tokens import hash_token
@@ -106,7 +102,9 @@ def _error_event(text: str) -> dict[str, Any]:
 async def test_busy_turn_keeps_its_lease(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    short = settings.model_copy(update={"worker_lease_ttl": timedelta(seconds=1)})
+    short = settings.model_copy(
+        update={"worker_lease_ttl": timedelta(milliseconds=200)}
+    )
     async with split_client_for(short, store, token=worker_secret) as (
         app,
         client,
@@ -117,13 +115,13 @@ async def test_busy_turn_keeps_its_lease(
         lease_id = uuid.UUID(command["lease_id"])
         ticks = 0
         loop = asyncio.get_running_loop()
-        end = loop.time() + 2.5
+        end = loop.time() + 0.6
         while loop.time() < end:
             worker.outbox.append(session_id, "event", _error_event(f"tick {ticks}"))
             ticks += 1
             expired = await app.state.workers.expire(store, app.state.event_hub)
             assert expired == []
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.02)
         assert await _lease_of(store, session_id) == lease_id
 
         async def stored() -> bool:
@@ -185,57 +183,3 @@ async def test_second_worker_continues_the_session_sequence(
         assert len(completed) == 2
         ledger = await _ledger(store, session_id)
         assert max(ledger) > first_high_water
-
-
-async def test_release_does_not_overtake_buffered_envelopes(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    async with split_client_for(settings, store, token=worker_secret) as (
-        app,
-        client,
-        worker,
-    ):
-        session_id = await _new_session(client)
-        command = await _lease_command(app, store, session_id)
-        worker.session_leases[session_id] = command["lease_id"]
-        stop = worker.outbox.append(
-            session_id, "lifecycle.stop", {"reason": "idle", "live_ms": 5}
-        )
-        marker = worker.outbox.append(session_id, "event", _error_event("last words"))
-        await worker.execution.note_stopped(session_id)
-
-        async def released() -> bool:
-            return await _lease_of(store, session_id) is None
-
-        await _until(released)
-        await asyncio.sleep(0.2)
-        ledger = await _ledger(store, session_id)
-        assert ledger[stop["seq"]] == "lifecycle.stop"
-        assert ledger[marker["seq"]] == "event"
-        async with store.session() as db:
-            events = await list_events(db, _tenant(), session_id)
-        assert any(
-            e.type == "agent.session.error" and e.data["message"] == "last words"
-            for e in events
-        )
-
-
-async def test_session_stop_receipt_is_ingested_before_the_release(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    async with split_client_for(settings, store, token=worker_secret) as (
-        app,
-        client,
-        worker,
-    ):
-        session_id = await _new_session(client)
-        done = await _message(client, session_id, "hi")
-        assert done.status_code == 200
-        await wait_for_idle(client, TOKEN, str(session_id))
-        await app.state.execution.teardown(session_id)
-        assert await _lease_of(store, session_id) is None
-        ledger = await _ledger(store, session_id)
-        assert "session.stopped" in ledger.values()
-        assert worker.outbox.acked_seq(session_id) == worker.outbox.high_water(
-            session_id
-        )

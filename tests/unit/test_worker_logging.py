@@ -118,18 +118,26 @@ async def test_run_loop_survives_errors_and_counts(
     assert field(errors[0], "loop") == "lease_reaper"
 
 
-async def test_run_loop_lets_cancellation_through() -> None:
+@pytest.mark.parametrize("on_cancel", ["raise", "error", "swallow"])
+async def test_run_loop_ends_on_cancel_whatever_the_round_does(on_cancel: str) -> None:
     started = asyncio.Event()
 
     async def body() -> None:
         started.set()
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            if on_cancel == "raise":
+                raise
+            if on_cancel == "error":
+                raise ValueError("Connection closed") from None
 
     task = spawn_loop("t", body, interval=0)
     await asyncio.wait_for(started.wait(), 2)
     task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    done, _pending = await asyncio.wait({task}, timeout=5)
+    assert task in done
+    assert task.cancelled()
 
 
 async def test_watch_task_logs_a_dead_task(caplog: pytest.LogCaptureFixture) -> None:
