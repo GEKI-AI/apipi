@@ -1,22 +1,23 @@
 import asyncio
 import logging
 import uuid
-from datetime import timedelta
 from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import OperationalError
-from tests.api.test_workers import _leased_session, _worker_settings
-from tests.support.fake_worker import FakeWorker
+from tests.support.fake_worker import (
+    FakeWorker,
+    acquire_lease,
+    socket_settings,
+    status_envelope,
+)
 from tests.support.prom import metric_line
-from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.protocol import (
     BASELINE_FEATURES,
-    FEATURE_SESSION_STOPPED,
     SUPPORTED_FEATURES,
     strict_parse,
 )
@@ -27,23 +28,8 @@ from apipi.store.repo import get_session
 from apipi.workerhub import serve as serve_module
 
 
-def _app(settings: Settings, store: Store, **kw: Any):
-    return create_app(
-        api_settings_for(
-            _worker_settings(settings, **kw).model_copy(update={"metrics": True})
-        ),
-        store=store,
-    )
-
-
-def _status(session_id: uuid.UUID, seq: int, **extra: Any) -> dict[str, Any]:
-    return {
-        "v": 2,
-        "session_id": str(session_id),
-        "seq": seq,
-        "type": "session.status",
-        "payload": {"status": "idle", **extra},
-    }
+def _app(settings: Settings, store: Store):
+    return create_app(socket_settings(settings), store=store)
 
 
 def _presign(session_id: uuid.UUID, seq: int, request_id: uuid.UUID) -> dict[str, Any]:
@@ -106,10 +92,10 @@ async def test_transient_ingest_error_is_retried_and_acked_after_the_retry(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, _command = await _leased_session(
+        tenant_id, session_id, _command = await acquire_lease(
             app, client, store, worker
         )
-        await worker.send_json(_status(session_id, 1))
+        await worker.send_json(status_envelope(session_id, 1))
         ack = await worker.receive_json()
         assert ack == {"type": "ack", "session_id": str(session_id), "last_seq": 1}
         assert state["ack_early"] is False
@@ -146,10 +132,10 @@ async def test_ingest_closes_the_socket_when_a_transient_error_persists(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, _command = await _leased_session(
+        tenant_id, session_id, _command = await acquire_lease(
             app, client, store, worker
         )
-        await worker.send_json(_status(session_id, 1))
+        await worker.send_json(status_envelope(session_id, 1))
         closed = await worker.wait_close()
         assert closed["code"] == 1011
         async with store.session() as db:
@@ -165,9 +151,7 @@ async def test_presign_reply_comes_before_the_ack_and_a_replay_gets_it_again(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        _tenant, session_id, _command = await _leased_session(
-            app, client, store, worker
-        )
+        _tenant, session_id, _command = await acquire_lease(app, client, store, worker)
         request_id = uuid.uuid4()
         await worker.send_json(_presign(session_id, 1, request_id))
         first = await worker.receive_json()
@@ -190,11 +174,11 @@ async def test_new_fields_and_types_from_a_newer_worker_lose_nothing(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, _command = await _leased_session(
+        tenant_id, session_id, _command = await acquire_lease(
             app, client, store, worker
         )
         with strict_parse(False):
-            await worker.send_json(_status(session_id, 1, shiny="new"))
+            await worker.send_json(status_envelope(session_id, 1, shiny="new"))
             await worker.send_json(
                 {
                     "v": 2,
@@ -234,7 +218,7 @@ async def test_commands_of_a_lease_queue_in_order_and_are_acked_one_by_one(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, first = await _leased_session(app, client, store, worker)
+        tenant_id, session_id, first = await acquire_lease(app, client, store, worker)
         from apipi.protocol import TurnCancelCommandPayload
 
         second = await hub.command(
@@ -279,9 +263,7 @@ async def test_zombie_lease_is_reattached_and_its_command_is_sent_again(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         dying = FakeWorker(app, worker_secret)
-        tenant_id, session_id, command = await _leased_session(
-            app, client, store, dying
-        )
+        tenant_id, session_id, command = await acquire_lease(app, client, store, dying)
         worker_id = dying.worker_id
         await dying.close()
         other = {"session_id": str(uuid.uuid4()), "lease_id": str(uuid.uuid4())}
@@ -312,16 +294,14 @@ async def test_zombie_lease_is_reattached_and_its_command_is_sent_again(
 async def test_unacked_commands_are_sent_again_on_a_timer_then_age_out(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = _app(settings, store, worker_lease_ttl=timedelta(seconds=30))
+    app = _app(settings, store)
     hub = app.state.workers
     hub.retransmit_seconds = 0.0
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, command = await _leased_session(
-            app, client, store, worker
-        )
+        tenant_id, session_id, command = await acquire_lease(app, client, store, worker)
         await hub.retransmit_due(store, app.state.event_hub)
         resent = await worker.receive_json()
         assert resent["id"] == command["id"]
@@ -353,47 +333,6 @@ async def test_unacked_commands_are_sent_again_on_a_timer_then_age_out(
         await worker.close()
 
 
-async def test_session_stop_is_acked_on_receipt_and_completed_by_the_envelope(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    import json
-
-    from tests.api.test_split_lease_seq_release import (
-        TOKEN,
-        _lease_of,
-        _ledger,
-        _message,
-        _new_session,
-    )
-    from tests.support.split_worker import split_client_for, wait_for_idle
-
-    sent: list[str] = []
-    async with split_client_for(settings, store, token=worker_secret, sent=sent) as (
-        app,
-        client,
-        worker,
-    ):
-        session_id = await _new_session(client)
-        assert (await _message(client, session_id, "hi")).status_code == 200
-        await wait_for_idle(client, TOKEN, str(session_id))
-        assert FEATURE_SESSION_STOPPED in app.state.workers.features_of(
-            next(iter(app.state.workers._conns))
-        )
-        await app.state.execution.teardown(session_id)
-        assert await _lease_of(store, session_id) is None
-        assert "session.stopped" in (await _ledger(store, session_id)).values()
-        frames = [json.loads(text) for text in sent]
-        acks = [i for i, f in enumerate(frames) if f.get("type") == "lease.ack"]
-        stopped = [
-            i for i, f in enumerate(frames) if f.get("type") == "session.stopped"
-        ]
-        assert acks and stopped
-        assert acks[-1] < stopped[0]
-        assert worker.outbox.acked_seq(session_id) == worker.outbox.high_water(
-            session_id
-        )
-
-
 async def test_a_restarted_worker_can_still_replay_its_spool_into_the_old_lease(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
@@ -402,9 +341,7 @@ async def test_a_restarted_worker_can_still_replay_its_spool_into_the_old_lease(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         before = FakeWorker(app, worker_secret)
-        tenant_id, session_id, command = await _leased_session(
-            app, client, store, before
-        )
+        tenant_id, session_id, command = await acquire_lease(app, client, store, before)
         await before.send_json(
             {"type": "lease.ack", "id": command["id"], "lease_id": command["lease_id"]}
         )
@@ -412,7 +349,7 @@ async def test_a_restarted_worker_can_still_replay_its_spool_into_the_old_lease(
         restarted = FakeWorker(app, worker_secret, worker_id=before.worker_id)
         hello = await restarted.connect(running=[])
         assert hello["sessions"] == {str(session_id): 0}
-        await restarted.send_json(_status(session_id, 1))
+        await restarted.send_json(status_envelope(session_id, 1))
         ack = await restarted.receive_json()
         assert ack["last_seq"] == 1
         async with store.session() as db:

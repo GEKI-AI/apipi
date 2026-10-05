@@ -1,11 +1,10 @@
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from httpx import AsyncClient
+from tests.support.http import auth, tenant_of
 
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.repo import create_agent, ensure_tenant
 
@@ -22,10 +21,6 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
 def _code(response) -> str | None:
     body = response.json()
     error = body.get("error")
@@ -38,7 +33,7 @@ async def test_agent_create_none_with_builtin_on_is_400(client: AsyncClient) -> 
     token = "builtin-agent-none"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -56,7 +51,7 @@ async def test_agent_create_none_with_builtin_off_is_200(
     token = "builtin-agent-none-off"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -74,7 +69,7 @@ async def test_agent_create_invalid_builtin_value_is_400(
     token = "builtin-bad-value"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -91,7 +86,7 @@ async def test_agent_create_hosted_codemode_needs_builtin_tools(
     token = "builtin-codemode-hosted"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -108,7 +103,7 @@ async def test_agent_update_none_with_builtin_on_is_400(
     token = "builtin-agent-update"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -119,7 +114,7 @@ async def test_agent_update_none_with_builtin_on_is_400(
     agent_id = created.json()["id"]
     updated = await client.post(
         f"/v1/agents/{agent_id}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"metadata": {"apipi.builtin_tools": "on"}},
     )
     assert updated.status_code == 400
@@ -134,7 +129,7 @@ async def test_agent_create_none_with_unknown_tool_type_is_400(
     token = "builtin-shell-tool"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -151,7 +146,7 @@ async def test_session_create_none_with_builtin_on_is_400(
     token = "builtin-session-none"
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent": {"model": "test"},
             "environment": {"type": "none"},
@@ -168,7 +163,7 @@ async def test_session_create_none_with_codemode_on_is_400(
     token = "builtin-session-codemode"
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent": {"model": "test"},
             "environment": {"type": "none"},
@@ -185,7 +180,7 @@ async def test_session_create_none_with_unknown_tool_type_is_400(
     token = "builtin-session-tool"
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent": {
                 "model": "test",
@@ -203,7 +198,7 @@ async def test_hosted_agent_used_for_none_session_is_rejected(
     token = "builtin-hosted-agent"
     agent = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -221,7 +216,7 @@ async def test_hosted_agent_used_for_none_session_is_rejected(
     agent_id = agent.json()["id"]
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "none"}},
     )
     assert created.status_code == 200, created.text
@@ -233,7 +228,7 @@ async def test_legacy_hosted_agent_with_shell_tool_used_for_none_is_rejected(
     # Agents stored before tool validation carry raw tool rows. Using one
     # with a non-allowed tool for a type=none session is tool_not_allowed.
     token = "builtin-legacy-agent"
-    tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         await ensure_tenant(db, tenant_id)
         agent = await create_agent(
@@ -246,7 +241,7 @@ async def test_legacy_hosted_agent_with_shell_tool_used_for_none_is_rejected(
         agent_id = str(agent.id)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "none"}},
     )
     assert created.status_code == 400
@@ -259,7 +254,7 @@ async def test_hosted_agent_with_builtin_on_used_for_none_is_rejected(
     token = "builtin-hosted-on"
     agent = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -270,7 +265,7 @@ async def test_hosted_agent_with_builtin_on_used_for_none_is_rejected(
     agent_id = agent.json()["id"]
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "none"}},
     )
     assert created.status_code == 400
@@ -284,7 +279,7 @@ async def test_session_create_none_with_function_and_http_mcp_runs(
     token = "builtin-session-ok"
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent": {
                 "model": "test",
@@ -317,7 +312,7 @@ async def test_session_update_none_with_builtin_on_is_400(
     token = "builtin-session-update"
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent": {"model": "test"},
             "environment": {"type": "none"},
@@ -328,7 +323,7 @@ async def test_session_update_none_with_builtin_on_is_400(
     session_id = created.json()["id"]
     updated = await client.post(
         f"/v1/agents/sessions/{session_id}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"metadata": {"apipi.builtin_tools": "on"}},
     )
     assert updated.status_code == 400
@@ -341,7 +336,7 @@ async def test_session_create_hosted_builtin_off_with_codemode_is_400(
     token = "builtin-hosted-codemode"
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent": {"model": "test"},
             "metadata": {
@@ -360,7 +355,7 @@ async def test_session_create_hosted_builtin_off_runs_without_tools(
     token = "builtin-hosted-off"
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent": {"model": "test"},
             "metadata": {"apipi.builtin_tools": "off"},
@@ -377,7 +372,7 @@ async def test_builtin_tools_session_overrides_agent_both_ways(
     token = "builtin-override"
     off_agent = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "off-bot",
             "model": "test",
@@ -387,7 +382,7 @@ async def test_builtin_tools_session_overrides_agent_both_ways(
     assert off_agent.status_code == 200, off_agent.text
     on_session = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": off_agent.json()["id"],
             "metadata": {"apipi.builtin_tools": "on"},
@@ -397,7 +392,7 @@ async def test_builtin_tools_session_overrides_agent_both_ways(
     assert on_session.status_code == 200, on_session.text
     on_agent = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "on-bot",
             "model": "test",
@@ -407,7 +402,7 @@ async def test_builtin_tools_session_overrides_agent_both_ways(
     assert on_agent.status_code == 200, on_agent.text
     off_session = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": on_agent.json()["id"],
             "metadata": {"apipi.builtin_tools": "off"},
@@ -423,14 +418,14 @@ async def test_session_update_hosted_codemode_needs_builtin_tools(
     token = "builtin-hosted-update"
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent": {"model": "test"}, "input": "hello"},
     )
     assert created.status_code == 200, created.text
     session_id = created.json()["id"]
     updated = await client.post(
         f"/v1/agents/sessions/{session_id}",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "metadata": {
                 "apipi.builtin_tools": "off",
@@ -450,7 +445,7 @@ async def test_bundle_export_keeps_builtin_tools(client: AsyncClient) -> None:
     token = "builtin-export"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -460,7 +455,7 @@ async def test_bundle_export_keeps_builtin_tools(client: AsyncClient) -> None:
     assert created.status_code == 200, created.text
     exported = await client.get(
         f"/v1/apipi/agents/{created.json()['id']}/export",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert exported.status_code == 200, exported.text
     with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
@@ -478,7 +473,7 @@ async def test_template_import_none_with_builtin_on_is_400(
     token = "builtin-template"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -488,7 +483,7 @@ async def test_template_import_none_with_builtin_on_is_400(
     assert created.status_code == 200, created.text
     exported = await client.get(
         f"/v1/apipi/agents/{created.json()['id']}/export",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert exported.status_code == 200, exported.text
     with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
@@ -505,7 +500,7 @@ async def test_template_import_none_with_builtin_on_is_400(
             archive.writestr(name, blob)
     imported = await client.post(
         "/v1/apipi/templates/import",
-        headers=_auth(token),
+        headers=auth(token),
         files={
             "bundle": (
                 "agent.apipi-agent.zip",

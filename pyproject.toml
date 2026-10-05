@@ -114,6 +114,10 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 timeout = 120
 timeout_method = "thread"
+filterwarnings = [
+    "error::ResourceWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
 markers = [
     "e2e: fast end-to-end tests; run in GitHub CI",
     "slow: large local validation; not GitHub CI",

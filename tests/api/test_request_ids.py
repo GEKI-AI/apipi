@@ -3,39 +3,35 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.http import auth, tenant_of
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import authenticate
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.turn_logs import get_turn_log
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
 async def test_generates_request_id(client: AsyncClient) -> None:
-    response = await client.get("/v1/agents", headers=_auth("t"))
+    response = await client.get("/v1/agents", headers=auth("t"))
     assert response.status_code == 200
     assert "x-apipi-instance" not in response.headers
     request_id = response.headers["x-request-id"]
     assert request_id
     assert request_id.isascii()
     assert len(request_id) <= 512
-    other = await client.get("/v1/agents", headers=_auth("t"))
+    other = await client.get("/v1/agents", headers=auth("t"))
     assert other.headers["x-request-id"] != request_id
 
 
 @pytest.mark.parametrize(
     ("headers", "status", "request_id"),
     [
-        ({**_auth("t"), "x-request-id": "echo-me"}, 200, "echo-me"),
+        ({**auth("t"), "x-request-id": "echo-me"}, 200, "echo-me"),
         (
             {
-                **_auth("t"),
+                **auth("t"),
                 "x-request-id": "echo-me",
                 "X-Client-Request-Id": "client-me",
             },
@@ -57,11 +53,11 @@ async def test_echoes_request_id(
 async def test_turn_log_stores_request_id(client: AsyncClient, store: Store) -> None:
     token = "rid"
     agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
     )
     created = await client.post(
         "/v1/agents/sessions",
-        headers={**_auth(token), "X-Client-Request-Id": "turn-req"},
+        headers={**auth(token), "X-Client-Request-Id": "turn-req"},
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none"},
@@ -71,10 +67,10 @@ async def test_turn_log_stores_request_id(client: AsyncClient, store: Store) -> 
     assert created.status_code == 200
     assert created.headers["x-request-id"] == "turn-req"
     turns = await client.get(
-        f"/v1/agents/sessions/{created.json()['id']}/turns", headers=_auth(token)
+        f"/v1/agents/sessions/{created.json()['id']}/turns", headers=auth(token)
     )
     turn_id = uuid.UUID(turns.json()["data"][0]["id"])
-    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         row = await get_turn_log(db, tenant_id, turn_id)
     assert row is not None
@@ -84,7 +80,7 @@ async def test_turn_log_stores_request_id(client: AsyncClient, store: Store) -> 
 async def test_auth_context_headers(client: AsyncClient) -> None:
     token = "ctx"
     identity = authenticate(token)
-    response = await client.get("/v1/agents", headers=_auth(token))
+    response = await client.get("/v1/agents", headers=auth(token))
     assert response.status_code == 200
     assert response.headers["x-tenant-id"] == str(identity.tenant_id)
     assert response.headers["x-user-id"] == identity.key_id
@@ -102,7 +98,7 @@ async def test_trace_id_from_traceparent(client: AsyncClient) -> None:
     response = await client.get(
         "/v1/agents",
         headers={
-            **_auth("t"),
+            **auth("t"),
             "traceparent": f"00-{trace_id}-b7ad6b7169203331-01",
         },
     )
@@ -115,7 +111,7 @@ async def test_incoming_tenant_header_is_not_trusted(client: AsyncClient) -> Non
     identity = authenticate(token)
     response = await client.get(
         "/v1/agents",
-        headers={**_auth(token), "x-tenant-id": "00000000-0000-0000-0000-000000000000"},
+        headers={**auth(token), "x-tenant-id": "00000000-0000-0000-0000-000000000000"},
     )
     assert response.status_code == 200
     assert response.headers["x-tenant-id"] == str(identity.tenant_id)
@@ -132,7 +128,7 @@ async def test_instance_header_when_set(store: Store, tmp_path: Path) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        response = await client.get("/v1/agents", headers=_auth("t"))
+        response = await client.get("/v1/agents", headers=auth("t"))
         health = await client.get("/health")
     assert response.status_code == 200
     assert response.headers["x-apipi-instance"] == "node-a"

@@ -2,14 +2,11 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from httpx import AsyncClient
+from tests.support.http import auth, create_agent
 
 from apipi.config import Settings
 from apipi.store.engine import Store
 from apipi.worker.fake_harness import FakeHarness
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def _client(
@@ -23,14 +20,6 @@ async def _client(
         yield client
 
 
-async def _create_agent(client: AsyncClient, token: str) -> str:
-    response = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    assert response.status_code == 200
-    return str(response.json()["id"])
-
-
 def _write_skill(tree: Path, name: str) -> None:
     tree.mkdir(parents=True)
     (tree / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
@@ -42,10 +31,10 @@ async def test_planted_skill_is_passed_to_harness(
     harness = FakeHarness()
     async for client in _client(settings, store, harness, worker_secret):
         token = "skills"
-        agent_id = await _create_agent(client, token)
+        agent_id = await create_agent(client, token)
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent_id, "environment": {"type": "openai_hosted"}},
         )
         assert created.status_code == 200
@@ -56,7 +45,7 @@ async def test_planted_skill_is_passed_to_harness(
         _write_skill(tree, "demo")
         posted = await client.post(
             f"/v1/agents/sessions/{created.json()['id']}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.message", "content": "hello"},
         )
         assert posted.status_code == 200
@@ -72,10 +61,10 @@ async def test_capability_directories_copied_and_discovered(
     _write_skill(caps / "cap-skill", "cap-skill")
     async for client in _client(settings, store, harness, worker_secret):
         token = "caps"
-        agent_id = await _create_agent(client, token)
+        agent_id = await create_agent(client, token)
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "environment": {
@@ -103,10 +92,10 @@ async def test_unknown_environment_field(
     harness = FakeHarness()
     async for client in _client(settings, store, harness, worker_secret):
         token = "skills"
-        agent_id = await _create_agent(client, token)
+        agent_id = await create_agent(client, token)
         response = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "environment": {"type": "none", "foo": 1},

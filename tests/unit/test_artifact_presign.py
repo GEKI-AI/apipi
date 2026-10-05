@@ -6,7 +6,8 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from tests.unit.test_blobs import FakeS3
+from tests.support.fake_s3 import FakeS3
+from tests.support.ingest import envelope, flush, leased_session
 
 from apipi.common.dirs import store_root
 from apipi.common.objects import NS_ARTIFACTS
@@ -21,16 +22,12 @@ from apipi.protocol import (
     PAYLOAD_MODELS,
     parse_envelope,
 )
-from apipi.services.ingest import IngestBatcher, flush_batch
 from apipi.services.worker_artifacts import check_completed_path, sha256_hex
 from apipi.store.blobs import LocalStore, S3Store, blob_key
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import (
-    create_session,
-    create_tenant,
     list_artifacts,
-    set_session_lease,
 )
 from apipi.worker.artifact_upload import (
     completed_envelope,
@@ -41,17 +38,6 @@ from apipi.worker.artifact_upload import (
 from apipi.worker.client import answer_store_check
 
 
-class _ListableFakeS3(FakeS3):
-    def list_objects_v2(self, **kwargs: object) -> dict[str, object]:
-        prefix = str(kwargs.get("Prefix") or "")
-        contents = [
-            {"Key": key, "Size": len(data)}
-            for key, data in self.objects.items()
-            if key.startswith(prefix)
-        ]
-        return {"Contents": contents, "IsTruncated": False}
-
-
 def _settings(tmp_path: Path, **overrides) -> Settings:
     kwargs: dict = {
         "database_url": "postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
@@ -60,24 +46,6 @@ def _settings(tmp_path: Path, **overrides) -> Settings:
     }
     kwargs.update(overrides)
     return Settings(**kwargs)
-
-
-async def _leased(store: Store, worker_id: uuid.UUID):
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(
-            db, tenant.id, environment={"type": "none"}, metadata={}
-        )
-        lease_id = uuid.uuid4()
-        await set_session_lease(
-            db,
-            tenant.id,
-            row.id,
-            worker_id=worker_id,
-            lease_id=lease_id,
-            lease_until=utc_now() + timedelta(seconds=30),
-        )
-        return tenant.id, row.id, lease_id, row.key_id
 
 
 def test_local_store_dir_defaults_to_apipi_store(
@@ -132,7 +100,7 @@ def test_presign_envelope_has_no_bytes() -> None:
     )
     assert payload["size"] == 5
     assert isinstance(payload["sha256"], str)
-    envelope = parse_envelope(
+    parsed = parse_envelope(
         {
             "v": 2,
             "session_id": str(session_id),
@@ -141,7 +109,7 @@ def test_presign_envelope_has_no_bytes() -> None:
             "payload": payload,
         }
     )
-    assert envelope.message_class() == "durable"
+    assert parsed.message_class() == "durable"
 
 
 def test_shared_store_check_roundtrip(tmp_path: Path) -> None:
@@ -178,20 +146,6 @@ def test_check_completed_path_rejects_traversal() -> None:
             check_completed_path(bad)
 
 
-async def _flush(store, worker_id, envelopes, settings, objects=None):
-    batcher = IngestBatcher()
-    for envelope in envelopes:
-        batcher.add(envelope, 128)
-    return await flush_batch(
-        store,
-        batcher.take(),
-        worker_id=worker_id,
-        settings=settings,
-        metrics=None,
-        objects=objects,
-    )
-
-
 def _presign_payload(request_id: uuid.UUID, size: int = 5) -> dict:
     return {
         "request_id": str(request_id),
@@ -203,35 +157,17 @@ def _presign_payload(request_id: uuid.UUID, size: int = 5) -> dict:
     }
 
 
-def _envelope(session_id, seq, type, payload):
-    from apipi.protocol import WorkerEnvelope
-
-    return WorkerEnvelope.model_validate(
-        {
-            "v": 2,
-            "session_id": str(session_id),
-            "seq": seq,
-            "type": type,
-            "payload": payload,
-        }
-    )
-
-
 async def test_quota_before_presign(store: Store, tmp_path: Path) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease, _key = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     settings = _settings(
         tmp_path, max_artifact_bytes=10, local_store_dir=str(tmp_path / "s")
     )
     request_id = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
-        [
-            _envelope(
-                session_id, 1, "artifact.presign", _presign_payload(request_id, 64)
-            )
-        ],
+        [envelope(session_id, 1, "artifact.presign", _presign_payload(request_id, 64))],
         settings,
     )
     assert outcome.acks == {session_id: 1}
@@ -248,16 +184,16 @@ async def test_quota_before_presign(store: Store, tmp_path: Path) -> None:
 
 async def test_filesystem_presign_then_completed(store: Store, tmp_path: Path) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease, key_id = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, key_id = await leased_session(store, worker_id)
     shared = tmp_path / "shared"
     settings = _settings(tmp_path, local_store_dir=str(shared))
     data = b"artifact-bytes"
     request_id = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "artifact.presign",
@@ -282,11 +218,11 @@ async def test_filesystem_presign_then_completed(store: Store, tmp_path: Path) -
         assert upload is not None
         object_id = blob_key(tenant_id, key_id, session_id, upload.artifact_id)
     relative = write_shared_object(settings, object_id, data)
-    outcome2 = await _flush(
+    outcome2 = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "artifact.completed",
@@ -311,15 +247,15 @@ async def test_filesystem_presign_then_completed(store: Store, tmp_path: Path) -
 
 async def test_checksum_mismatch_rejected(store: Store, tmp_path: Path) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease, key_id = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, key_id = await leased_session(store, worker_id)
     settings = _settings(tmp_path, local_store_dir=str(tmp_path / "shared"))
     data = b"real-bytes"
     request_id = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "artifact.presign",
@@ -336,11 +272,11 @@ async def test_checksum_mismatch_rejected(store: Store, tmp_path: Path) -> None:
         assert upload is not None
         object_id = blob_key(tenant_id, key_id, session_id, upload.artifact_id)
     relative = write_shared_object(settings, object_id, data)
-    outcome2 = await _flush(
+    outcome2 = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "artifact.completed",
@@ -359,21 +295,21 @@ async def test_checksum_mismatch_rejected(store: Store, tmp_path: Path) -> None:
 
 async def test_foreign_upload_id_rejected(store: Store, tmp_path: Path) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease, _key = await _leased(store, worker_id)
-    _t2, session2, _l2, _k2 = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
+    _t2, session2, _l2, _k2 = await leased_session(store, worker_id)
     settings = _settings(tmp_path, local_store_dir=str(tmp_path / "shared"))
     request_id = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
-        [_envelope(session2, 1, "artifact.presign", _presign_payload(request_id))],
+        [envelope(session2, 1, "artifact.presign", _presign_payload(request_id))],
         settings,
     )
     upload_id = outcome.presign_replies[0]["upload_id"]
-    outcome2 = await _flush(
+    outcome2 = await flush(
         store,
         worker_id,
-        [_envelope(session_id, 2, "artifact.completed", {"upload_id": upload_id})],
+        [envelope(session_id, 2, "artifact.completed", {"upload_id": upload_id})],
         settings,
     )
     assert len(outcome2.rejected) == 1
@@ -383,21 +319,21 @@ async def test_path_traversal_in_completed_rejected(
     store: Store, tmp_path: Path
 ) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease, _key = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     settings = _settings(tmp_path, local_store_dir=str(tmp_path / "shared"))
     request_id = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
-        [_envelope(session_id, 1, "artifact.presign", _presign_payload(request_id))],
+        [envelope(session_id, 1, "artifact.presign", _presign_payload(request_id))],
         settings,
     )
     upload_id = outcome.presign_replies[0]["upload_id"]
-    outcome2 = await _flush(
+    outcome2 = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "artifact.completed",
@@ -411,7 +347,7 @@ async def test_path_traversal_in_completed_rejected(
 
 async def test_s3_presign_bound_to_session_prefix(store: Store, tmp_path: Path) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease, key_id = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, key_id = await leased_session(store, worker_id)
     settings = _settings(
         tmp_path,
         artifact_store="s3",
@@ -419,15 +355,15 @@ async def test_s3_presign_bound_to_session_prefix(store: Store, tmp_path: Path) 
         s3_endpoint="https://s3.example",
         s3_region="us-east-1",
     )
-    fake = _ListableFakeS3()
+    fake = FakeS3()
     objects = S3Store(settings, client=fake)
     data = b"s3-bytes"
     request_id = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "artifact.presign",
@@ -463,11 +399,11 @@ async def test_s3_presign_bound_to_session_prefix(store: Store, tmp_path: Path) 
     # Worker uploads with no credentials, just the URL.
     objects_sync = S3Store(settings, client=fake)
     await objects_sync.put(NS_ARTIFACTS, object_id, data)
-    outcome2 = await _flush(
+    outcome2 = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "artifact.completed",
@@ -493,7 +429,7 @@ async def test_presign_after_completed_in_the_same_batch_is_not_unchanged(
     store: Store, tmp_path: Path
 ) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease, _key = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     settings = _settings(
         tmp_path,
         artifact_store="s3",
@@ -501,11 +437,11 @@ async def test_presign_after_completed_in_the_same_batch_is_not_unchanged(
         s3_endpoint="https://s3.example",
         s3_region="us-east-1",
     )
-    objects = S3Store(settings, client=_ListableFakeS3())
+    objects = S3Store(settings, client=FakeS3())
     old, new = b"version-a", b"version-b"
 
     def presign(seq: int, data: bytes):
-        return _envelope(
+        return envelope(
             session_id,
             seq,
             "artifact.presign",
@@ -521,7 +457,7 @@ async def test_presign_after_completed_in_the_same_batch_is_not_unchanged(
 
     async def completed(seq: int, reply: dict, data: bytes):
         await objects.put(NS_ARTIFACTS, reply["object_id"], data)
-        return _envelope(
+        return envelope(
             session_id,
             seq,
             "artifact.completed",
@@ -533,30 +469,30 @@ async def test_presign_after_completed_in_the_same_batch_is_not_unchanged(
             },
         )
 
-    first = await _flush(store, worker_id, [presign(1, old)], settings, objects)
+    first = await flush(store, worker_id, [presign(1, old)], settings, objects=objects)
     a = first.presign_replies[0]
-    second = await _flush(
+    second = await flush(
         store,
         worker_id,
         [await completed(2, a, old), presign(3, new)],
         settings,
-        objects,
+        objects=objects,
     )
     b = second.presign_replies[0]
-    third = await _flush(
+    third = await flush(
         store,
         worker_id,
         [await completed(4, b, new), presign(5, old)],
         settings,
-        objects,
+        objects=objects,
     )
     assert third.rejected == []
     reverted = third.presign_replies[0]
     assert reverted["ok"] is True
     assert reverted.get("unchanged") is not True
     assert reverted["upload_id"]
-    fourth = await _flush(
-        store, worker_id, [await completed(6, reverted, old)], settings, objects
+    fourth = await flush(
+        store, worker_id, [await completed(6, reverted, old)], settings, objects=objects
     )
     assert fourth.rejected == []
     async with store.session() as db:
@@ -571,7 +507,7 @@ async def test_presign_after_completed_in_the_same_batch_is_not_unchanged(
 
 async def test_s3_presign_ttl_short(store: Store, tmp_path: Path) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease, _key = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     settings = _settings(
         tmp_path,
         artifact_store="s3",
@@ -581,11 +517,11 @@ async def test_s3_presign_ttl_short(store: Store, tmp_path: Path) -> None:
         presign_ttl="5m",
     )
     assert settings.presign_ttl <= timedelta(minutes=15)
-    fake = _ListableFakeS3()
-    outcome = await _flush(
+    fake = FakeS3()
+    outcome = await flush(
         store,
         worker_id,
-        [_envelope(session_id, 1, "artifact.presign", _presign_payload(uuid.uuid4()))],
+        [envelope(session_id, 1, "artifact.presign", _presign_payload(uuid.uuid4()))],
         settings,
         objects=S3Store(settings, client=fake),
     )
@@ -599,7 +535,7 @@ async def test_input_image_presign_is_refused(store: Store, tmp_path: Path) -> N
     from apipi.store.models import ArtifactUploadRow
 
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease, _key = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     settings = _settings(
         tmp_path,
         artifact_store="s3",
@@ -607,9 +543,9 @@ async def test_input_image_presign_is_refused(store: Store, tmp_path: Path) -> N
         s3_endpoint="https://s3.example",
         s3_region="us-east-1",
     )
-    fake = _ListableFakeS3()
+    fake = FakeS3()
     data = b"\x89PNG-legacy"
-    envelope = parse_envelope(
+    parsed = parse_envelope(
         {
             "v": 2,
             "session_id": str(session_id),
@@ -625,8 +561,8 @@ async def test_input_image_presign_is_refused(store: Store, tmp_path: Path) -> N
             },
         }
     )
-    outcome = await _flush(
-        store, worker_id, [envelope], settings, objects=S3Store(settings, client=fake)
+    outcome = await flush(
+        store, worker_id, [parsed], settings, objects=S3Store(settings, client=fake)
     )
     reply = outcome.presign_replies[0]
     assert reply["ok"] is False
@@ -649,7 +585,7 @@ async def test_old_input_image_upload_rows_are_refused(
     from apipi.store.repo import create_artifact_upload
 
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease, _key = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     settings = _settings(tmp_path, local_store_dir=str(tmp_path / "shared"))
     data = b"\x89PNG-legacy"
     request_id = uuid.uuid4()
@@ -671,12 +607,12 @@ async def test_old_input_image_upload_rows_are_refused(
         await db.commit()
     payload = _presign_payload(request_id, len(data))
     payload["kind"] = "input_image"
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(session_id, 1, "artifact.presign", payload),
-            _envelope(
+            envelope(session_id, 1, "artifact.presign", payload),
+            envelope(
                 session_id,
                 2,
                 "artifact.completed",

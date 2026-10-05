@@ -1,8 +1,8 @@
 import uuid
 from datetime import timedelta
-from typing import Any
 
 import pytest
+from tests.support.ingest import envelope, flush, leased_session
 
 from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, flush_batch, last_seq_for
@@ -14,64 +14,23 @@ from apipi.store.repo import (
     create_tenant,
     list_items,
     list_turns,
-    set_session_lease,
 )
-
-
-async def _leased(
-    store: Store, worker_id: uuid.UUID
-) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(
-            db, tenant.id, environment={"type": "none"}, metadata={}
-        )
-        lease_id = uuid.uuid4()
-        await set_session_lease(
-            db,
-            tenant.id,
-            row.id,
-            worker_id=worker_id,
-            lease_id=lease_id,
-            lease_until=utc_now() + timedelta(seconds=30),
-        )
-        return tenant.id, row.id, lease_id
-
-
-def _envelope(
-    session_id: uuid.UUID, seq: int, type: str, payload: dict[str, Any]
-) -> WorkerEnvelope:
-    raw_turn = payload.get("turn_id")
-    data_turn = None
-    if isinstance(payload.get("data"), dict):
-        maybe = payload["data"].get("turn_id")
-        data_turn = maybe if isinstance(maybe, str) else None
-    return WorkerEnvelope.model_validate(
-        {
-            "v": 2,
-            "session_id": str(session_id),
-            "turn_id": raw_turn if isinstance(raw_turn, str) else data_turn,
-            "seq": seq,
-            "type": type,
-            "payload": payload,
-        }
-    )
 
 
 def _turn_flow(session_id: uuid.UUID, turn_id: uuid.UUID) -> list[WorkerEnvelope]:
     item_id = uuid.uuid4()
     return [
-        _envelope(session_id, 1, "session.status", {"status": "in_progress"}),
-        _envelope(
+        envelope(session_id, 1, "session.status", {"status": "in_progress"}),
+        envelope(
             session_id,
             2,
             "event",
             {"type": "agent.session.in_progress", "data": {}},
         ),
-        _envelope(
+        envelope(
             session_id, 3, "turn.status", {"turn_id": str(turn_id), "status": "started"}
         ),
-        _envelope(
+        envelope(
             session_id,
             4,
             "event",
@@ -81,7 +40,7 @@ def _turn_flow(session_id: uuid.UUID, turn_id: uuid.UUID) -> list[WorkerEnvelope
                 "turn_id": str(turn_id),
             },
         ),
-        _envelope(
+        envelope(
             session_id,
             5,
             "event",
@@ -91,7 +50,7 @@ def _turn_flow(session_id: uuid.UUID, turn_id: uuid.UUID) -> list[WorkerEnvelope
                 "turn_id": str(turn_id),
             },
         ),
-        _envelope(
+        envelope(
             session_id,
             6,
             "item.added",
@@ -102,7 +61,7 @@ def _turn_flow(session_id: uuid.UUID, turn_id: uuid.UUID) -> list[WorkerEnvelope
                 "data": {"role": "user", "content": "hi"},
             },
         ),
-        _envelope(
+        envelope(
             session_id,
             7,
             "event",
@@ -116,7 +75,7 @@ def _turn_flow(session_id: uuid.UUID, turn_id: uuid.UUID) -> list[WorkerEnvelope
                 "turn_id": str(turn_id),
             },
         ),
-        _envelope(
+        envelope(
             session_id,
             8,
             "event",
@@ -126,13 +85,13 @@ def _turn_flow(session_id: uuid.UUID, turn_id: uuid.UUID) -> list[WorkerEnvelope
                 "turn_id": str(turn_id),
             },
         ),
-        _envelope(
+        envelope(
             session_id,
             9,
             "turn.status",
             {"turn_id": str(turn_id), "status": "completed"},
         ),
-        _envelope(
+        envelope(
             session_id,
             10,
             "usage",
@@ -146,7 +105,7 @@ def _turn_flow(session_id: uuid.UUID, turn_id: uuid.UUID) -> list[WorkerEnvelope
                 "tool_counts": {"get_weather": 1},
             },
         ),
-        _envelope(
+        envelope(
             session_id,
             11,
             "event",
@@ -156,31 +115,17 @@ def _turn_flow(session_id: uuid.UUID, turn_id: uuid.UUID) -> list[WorkerEnvelope
                 "turn_id": str(turn_id),
             },
         ),
-        _envelope(session_id, 12, "session.status", {"status": "idle"}),
-        _envelope(session_id, 13, "event", {"type": "agent.session.idle", "data": {}}),
+        envelope(session_id, 12, "session.status", {"status": "idle"}),
+        envelope(session_id, 13, "event", {"type": "agent.session.idle", "data": {}}),
     ]
-
-
-async def _flush(
-    store: Store,
-    worker_id: uuid.UUID,
-    envelopes: list[WorkerEnvelope],
-    settings: Any = None,
-):
-    batcher = IngestBatcher()
-    for envelope in envelopes:
-        batcher.add(envelope, 128)
-    return await flush_batch(
-        store, batcher.take(), worker_id=worker_id, settings=settings, metrics=None
-    )
 
 
 async def test_full_turn_flow_applies_once(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     turn_id = uuid.uuid4()
     flow = _turn_flow(session_id, turn_id)
-    outcome = await _flush(store, worker_id, flow, settings)
+    outcome = await flush(store, worker_id, flow, settings)
     assert outcome.acks == {session_id: 13}
     assert outcome.rejected == []
     assert len(outcome.wakes) == 7
@@ -222,11 +167,11 @@ async def test_full_turn_flow_applies_once(store: Store, settings) -> None:
 
 async def test_duplicate_batch_is_noop(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     turn_id = uuid.uuid4()
     flow = _turn_flow(session_id, turn_id)
-    first = await _flush(store, worker_id, flow, settings)
-    second = await _flush(store, worker_id, flow, settings)
+    first = await flush(store, worker_id, flow, settings)
+    second = await flush(store, worker_id, flow, settings)
     assert first.acks == second.acks == {session_id: 13}
     assert second.rejected == []
     assert second.wakes == []
@@ -240,10 +185,10 @@ async def test_envelope_without_lease_is_rejected(store: Store, settings) -> Non
             db, tenant.id, environment={"type": "none"}, metadata={}
         )
         session_id = row.id
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
-        [_envelope(session_id, 1, "session.status", {"status": "idle"})],
+        [envelope(session_id, 1, "session.status", {"status": "idle"})],
         settings,
     )
     assert outcome.acks == {session_id: 1}
@@ -253,13 +198,13 @@ async def test_envelope_without_lease_is_rejected(store: Store, settings) -> Non
 
 async def test_turn_mismatch_is_rejected(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     first_turn = uuid.uuid4()
-    await _flush(
+    await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "turn.status",
@@ -269,17 +214,17 @@ async def test_turn_mismatch_is_rejected(store: Store, settings) -> None:
         settings,
     )
     other_turn = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "turn.status",
                 {"turn_id": str(other_turn), "status": "started"},
             ),
-            _envelope(
+            envelope(
                 session_id,
                 3,
                 "event",
@@ -315,9 +260,9 @@ async def test_follow_up_turn_survives_a_wall_clock_step_back(
     from apipi.store.models import Turn
 
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     first = uuid.uuid4()
-    outcome = await _flush(store, worker_id, _turn_flow(session_id, first), settings)
+    outcome = await flush(store, worker_id, _turn_flow(session_id, first), settings)
     assert outcome.rejected == []
     async with store.session() as db:
         await db.execute(
@@ -330,7 +275,7 @@ async def test_follow_up_turn_survives_a_wall_clock_step_back(
         envelope.model_copy(update={"seq": envelope.seq + 13})
         for envelope in _turn_flow(session_id, second)
     ]
-    outcome = await _flush(store, worker_id, follow_up, settings)
+    outcome = await flush(store, worker_id, follow_up, settings)
     assert outcome.rejected == []
     assert outcome.acks == {session_id: 26}
     async with store.session() as db:
@@ -351,9 +296,9 @@ async def test_items_keep_creation_order_when_the_wall_clock_steps_back(
             return datetime.now(tz) - timedelta(hours=1)
 
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     first = uuid.uuid4()
-    outcome = await _flush(store, worker_id, _turn_flow(session_id, first), settings)
+    outcome = await flush(store, worker_id, _turn_flow(session_id, first), settings)
     assert outcome.rejected == []
     monkeypatch.setattr("apipi.store.models.datetime", SteppedBack)
     second = uuid.uuid4()
@@ -361,7 +306,7 @@ async def test_items_keep_creation_order_when_the_wall_clock_steps_back(
         envelope.model_copy(update={"seq": envelope.seq + 13})
         for envelope in _turn_flow(session_id, second)
     ]
-    outcome = await _flush(store, worker_id, follow_up, settings)
+    outcome = await flush(store, worker_id, follow_up, settings)
     assert outcome.rejected == []
     async with store.session() as db:
         items = await list_items(db, tenant_id, session_id)
@@ -408,15 +353,15 @@ async def test_items_of_one_batch_keep_creation_order_when_the_clock_steps_back(
 
 async def test_unknown_and_live_events_rejected(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease = await _leased(store, worker_id)
-    outcome = await _flush(
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id, 1, "event", {"type": "agent.session.nope", "data": {}}
             ),
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "event",
@@ -437,12 +382,12 @@ async def test_malformed_artifact_completed_rejected_without_apply(
     store: Store, settings
 ) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease = await _leased(store, worker_id)
-    outcome = await _flush(
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "artifact.completed",
@@ -460,12 +405,12 @@ async def test_sandbox_status_applies_without_wake_on_none_env(
     store: Store, settings
 ) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease = await _leased(store, worker_id)
-    outcome = await _flush(
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "sandbox.status",
@@ -481,10 +426,10 @@ async def test_sandbox_status_applies_without_wake_on_none_env(
 
 async def test_oversize_envelope_rejected(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     batcher = IngestBatcher()
     batcher.add(
-        _envelope(session_id, 1, "session.status", {"status": "idle"}),
+        envelope(session_id, 1, "session.status", {"status": "idle"}),
         2 * 1024 * 1024,
     )
     outcome = await flush_batch(
@@ -496,19 +441,19 @@ async def test_oversize_envelope_rejected(store: Store, settings) -> None:
 
 async def test_failed_turn_records_failure(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     turn_id = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "turn.status",
                 {"turn_id": str(turn_id), "status": "started"},
             ),
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "turn.status",
@@ -519,7 +464,7 @@ async def test_failed_turn_records_failure(store: Store, settings) -> None:
                     "message": "Worker outbox is full",
                 },
             ),
-            _envelope(
+            envelope(
                 session_id,
                 3,
                 "usage",
@@ -540,7 +485,7 @@ async def test_failed_turn_records_failure(store: Store, settings) -> None:
                     },
                 },
             ),
-            _envelope(
+            envelope(
                 session_id,
                 4,
                 "event",
@@ -570,24 +515,24 @@ async def test_mid_apply_failure_rolls_back_envelope(
     import apipi.services.turn_log as runtime_module
 
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     turn_id = uuid.uuid4()
 
     async def boom(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("turn log store down")
 
     monkeypatch.setattr(runtime_module, "_write_turn_log", boom)
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "turn.status",
                 {"turn_id": str(turn_id), "status": "started"},
             ),
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "usage",
@@ -598,7 +543,7 @@ async def test_mid_apply_failure_rolls_back_envelope(
                     "completion_tokens": 7,
                 },
             ),
-            _envelope(session_id, 3, "session.status", {"status": "idle"}),
+            envelope(session_id, 3, "session.status", {"status": "idle"}),
         ],
         settings,
     )
@@ -621,20 +566,20 @@ async def test_item_done_merges_data_without_public_event(
     store: Store, settings
 ) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     turn_id = uuid.uuid4()
     item_id = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "turn.status",
                 {"turn_id": str(turn_id), "status": "started"},
             ),
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "item.added",
@@ -645,7 +590,7 @@ async def test_item_done_merges_data_without_public_event(
                     "data": {"role": "user"},
                 },
             ),
-            _envelope(
+            envelope(
                 session_id,
                 3,
                 "item.done",
@@ -655,7 +600,7 @@ async def test_item_done_merges_data_without_public_event(
                     "data": {"content": "hi"},
                 },
             ),
-            _envelope(
+            envelope(
                 session_id,
                 4,
                 "item.done",
@@ -677,21 +622,21 @@ async def test_item_done_merges_data_without_public_event(
 
 async def test_item_done_for_other_turn_is_rejected(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     first_turn = uuid.uuid4()
     other_turn = uuid.uuid4()
     item_id = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "turn.status",
                 {"turn_id": str(first_turn), "status": "started"},
             ),
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "item.added",
@@ -702,19 +647,19 @@ async def test_item_done_for_other_turn_is_rejected(store: Store, settings) -> N
                     "data": {},
                 },
             ),
-            _envelope(
+            envelope(
                 session_id,
                 3,
                 "turn.status",
                 {"turn_id": str(first_turn), "status": "completed"},
             ),
-            _envelope(
+            envelope(
                 session_id,
                 4,
                 "turn.status",
                 {"turn_id": str(other_turn), "status": "started"},
             ),
-            _envelope(
+            envelope(
                 session_id,
                 5,
                 "item.done",
@@ -742,33 +687,14 @@ def test_batcher_full_and_window() -> None:
     session_id = uuid.uuid4()
     assert batcher.poll_timeout(0.05) is None
     assert batcher.should_flush(0.05) is False
-    batcher.add(_envelope(session_id, 1, "session.status", {"status": "idle"}), 10)
+    batcher.add(envelope(session_id, 1, "session.status", {"status": "idle"}), 10)
     assert batcher.poll_timeout(0.05) is not None
     assert batcher.should_flush(0.05) is False
-    batcher.add(_envelope(session_id, 2, "session.status", {"status": "idle"}), 10)
+    batcher.add(envelope(session_id, 2, "session.status", {"status": "idle"}), 10)
     assert batcher.full() is True
     assert batcher.should_flush(0.05) is True
     assert len(batcher.take()) == 2
     assert len(batcher) == 0
-
-
-async def _flush_with_metrics(
-    store: Store,
-    worker_id: uuid.UUID,
-    envelopes: list[WorkerEnvelope],
-    metrics: Any,
-    settings: Any = None,
-):
-    batcher = IngestBatcher()
-    for envelope in envelopes:
-        batcher.add(envelope, 128)
-    return await flush_batch(
-        store,
-        batcher.take(),
-        worker_id=worker_id,
-        settings=settings,
-        metrics=metrics,
-    )
 
 
 async def test_ingest_counts_ok_duplicate_and_rejected(
@@ -780,18 +706,18 @@ async def test_ingest_counts_ok_duplicate_and_rejected(
 
     metrics = Metrics()
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     flow = _turn_flow(session_id, uuid.uuid4())
-    await _flush_with_metrics(store, worker_id, flow, metrics, settings)
+    await flush(store, worker_id, flow, settings, metrics=metrics)
     with caplog.at_level("INFO", logger="apipi.worker"):
-        await _flush_with_metrics(store, worker_id, flow[:3], metrics, settings)
+        await flush(store, worker_id, flow[:3], settings, metrics=metrics)
     stranger = uuid.uuid4()
-    await _flush_with_metrics(
+    await flush(
         store,
         stranger,
-        [_envelope(session_id, 14, "session.status", {"status": "idle"})],
-        metrics,
+        [envelope(session_id, 14, "session.status", {"status": "idle"})],
         settings,
+        metrics=metrics,
     )
     body = metrics.scrape().decode()
     assert metric_line(
@@ -823,18 +749,18 @@ async def test_rejected_envelopes_of_a_stale_worker_do_not_move_the_cursor(
     store: Store, settings
 ) -> None:
     owner = uuid.uuid4()
-    _tenant, session_id, _lease = await _leased(store, owner)
-    await _flush(
+    _tenant, session_id, _lease, _key = await leased_session(store, owner)
+    await flush(
         store,
         owner,
-        [_envelope(session_id, 1, "session.status", {"status": "idle"})],
+        [envelope(session_id, 1, "session.status", {"status": "idle"})],
         settings,
     )
     stale = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         stale,
-        [_envelope(session_id, 50, "session.status", {"status": "idle"})],
+        [envelope(session_id, 50, "session.status", {"status": "idle"})],
         settings,
     )
     assert outcome.acks == {session_id: 50}
@@ -850,13 +776,13 @@ async def test_workspace_reaped_is_acked_after_the_lease_ended(
     from apipi.store.repo import clear_session_lease
 
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     async with store.session() as db:
         await clear_session_lease(db, tenant_id, session_id)
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
-        [_envelope(session_id, 7, "workspace.reaped", {"reason": "idle"})],
+        [envelope(session_id, 7, "workspace.reaped", {"reason": "idle"})],
         settings,
     )
     assert outcome.acks == {session_id: 7}

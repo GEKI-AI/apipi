@@ -1,8 +1,8 @@
-import io
 from pathlib import Path
 
 import httpx
 import pytest
+from tests.support.fake_s3 import FakeS3
 
 from apipi.common.images import read_current
 from apipi.config import ConfigError, Settings, load_settings
@@ -10,51 +10,6 @@ from apipi.worker.pi.image_ops import package_image, publish_images
 from apipi.worker.pi.image_pull import list_images, pull_images
 from apipi.worker.pi.image_store import S3ImageStore, open_image_store, parse_image_uri
 from apipi.worker.pi.microvm import microvm_images
-
-
-class _Missing(Exception):
-    def __init__(self, code: str) -> None:
-        self.response = {"Error": {"Code": code}}
-
-
-class FakeS3:
-    def __init__(self) -> None:
-        self.objects: dict[str, bytes] = {}
-        self.downloads: list[str] = []
-        self.gets: list[str] = []
-
-    def upload_file(self, filename: str, bucket: str, key: str) -> None:
-        del bucket
-        self.objects[key] = Path(filename).read_bytes()
-
-    def download_file(self, bucket: str, key: str, filename: str) -> None:
-        del bucket
-        self.downloads.append(key)
-        if key not in self.objects:
-            raise _Missing("NoSuchKey")
-        Path(filename).write_bytes(self.objects[key])
-
-    def put_object(self, **kwargs: object) -> None:
-        key = kwargs["Key"]
-        body = kwargs["Body"]
-        assert isinstance(key, str)
-        assert isinstance(body, bytes)
-        self.objects[key] = body
-
-    def head_object(self, **kwargs: object) -> dict[str, object]:
-        key = kwargs["Key"]
-        assert isinstance(key, str)
-        if key not in self.objects:
-            raise _Missing("404")
-        return {}
-
-    def get_object(self, **kwargs: object) -> dict[str, object]:
-        key = kwargs["Key"]
-        assert isinstance(key, str)
-        self.gets.append(key)
-        if key not in self.objects:
-            raise _Missing("NoSuchKey")
-        return {"Body": io.BytesIO(self.objects[key])}
 
 
 def _settings(

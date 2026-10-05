@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 import pytest
+from tests.support.http import read_timeout
 
 from apipi.config import ConfigError, Settings, load_settings
 from apipi.services.search import (
@@ -472,14 +473,10 @@ async def test_search_bad_fields_reply_invalid_request(store: Store) -> None:
     assert reply is not None and reply["code"] == "invalid_request"
 
 
-def _read_timeout(request: httpx.Request) -> httpx.Response:
-    raise httpx.ReadTimeout("slow", request=request)
-
-
 @pytest.mark.parametrize(
     ("handler", "code", "charged"),
     [
-        (_read_timeout, "search_timeout", (0, 0)),
+        (read_timeout, "search_timeout", (0, 0)),
         (lambda request: httpx.Response(500), "search_unavailable", (0, 0)),
         (lambda request: httpx.Response(401), "search_failed", (0, 0)),
         (lambda request: httpx.Response(200, text="not json"), "search_failed", (1, 1)),

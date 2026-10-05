@@ -1,17 +1,19 @@
 """Split-mode regressions for #483: lease renewal, sequence, release order."""
 
 import asyncio
+import json
 import uuid
-from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 from httpx import AsyncClient
 from sqlalchemy import select
-from tests.support.split_worker import serve_split, split_client_for
+from tests.support.http import auth, post_message, tenant_of
+from tests.support.split_worker import serve_split, split_client_for, wait_for_idle
+from tests.support.waits import until
 
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
+from apipi.protocol import FEATURE_SESSION_STOPPED
 from apipi.services.worker_tokens import create_token
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -22,21 +24,13 @@ from apipi.worker.fake_harness import FakeHarness
 TOKEN = "lease-seq-release"
 
 
-def _auth() -> dict[str, str]:
-    return {"Authorization": f"Bearer {TOKEN}"}
-
-
-def _tenant() -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(TOKEN))
-
-
 async def _new_session(client: AsyncClient, **extra: Any) -> uuid.UUID:
     agent = await client.post(
-        "/v1/agents", headers=_auth(), json={"name": "bot", "model": "test"}
+        "/v1/agents", headers=auth(TOKEN), json={"name": "bot", "model": "test"}
     )
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(),
+        headers=auth(TOKEN),
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none"},
@@ -47,28 +41,9 @@ async def _new_session(client: AsyncClient, **extra: Any) -> uuid.UUID:
     return uuid.UUID(created.json()["id"])
 
 
-async def _message(client: AsyncClient, session_id: uuid.UUID, text: str) -> Any:
-    return await client.post(
-        f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(),
-        json={"type": "agent.session.input.message", "content": text},
-    )
-
-
-async def _until(predicate: Callable[[], Any], timeout: float = 10.0) -> Any:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while True:
-        value = await predicate()
-        if value:
-            return value
-        if asyncio.get_running_loop().time() >= deadline:
-            raise AssertionError("condition not met in time")
-        await asyncio.sleep(0.02)
-
-
 async def _lease_of(store: Store, session_id: uuid.UUID) -> Any:
     async with store.session() as db:
-        row = await get_session(db, _tenant(), session_id)
+        row = await get_session(db, tenant_of(TOKEN), session_id)
         assert row is not None
         return row.lease_id
 
@@ -83,7 +58,7 @@ async def _ledger(store: Store, session_id: uuid.UUID) -> dict[int, str]:
 
 async def _lease_command(app: Any, store: Any, session_id: uuid.UUID) -> dict[str, Any]:
     command = await app.state.workers.acquire(
-        store, _tenant(), session_id, op="turn.cancel"
+        store, tenant_of(TOKEN), session_id, op="turn.cancel"
     )
     assert command is not None
     assert await app.state.workers.wait_ack(
@@ -126,11 +101,11 @@ async def test_busy_turn_keeps_its_lease(
 
         async def stored() -> bool:
             async with store.session() as db:
-                events = await list_events(db, _tenant(), session_id)
+                events = await list_events(db, tenant_of(TOKEN), session_id)
             errors = [e for e in events if e.type == "agent.session.error"]
             return len(errors) == ticks
 
-        await _until(stored)
+        await until(stored, timeout=10.0)
 
 
 async def test_second_worker_continues_the_session_sequence(
@@ -142,7 +117,7 @@ async def test_second_worker_continues_the_session_sequence(
         first,
     ):
         session_id = await _new_session(client)
-        done = await _message(client, session_id, "one")
+        done = await post_message(client, TOKEN, session_id, "one")
         assert done.status_code == 200
         first_high_water = first.outbox.high_water(session_id)
         assert first_high_water > 5
@@ -150,30 +125,30 @@ async def test_second_worker_continues_the_session_sequence(
         async def acked() -> bool:
             return first.outbox.acked_seq(session_id) == first_high_water
 
-        await _until(acked)
+        await until(acked, timeout=10.0)
         await first.execution.note_stopped(session_id)
 
         async def released() -> bool:
             return await _lease_of(store, session_id) is None
 
-        await _until(released)
+        await until(released, timeout=10.0)
         await first.aclose()
 
         async def gone() -> bool:
             return app.state.workers.live() == 0
 
-        await _until(gone)
+        await until(gone, timeout=10.0)
         second_token = (await create_token(store, name="worker-b")).secret
         async with serve_split(app, settings, FakeHarness(), second_token) as second:
             assert second.outbox.high_water(session_id) == 0
             reply = await asyncio.wait_for(
-                _message(client, session_id, "two"), timeout=15
+                post_message(client, TOKEN, session_id, "two"), timeout=15
             )
             assert reply.status_code == 200, reply.text
             assert reply.json()["status"] == "idle"
             assert second.outbox.high_water(session_id) > first_high_water
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth()
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(TOKEN)
         )
         completed = [
             e
@@ -183,3 +158,33 @@ async def test_second_worker_continues_the_session_sequence(
         assert len(completed) == 2
         ledger = await _ledger(store, session_id)
         assert max(ledger) > first_high_water
+
+
+async def test_session_stop_is_acked_on_receipt_and_completed_by_the_envelope(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    sent: list[str] = []
+    async with split_client_for(settings, store, token=worker_secret, sent=sent) as (
+        app,
+        client,
+        worker,
+    ):
+        session_id = await _new_session(client)
+        assert (await post_message(client, TOKEN, session_id, "hi")).status_code == 200
+        await wait_for_idle(client, TOKEN, str(session_id))
+        assert FEATURE_SESSION_STOPPED in app.state.workers.features_of(
+            next(iter(app.state.workers._conns))
+        )
+        await app.state.execution.teardown(session_id)
+        assert await _lease_of(store, session_id) is None
+        assert "session.stopped" in (await _ledger(store, session_id)).values()
+        frames = [json.loads(text) for text in sent]
+        acks = [i for i, f in enumerate(frames) if f.get("type") == "lease.ack"]
+        stopped = [
+            i for i, f in enumerate(frames) if f.get("type") == "session.stopped"
+        ]
+        assert acks and stopped
+        assert acks[-1] < stopped[0]
+        assert worker.outbox.acked_seq(session_id) == worker.outbox.high_water(
+            session_id
+        )

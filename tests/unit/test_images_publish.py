@@ -1,58 +1,15 @@
-import io
 import json
 from pathlib import Path
 
 import pytest
+from tests.support.config import none_settings
+from tests.support.fake_s3 import FakeS3, FakeS3Error
 
 from apipi.cli import main
 from apipi.common.images import load_index, manifest_name, sha256_file
-from apipi.config import ConfigError, Settings
+from apipi.config import ConfigError
 from apipi.worker.pi.image_ops import package_image, publish_images
 from apipi.worker.pi.image_store import open_image_store
-
-
-class _Missing(Exception):
-    def __init__(self, code: str) -> None:
-        self.response = {"Error": {"Code": code}}
-
-
-class FakeS3:
-    def __init__(self) -> None:
-        self.objects: dict[str, bytes] = {}
-        self.uploads: list[str] = []
-
-    def upload_file(self, filename: str, bucket: str, key: str) -> None:
-        del bucket
-        self.uploads.append(key)
-        self.objects[key] = Path(filename).read_bytes()
-
-    def put_object(self, **kwargs: object) -> None:
-        key = kwargs["Key"]
-        body = kwargs["Body"]
-        assert isinstance(key, str)
-        assert isinstance(body, bytes)
-        self.objects[key] = body
-
-    def head_object(self, **kwargs: object) -> dict[str, object]:
-        key = kwargs["Key"]
-        assert isinstance(key, str)
-        if key not in self.objects:
-            raise _Missing("404")
-        return {}
-
-    def get_object(self, **kwargs: object) -> dict[str, object]:
-        key = kwargs["Key"]
-        assert isinstance(key, str)
-        if key not in self.objects:
-            raise _Missing("NoSuchKey")
-        return {"Body": io.BytesIO(self.objects[key])}
-
-
-def _settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-    )
 
 
 def _package(tmp_path: Path, image_id: str) -> Path:
@@ -95,7 +52,7 @@ class _MissingBucket:
 
     def head_object(self, **kwargs: object) -> dict[str, object]:
         del kwargs
-        raise _Missing("NoSuchBucket")
+        raise FakeS3Error("NoSuchBucket")
 
     def put_object(self, **kwargs: object) -> None:
         del kwargs
@@ -114,7 +71,7 @@ def _stamp(path: Path, created_at: str) -> None:
 
 def test_publish_requires_store_version(tmp_path: Path) -> None:
     out = _package(tmp_path, "default")
-    store = open_image_store((tmp_path / "store").as_uri(), _settings(), write=True)
+    store = open_image_store((tmp_path / "store").as_uri(), none_settings(), write=True)
     with pytest.raises(ConfigError, match="push requires --store-version"):
         publish_images(store, out, ids=["default"])
 
@@ -123,7 +80,7 @@ def test_publish_versioned_writes_index(tmp_path: Path) -> None:
     out = _package(tmp_path, "default")
     _package(tmp_path, "browser")
     store_dir = tmp_path / "store" / "0.14.0"
-    store = open_image_store(store_dir.as_uri(), _settings(), write=True)
+    store = open_image_store(store_dir.as_uri(), none_settings(), write=True)
     planned = publish_images(
         store, out, ids=["default"], store_version="0.14.0", dry_run=True
     )
@@ -138,7 +95,7 @@ def test_publish_versioned_writes_index(tmp_path: Path) -> None:
 def test_publish_dry_run_writes_nothing(tmp_path: Path) -> None:
     out = _package(tmp_path, "default")
     store_dir = tmp_path / "dry" / "0.14.0"
-    store = open_image_store(store_dir.as_uri(), _settings(), write=True)
+    store = open_image_store(store_dir.as_uri(), none_settings(), write=True)
     planned = publish_images(
         store, out, ids=["default"], store_version="0.14.0", dry_run=True
     )
@@ -151,7 +108,7 @@ def test_publish_s3_uses_prefix(tmp_path: Path) -> None:
     fake = FakeS3()
     store = open_image_store(
         "s3://images/apipi/0.14.0",
-        _settings(),
+        none_settings(),
         write=True,
         client=fake,
     )
@@ -209,7 +166,7 @@ def test_publish_missing_bucket(tmp_path: Path) -> None:
     fake = _MissingBucket()
     store = open_image_store(
         "s3://missing/apipi/0.14.0",
-        _settings(),
+        none_settings(),
         write=True,
         client=fake,
     )
@@ -220,7 +177,7 @@ def test_publish_missing_bucket(tmp_path: Path) -> None:
 
 def test_https_publish_rejected() -> None:
     with pytest.raises(ConfigError, match="read-only"):
-        open_image_store("https://example.com/images", _settings(), write=True)
+        open_image_store("https://example.com/images", none_settings(), write=True)
 
 
 def test_cli_push_dry_run(

@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import FastAPI
+from tests.support.config import none_settings_for
 from tests.support.fake_worker import FakeWorker
 from tests.support.split_worker import api_settings_for
 
@@ -19,14 +20,6 @@ from apipi.store.repo import (
     get_session,
     set_session_lease,
 )
-
-
-def _worker_settings(settings: Settings) -> Settings:
-    return Settings(
-        database_url=settings.database_url,
-        run_mode="none",
-        sessions_dir=settings.sessions_dir,
-    )
 
 
 async def _hosted_lease(
@@ -65,7 +58,7 @@ async def _reply(worker: FakeWorker) -> dict[str, Any]:
 async def test_inventory_reply_revokes_unknown_and_shares_ttl(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app = create_app(api_settings_for(none_settings_for(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect()
     assert hello.get("ok") is True
@@ -105,7 +98,7 @@ async def test_inventory_reply_revokes_unknown_and_shares_ttl(
 async def test_inventory_clears_orphaned_lease(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app = create_app(api_settings_for(none_settings_for(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     try:
         hello = await worker.connect()
@@ -127,7 +120,9 @@ async def test_inventory_clears_orphaned_lease(
 async def test_hello_carries_revoke_and_ttl(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app: FastAPI = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app: FastAPI = create_app(
+        api_settings_for(none_settings_for(settings)), store=store
+    )
     first = FakeWorker(app, worker_secret)
     hello = await first.connect()
     worker_id = str(hello["worker_id"])
@@ -169,7 +164,7 @@ async def test_hello_carries_revoke_and_ttl(
 async def test_sandbox_seen_touches_only_owned(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app = create_app(api_settings_for(none_settings_for(settings)), store=store)
     first = FakeWorker(app, worker_secret)
     hello = await first.connect()
     worker_id = uuid.UUID(str(hello["worker_id"]))
@@ -218,7 +213,7 @@ async def test_sandbox_seen_touches_only_owned(
 async def test_inventory_unleased_gets_ttl_or_revoke(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app = create_app(api_settings_for(none_settings_for(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect()
     assert hello.get("ok") is True

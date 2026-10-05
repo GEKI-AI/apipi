@@ -42,7 +42,7 @@ Code comments stay omitted unless asked.
 | `tests/api/` | Public HTTP |
 | `tests/unit/` | Internals, mocks |
 | `tests/e2e/` | Live Pi |
-| `tests/support/` | FakeHarness, fakes, and the worker protocol transcript player |
+| `tests/support/` | Helpers that test files share, fakes, and the worker protocol transcript player. Test files import shared helpers only from here |
 | `tests/fixtures/worker-protocol/` | Golden transcripts (JSON Lines) of the worker protocol |
 
 Before code, read the `docs/` page for the part you are changing.

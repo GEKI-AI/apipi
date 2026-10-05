@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from tests.support.config import none_settings
 
 from apipi.config import ConfigError, Settings
 from apipi.worker.pi.fragments import (
@@ -10,16 +11,9 @@ from apipi.worker.pi.fragments import (
 from apipi.worker.pi.platform_prompt import compose_instructions
 
 
-def _settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-    )
-
-
 def test_default_prompt_is_the_shipped_file() -> None:
     shipped = render_shipped("main.none", {"platform_name": "ApiPi"})
-    assert compose_instructions(_settings(), None) == shipped
+    assert compose_instructions(none_settings(), None) == shipped
     assert "no computer" in shipped
 
 
@@ -75,6 +69,6 @@ def test_platform_name_replaces_builtin_name() -> None:
 
 
 def test_instructions_are_not_templated() -> None:
-    text = compose_instructions(_settings(), "use ${platform_name} literally")
+    text = compose_instructions(none_settings(), "use ${platform_name} literally")
     assert text is not None
     assert "${platform_name}" in text

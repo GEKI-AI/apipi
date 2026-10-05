@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 from tests.support import conformance, wire_schema
+from tests.support.http import auth
 from tests.support.split_worker import split_client_for, wait_for_idle
 
 from apipi.config import Settings
@@ -110,7 +111,7 @@ async def test_a_real_turn_is_captured_and_valid(
         client,
         _worker,
     ):
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = auth(token)
         agent = await client.post(
             "/v1/agents", headers=headers, json={"name": "bot", "model": "test"}
         )

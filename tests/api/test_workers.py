@@ -3,21 +3,18 @@ import uuid
 from datetime import timedelta
 
 from httpx import ASGITransport, AsyncClient
-from tests.support.fake_worker import FakeWorker
+from tests.support.config import none_settings_for
+from tests.support.fake_worker import FakeWorker, acquire_lease
+from tests.support.http import auth, tenant_of
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.services.worker_tokens import create_token
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import Event, utc_now
 from apipi.store.repo import get_session, get_worker
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def _wait_events(
@@ -36,25 +33,6 @@ async def _wait_events(
         return await list_events(db, tenant_id, session_id)
 
 
-def _tenant(token: str) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
-
-
-def _worker_settings(
-    settings: Settings,
-    *,
-    worker_lease_ttl: timedelta = timedelta(seconds=30),
-    instance_id: str | None = None,
-) -> Settings:
-    return Settings(
-        database_url=settings.database_url,
-        run_mode="none",
-        sessions_dir=settings.sessions_dir,
-        worker_lease_ttl=worker_lease_ttl,
-        instance_id=instance_id,
-    )
-
-
 async def test_worker_requires_token(settings: Settings, store: Store) -> None:
     app = create_app(api_settings_for(settings), store=store)
     worker = FakeWorker(app, "no-such-token")
@@ -71,19 +49,19 @@ async def test_worker_requires_token(settings: Settings, store: Store) -> None:
 async def test_worker_register_lease_command_event_and_expiry(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    worker_settings = _worker_settings(settings)
+    worker_settings = none_settings_for(settings)
     app = create_app(api_settings_for(worker_settings), store=store)
     token = "t"
-    tenant_id = _tenant(token)
+    tenant_id = tenant_of(token)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
         )
         session_id = uuid.UUID(created.json()["id"])
@@ -160,18 +138,18 @@ async def test_worker_register_lease_command_event_and_expiry(
 async def test_draining_worker_is_not_scheduled(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app = create_app(api_settings_for(none_settings_for(settings)), store=store)
     token = "t"
-    tenant_id = _tenant(token)
+    tenant_id = tenant_of(token)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
         )
         session_id = uuid.UUID(created.json()["id"])
@@ -201,7 +179,7 @@ async def test_draining_worker_is_not_scheduled(
 async def test_worker_register_defaults_memory_mb(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app = create_app(api_settings_for(none_settings_for(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect(capacity=4)
     assert hello["ok"] is True
@@ -216,7 +194,7 @@ async def test_worker_register_defaults_memory_mb(
 async def test_worker_register_records_memory_mb(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app = create_app(api_settings_for(none_settings_for(settings)), store=store)
     worker = FakeWorker(app, worker_secret)
     hello = await worker.connect(capacity=4, memory_mb=2048)
     assert hello["ok"] is True
@@ -242,34 +220,12 @@ async def test_worker_register_records_memory_mb(
     await worker.close()
 
 
-async def _leased_session(
-    app, client: AsyncClient, store: Store, worker: FakeWorker, token: str = "t"
-) -> tuple[uuid.UUID, uuid.UUID, dict]:
-    tenant_id = _tenant(token)
-    agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
-    )
-    session_id = uuid.UUID(created.json()["id"])
-    await worker.connect()
-    command = await app.state.workers.acquire(
-        store, tenant_id, session_id, op="turn.cancel"
-    )
-    assert command is not None
-    await worker.receive_json()
-    return tenant_id, session_id, command
-
-
 async def test_hello_carries_the_api_heartbeat_interval(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     app = create_app(
         api_settings_for(
-            _worker_settings(settings, worker_lease_ttl=timedelta(seconds=3))
+            none_settings_for(settings, worker_lease_ttl=timedelta(seconds=3))
         ),
         store=store,
     )
@@ -283,12 +239,12 @@ async def test_hello_carries_the_api_heartbeat_interval(
 async def test_commands_carry_the_session_cursor(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app = create_app(api_settings_for(none_settings_for(settings)), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, _command = await _leased_session(
+        tenant_id, session_id, _command = await acquire_lease(
             app, client, store, worker
         )
         async with store.session() as db:
@@ -312,12 +268,12 @@ async def test_commands_carry_the_session_cursor(
 async def test_new_lease_command_carries_the_persisted_cursor(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app = create_app(api_settings_for(none_settings_for(settings)), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, first = await _leased_session(app, client, store, worker)
+        tenant_id, session_id, first = await acquire_lease(app, client, store, worker)
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             assert row is not None
@@ -343,7 +299,7 @@ async def test_ack_and_ingest_renew_the_lease_once_per_interval(
 ) -> None:
     app = create_app(
         api_settings_for(
-            _worker_settings(settings, worker_lease_ttl=timedelta(seconds=3))
+            none_settings_for(settings, worker_lease_ttl=timedelta(seconds=3))
         ),
         store=store,
     )
@@ -351,9 +307,7 @@ async def test_ack_and_ingest_renew_the_lease_once_per_interval(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, command = await _leased_session(
-            app, client, store, worker
-        )
+        tenant_id, session_id, command = await acquire_lease(app, client, store, worker)
 
         async def lease_until():
             async with store.session() as db:
@@ -404,7 +358,7 @@ async def test_lease_events_are_counted(
 
     app = create_app(
         api_settings_for(
-            _worker_settings(settings).model_copy(update={"metrics": True})
+            none_settings_for(settings).model_copy(update={"metrics": True})
         ),
         store=store,
     )
@@ -412,9 +366,7 @@ async def test_lease_events_are_counted(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, command = await _leased_session(
-            app, client, store, worker
-        )
+        tenant_id, session_id, command = await acquire_lease(app, client, store, worker)
         await worker.send_json({"type": "heartbeat"})
         for _ in range(50):
             body = app.state.metrics.scrape().decode()

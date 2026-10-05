@@ -3,6 +3,7 @@ from typing import Any
 
 import httpx
 import pytest
+from tests.support.http import read_timeout
 
 from apipi.services.search_providers import (
     SearchOptions,
@@ -248,10 +249,6 @@ async def test_slow_provider_hits_total_timeout(provider: str) -> None:
     assert raised.value.charged is False
 
 
-def _read_timeout(request: httpx.Request) -> httpx.Response:
-    raise httpx.ReadTimeout("slow", request=request)
-
-
 def _connect_error(request: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("down", request=request)
 
@@ -270,7 +267,7 @@ def _status(status: int) -> Any:
 @pytest.mark.parametrize(
     ("handler", "code", "charged"),
     [
-        (_read_timeout, "search_timeout", False),
+        (read_timeout, "search_timeout", False),
         (_connect_error, "search_unavailable", False),
         (_status(400), "search_failed", False),
         (_status(401), "search_failed", False),

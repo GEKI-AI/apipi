@@ -5,28 +5,23 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
-from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from botocore.exceptions import ClientError
 from httpx import ASGITransport, AsyncClient
+from tests.support.fake_s3 import FakeS3
 from tests.support.files import Users, message, vision, zip_skill
+from tests.support.http import auth, tenant_of
 from tests.support.split_worker import api_settings_for, split_client_for
-from tests.unit.test_blobs import FakeS3
 
 from apipi.common.objects import NS_FILES
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.services.uploads import UploadService
 from apipi.store.blobs import S3Store, file_object_id, skill_object_id
 from apipi.store.engine import Store
 from apipi.store.repo import create_artifact, create_tenant
 from apipi.worker.fake_harness import FakeHarness
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _s3_settings(settings: Settings) -> Settings:
@@ -53,7 +48,7 @@ def _key(url: str) -> str:
 async def test_presign_requires_s3(client: AsyncClient) -> None:
     created = await client.post(
         "/v1/apipi/uploads",
-        headers=_auth("t"),
+        headers=auth("t"),
         json={
             "purpose": "file",
             "filename": "a.txt",
@@ -98,13 +93,13 @@ async def test_presign_put_then_complete(
     )
     data = zip_skill() if purpose == "skill" else b"hello"
     token = "up2"
-    tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         created = await client.post(
             "/v1/apipi/uploads",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "purpose": purpose,
                 "filename": filename,
@@ -115,12 +110,12 @@ async def test_presign_put_then_complete(
         assert created.status_code == 200
         object_id = created.json()["object_id"]
         complete = f"/v1/apipi/uploads/{created.json()['upload_id']}/complete"
-        missing = await client.post(complete, headers=_auth(token), json={})
+        missing = await client.post(complete, headers=auth(token), json={})
         put = client_s3.put_url(created.json()["url"], data, content_type)
-        done = await client.post(complete, headers=_auth(token), json={})
-        other = await client.post(complete, headers=_auth("other"), json={})
+        done = await client.post(complete, headers=auth(token), json={})
+        other = await client.post(complete, headers=auth("other"), json={})
         download = await client.post(
-            f"/v1/apipi/{namespace}/{object_id}/download", headers=_auth(token)
+            f"/v1/apipi/{namespace}/{object_id}/download", headers=auth(token)
         )
     upload_key = f"apipi/uploads/{tenant_id}/{created.json()['upload_id']}"
     assert _key(created.json()["url"]) == upload_key
@@ -149,7 +144,7 @@ async def test_presign_put_then_complete(
 async def test_upload_oversize_rejected(client: AsyncClient) -> None:
     created = await client.post(
         "/v1/apipi/uploads",
-        headers=_auth("t"),
+        headers=auth("t"),
         json={
             "purpose": "file",
             "filename": "big.bin",
@@ -175,16 +170,16 @@ async def test_artifact_download_forces_attachment(
     ) as client:
         token = "art-dl"
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent.json()["id"]},
         )
         assert created.status_code == 200
         session_id = uuid.UUID(created.json()["id"])
-        tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+        tenant_id = tenant_of(token)
         async with store.session() as db:
             artifact = await create_artifact(
                 db,
@@ -196,7 +191,7 @@ async def test_artifact_download_forces_attachment(
             artifact_id = artifact.id
         download = await client.post(
             f"/v1/apipi/sessions/{session_id}/artifacts/{artifact_id}/download",
-            headers=_auth(token),
+            headers=auth(token),
         )
         assert download.status_code == 200
         query = _query(download.json()["url"])
@@ -218,7 +213,7 @@ async def test_upload_purpose_sets_the_file_kind(
         authenticate=Users(),
     )
     token = "kinds"
-    headers = {**_auth(token), "X-End-User": "ada"}
+    headers = auth(token, "ada")
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -280,14 +275,14 @@ async def test_image_upload_is_an_image_within_the_image_limits(
         objects=S3Store(s3_settings, client=client_s3),
     )
     token = "images"
-    tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
 
     async def _create(
         client: AsyncClient, size: int, content_type: str, **extra: str
     ) -> Any:
         return await client.post(
             "/v1/apipi/uploads",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "purpose": "image",
                 "filename": "photo.png",
@@ -307,29 +302,29 @@ async def test_image_upload_is_an_image_within_the_image_limits(
         client_s3.put_url(created.json()["url"], b"\x89PNG1234", "image/png")
         mismatched = await client.post(
             f"/v1/apipi/uploads/{created.json()['upload_id']}/complete",
-            headers=_auth(token),
+            headers=auth(token),
             json={"file_purpose": "user_data"},
         )
         done = await client.post(
             f"/v1/apipi/uploads/{created.json()['upload_id']}/complete",
-            headers=_auth(token),
+            headers=auth(token),
             json={"file_purpose": "vision"},
         )
         plain = await client.post(
             "/v1/apipi/uploads",
-            headers=_auth(token),
+            headers=auth(token),
             json={"purpose": "file", "filename": "a.txt", "bytes": 5},
         )
         plain_id = plain.json()["object_id"]
         client_s3.put_url(plain.json()["url"], b"hello", "application/octet-stream")
         plain_vision = await client.post(
             f"/v1/apipi/uploads/{plain.json()['upload_id']}/complete",
-            headers=_auth(token),
+            headers=auth(token),
             json={"file_purpose": "vision"},
         )
         plain_done = await client.post(
             f"/v1/apipi/uploads/{plain.json()['upload_id']}/complete",
-            headers=_auth(token),
+            headers=auth(token),
             json={"file_purpose": "assistants"},
         )
         not_image = await _create(client, 8, "text/plain")
@@ -337,7 +332,7 @@ async def test_image_upload_is_an_image_within_the_image_limits(
         wrong_purpose = await _create(client, 8, "image/png", file_purpose="user_data")
         vision_file = await client.post(
             "/v1/apipi/uploads",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "purpose": "file",
                 "filename": "photo.png",
@@ -352,16 +347,16 @@ async def test_image_upload_is_an_image_within_the_image_limits(
         client_s3.put_object(Key=lying_key, Body=b"x" * 32, ContentType="image/png")
         oversized = await client.post(
             f"/v1/apipi/uploads/{lying.json()['upload_id']}/complete",
-            headers=_auth(token),
+            headers=auth(token),
             json={},
         )
         lying_kept = lying_key in client_s3.objects
         lying_file = f"apipi/files/{file_object_id(tenant_id, lying_id)}"
         lying_copied = lying_file in client_s3.objects
         listed = await client.get(
-            "/v1/apipi/files", headers=_auth(token), params={"kind": "image"}
+            "/v1/apipi/files", headers=auth(token), params={"kind": "image"}
         )
-        default = await client.get("/v1/files", headers=_auth(token))
+        default = await client.get("/v1/files", headers=auth(token))
     assert mismatched.status_code == 400
     assert done.status_code == 200
     assert done.json()["purpose"] == "vision"
@@ -390,8 +385,8 @@ async def test_uploads_and_downloads_of_user_files_match_the_user(
         authenticate=Users(),
     )
     token = "upload-users"
-    u1 = {**_auth(token), "X-End-User": "u1"}
-    u2 = {**_auth(token), "X-End-User": "u2"}
+    u1 = auth(token, "u1")
+    u2 = auth(token, "u2")
 
     async def _put(client: AsyncClient, headers: dict[str, str], purpose: str) -> Any:
         created = await client.post(
@@ -419,7 +414,7 @@ async def test_uploads_and_downloads_of_user_files_match_the_user(
         download = f"/v1/apipi/files/{attachment['object_id']}/download"
         u2_download = await client.post(download, headers=u2)
         u1_download = await client.post(download, headers=u1)
-        none_download = await client.post(download, headers=_auth(token))
+        none_download = await client.post(download, headers=auth(token))
         agent_file = await _put(client, u1, "file")
         await client.post(
             f"/v1/apipi/uploads/{agent_file['upload_id']}/complete",
@@ -429,7 +424,7 @@ async def test_uploads_and_downloads_of_user_files_match_the_user(
         u2_agent_file = await client.post(
             f"/v1/apipi/files/{agent_file['object_id']}/download", headers=u2
         )
-        shared = await _put(client, _auth(token), "attachment")
+        shared = await _put(client, auth(token), "attachment")
         u2_shared = await client.post(
             f"/v1/apipi/uploads/{shared['upload_id']}/complete", headers=u2, json={}
         )
@@ -454,7 +449,7 @@ async def _presigned(
 ) -> dict[str, Any]:
     created = await client.post(
         "/v1/apipi/uploads",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "purpose": purpose,
             "filename": filename,
@@ -466,7 +461,7 @@ async def _presigned(
     assert fake.put_url(created.json()["url"], data, content_type) == 200
     done = await client.post(
         f"/v1/apipi/uploads/{created.json()['upload_id']}/complete",
-        headers=_auth(token),
+        headers=auth(token),
         json={},
     )
     assert done.status_code == 200, done.json()
@@ -493,7 +488,7 @@ async def test_a_put_after_complete_does_not_change_what_the_id_delivers(
     monkeypatch.setattr("apipi.worker.turn_context.fetch_ref_bytes", _fetch)
     harness = FakeHarness()
     token = "re-put"
-    tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     png = b"\x89PNG\r\n\x1a\nimage"
     skill = zip_skill()
     async with split_client_for(
@@ -517,19 +512,19 @@ async def test_a_put_after_complete_does_not_change_what_the_id_delivers(
             for upload, size in ((text, 5), (image, len(png)), (bundle, len(skill)))
         ]
         content = await client.get(
-            f"/v1/files/{text['object_id']}/content", headers=_auth(token)
+            f"/v1/files/{text['object_id']}/content", headers=auth(token)
         )
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         session = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
         )
         sent = await client.post(
             f"/v1/agents/sessions/{session.json()['id']}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message(
                 {"type": "input_file", "file_id": text["object_id"]},
                 {"type": "input_image", "file_id": image["object_id"]},
@@ -562,7 +557,7 @@ async def test_a_put_of_another_size_than_declared_is_rejected(
     ) as client:
         created = await client.post(
             "/v1/apipi/uploads",
-            headers=_auth("size"),
+            headers=auth("size"),
             json={
                 "purpose": "file",
                 "filename": "a.txt",
@@ -573,9 +568,9 @@ async def test_a_put_of_another_size_than_declared_is_rejected(
         url = created.json()["url"]
         larger = fake.put_url(url, b"hello!", "text/plain")
         path = f"/v1/apipi/uploads/{created.json()['upload_id']}/complete"
-        complete = await client.post(path, headers=_auth("size"), json={})
+        complete = await client.post(path, headers=auth("size"), json={})
         fake.put_object(Key=_key(url), Body=b"hello!")
-        unsigned = await client.post(path, headers=_auth("size"), json={})
+        unsigned = await client.post(path, headers=auth("size"), json={})
     assert fake.presigns[-1]["ContentLength"] == 5
     assert larger == 403
     assert complete.status_code == 400
@@ -613,7 +608,7 @@ async def test_complete_after_a_failed_copy_can_be_retried(
     ) as client:
         created = await client.post(
             "/v1/apipi/uploads",
-            headers=_auth("retry"),
+            headers=auth("retry"),
             json={
                 "purpose": "skill",
                 "filename": "demo.zip",
@@ -623,12 +618,12 @@ async def test_complete_after_a_failed_copy_can_be_retried(
         )
         fake.put_url(created.json()["url"], data, "application/zip")
         path = f"/v1/apipi/uploads/{created.json()['upload_id']}/complete"
-        failed = await client.post(path, headers=_auth("retry"), json={})
+        failed = await client.post(path, headers=auth("retry"), json={})
         missing = await client.get(
-            f"/v1/skills/{created.json()['object_id']}", headers=_auth("retry")
+            f"/v1/skills/{created.json()['object_id']}", headers=auth("retry")
         )
-        done = await client.post(path, headers=_auth("retry"), json={})
-        again = await client.post(path, headers=_auth("retry"), json={})
+        done = await client.post(path, headers=auth("retry"), json={})
+        again = await client.post(path, headers=auth("retry"), json={})
     assert failed.status_code == 503
     assert failed.json()["error"]["code"] == "artifact_store"
     assert missing.status_code == 404
@@ -648,7 +643,7 @@ async def test_reads_of_a_stored_object_stop_at_its_size(
         objects=S3Store(s3_settings, client=fake),
     )
     token = "bounded"
-    tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -658,23 +653,23 @@ async def test_reads_of_a_stored_object_stop_at_its_size(
         file_id = upload["object_id"]
         key = f"apipi/files/{file_object_id(tenant_id, file_id)}"
         fake.objects[key] = b"x" * 1_000_000
-        content = await client.get(f"/v1/files/{file_id}/content", headers=_auth(token))
+        content = await client.get(f"/v1/files/{file_id}/content", headers=auth(token))
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         session = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
         )
         text = await client.post(
             f"/v1/agents/sessions/{session.json()['id']}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message({"type": "input_file", "file_id": file_id}),
         )
         hosted = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {
@@ -686,7 +681,7 @@ async def test_reads_of_a_stored_object_stop_at_its_size(
             },
         )
         fake.objects[key] = b"hi"
-        smaller = await client.get(f"/v1/files/{file_id}/content", headers=_auth(token))
+        smaller = await client.get(f"/v1/files/{file_id}/content", headers=auth(token))
     for response in (content, text, hosted, smaller):
         assert response.status_code == 503, response.json()
         assert response.json()["error"]["code"] == "artifact_store"
@@ -717,7 +712,7 @@ async def test_a_second_complete_waits_and_keeps_the_first_bytes(
         objects=S3Store(s3_settings, client=fake),
     )
     token = "race"
-    tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     data = zip_skill() if purpose == "skill" else b"first"
     content_type = "application/zip" if purpose == "skill" else "text/plain"
     async with AsyncClient(
@@ -725,7 +720,7 @@ async def test_a_second_complete_waits_and_keeps_the_first_bytes(
     ) as client:
         created = await client.post(
             "/v1/apipi/uploads",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "purpose": purpose,
                 "filename": "a.zip",
@@ -736,12 +731,12 @@ async def test_a_second_complete_waits_and_keeps_the_first_bytes(
         url = created.json()["url"]
         fake.put_url(url, data, content_type)
         path = f"/v1/apipi/uploads/{created.json()['upload_id']}/complete"
-        first = asyncio.create_task(client.post(path, headers=_auth(token), json={}))
+        first = asyncio.create_task(client.post(path, headers=auth(token), json={}))
         try:
             assert await asyncio.to_thread(fake.copied.wait, 10)
             assert fake.put_url(url, b"\xff" * len(data), content_type) == 200
             second = asyncio.create_task(
-                client.post(path, headers=_auth(token), json={})
+                client.post(path, headers=auth(token), json={})
             )
             await asyncio.sleep(0.1)
         finally:
@@ -774,7 +769,7 @@ async def test_a_failed_complete_after_the_copy_deletes_the_copy(
     async def _create(client: AsyncClient, purpose: str, data: bytes) -> Any:
         created = await client.post(
             "/v1/apipi/uploads",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "purpose": purpose,
                 "filename": "a.zip",
@@ -795,14 +790,14 @@ async def test_a_failed_complete_after_the_copy_deletes_the_copy(
         skill = await _create(client, "skill", b"not a zip")
         bad_zip = await client.post(
             f"/v1/apipi/uploads/{skill['upload_id']}/complete",
-            headers=_auth(token),
+            headers=auth(token),
             json={},
         )
         upload = await _create(client, "file", b"hello")
         monkeypatch.setattr("apipi.services.uploads.create_file", _broken)
         failed = await client.post(
             f"/v1/apipi/uploads/{upload['upload_id']}/complete",
-            headers=_auth(token),
+            headers=auth(token),
             json={},
         )
     assert bad_zip.status_code == 400

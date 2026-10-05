@@ -7,13 +7,13 @@ from typing import Any
 import pytest
 from httpx import AsyncClient, Response
 from sqlalchemy import select
+from tests.support.http import auth, create_agent, parse_sse, tenant_of
 from tests.support.split_worker import split_client_for
 from tests.support.workspace import hosted_dir
 
 from apipi.api.sessions import _event_stream
 from apipi.common.event_bus import EventHub
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.protocol import PUBLIC_EVENT_TYPES
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow
@@ -42,32 +42,12 @@ _TOOLS = [
 ]
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
 def _error(response: Response) -> dict[str, object]:
     payload = response.json()
     assert set(payload) == {"error"}
     error = payload["error"]
     assert set(error) == {"type", "code", "message"}
     return error
-
-
-def _parse_sse(text: str) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    for block in text.split("\n\n"):
-        if not block.strip() or block.startswith(":"):
-            continue
-        data = None
-        for line in block.split("\n"):
-            if line.startswith("data: "):
-                data = line[6:]
-        if data is not None:
-            parsed = json.loads(data)
-            assert isinstance(parsed, dict)
-            events.append(parsed)
-    return events
 
 
 async def _read_stream_until_seq(
@@ -84,19 +64,12 @@ async def _read_stream_until_seq(
             if chunk.startswith(":"):
                 continue
             chunks.append(chunk)
-            parsed = _parse_sse("".join(chunks))
+            parsed = parse_sse("".join(chunks))
             if parsed and int(parsed[-1]["seq"]) >= last_seq:
                 return "".join(chunks)
     finally:
         await agen.aclose()
     return "".join(chunks)
-
-
-async def _agent(client: AsyncClient, token: str, **fields: object) -> str:
-    body: dict[str, object] = {"name": "bot", "model": "test", **fields}
-    created = await client.post("/v1/agents", headers=_auth(token), json=body)
-    assert created.status_code == 200
-    return str(created.json()["id"])
 
 
 async def _session(
@@ -113,7 +86,7 @@ async def _session(
     if input is not None:
         payload["input"] = input
     created = await client.post(
-        "/v1/agents/sessions", headers=_auth(token), json=payload
+        "/v1/agents/sessions", headers=auth(token), json=payload
     )
     assert created.status_code == 200
     return created.json()
@@ -123,7 +96,7 @@ async def test_compat_agents_crud(client: AsyncClient) -> None:
     token = "compat-agents"
     created = await client.post(
         "/v1/agents",
-        headers={**_auth(token), "OpenAI-Beta": "agents=v1"},
+        headers={**auth(token), "OpenAI-Beta": "agents=v1"},
         json={
             "name": "one",
             "model": "test-model",
@@ -140,17 +113,17 @@ async def test_compat_agents_crud(client: AsyncClient) -> None:
     assert body["metadata"] == {"k": "v"}
     assert [tool["type"] for tool in body["tools"]] == ["function", "mcp", "mcp"]
     agent_id = body["id"]
-    listed = await client.get("/v1/agents", headers=_auth(token))
+    listed = await client.get("/v1/agents", headers=auth(token))
     assert [row["id"] for row in listed.json()["data"]] == [agent_id]
-    got = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
+    got = await client.get(f"/v1/agents/{agent_id}", headers=auth(token))
     assert got.json()["id"] == agent_id
     updated = await client.post(
-        f"/v1/agents/{agent_id}", headers=_auth(token), json={"name": "two"}
+        f"/v1/agents/{agent_id}", headers=auth(token), json={"name": "two"}
     )
     assert updated.json()["name"] == "two"
-    deleted = await client.delete(f"/v1/agents/{agent_id}", headers=_auth(token))
+    deleted = await client.delete(f"/v1/agents/{agent_id}", headers=auth(token))
     assert deleted.json() == {"id": agent_id, "deleted": True}
-    gone = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
+    gone = await client.get(f"/v1/agents/{agent_id}", headers=auth(token))
     assert gone.status_code == 404
 
 
@@ -158,7 +131,7 @@ async def test_compat_sessions_stream_follow_up(
     store: Store, client: AsyncClient
 ) -> None:
     token = "compat-sessions"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(
         client,
         token,
@@ -168,7 +141,7 @@ async def test_compat_sessions_stream_follow_up(
     )
     session_id = created["id"]
     events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     assert events.status_code == 200
     types = [event["type"] for event in events.json()["data"]]
@@ -176,13 +149,13 @@ async def test_compat_sessions_stream_follow_up(
     assert types[-1] == "agent.session.idle"
     follow = await client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={"type": "agent.session.input.message", "content": "again"},
     )
     assert follow.status_code == 200
     assert follow.json()["status"] == "idle"
     events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     stored = events.json()["data"]
     texts = [
@@ -199,7 +172,7 @@ async def test_compat_sessions_stream_follow_up(
         assert row is not None
         tenant_id = row.tenant_id
         sid = row.id
-    streamed = _parse_sse(
+    streamed = parse_sse(
         await _read_stream_until_seq(store, EventHub(), tenant_id, sid, last_seq)
     )
     stream_types = [event["type"] for event in streamed]
@@ -217,7 +190,7 @@ async def test_compat_environment_openai_hosted(
     client: AsyncClient, settings: Settings
 ) -> None:
     token = "compat-hosted"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(client, token, agent_id=agent_id)
     env = created["environment"]
     assert env["type"] == "openai_hosted"
@@ -228,19 +201,19 @@ async def test_compat_environment_hosted_alias(
     client: AsyncClient, settings: Settings
 ) -> None:
     token = "compat-hosted-alias"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(
         client, token, agent_id=agent_id, environment={"type": "hosted"}
     )
     assert created["environment"]["type"] == "openai_hosted"
     assert hosted_dir(settings, token, created["id"]).is_dir()
-    got = await client.get(f"/v1/agents/sessions/{created['id']}", headers=_auth(token))
+    got = await client.get(f"/v1/agents/sessions/{created['id']}", headers=auth(token))
     assert got.json()["environment"]["type"] == "openai_hosted"
 
 
 async def test_compat_environment_none(client: AsyncClient) -> None:
     token = "compat-none"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(
         client, token, agent_id=agent_id, environment={"type": "none"}
     )
@@ -258,10 +231,10 @@ async def test_compat_environment_self_hosted_not_supported(
     client: AsyncClient,
 ) -> None:
     token = "compat-self"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "self_hosted"}},
     )
     assert response.status_code == 400
@@ -281,7 +254,7 @@ async def test_compat_function_tools(
         settings, store, harness=harness, token=worker_secret
     ) as (_app, client, _worker):
         token = "compat-tools"
-        agent_id = await _agent(client, token, tools=[_TOOLS[0]])
+        agent_id = await create_agent(client, token, tools=[_TOOLS[0]])
         created = await _session(
             client,
             token,
@@ -300,7 +273,7 @@ async def test_compat_function_tools(
         ]
         session_id = created["id"]
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
         )
         require = [
             event
@@ -309,7 +282,7 @@ async def test_compat_function_tools(
         ]
         resumed = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "type": "agent.session.input.tool_result",
                 "turn_id": require[0]["data"]["turn_id"],
@@ -324,8 +297,8 @@ async def test_compat_function_tools(
 
 async def test_compat_mcp(client: AsyncClient) -> None:
     token = "compat-mcp"
-    agent_id = await _agent(client, token, tools=_TOOLS[1:])
-    got = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
+    agent_id = await create_agent(client, token, tools=_TOOLS[1:])
+    got = await client.get(f"/v1/agents/{agent_id}", headers=auth(token))
     tools = got.json()["tools"]
     assert tools[0]["server_url"] == "https://mcp.tavily.com/mcp"
     assert tools[1]["allowed_tools"] == ["search"]
@@ -344,7 +317,7 @@ async def test_compat_skills(
         _worker,
     ):
         token = "compat-skills"
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         created = await _session(
             client,
             token,
@@ -370,7 +343,7 @@ async def test_compat_artifacts(
     client: AsyncClient, store: Store, settings: Settings
 ) -> None:
     token = "compat-artifacts"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(client, token, agent_id=agent_id)
     session_id = created["id"]
     directory = hosted_dir(settings, token, session_id)
@@ -378,17 +351,17 @@ async def test_compat_artifacts(
     (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     posted = await client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={"type": "agent.session.input.message", "text": "hello"},
     )
     assert posted.status_code == 200
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     artifact_id = listed.json()["data"][0]["id"]
     content = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert content.status_code == 200
     assert content.content == b"hello"
@@ -396,7 +369,7 @@ async def test_compat_artifacts(
 
 async def test_compat_usage_on_turns(client: AsyncClient, store: Store) -> None:
     token = "compat-usage"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(
         client,
         token,
@@ -406,7 +379,7 @@ async def test_compat_usage_on_turns(client: AsyncClient, store: Store) -> None:
     )
     session_id = created["id"]
     events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     completed = [
         event
@@ -421,10 +394,10 @@ async def test_compat_usage_on_turns(client: AsyncClient, store: Store) -> None:
     turn_id = completed[0]["data"]["turn_id"]
     one = await client.get(
         f"/v1/agents/sessions/{session_id}/turns/{turn_id}",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert one.json()["usage"] == FAKE_USAGE
-    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         row = await get_session_turn(
             db, tenant_id, uuid.UUID(session_id), uuid.UUID(turn_id)
@@ -435,7 +408,7 @@ async def test_compat_usage_on_turns(client: AsyncClient, store: Store) -> None:
 
 async def test_compat_session_export(client: AsyncClient) -> None:
     token = "compat-export"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(
         client,
         token,
@@ -445,7 +418,7 @@ async def test_compat_session_export(client: AsyncClient) -> None:
     )
     session_id = created["id"]
     exported = await client.get(
-        f"/v1/apipi/sessions/{session_id}/export", headers=_auth(token)
+        f"/v1/apipi/sessions/{session_id}/export", headers=auth(token)
     )
     assert exported.status_code == 200
     body = exported.json()
@@ -459,7 +432,7 @@ async def test_compat_session_export(client: AsyncClient) -> None:
 
 async def test_compat_event_types(client: AsyncClient) -> None:
     token = "compat-events"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(
         client,
         token,
@@ -468,7 +441,7 @@ async def test_compat_event_types(client: AsyncClient) -> None:
         input="hello",
     )
     events = await client.get(
-        f"/v1/agents/sessions/{created['id']}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{created['id']}/events", headers=auth(token)
     )
     types = [event["type"] for event in events.json()["data"]]
     assert set(types) <= PUBLIC_EVENT_TYPES
@@ -483,18 +456,18 @@ async def test_compat_event_types(client: AsyncClient) -> None:
 async def test_compat_error_envelope(client: AsyncClient) -> None:
     token = "compat-errors"
     unknown = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "one", "vaults": []}
+        "/v1/agents", headers=auth(token), json={"name": "one", "vaults": []}
     )
     assert unknown.status_code == 400
     assert _error(unknown)["type"] == "invalid_request"
     assert _error(unknown)["code"] == "unknown_field"
     blocked = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "one", "multi_agent": True}
+        "/v1/agents", headers=auth(token), json={"name": "one", "multi_agent": True}
     )
     assert blocked.status_code == 400
     assert _error(blocked)["type"] == "not_implemented"
     assert _error(blocked)["code"] == "multi_agent"
-    missing = await client.get(f"/v1/agents/{uuid.uuid4()}", headers=_auth(token))
+    missing = await client.get(f"/v1/agents/{uuid.uuid4()}", headers=auth(token))
     assert missing.status_code == 404
     assert _error(missing)["type"] == "invalid_request"
     assert _error(missing)["code"] == "not_found"
@@ -528,19 +501,19 @@ async def test_compat_tenant_404(
 ) -> None:
     token_a = "compat-a"
     token_b = "compat-b"
-    agent_id = await _agent(client, token_a)
+    agent_id = await create_agent(client, token_a)
     created = await _session(
         client, token_a, agent_id=agent_id, environment={"type": "none"}, input="hello"
     )
     other = await client.request(
         method,
         path.format(agent_id=agent_id, session_id=created["id"]),
-        headers=_auth(token_b),
+        headers=auth(token_b),
         json=body,
     )
     assert other.status_code == 404
     assert _error(other)["code"] == "not_found"
-    listed = await client.get("/v1/agents/sessions", headers=_auth(token_b))
+    listed = await client.get("/v1/agents/sessions", headers=auth(token_b))
     assert listed.json() == {"data": []}
 
 
@@ -573,7 +546,7 @@ async def test_unknown_session_is_404(
     missing = await client.request(
         method,
         path.format(id=uuid.uuid4()),
-        headers=_auth("compat-missing"),
+        headers=auth("compat-missing"),
         json=body,
     )
     assert missing.status_code == 404
@@ -600,13 +573,13 @@ async def test_unknown_field_is_rejected(
     client: AsyncClient, path: str, body: dict[str, Any]
 ) -> None:
     token = "compat-unknown-field"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(
         client, token, agent_id=agent_id, environment={"type": "none"}
     )
     response = await client.post(
         path.format(session_id=created["id"]),
-        headers=_auth(token),
+        headers=auth(token),
         json={**body, "foo": 1},
     )
     assert response.status_code == 400
@@ -615,9 +588,9 @@ async def test_unknown_field_is_rejected(
         "code": "unknown_field",
         "message": "Unknown field: foo",
     }
-    agents = await client.get("/v1/agents", headers=_auth(token))
+    agents = await client.get("/v1/agents", headers=auth(token))
     assert [row["id"] for row in agents.json()["data"]] == [agent_id]
-    sessions = await client.get("/v1/agents/sessions", headers=_auth(token))
+    sessions = await client.get("/v1/agents/sessions", headers=auth(token))
     assert [row["id"] for row in sessions.json()["data"]] == [created["id"]]
 
 
@@ -639,7 +612,7 @@ def _nested_message(text: str) -> dict[str, Any]:
 
 async def test_compat_nested_events_message(client: AsyncClient) -> None:
     token = "compat-nested-message"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(
         client,
         token,
@@ -650,13 +623,13 @@ async def test_compat_nested_events_message(client: AsyncClient) -> None:
     session_id = created["id"]
     follow = await client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json=_nested_message("again"),
     )
     assert follow.status_code == 200
     assert follow.json()["status"] == "idle"
     events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     texts = [
         event["data"]["text"]
@@ -677,7 +650,7 @@ async def test_compat_nested_events_tool_result(
         settings, store, harness=harness, token=worker_secret
     ) as (_app, client, _worker):
         token = "compat-nested-tool"
-        agent_id = await _agent(client, token, tools=[_TOOLS[0]])
+        agent_id = await create_agent(client, token, tools=[_TOOLS[0]])
         created = await _session(
             client,
             token,
@@ -687,7 +660,7 @@ async def test_compat_nested_events_tool_result(
         )
         session_id = created["id"]
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
         )
         require = [
             event
@@ -696,7 +669,7 @@ async def test_compat_nested_events_tool_result(
         ]
         resumed = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "events": [
                     {
@@ -722,7 +695,7 @@ async def test_compat_nested_events_cancel(
         settings, store, harness=harness, token=worker_secret
     ) as (app, client, _worker):
         token = "compat-nested-cancel"
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         created = await _session(
             client, token, agent_id=agent_id, environment={"type": "none"}
         )
@@ -734,7 +707,7 @@ async def test_compat_nested_events_cancel(
             task = asyncio.create_task(
                 client.post(
                     f"/v1/agents/sessions/{session_id}/events",
-                    headers=_auth(token),
+                    headers=auth(token),
                     json=_nested_message("go"),
                 )
             )
@@ -744,7 +717,7 @@ async def test_compat_nested_events_cancel(
                     break
             cancelled = await client.post(
                 f"/v1/agents/sessions/{session_id}/events",
-                headers=_auth(token),
+                headers=auth(token),
                 json={"events": [{"type": "agent.session.input.cancel"}]},
             )
             assert cancelled.status_code == 200
@@ -757,7 +730,7 @@ async def test_compat_nested_events_cancel(
 
 async def test_compat_nested_events_rejects(client: AsyncClient) -> None:
     token = "compat-nested-reject"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await _session(
         client, token, agent_id=agent_id, environment={"type": "none"}, input="hello"
     )
@@ -765,7 +738,7 @@ async def test_compat_nested_events_rejects(client: AsyncClient) -> None:
     path = f"/v1/agents/sessions/{session_id}/events"
     multi = await client.post(
         path,
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "events": [
                 {
@@ -793,7 +766,7 @@ async def test_compat_nested_events_rejects(client: AsyncClient) -> None:
     assert _error(multi)["type"] == "invalid_request"
     mixed = await client.post(
         path,
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "type": "agent.session.input.message",
             "events": [
@@ -813,7 +786,7 @@ async def test_compat_nested_events_rejects(client: AsyncClient) -> None:
     assert _error(mixed)["type"] == "invalid_request"
     extra = await client.post(
         path,
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "events": [
                 {
@@ -833,7 +806,7 @@ async def test_compat_nested_events_rejects(client: AsyncClient) -> None:
     assert _error(extra)["code"] == "unknown_field"
     image = await client.post(
         path,
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "events": [
                 {
@@ -857,10 +830,10 @@ _PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGA
 
 async def test_image_requires_registry_capability(client: AsyncClient) -> None:
     token = "compat-image-off"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "input": {
@@ -892,10 +865,10 @@ async def test_image_is_stored_by_file_id(
         _worker,
     ):
         token = "compat-image-on"
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "input": [
@@ -916,9 +889,9 @@ async def test_image_is_stored_by_file_id(
         assert created.status_code == 200
         session_id = created.json()["id"]
         items = await client.get(
-            f"/v1/agents/sessions/{session_id}/items", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/items", headers=auth(token)
         )
-        listed = await client.get("/v1/apipi/models", headers=_auth(token))
+        listed = await client.get("/v1/apipi/models", headers=auth(token))
     assert items.status_code == 200
     content = items.json()["data"][0]["data"]["content"]
     assert content[0] == {"type": "input_text", "text": "see"}

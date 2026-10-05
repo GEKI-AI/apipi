@@ -5,13 +5,21 @@ import contextlib
 import json
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 import websockets
+from tests.support.waits import closed_on_cancel, until
+from tests.support.worker_connection import (
+    FakeExecution,
+    FakeSock,
+    command_frame,
+    hello_frame,
+    start_connection,
+)
 from websockets.frames import Close
 
 from apipi.common.metrics import Metrics
@@ -26,222 +34,18 @@ from apipi.worker.client import (
     BadHello,
     HelloTimeout,
     _reconnect_reason,
-    _serve_connection,
     reconnect_delay,
     run_worker,
 )
-from apipi.worker.commands import CommandDedupe
 from apipi.worker.deltas import DeltaRelay
 from apipi.worker.outbox import Outbox
-
-
-def _hello(**extra: Any) -> dict[str, Any]:
-    return {
-        "ok": True,
-        "worker_id": str(uuid.uuid4()),
-        "lease_ttl_seconds": 30,
-        "heartbeat_seconds": 0.05,
-        "sessions": {},
-        **extra,
-    }
-
-
-class _Sock:
-    def __init__(self, incoming: list[Any] | None = None) -> None:
-        self.queue: asyncio.Queue[Any] = asyncio.Queue()
-        self.sent: list[dict[str, Any]] = []
-        for message in incoming or []:
-            self.push(message)
-
-    def push(self, message: Any) -> None:
-        self.queue.put_nowait(
-            json.dumps(message) if isinstance(message, dict) else message
-        )
-
-    async def send(self, data: str) -> None:
-        self.sent.append(json.loads(data))
-
-    async def recv(self) -> Any:
-        return await self.queue.get()
-
-    def of(self, kind: str) -> list[dict[str, Any]]:
-        return [m for m in self.sent if m.get("type") == kind]
-
-
-class _Relay(DeltaRelay):
-    def __init__(self) -> None:
-        super().__init__()
-        self.forgotten: list[uuid.UUID] = []
-
-    def forget(self, session_id: uuid.UUID) -> None:
-        self.forgotten.append(session_id)
-
-
-class _Pool:
-    def __init__(self) -> None:
-        self.live_ids: set[uuid.UUID] = set()
-        self.closed = False
-
-    def live(self) -> int:
-        return len(self.live_ids)
-
-    def alive(self, session_id: uuid.UUID) -> bool:
-        return session_id in self.live_ids
-
-    def held(self, session_id: uuid.UUID) -> bool:
-        return False
-
-    def hold(self, session_id: uuid.UUID) -> None:
-        del session_id
-
-    def release(self, session_id: uuid.UUID) -> None:
-        del session_id
-
-    async def after_turn(self, session_id: uuid.UUID) -> None:
-        del session_id
-
-    async def kill_unheld(self, reason: str = "") -> None:
-        del reason
-
-    async def close(self) -> None:
-        self.closed = True
-
-
-class _Execution:
-    tracing = None
-
-    def __init__(self, settings: Settings, outbox: Outbox) -> None:
-        self.settings = settings
-        self.outbox = outbox
-        self.pool = _Pool()
-        self.metrics: Any = None
-        self.presign_waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
-        self.turns: list[uuid.UUID] = []
-        self.cancels: list[uuid.UUID] = []
-        self.teardowns: list[uuid.UUID] = []
-        self.seen_hook: Any = None
-        self.note_stopped: Any = None
-        self.socket_open = False
-        self._context_ttl: dict[str, Any] = {}
-        self.on_teardown: Any = None
-        self.on_cancel: Any = None
-
-    async def run_turn(
-        self, tenant_id: uuid.UUID, session_id: uuid.UUID, text: str, **kwargs: Any
-    ) -> None:
-        del tenant_id, text, kwargs
-        self.turns.append(session_id)
-
-    async def cancel(self, session_id: uuid.UUID, *, status: str) -> None:
-        del status
-        self.cancels.append(session_id)
-        if self.on_cancel is not None:
-            await self.on_cancel(session_id)
-
-    def sink_for(self, tenant_id: uuid.UUID, session_id: uuid.UUID) -> None:
-        return None
-
-    async def teardown(self, session_id: uuid.UUID) -> None:
-        self.teardowns.append(session_id)
-        if self.on_teardown is not None:
-            await self.on_teardown(session_id)
-
-
-def _command(
-    session_id: uuid.UUID,
-    lease_id: str,
-    op: str = "turn.start",
-    *,
-    command_id: uuid.UUID | None = None,
-    **payload: Any,
-) -> dict[str, Any]:
-    return {
-        "type": "command",
-        "id": str(command_id or uuid.uuid4()),
-        "session_id": str(session_id),
-        "lease_id": lease_id,
-        "op": op,
-        "payload": {
-            "tenant_id": str(uuid.uuid4()),
-            "text": "hi",
-            "last_seq": 0,
-            **payload,
-        },
-    }
-
-
-@dataclass
-class _Run:
-    task: "asyncio.Task[tuple[str, float | None]]"
-    sock: _Sock
-    execution: _Execution
-    outbox: Outbox
-    leases: dict[uuid.UUID, str]
-    dedupe: CommandDedupe
-    draining: asyncio.Event
-    pending: dict[uuid.UUID, str]
-    tasks: set[asyncio.Task[None]] = field(default_factory=set)
-
-    async def stop(self) -> None:
-        self.task.cancel()
-        for task in list(self.tasks):
-            task.cancel()
-        await asyncio.gather(self.task, *self.tasks, return_exceptions=True)
-
-
-def _start(
-    settings: Settings,
-    sock: _Sock,
-    *,
-    execution: _Execution | None = None,
-    outbox: Outbox | None = None,
-    leases: dict[uuid.UUID, str] | None = None,
-    pending: dict[uuid.UUID, str] | None = None,
-    draining: asyncio.Event | None = None,
-    wait: float = 30.0,
-) -> _Run:
-    outbox = outbox if outbox is not None else Outbox()
-    execution = execution if execution is not None else _Execution(settings, outbox)
-    leases = leases if leases is not None else {}
-    dedupe = CommandDedupe()
-    draining = draining if draining is not None else asyncio.Event()
-    pending = pending if pending is not None else {}
-    tasks: set[asyncio.Task[None]] = set()
-    task = asyncio.create_task(
-        _serve_connection(
-            settings,
-            execution,
-            outbox,
-            _Relay(),
-            sock,
-            leases,
-            set(),
-            tasks,
-            draining,
-            None,
-            wait,
-            None,
-            dedupe,
-            pending_releases=pending,
-        )
-    )
-    return _Run(task, sock, execution, outbox, leases, dedupe, draining, pending, tasks)
-
-
-async def _wait_for(predicate: Any, timeout: float = 5.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("timed out waiting for condition")
 
 
 async def test_stop_that_needs_a_presign_keeps_heartbeats_and_replies_flowing(
     settings: Settings,
 ) -> None:
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     session_id = uuid.uuid4()
     lease_id = str(uuid.uuid4())
 
@@ -259,12 +63,14 @@ async def test_stop_that_needs_a_presign_keeps_heartbeats_and_replies_flowing(
         )
 
     execution.on_teardown = harvest
-    sock = _Sock([_hello(), _command(session_id, lease_id, "session.stop")])
-    run = _start(settings, sock, execution=execution, outbox=outbox)
+    sock = FakeSock(
+        [hello_frame(), command_frame(session_id, lease_id, "session.stop")]
+    )
+    run = start_connection(settings, sock, execution=execution, outbox=outbox)
     try:
-        await _wait_for(lambda: sock.of("artifact.presign"))
+        await until(lambda: sock.of("artifact.presign"))
         beats = len(sock.of("heartbeat"))
-        await _wait_for(lambda: len(sock.of("heartbeat")) >= beats + 3)
+        await until(lambda: len(sock.of("heartbeat")) >= beats + 3)
         assert sock.of("lease.ack") == []
         request_id = sock.of("artifact.presign")[0]["payload"]["request_id"]
         sock.push(
@@ -276,7 +82,7 @@ async def test_stop_that_needs_a_presign_keeps_heartbeats_and_replies_flowing(
                 "unchanged": True,
             }
         )
-        await _wait_for(lambda: outbox.high_water(session_id) >= 2)
+        await until(lambda: outbox.high_water(session_id) >= 2)
         sock.push(
             {
                 "type": "ack",
@@ -284,7 +90,7 @@ async def test_stop_that_needs_a_presign_keeps_heartbeats_and_replies_flowing(
                 "last_seq": outbox.high_water(session_id),
             }
         )
-        await _wait_for(lambda: sock.of("lease.ack"))
+        await until(lambda: sock.of("lease.ack"))
         assert session_id not in run.leases
         assert len(run.dedupe) == 0
         assert outbox.describe()["sessions"] == 0
@@ -297,7 +103,7 @@ async def test_revoke_teardown_runs_as_a_task_and_orders_commands_per_session(
 ) -> None:
     gate = asyncio.Event()
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
 
     async def slow(_sid: uuid.UUID) -> None:
         await gate.wait()
@@ -306,26 +112,26 @@ async def test_revoke_teardown_runs_as_a_task_and_orders_commands_per_session(
     revoked = uuid.uuid4()
     other = uuid.uuid4()
     old_lease = str(uuid.uuid4())
-    sock = _Sock([_hello()])
-    run = _start(
+    sock = FakeSock([hello_frame()])
+    run = start_connection(
         settings, sock, execution=execution, outbox=outbox, leases={revoked: old_lease}
     )
     try:
-        await _wait_for(lambda: sock.of("heartbeat"))
+        await until(lambda: sock.of("heartbeat"))
         sock.push(
             {"type": "lease.revoke", "session_id": str(revoked), "lease_id": old_lease}
         )
-        sock.push(_command(other, str(uuid.uuid4())))
-        await _wait_for(lambda: len(sock.of("lease.ack")) == 1)
+        sock.push(command_frame(other, str(uuid.uuid4())))
+        await until(lambda: len(sock.of("lease.ack")) == 1)
         assert revoked not in run.leases
-        again = _command(revoked, str(uuid.uuid4()))
+        again = command_frame(revoked, str(uuid.uuid4()))
         sock.push(again)
         await asyncio.sleep(0.1)
         assert len(sock.of("lease.ack")) == 1
         assert execution.turns == [other]
         gate.set()
-        await _wait_for(lambda: len(sock.of("lease.ack")) == 2)
-        await _wait_for(lambda: revoked in execution.turns)
+        await until(lambda: len(sock.of("lease.ack")) == 2)
+        await until(lambda: revoked in execution.turns)
     finally:
         await run.stop()
 
@@ -333,7 +139,7 @@ async def test_revoke_teardown_runs_as_a_task_and_orders_commands_per_session(
 async def test_inventory_revokes_run_as_tasks(settings: Settings) -> None:
     gate = asyncio.Event()
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
 
     async def slow(_sid: uuid.UUID) -> None:
         await gate.wait()
@@ -341,21 +147,21 @@ async def test_inventory_revokes_run_as_tasks(settings: Settings) -> None:
     execution.on_teardown = slow
     revoked = uuid.uuid4()
     lease = str(uuid.uuid4())
-    sock = _Sock([_hello()])
-    run = _start(
+    sock = FakeSock([hello_frame()])
+    run = start_connection(
         settings, sock, execution=execution, outbox=outbox, leases={revoked: lease}
     )
     try:
-        await _wait_for(lambda: sock.of("heartbeat"))
+        await until(lambda: sock.of("heartbeat"))
         sock.push(
             {
                 "type": "inventory.reply",
                 "revoke": [{"session_id": str(revoked), "lease_id": lease}],
             }
         )
-        await _wait_for(lambda: execution.teardowns == [revoked])
+        await until(lambda: execution.teardowns == [revoked])
         beats = len(sock.of("heartbeat"))
-        await _wait_for(lambda: len(sock.of("heartbeat")) >= beats + 2)
+        await until(lambda: len(sock.of("heartbeat")) >= beats + 2)
         assert revoked not in run.leases
         gate.set()
     finally:
@@ -366,19 +172,19 @@ async def test_malformed_frames_are_counted_logged_and_skipped(
     settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     metrics = Metrics()
     execution.metrics = metrics
-    sock = _Sock([_hello()])
-    run = _start(settings, sock, execution=execution, outbox=outbox)
+    sock = FakeSock([hello_frame()])
+    run = start_connection(settings, sock, execution=execution, outbox=outbox)
     caplog.set_level(logging.WARNING, logger="apipi.worker")
     try:
-        await _wait_for(lambda: sock.of("heartbeat"))
+        await until(lambda: sock.of("heartbeat"))
         sock.push("{not json")
         sock.push(b"\xff\xfe")
         sock.push("[1, 2]")
-        sock.push(_command(uuid.uuid4(), str(uuid.uuid4())))
-        await _wait_for(lambda: sock.of("lease.ack"))
+        sock.push(command_frame(uuid.uuid4(), str(uuid.uuid4())))
+        await until(lambda: sock.of("lease.ack"))
         assert not run.task.done()
         body = metrics.scrape().decode()
         line = [
@@ -403,7 +209,7 @@ async def test_failed_command_is_answered_with_an_error_and_not_deduped(
     settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     calls = 0
 
     async def boom(_sid: uuid.UUID) -> None:
@@ -415,16 +221,16 @@ async def test_failed_command_is_answered_with_an_error_and_not_deduped(
     execution.on_cancel = boom
     session_id = uuid.uuid4()
     lease = str(uuid.uuid4())
-    command = _command(session_id, lease, "turn.cancel")
-    sock = _Sock([_hello()])
-    run = _start(
+    command = command_frame(session_id, lease, "turn.cancel")
+    sock = FakeSock([hello_frame()])
+    run = start_connection(
         settings, sock, execution=execution, outbox=outbox, leases={session_id: lease}
     )
     caplog.set_level(logging.ERROR)
     try:
-        await _wait_for(lambda: sock.of("heartbeat"))
+        await until(lambda: sock.of("heartbeat"))
         sock.push(command)
-        await _wait_for(lambda: outbox.pending(session_id))
+        await until(lambda: outbox.pending(session_id))
         error = outbox.pending(session_id)[0]
         assert error["type"] == "error"
         assert error["payload"]["code"] == "internal"
@@ -433,7 +239,7 @@ async def test_failed_command_is_answered_with_an_error_and_not_deduped(
             for r in caplog.records
         )
         sock.push(dict(command))
-        await _wait_for(lambda: calls == 2)
+        await until(lambda: calls == 2)
     finally:
         await run.stop()
 
@@ -442,7 +248,7 @@ async def test_failed_stop_is_not_acked_and_runs_again_on_retransmit(
     settings: Settings,
 ) -> None:
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     calls = 0
 
     async def flaky(_sid: uuid.UUID) -> None:
@@ -454,17 +260,17 @@ async def test_failed_stop_is_not_acked_and_runs_again_on_retransmit(
     execution.on_teardown = flaky
     session_id = uuid.uuid4()
     lease = str(uuid.uuid4())
-    stop = _command(session_id, lease, "session.stop")
-    sock = _Sock([_hello(), stop])
-    run = _start(settings, sock, execution=execution, outbox=outbox)
+    stop = command_frame(session_id, lease, "session.stop")
+    sock = FakeSock([hello_frame(), stop])
+    run = start_connection(settings, sock, execution=execution, outbox=outbox)
     try:
-        await _wait_for(lambda: calls == 1)
-        await _wait_for(lambda: outbox.pending(session_id))
+        await until(lambda: calls == 1)
+        await until(lambda: outbox.pending(session_id))
         assert outbox.pending(session_id)[0]["type"] == "error"
         assert sock.of("lease.ack") == []
         sock.push(dict(stop))
-        await _wait_for(lambda: calls == 2)
-        await _wait_for(
+        await until(lambda: calls == 2)
+        await until(
             lambda: (
                 outbox.high_water(session_id) >= 2
                 and outbox.pending(session_id)[-1]["type"] == "session.stopped"
@@ -477,7 +283,7 @@ async def test_failed_stop_is_not_acked_and_runs_again_on_retransmit(
                 "last_seq": outbox.high_water(session_id),
             }
         )
-        await _wait_for(lambda: sock.of("lease.ack"))
+        await until(lambda: sock.of("lease.ack"))
     finally:
         await run.stop()
 
@@ -486,21 +292,21 @@ async def test_leases_are_tracked_only_for_accepted_commands(
     settings: Settings,
 ) -> None:
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     cancelled = uuid.uuid4()
     rejected = uuid.uuid4()
     rejected_lease = str(uuid.uuid4())
-    sock = _Sock(
+    sock = FakeSock(
         [
-            _hello(),
-            _command(cancelled, str(uuid.uuid4()), "turn.cancel"),
-            _command(rejected, rejected_lease, run_mode="microvm"),
+            hello_frame(),
+            command_frame(cancelled, str(uuid.uuid4()), "turn.cancel"),
+            command_frame(rejected, rejected_lease, run_mode="microvm"),
         ]
     )
-    run = _start(settings, sock, execution=execution, outbox=outbox)
+    run = start_connection(settings, sock, execution=execution, outbox=outbox)
     try:
-        await _wait_for(lambda: len(sock.of("lease.ack")) == 2)
-        await _wait_for(lambda: sock.of("lease.release"))
+        await until(lambda: len(sock.of("lease.ack")) == 2)
+        await until(lambda: sock.of("lease.release"))
         assert sock.of("lease.release")[0]["lease_id"] == rejected_lease
         assert run.leases == {}
         assert execution.turns == []
@@ -515,7 +321,7 @@ async def test_first_frame_that_is_not_hello_reconnects(settings: Settings) -> N
         "not json",
         "[1]",
     ):
-        run = _start(settings, _Sock([frame]))
+        run = start_connection(settings, FakeSock([frame]))
         with pytest.raises(BadHello):
             await asyncio.wait_for(run.task, timeout=5)
         assert _reconnect_reason(BadHello()) == "error"
@@ -525,7 +331,7 @@ async def test_rejections_stop_the_worker_with_a_clear_message(
     settings: Settings,
 ) -> None:
     for error in ("unauthorized", "revoked", "unsupported_protocol", "token_bound"):
-        run = _start(settings, _Sock([{"ok": False, "error": error}]))
+        run = start_connection(settings, FakeSock([{"ok": False, "error": error}]))
         with pytest.raises(ConfigError, match=error):
             await asyncio.wait_for(run.task, timeout=5)
 
@@ -534,7 +340,7 @@ async def test_hello_has_a_timeout(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("apipi.worker.client.HELLO_TIMEOUT", 0.05)
-    run = _start(settings, _Sock())
+    run = start_connection(settings, FakeSock())
     with pytest.raises(HelloTimeout) as caught:
         await asyncio.wait_for(run.task, timeout=5)
     assert _reconnect_reason(caught.value) == "hello_timeout"
@@ -564,29 +370,33 @@ async def test_reconnect_sends_each_envelope_once_and_counts_the_resend(
 ) -> None:
     metrics = Metrics()
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     execution.metrics = metrics
     outbox.metrics = metrics
     session_id = uuid.uuid4()
     leases = {session_id: str(uuid.uuid4())}
     for n in range(3):
         outbox.append(session_id, "event", {"n": n})
-    first = _Sock([_hello(sessions={str(session_id): 0})])
-    run = _start(settings, first, execution=execution, outbox=outbox, leases=leases)
+    first = FakeSock([hello_frame(sessions={str(session_id): 0})])
+    run = start_connection(
+        settings, first, execution=execution, outbox=outbox, leases=leases
+    )
     try:
-        await _wait_for(lambda: len(first.of("event")) == 3)
+        await until(lambda: len(first.of("event")) == 3)
         outbox.append(session_id, "event", {"n": 3})
-        await _wait_for(lambda: len(first.of("event")) == 4)
+        await until(lambda: len(first.of("event")) == 4)
         await asyncio.sleep(0.1)
         assert [m["seq"] for m in first.of("event")] == [1, 2, 3, 4]
     finally:
         await run.stop()
-    second = _Sock([_hello(sessions={str(session_id): 1})])
-    run = _start(settings, second, execution=execution, outbox=outbox, leases=leases)
+    second = FakeSock([hello_frame(sessions={str(session_id): 1})])
+    run = start_connection(
+        settings, second, execution=execution, outbox=outbox, leases=leases
+    )
     try:
-        await _wait_for(lambda: len(second.of("event")) == 3)
+        await until(lambda: len(second.of("event")) == 3)
         outbox.append(session_id, "event", {"n": 4})
-        await _wait_for(lambda: len(second.of("event")) == 4)
+        await until(lambda: len(second.of("event")) == 4)
         await asyncio.sleep(0.1)
         assert [m["seq"] for m in second.of("event")] == [2, 3, 4, 5]
         body = metrics.scrape().decode()
@@ -605,13 +415,13 @@ async def test_spooled_envelopes_without_a_claim_are_sent_after_a_restart(
     del first
     restarted = Outbox(spool_dir=tmp_path / "spool")
     restarted.load_spool()
-    sock = _Sock([_hello()])
-    run = _start(settings, sock, outbox=restarted)
+    sock = FakeSock([hello_frame()])
+    run = start_connection(settings, sock, outbox=restarted)
     try:
-        await _wait_for(lambda: len(sock.of("turn.status")) == 1)
-        await _wait_for(lambda: len(sock.of("usage")) == 1)
+        await until(lambda: len(sock.of("turn.status")) == 1)
+        await until(lambda: len(sock.of("usage")) == 1)
         sock.push({"type": "ack", "session_id": str(session_id), "last_seq": 2})
-        await _wait_for(lambda: restarted.pending_sessions() == [])
+        await until(lambda: restarted.pending_sessions() == [])
         assert not (tmp_path / "spool" / f"{session_id}.jsonl").exists()
     finally:
         await run.stop()
@@ -623,10 +433,10 @@ async def test_lease_released_while_offline_is_released_after_the_next_hello(
     session_id = uuid.uuid4()
     lease = str(uuid.uuid4())
     pending = {session_id: lease}
-    sock = _Sock([_hello()])
-    run = _start(settings, sock, pending=pending)
+    sock = FakeSock([hello_frame()])
+    run = start_connection(settings, sock, pending=pending)
     try:
-        await _wait_for(lambda: sock.of("lease.release"))
+        await until(lambda: sock.of("lease.release"))
         assert sock.of("lease.release")[0]["lease_id"] == lease
         assert pending == {}
         assert run.leases == {}
@@ -640,8 +450,8 @@ async def test_drain_waits_for_the_outbox_to_be_acked(settings: Settings) -> Non
     outbox.append(session_id, "usage", {"input": 1})
     draining = asyncio.Event()
     draining.set()
-    sock = _Sock([_hello()])
-    run = _start(settings, sock, outbox=outbox, draining=draining)
+    sock = FakeSock([hello_frame()])
+    run = start_connection(settings, sock, outbox=outbox, draining=draining)
     try:
         await asyncio.sleep(0.3)
         assert not run.task.done()
@@ -658,8 +468,8 @@ async def test_drain_gives_up_on_the_outbox_at_the_timeout(settings: Settings) -
     outbox.append(uuid.uuid4(), "usage", {"input": 1})
     draining = asyncio.Event()
     draining.set()
-    run = _start(
-        settings, _Sock([_hello()]), outbox=outbox, draining=draining, wait=0.2
+    run = start_connection(
+        settings, FakeSock([hello_frame()]), outbox=outbox, draining=draining, wait=0.2
     )
     outcome, _deadline = await asyncio.wait_for(run.task, timeout=5)
     assert outcome == "drain_timeout"
@@ -700,7 +510,7 @@ async def test_cancelled_upload_passes_cancelled_error_through(
             timeout=30.0,
         )
     )
-    await _wait_for(lambda: waiters)
+    await until(lambda: waiters)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -709,13 +519,13 @@ async def test_cancelled_upload_passes_cancelled_error_through(
 
 async def test_lost_connection_fails_waiting_uploads_fast(settings: Settings) -> None:
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     metrics = Metrics()
     execution.metrics = metrics
     outbox.metrics = metrics
     session_id = uuid.uuid4()
-    sock = _Sock([_hello(sessions={str(session_id): 0})])
-    run = _start(
+    sock = FakeSock([hello_frame(sessions={str(session_id): 0})])
+    run = start_connection(
         settings,
         sock,
         execution=execution,
@@ -736,9 +546,9 @@ async def test_lost_connection_fails_waiting_uploads_fast(settings: Settings) ->
         )
     )
     try:
-        await _wait_for(lambda: sock.of("artifact.presign"))
+        await until(lambda: sock.of("artifact.presign"))
         sock.push({"type": "ack", "session_id": str(session_id), "last_seq": 1})
-        await _wait_for(lambda: outbox.acked_seq(session_id) == 1)
+        await until(lambda: outbox.acked_seq(session_id) == 1)
         run.task.cancel()
         await asyncio.gather(run.task, return_exceptions=True)
         with pytest.raises(PresignDisconnected):
@@ -798,7 +608,7 @@ class _Connect:
         return False
 
 
-class _RunExecution(_Execution):
+class _RunExecution(FakeExecution):
     async def _idle(self) -> None:
         await asyncio.Event().wait()
 
@@ -844,14 +654,18 @@ async def test_bad_first_frame_reconnects_instead_of_exiting(
 
     monkeypatch.setattr("apipi.worker.scrape.serve_metrics", no_scrape)
     connects = _Connects(
-        [_Sock([{"ok": False, "error": "database busy"}]), _Sock([_hello()]), None]
+        [
+            FakeSock([{"ok": False, "error": "database busy"}]),
+            FakeSock([hello_frame()]),
+            None,
+        ]
     )
     task = asyncio.create_task(
         run_worker(settings, url="http://127.0.0.1:8000", connect=connects)
     )
     try:
-        await _wait_for(lambda: connects.calls >= 2)
-        await _wait_for(
+        await until(lambda: connects.calls >= 2)
+        await until(
             lambda: (
                 'apipi_worker_reconnects_total{reason="error"} 1.0'
                 in metrics.scrape().decode()
@@ -877,12 +691,12 @@ async def test_tls_context_is_rebuilt_on_every_reconnect(
         return {}
 
     monkeypatch.setattr("apipi.worker.client._worker_connect_kwargs", kwargs)
-    connects = _Connects([None, None, None, _Sock([_hello()])])
+    connects = _Connects([None, None, None, FakeSock([hello_frame()])])
     task = asyncio.create_task(
         run_worker(settings, url="http://127.0.0.1:8000", connect=connects)
     )
     try:
-        await _wait_for(lambda: connects.calls >= 4)
+        await until(lambda: connects.calls >= 4)
         assert built == connects.calls
     finally:
         task.cancel()
@@ -967,7 +781,7 @@ async def test_observe_loop_survives_a_failing_round(
     monkeypatch.setattr(execution.pool, "sweep_dead", sweep)
     task = asyncio.create_task(execution.observe_loop())
     try:
-        await _wait_for(lambda: calls >= 3)
+        await until(lambda: calls >= 3)
         assert not task.done()
     finally:
         task.cancel()
@@ -1008,17 +822,9 @@ async def test_observe_loop_samples_guests_at_once_on_a_fresh_host(
     assert samples == [5.0]
 
 
-async def _closed_on_cancel(entered: asyncio.Event) -> None:
-    entered.set()
-    try:
-        await asyncio.Event().wait()
-    except asyncio.CancelledError:
-        raise ValueError("Connection closed") from None
-
-
 async def _swallowed_cancel(entered: asyncio.Event) -> None:
     with contextlib.suppress(ValueError):
-        await _closed_on_cancel(entered)
+        await closed_on_cancel(entered)
 
 
 async def _ends_cancelled(task: "asyncio.Task[Any]") -> None:
@@ -1028,9 +834,9 @@ async def _ends_cancelled(task: "asyncio.Task[Any]") -> None:
     assert task.cancelled()
 
 
-class _SwallowingSock(_Sock):
+class _SwallowingSock(FakeSock):
     def __init__(self, block: str, entered: asyncio.Event) -> None:
-        super().__init__([_hello(), {"type": "noop"}])
+        super().__init__([hello_frame(), {"type": "noop"}])
         self.block = block
         self.entered = entered
         self.received = 0
@@ -1061,7 +867,7 @@ async def test_a_cancel_ends_the_connection_when_a_lane_swallows_it(
     entered = asyncio.Event()
     outbox = Outbox()
     outbox.append(uuid.uuid4(), "usage", {"input": 1})
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     draining = asyncio.Event()
     if block == "drain":
         draining.set()
@@ -1075,7 +881,7 @@ async def test_a_cancel_ends_the_connection_when_a_lane_swallows_it(
                 await _swallowed_cancel(entered)
 
         monkeypatch.setattr(execution.pool, "kill_unheld", kill_unheld)
-    run = _start(
+    run = start_connection(
         settings,
         _SwallowingSock(block, entered),
         execution=execution,
@@ -1096,7 +902,7 @@ async def test_a_lease_release_cancelled_while_it_is_sent_goes_out_after_the_nex
     lease = str(uuid.uuid4())
     entered = asyncio.Event()
 
-    class _BlockingSock(_Sock):
+    class _BlockingSock(FakeSock):
         async def send(self, data: str) -> None:
             if json.loads(data).get("type") == "lease.release":
                 entered.set()
@@ -1105,10 +911,10 @@ async def test_a_lease_release_cancelled_while_it_is_sent_goes_out_after_the_nex
 
     leases = {session_id: lease}
     pending: dict[uuid.UUID, str] = {}
-    sock = _BlockingSock([_hello(sessions={str(session_id): 0})])
-    run = _start(settings, sock, leases=leases, pending=pending)
+    sock = _BlockingSock([hello_frame(sessions={str(session_id): 0})])
+    run = start_connection(settings, sock, leases=leases, pending=pending)
     try:
-        await _wait_for(lambda: sock.of("heartbeat"))
+        await until(lambda: sock.of("heartbeat"))
         release = asyncio.create_task(run.execution.note_stopped(session_id))
         await asyncio.wait_for(entered.wait(), timeout=5)
         assert leases == {}
@@ -1117,10 +923,10 @@ async def test_a_lease_release_cancelled_while_it_is_sent_goes_out_after_the_nex
         assert pending == {session_id: lease}
     finally:
         await run.stop()
-    after = _Sock([_hello()])
-    second = _start(settings, after, leases=leases, pending=pending)
+    after = FakeSock([hello_frame()])
+    second = start_connection(settings, after, leases=leases, pending=pending)
     try:
-        await _wait_for(lambda: after.of("lease.release"))
+        await until(lambda: after.of("lease.release"))
         assert after.of("lease.release")[0]["lease_id"] == lease
         assert pending == {}
     finally:
@@ -1135,9 +941,9 @@ async def test_a_cancel_ends_the_reconnect_loop_when_the_socket_turns_it_into_an
     _patch_run_worker(monkeypatch, execution)
     entered = asyncio.Event()
 
-    class _ClosingSock(_Sock):
+    class _ClosingSock(FakeSock):
         async def recv(self) -> Any:
-            await _closed_on_cancel(entered)
+            await closed_on_cancel(entered)
 
     connects = _Connects([_ClosingSock()])
     task = asyncio.create_task(
@@ -1157,18 +963,18 @@ async def test_a_command_that_turns_a_cancel_into_an_error_is_not_reported(
     settings: Settings, op: str
 ) -> None:
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     entered = asyncio.Event()
 
     async def closing(_sid: uuid.UUID) -> None:
-        await _closed_on_cancel(entered)
+        await closed_on_cancel(entered)
 
     execution.on_cancel = closing
     execution.on_teardown = closing
     session_id = uuid.uuid4()
     lease = str(uuid.uuid4())
-    sock = _Sock([_hello(), _command(session_id, lease, op)])
-    run = _start(settings, sock, execution=execution, outbox=outbox)
+    sock = FakeSock([hello_frame(), command_frame(session_id, lease, op)])
+    run = start_connection(settings, sock, execution=execution, outbox=outbox)
     try:
         await asyncio.wait_for(entered.wait(), timeout=5)
         (command,) = [
@@ -1188,7 +994,7 @@ async def test_a_cancel_ends_the_delta_flush_when_the_send_turns_it_into_an_erro
     entered = asyncio.Event()
 
     async def send(_wire: dict[str, Any]) -> None:
-        await _closed_on_cancel(entered)
+        await closed_on_cancel(entered)
 
     relay = DeltaRelay(send, window=0)
     await relay.submit(uuid.uuid4(), uuid.uuid4(), "hello")
@@ -1216,7 +1022,7 @@ async def test_a_cancel_ends_a_worker_loop_whose_round_swallows_it(
     entered = asyncio.Event()
 
     async def seen(_ids: list[uuid.UUID]) -> None:
-        await _closed_on_cancel(entered)
+        await closed_on_cancel(entered)
 
     execution.seen_hook = seen
     task = asyncio.create_task(execution.sandbox_seen_loop())

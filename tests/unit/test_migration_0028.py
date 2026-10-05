@@ -5,6 +5,7 @@ import pytest
 from alembic import command
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
+from tests.support.migrations import SqliteRevisions
 
 from apipi.store.migrate import alembic_config, upgrade_head
 
@@ -113,9 +114,9 @@ def _insert_item(connection, ids: dict[str, str], kind: str) -> None:
 
 def test_search_usage_migration_adds_columns_table_and_item_type(
     tmp_path: Path,
+    sqlite_revisions: SqliteRevisions,
 ) -> None:
-    url = f"sqlite:///{tmp_path / 'apipi.db'}"
-    command.upgrade(alembic_config(url), "0027_artifact_uploads")
+    url = sqlite_revisions.copy_at("0027_artifact_uploads", tmp_path / "apipi.db")
     ids = _seed(url)
     upgrade_head(url)
     engine = create_engine(url)
@@ -167,9 +168,10 @@ def test_search_usage_migration_adds_columns_table_and_item_type(
         engine.dispose()
 
 
-def test_search_usage_migration_cascades_with_turn(tmp_path: Path) -> None:
-    url = f"sqlite:///{tmp_path / 'apipi.db'}"
-    command.upgrade(alembic_config(url), "0027_artifact_uploads")
+def test_search_usage_migration_cascades_with_turn(
+    tmp_path: Path, sqlite_revisions: SqliteRevisions
+) -> None:
+    url = sqlite_revisions.copy_at("0027_artifact_uploads", tmp_path / "apipi.db")
     ids = _seed(url)
     upgrade_head(url)
     engine = create_engine(url)
@@ -210,9 +212,9 @@ def test_search_usage_migration_cascades_with_turn(tmp_path: Path) -> None:
 
 def test_search_usage_migration_downgrade_drops_web_search_items(
     tmp_path: Path,
+    sqlite_revisions: SqliteRevisions,
 ) -> None:
-    url = f"sqlite:///{tmp_path / 'apipi.db'}"
-    command.upgrade(alembic_config(url), "0027_artifact_uploads")
+    url = sqlite_revisions.copy_at("0027_artifact_uploads", tmp_path / "apipi.db")
     ids = _seed(url)
     upgrade_head(url)
     engine = create_engine(url)

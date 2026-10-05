@@ -17,7 +17,8 @@ from fastapi import FastAPI
 
 from apipi.config import Settings
 from tests.support import wire_schema
-from tests.support.fake_runner import AsgiWebsocket
+from tests.support.asgi_websocket import AsgiWebsocket
+from tests.support.http import auth
 
 
 def api_settings_for(settings: Settings, *, batch_window_zero: bool = True) -> Settings:
@@ -420,13 +421,27 @@ async def split_client_for(
         await worker.aclose()
 
 
+def block_storage(monkeypatch: Any) -> None:
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("split worker must not construct storage clients")
+
+    import apipi.store.blobs as blobs
+    import apipi.store.engine as engine
+
+    monkeypatch.setattr(engine, "create_engine", _boom)
+    monkeypatch.setattr(engine, "Store", _boom)
+    monkeypatch.setattr(blobs, "object_store", _boom)
+    monkeypatch.setattr(blobs, "blob_store", _boom)
+    monkeypatch.setattr(blobs, "S3Store", _boom)
+
+
 async def wait_for_idle(
     client: Any, token: str, session_id: str, timeout: float = 15.0
 ) -> dict[str, Any]:
     """Poll `GET /v1/agents/sessions/{id}` until status is idle."""
     import asyncio as _asyncio
 
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = auth(token)
     deadline = _asyncio.get_running_loop().time() + timeout
     last: dict[str, Any] = {}
     while True:
@@ -452,7 +467,7 @@ async def wait_for_event_types(
     """Poll session events until every `wanted` type is present."""
     import asyncio as _asyncio
 
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = auth(token)
     deadline = _asyncio.get_running_loop().time() + timeout
     while True:
         response = await client.get(

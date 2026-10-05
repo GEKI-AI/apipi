@@ -7,18 +7,13 @@ import asyncio
 import uuid
 
 from tests.support.postgres import needs_postgres, pg_dsn, postgres_replicas
+from tests.support.waits import until
 
 from apipi.common.event_bus import is_wake, message_seq
 from apipi.common.metrics import Metrics
 from apipi.services.event_bus import PostgresEventBus
 
 pytestmark = needs_postgres
-
-
-async def _wait_for(condition, timeout: float = 10.0) -> None:  # type: ignore[no-untyped-def]
-    async with asyncio.timeout(timeout):
-        while not condition():
-            await asyncio.sleep(0.05)
 
 
 async def test_postgres_listener_reconnect_covers_gap() -> None:
@@ -30,10 +25,11 @@ async def test_postgres_listener_reconnect_covers_gap() -> None:
             listen = replica_b._listen
             assert listen is not None
             await listen.close()
-            await _wait_for(
+            await until(
                 lambda: (
                     replica_b._listen is not None and not replica_b._listen.is_closed()
-                )
+                ),
+                timeout=10.0,
             )
             reconnects = metrics.registry.get_sample_value(
                 "apipi_event_bus_listener_reconnects_total"
@@ -148,7 +144,7 @@ async def test_postgres_instance_messages_reach_only_that_instance() -> None:
         await replica_a.listen_instance("node-a", got_a.append)
         await replica_b.listen_instance("node-b", got_b.append)
         await replica_a.send_instance("node-b", {"kind": "forward", "id": "x"})
-        await _wait_for(lambda: bool(got_b))
+        await until(lambda: bool(got_b), timeout=10.0)
         await asyncio.sleep(0.2)
         assert got_b == [{"kind": "forward", "id": "x"}]
         assert got_a == []

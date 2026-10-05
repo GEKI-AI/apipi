@@ -36,12 +36,13 @@ class SplitProcesses:
     worker_log: Path
     worker_sessions: Path
 
-    def logs(self) -> str:
-        parts = []
-        for name, path in (("api", self.api_log), ("worker", self.worker_log)):
-            text = path.read_text(errors="replace") if path.exists() else ""
-            parts.append(f"--- {name} ---\n{text[-4000:]}")
-        return "\n".join(parts)
+
+def _tail(api_log: Path, worker_log: Path) -> str:
+    parts = []
+    for name, path in (("api", api_log), ("worker", worker_log)):
+        text = path.read_text(errors="replace") if path.exists() else ""
+        parts.append(f"--- {name} ---\n{text[-4000:]}")
+    return "\n".join(parts)
 
 
 def fake_pi_shim(directory: Path) -> Path:
@@ -178,7 +179,7 @@ async def split_processes(
                 )
             logs = f"{api_log}, {worker_log}"
             await _wait_ready(tuple(procs), store, base_url, logs, timeout)
-            running = SplitProcesses(
+            yield SplitProcesses(
                 base_url,
                 procs[0],
                 procs[1],
@@ -186,14 +187,10 @@ async def split_processes(
                 worker_log,
                 tmp_path / "worker-sessions",
             )
-            try:
-                yield running
-            except BaseException:
-                print(running.logs())
-                raise
     finally:
         for proc in reversed(procs):
             await _stop(proc)
+        print(_tail(api_log, worker_log))
 
 
 @contextlib.asynccontextmanager

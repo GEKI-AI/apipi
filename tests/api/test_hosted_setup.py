@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.http import auth, create_agent
 from tests.support.workspace import hosted_dir
 
 from apipi.config import Settings
@@ -17,29 +18,17 @@ from apipi.worker.pi.artifacts import reap_workspaces
 from apipi.worker.pi.isolation.none import NoneIsolation
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-async def _agent(client: AsyncClient, token: str) -> str:
-    response = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    assert response.status_code == 200
-    return str(response.json()["id"])
-
-
 async def test_public_session_omits_directory(client: AsyncClient) -> None:
     token = "no-directory"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "openai_hosted"}},
     )
     assert created.status_code == 200
     assert "directory" not in created.json()["environment"]
-    listed = await client.get("/v1/agents/sessions", headers=_auth(token))
+    listed = await client.get("/v1/agents/sessions", headers=auth(token))
     assert "directory" not in listed.json()["data"][0]["environment"]
 
 
@@ -57,12 +46,12 @@ async def test_host_setup_does_not_block_other_requests(
         _worker,
     ):
         token = "setup-thread"
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         started = time.monotonic()
         created = asyncio.create_task(
             client.post(
                 "/v1/agents/sessions",
-                headers=_auth(token),
+                headers=auth(token),
                 json={
                     "agent_id": agent_id,
                     "environment": {
@@ -85,10 +74,10 @@ async def test_packages_and_setup_commands_are_stored(
     client: AsyncClient, settings: Settings
 ) -> None:
     token = "setup-store"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -118,10 +107,10 @@ async def test_setup_runs_before_turn(
 
     monkeypatch.setattr("apipi.env.setup.run_host_setup", fake_run)
     token = "setup-run"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -136,7 +125,7 @@ async def test_setup_runs_before_turn(
     ready = hosted_dir(settings, token, created.json()["id"]) / "ready.txt"
     assert ready.read_text() == "ok"
     events = await client.get(
-        f"/v1/agents/sessions/{created.json()['id']}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{created.json()['id']}/events", headers=auth(token)
     )
     types = [event["type"] for event in events.json()["data"]]
     assert "agent.session.turn.completed" in types
@@ -151,10 +140,10 @@ async def test_setup_failure_does_not_start_turn(
 
     monkeypatch.setattr("apipi.env.setup.run_host_setup", boom)
     token = "setup-fail"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -167,7 +156,7 @@ async def test_setup_failure_does_not_start_turn(
     assert created.status_code == 200
     assert created.json()["status"] == "failed"
     events = await client.get(
-        f"/v1/agents/sessions/{created.json()['id']}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{created.json()['id']}/events", headers=auth(token)
     )
     types = [event["type"] for event in events.json()["data"]]
     assert "agent.session.environment.failed" in types
@@ -190,10 +179,10 @@ async def test_system_packages_rejected_on_microvm(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         token = "setup-system-microvm"
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         response = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "environment": {
@@ -208,10 +197,10 @@ async def test_system_packages_rejected_on_microvm(
 
 async def test_packages_rejected_on_none(client: AsyncClient) -> None:
     token = "setup-none"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none", "packages": {"python": ["rich"]}},
@@ -223,14 +212,14 @@ async def test_packages_rejected_on_none(client: AsyncClient) -> None:
 
 async def test_unimplemented_env_fields(client: AsyncClient) -> None:
     token = "setup-unimpl"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     for field, value in (
         ("environment_template_id", "tpl"),
         ("plugins", []),
     ):
         response = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "environment": {"type": "openai_hosted", field: value},
@@ -260,10 +249,10 @@ async def test_sandbox_ttl_wipes_scratch_and_rehydrates(
         worker,
     ):
         token = "sandbox-ttl"
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "environment": {
@@ -287,7 +276,7 @@ async def test_sandbox_ttl_wipes_scratch_and_rehydrates(
         assert not directory.exists()
         follow = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.message", "text": "hello"},
         )
         assert follow.status_code == 200
@@ -307,10 +296,10 @@ async def test_reap_skips_held_hosted_workspace(
         worker,
     ):
         token = "reap-held"
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "environment": {"type": "openai_hosted"},
@@ -371,10 +360,10 @@ async def test_spawn_oserror_fails_turn_not_500(
         settings, store, harness=_SpawnFailHarness(), token=worker_secret
     ) as (_app, client, _worker):
         token = "spawn-fail"
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "environment": {"type": "openai_hosted"},
@@ -385,13 +374,11 @@ async def test_spawn_oserror_fails_turn_not_500(
         error = created.json()["error"]
         assert error["code"] == "spawn_failed"
         session_id = error["session_id"]
-        got = await client.get(
-            f"/v1/agents/sessions/{session_id}", headers=_auth(token)
-        )
+        got = await client.get(f"/v1/agents/sessions/{session_id}", headers=auth(token))
         assert got.status_code == 200
         assert got.json()["status"] == "idle"
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
         )
         body = events.json()["data"]
         types = [event["type"] for event in body]
@@ -405,11 +392,11 @@ async def test_env_and_inline_files_are_stored(
     client: AsyncClient, settings: Settings
 ) -> None:
     token = "env-files"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     payload = base64.b64encode(b"a,b\n1,2\n").decode()
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -437,10 +424,10 @@ async def test_env_and_inline_files_are_stored(
 
 async def test_reserved_env_name_rejected(client: AsyncClient) -> None:
     token = "env-reserved"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -455,10 +442,10 @@ async def test_reserved_env_name_rejected(client: AsyncClient) -> None:
 
 async def test_env_rejected_on_none(client: AsyncClient) -> None:
     token = "env-none"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none", "env": {"A": "b"}},
@@ -470,10 +457,10 @@ async def test_env_rejected_on_none(client: AsyncClient) -> None:
 
 async def test_unknown_files_type_not_implemented(client: AsyncClient) -> None:
     token = "files-id"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -490,10 +477,10 @@ async def test_unknown_files_type_not_implemented(client: AsyncClient) -> None:
 
 async def test_network_is_stored(client: AsyncClient, settings: Settings) -> None:
     token = "net-store"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -517,10 +504,10 @@ async def test_network_is_stored(client: AsyncClient, settings: Settings) -> Non
 
 async def test_network_disabled_fails_on_none_isolation(client: AsyncClient) -> None:
     token = "net-none"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -534,7 +521,7 @@ async def test_network_disabled_fails_on_none_isolation(client: AsyncClient) -> 
     assert created.json()["status"] == "failed"
     session_id = created.json()["id"]
     events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     failed = next(
         event
@@ -546,10 +533,10 @@ async def test_network_disabled_fails_on_none_isolation(client: AsyncClient) -> 
 
 async def test_network_ignored_on_type_none(client: AsyncClient) -> None:
     token = "net-type-none"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -564,10 +551,10 @@ async def test_network_ignored_on_type_none(client: AsyncClient) -> None:
 
 async def test_self_hosted_rejected_not_implemented(client: AsyncClient) -> None:
     token = "net-self"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -582,10 +569,10 @@ async def test_self_hosted_rejected_not_implemented(client: AsyncClient) -> None
 
 async def test_network_bad_host_rejected(client: AsyncClient) -> None:
     token = "net-bad"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {

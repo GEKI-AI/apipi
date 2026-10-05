@@ -8,33 +8,19 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from tests.support.config import none_settings_for
 from tests.support.fake_worker import FakeWorker
+from tests.support.http import auth, tenant_of
+from tests.support.ingest import frame
 from tests.support.prom import metric_line
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.events import list_events
 from apipi.store.models import utc_now
 from apipi.store.repo import list_turns, set_session_lease
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant(token: str) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
-
-
-def _worker_settings(settings: Settings) -> Settings:
-    return Settings(
-        database_url=settings.database_url,
-        run_mode="none",
-        sessions_dir=settings.sessions_dir,
-    )
 
 
 async def _session(
@@ -44,12 +30,12 @@ async def _session(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         assert agent.status_code == 200
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},
@@ -57,7 +43,7 @@ async def _session(
         )
         assert created.status_code == 200
         body = created.json()
-    return _tenant(token), uuid.UUID(body["id"])
+    return tenant_of(token), uuid.UUID(body["id"])
 
 
 async def _lease(
@@ -77,23 +63,6 @@ async def _lease(
             lease_until=utc_now() + timedelta(seconds=30),
         )
         return lease_id
-
-
-def _envelope(
-    session_id: uuid.UUID, seq: int, type: str, payload: dict[str, Any]
-) -> dict[str, Any]:
-    turn_id = payload.get("turn_id")
-    if turn_id is None and isinstance(payload.get("data"), dict):
-        maybe = payload["data"].get("turn_id")
-        turn_id = maybe if isinstance(maybe, str) else None
-    return {
-        "v": 2,
-        "session_id": str(session_id),
-        "turn_id": turn_id,
-        "seq": seq,
-        "type": type,
-        "payload": payload,
-    }
 
 
 async def _turn_envelopes(
@@ -164,7 +133,7 @@ async def _turn_envelopes(
         ("event", {"type": "agent.session.idle", "data": {}}),
     ]
     return [
-        _envelope(session_id, start + index, type, payload)
+        frame(session_id, start + index, type, payload)
         for index, (type, payload) in enumerate(flow)
     ]
 
@@ -182,7 +151,7 @@ async def test_socket_ingest_acks_and_persists(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     app = create_app(
-        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        api_settings_for(none_settings_for(settings), batch_window_zero=False),
         store=store,
     )
     token = "t"
@@ -211,7 +180,7 @@ async def test_socket_ingest_acks_and_persists(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         listed = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
         )
         assert listed.status_code == 200
         assert len(listed.json()["data"]) >= 6
@@ -244,11 +213,9 @@ async def test_socket_reject_counts_and_acks_past(
     await _lease(store, tenant_id, session_id, worker_id)
     caplog.set_level(logging.WARNING, logger="apipi.worker")
     await worker.send_json(
-        _envelope(session_id, 1, "event", {"type": "agent.session.nope", "data": {}})
+        frame(session_id, 1, "event", {"type": "agent.session.nope", "data": {}})
     )
-    await worker.send_json(
-        _envelope(session_id, 2, "session.status", {"status": "idle"})
-    )
+    await worker.send_json(frame(session_id, 2, "session.status", {"status": "idle"}))
     acks = await _drain_acks(worker, 1)
     assert acks[-1]["last_seq"] == 2
     assert "worker envelope rejected" in caplog.text
@@ -278,7 +245,7 @@ async def test_reconnect_replays_exactly_once(
     settings: Settings, store: Store, worker_secret: str, another_replica: bool
 ) -> None:
     app = create_app(
-        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        api_settings_for(none_settings_for(settings), batch_window_zero=False),
         store=store,
     )
     token = "t"
@@ -296,7 +263,7 @@ async def test_reconnect_replays_exactly_once(
     await worker.close()
     if another_replica:
         app = create_app(
-            api_settings_for(_worker_settings(settings), batch_window_zero=False),
+            api_settings_for(none_settings_for(settings), batch_window_zero=False),
             store=store,
         )
     second = FakeWorker(app, worker_secret, worker_id=str(worker_id))
@@ -336,7 +303,7 @@ async def test_ingest_latency_within_batch_window(
 ) -> None:
     assert settings.worker_ingest_batch_window.total_seconds() <= 0.05
     app = create_app(
-        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        api_settings_for(none_settings_for(settings), batch_window_zero=False),
         store=store,
     )
     token = "t"
@@ -368,15 +335,15 @@ async def test_cross_replica_wake_where_possible(
     import os
 
     if not os.environ.get("APIPI_TEST_DATABASE_URL"):
-        settings_obj = _worker_settings(settings)
+        settings_obj = none_settings_for(settings)
         assert settings_obj.event_bus == "auto"
         return
     first_app = create_app(
-        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        api_settings_for(none_settings_for(settings), batch_window_zero=False),
         store=store,
     )
     second_app = create_app(
-        api_settings_for(_worker_settings(settings), batch_window_zero=False),
+        api_settings_for(none_settings_for(settings), batch_window_zero=False),
         store=store,
     )
     token = "t"
@@ -389,10 +356,10 @@ async def test_cross_replica_wake_where_possible(
     try:
         started = time.monotonic()
         await worker.send_json(
-            _envelope(session_id, 1, "session.status", {"status": "in_progress"})
+            frame(session_id, 1, "session.status", {"status": "in_progress"})
         )
         await worker.send_json(
-            _envelope(
+            frame(
                 session_id,
                 2,
                 "event",

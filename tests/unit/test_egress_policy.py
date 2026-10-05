@@ -4,6 +4,7 @@ from dataclasses import replace
 from typing import Any, cast
 
 import pytest
+from tests.support.egress import static_resolver
 
 from apipi.worker.egress.policy import (
     PLACEHOLDER_NET,
@@ -233,17 +234,8 @@ def test_blocked_cidrs_cover_private_ranges() -> None:
     assert all(":" not in cidr for cidr in BLOCKED_EGRESS_CIDRS)
 
 
-def resolver(table: dict[str, list[str]]) -> Callable[[str, int], Awaitable[list[str]]]:
-    async def resolve(host: str, _port: int) -> list[str]:
-        if host not in table:
-            raise OSError("unknown host")
-        return table[host]
-
-    return resolve
-
-
 async def test_resolve_rejects_any_private_address() -> None:
-    resolve = resolver(
+    resolve = static_resolver(
         {
             "public.example": ["93.184.216.34"],
             "rebind.example": ["93.184.216.34", "10.0.0.5"],
@@ -279,7 +271,7 @@ async def _resolve_or_reason(
 
 
 async def test_private_hosts_need_the_name_and_an_allowed_address() -> None:
-    resolve = resolver(
+    resolve = static_resolver(
         {
             "forgejo.internal": ["10.1.2.3"],
             "moved.internal": ["10.9.9.9"],

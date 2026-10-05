@@ -1,38 +1,22 @@
-import io
-import zipfile
-
 from httpx import AsyncClient
+from tests.support.files import zip_skill
+from tests.support.http import auth, create_agent
 
 from apipi.common.skills import discover_skill_dirs
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _zip_skill(name: str, *, body: str | None = None) -> bytes:
-    text = body if body is not None else f"---\nname: {name}\n---\nDo the thing.\n"
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as archive:
-        archive.writestr(f"{name}/SKILL.md", text)
-        archive.writestr(f"{name}/scripts/run.sh", "echo ok\n")
-    return buf.getvalue()
-
-
-async def _agent(client: AsyncClient, token: str) -> str:
-    response = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    assert response.status_code == 200
-    return str(response.json()["id"])
 
 
 async def test_skill_upload_and_session_attach(client: AsyncClient) -> None:
     token = "skill-crud"
     uploaded = await client.post(
         "/v1/skills",
-        headers=_auth(token),
-        files={"files": ("demo.zip", _zip_skill("demo"), "application/zip")},
+        headers=auth(token),
+        files={
+            "files": (
+                "demo.zip",
+                zip_skill("demo", {"scripts/run.sh": "echo ok\n"}),
+                "application/zip",
+            )
+        },
     )
     assert uploaded.status_code == 200
     body = uploaded.json()
@@ -40,14 +24,14 @@ async def test_skill_upload_and_session_attach(client: AsyncClient) -> None:
     assert skill_id.startswith("skill-")
     assert body["object"] == "skill"
     assert body["name"] == "demo"
-    listed = await client.get("/v1/skills", headers=_auth(token))
+    listed = await client.get("/v1/skills", headers=auth(token))
     assert listed.json()["data"][0]["id"] == skill_id
-    other = await client.get(f"/v1/skills/{skill_id}", headers=_auth("other-tenant"))
+    other = await client.get(f"/v1/skills/{skill_id}", headers=auth("other-tenant"))
     assert other.status_code == 404
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -77,10 +61,10 @@ async def test_skill_upload_and_session_attach(client: AsyncClient) -> None:
 
 async def test_skill_missing_is_not_found(client: AsyncClient) -> None:
     token = "skill-missing"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -95,7 +79,7 @@ async def test_skill_missing_is_not_found(client: AsyncClient) -> None:
 async def test_skill_bad_zip_rejected(client: AsyncClient) -> None:
     response = await client.post(
         "/v1/skills",
-        headers=_auth("skill-bad"),
+        headers=auth("skill-bad"),
         files={"files": ("nope.zip", b"not a zip", "application/zip")},
     )
     assert response.status_code == 400
@@ -104,10 +88,10 @@ async def test_skill_bad_zip_rejected(client: AsyncClient) -> None:
 
 async def test_skill_unknown_type_not_implemented(client: AsyncClient) -> None:
     token = "skill-type"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -126,16 +110,22 @@ async def test_delete_skill_then_attach_is_not_found(client: AsyncClient) -> Non
     token = "skill-delete"
     uploaded = await client.post(
         "/v1/skills",
-        headers=_auth(token),
-        files={"files": ("demo.zip", _zip_skill("gone"), "application/zip")},
+        headers=auth(token),
+        files={
+            "files": (
+                "demo.zip",
+                zip_skill("gone", {"scripts/run.sh": "echo ok\n"}),
+                "application/zip",
+            )
+        },
     )
     skill_id = uploaded.json()["id"]
-    deleted = await client.delete(f"/v1/skills/{skill_id}", headers=_auth(token))
+    deleted = await client.delete(f"/v1/skills/{skill_id}", headers=auth(token))
     assert deleted.json()["deleted"] is True
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {

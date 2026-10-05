@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 import pytest
+from tests.support.ingest import leased_session
 from tests.support.postgres import needs_postgres, postgres_replicas
 
 from apipi.common.event_bus import EventBus, InMemoryEventBus, live_event_body
@@ -16,8 +17,6 @@ from apipi.store.engine import Store
 from apipi.store.repo import (
     append_event,
     clear_session_lease,
-    create_session,
-    create_tenant,
     set_session_lease,
 )
 from apipi.worker.deltas import DeltaRelay, LiveRedirectBus
@@ -224,26 +223,6 @@ def _conn(worker_id: uuid.UUID, lease_id: uuid.UUID) -> WorkerConnection:
     )
 
 
-async def _leased(
-    store: Store, worker_id: uuid.UUID
-) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
-    from apipi.store.models import utc_now
-
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        session_row = await create_session(db, tenant.id)
-        lease_id = uuid.uuid4()
-        await set_session_lease(
-            db,
-            tenant.id,
-            session_row.id,
-            worker_id=worker_id,
-            lease_id=lease_id,
-            lease_until=utc_now() + timedelta(minutes=5),
-        )
-        return tenant.id, session_row.id, lease_id, worker_id
-
-
 @pytest.fixture(params=["memory", pytest.param("postgres", marks=needs_postgres)])
 async def buses(
     request: pytest.FixtureRequest,
@@ -262,7 +241,7 @@ async def test_handle_delta_publishes_live_without_db_writes(
     publish, subscribe = buses
     hub = WorkerHub(settings)
     worker_id = uuid.uuid4()
-    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    tenant_id, session_id, lease_id, _ = await leased_session(store, worker_id)
     queue = subscribe.subscribe(session_id)
     try:
         turn_id = uuid.uuid4()
@@ -293,7 +272,7 @@ async def test_handle_delta_rejects_unleased_session(
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
-    _, session_id, _, _ = await _leased(store, uuid.uuid4())
+    _, session_id, _, _ = await leased_session(store, uuid.uuid4())
     caplog.set_level(logging.WARNING, logger="apipi.worker")
     published = await hub.handle_delta(
         store,
@@ -328,7 +307,7 @@ async def test_handle_delta_drops_only_deltas_of_ended_turns(
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
-    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    tenant_id, session_id, lease_id, _ = await leased_session(store, worker_id)
     turn_id = uuid.uuid4()
     await _noted(hub, tenant_id, session_id, worker_id, lease_id)
     ended = turn_id if same_turn else uuid.uuid4()
@@ -356,7 +335,7 @@ async def test_handle_delta_rejects_oversize(settings: Settings, store: Store) -
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
-    _, session_id, lease_id, _ = await _leased(store, worker_id)
+    _, session_id, lease_id, _ = await leased_session(store, worker_id)
     published = await hub.handle_delta(
         store,
         bus,
@@ -370,7 +349,7 @@ async def test_handle_delta_ignores_reasoning(settings: Settings, store: Store) 
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
-    _, session_id, lease_id, _ = await _leased(store, worker_id)
+    _, session_id, lease_id, _ = await leased_session(store, worker_id)
     turn_id = uuid.uuid4()
     envelope = WorkerEnvelope.model_validate(
         {
@@ -397,7 +376,7 @@ async def test_handle_delta_rate_limits(settings: Settings, store: Store) -> Non
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
-    _, session_id, lease_id, _ = await _leased(store, worker_id)
+    _, session_id, lease_id, _ = await leased_session(store, worker_id)
     conn = _conn(worker_id, lease_id)
     turn_id = uuid.uuid4()
     accepted = 0
@@ -423,7 +402,7 @@ async def test_handle_delta_counts_protocol_events(
     hub = WorkerHub(metered, metrics=Metrics())
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
-    _, session_id, lease_id, _ = await _leased(store, worker_id)
+    _, session_id, lease_id, _ = await leased_session(store, worker_id)
     assert await hub.handle_delta(
         store,
         bus,
@@ -462,7 +441,7 @@ async def test_handle_delta_reads_no_events(
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
-    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    tenant_id, session_id, lease_id, _ = await leased_session(store, worker_id)
     async with store.session() as db:
         for _ in range(30):
             await append_event(
@@ -487,7 +466,7 @@ async def test_handle_delta_uses_no_query_once_leased(
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
-    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    tenant_id, session_id, lease_id, _ = await leased_session(store, worker_id)
     await _noted(hub, tenant_id, session_id, worker_id, lease_id)
     turn_id = uuid.uuid4()
     conn = _conn(worker_id, lease_id)
@@ -525,7 +504,7 @@ async def test_delta_state_dropped_on_release_and_detach(
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
-    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    tenant_id, session_id, lease_id, _ = await leased_session(store, worker_id)
     conn = _conn(worker_id, lease_id)
     await hub.attach(conn)
     try:
@@ -567,7 +546,7 @@ async def test_stale_delta_lease_is_revalidated(
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
-    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
+    tenant_id, session_id, lease_id, _ = await leased_session(store, worker_id)
     conn = _conn(worker_id, lease_id)
     turn_id = uuid.uuid4()
     assert await hub.handle_delta(

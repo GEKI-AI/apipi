@@ -6,16 +6,12 @@ from typing import cast
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from tests.support.http import auth, tenant_of
 
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.turn_logs import get_turn_log
 from apipi.worker.fake_harness import FakeHarness
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _app_of(client: AsyncClient) -> FastAPI:
@@ -48,11 +44,11 @@ async def cancel_client(
 
 async def _create_idle_session(client: AsyncClient, token: str) -> str:
     agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
     )
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
     )
     assert created.status_code == 200
@@ -71,7 +67,7 @@ async def test_cancel_in_progress_turn(
         task = asyncio.create_task(
             cancel_client.post(
                 f"/v1/agents/sessions/{session_id}/events",
-                headers=_auth(token),
+                headers=auth(token),
                 json={"type": "agent.session.input.message", "content": "go"},
             )
         )
@@ -81,7 +77,7 @@ async def test_cancel_in_progress_turn(
                 break
         cancelled = await cancel_client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.cancel"},
         )
         assert cancelled.status_code == 200
@@ -92,22 +88,22 @@ async def test_cancel_in_progress_turn(
         hub.unsubscribe(sid, queue)
 
     got = await cancel_client.get(
-        f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}", headers=auth(token)
     )
     assert got.json()["status"] == "idle"
     turns = await cancel_client.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(token)
     )
     assert turns.json()["data"][0]["status"] == "cancelled"
     events = await cancel_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     types = [event["type"] for event in events.json()["data"]]
     index = types.index("agent.session.turn.cancelled")
     assert types[index + 1] == "agent.session.idle"
     assert types[-1] == "agent.session.idle"
     turn_id = uuid.UUID(turns.json()["data"][0]["id"])
-    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         row = await get_turn_log(db, tenant_id, turn_id)
     assert row is not None
@@ -121,7 +117,7 @@ async def test_cancel_idle_is_invalid(cancel_client: AsyncClient) -> None:
     session_id = await _create_idle_session(cancel_client, "c")
     response = await cancel_client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth("c"),
+        headers=auth("c"),
         json={"type": "agent.session.input.cancel"},
     )
     assert response.status_code == 400
@@ -141,7 +137,7 @@ async def test_message_cancels_live_in_progress(
         task = asyncio.create_task(
             cancel_client.post(
                 f"/v1/agents/sessions/{session_id}/events",
-                headers=_auth(token),
+                headers=auth(token),
                 json={"type": "agent.session.input.message", "content": "go"},
             )
         )
@@ -152,7 +148,7 @@ async def test_message_cancels_live_in_progress(
         cancel_harness.hold = False
         second = await cancel_client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.message", "content": "next"},
         )
         first = await task
@@ -162,7 +158,7 @@ async def test_message_cancels_live_in_progress(
     finally:
         hub.unsubscribe(sid, queue)
     turns = await cancel_client.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(token)
     )
     statuses = [row["status"] for row in turns.json()["data"]]
     assert "cancelled" in statuses

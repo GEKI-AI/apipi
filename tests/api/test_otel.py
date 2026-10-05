@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from httpx import AsyncClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from tests.support.http import auth
 from tests.support.split_worker import api_settings_for, split_client_for
 
 from apipi.common.otel import Tracing
@@ -11,10 +12,6 @@ from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.store.engine import Store
 from apipi.worker.fake_harness import FAKE_USAGE, FakeHarness
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _blob(spans: object) -> str:
@@ -50,15 +47,6 @@ async def otel_client(
         settings, store, token=worker_secret, tracing=otel_tracing
     ) as (_app, client, _worker):
         yield client
-
-
-@pytest.fixture
-def tool_harness() -> FakeHarness:
-    harness = FakeHarness()
-    harness.function_calls = [
-        {"name": "echo", "arguments": {"text": "hi"}, "call_id": "call_1"}
-    ]
-    return harness
 
 
 @pytest.fixture
@@ -104,12 +92,12 @@ async def test_traceparent_parents_session_span(
     trace_id = "0af7651916cd43dd8448eb211c80319c"
     token = "otel-parent"
     agent = await otel_client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
     )
     created = await otel_client.post(
         "/v1/agents/sessions",
         headers={
-            **_auth(token),
+            **auth(token),
             "traceparent": f"00-{trace_id}-b7ad6b7169203331-01",
         },
         json={
@@ -132,11 +120,11 @@ async def test_completed_turn_spans_link_ids_without_message_text(
 ) -> None:
     token = "otel-t"
     agent = await otel_client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
     )
     created = await otel_client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none"},
@@ -146,7 +134,7 @@ async def test_completed_turn_spans_link_ids_without_message_text(
     assert created.status_code == 200
     session_id = created.json()["id"]
     turns = await otel_client.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(token)
     )
     turn_id = turns.json()["data"][0]["id"]
     request_id = created.headers["x-request-id"]
@@ -192,7 +180,7 @@ async def test_function_tool_turn_span_has_tool_names(
     token = "otel-tools"
     agent = await otel_tool_client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -208,7 +196,7 @@ async def test_function_tool_turn_span_has_tool_names(
     )
     created = await otel_tool_client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none"},
@@ -217,7 +205,7 @@ async def test_function_tool_turn_span_has_tool_names(
     )
     session_id = created.json()["id"]
     events = await otel_tool_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     require = [
         event
@@ -228,7 +216,7 @@ async def test_function_tool_turn_span_has_tool_names(
     otel_exporter.clear()
     resumed = await otel_tool_client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "type": "agent.session.input.tool_result",
             "turn_id": turn_id,

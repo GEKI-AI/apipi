@@ -3,6 +3,7 @@ from uuid import UUID
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from tests.support.http import auth
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
@@ -18,10 +19,6 @@ from apipi.store.engine import Store
 from apipi.store.models import VaultCredential
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
 def _static_bearer(token: str = "t") -> dict[str, str]:
     return {
         "type": "static_bearer",
@@ -32,14 +29,14 @@ def _static_bearer(token: str = "t") -> dict[str, str]:
 
 async def _vault(client: AsyncClient, token: str) -> str:
     created = await client.post(
-        "/v1/agents/vaults", headers=_auth(token), json={"name": "git"}
+        "/v1/agents/vaults", headers=auth(token), json={"name": "git"}
     )
     assert created.status_code == 200
     return str(created.json()["id"])
 
 
 def _env_auth(**overrides: object) -> dict[str, object]:
-    auth: dict[str, object] = {
+    body: dict[str, object] = {
         "type": "environment_variable",
         "secret_name": "GITHUB_TOKEN",
         "secret_value": "ghp_live_secret",
@@ -48,8 +45,8 @@ def _env_auth(**overrides: object) -> dict[str, object]:
             "allowed_hosts": ["github.com", "API.GitHub.com"],
         },
     }
-    auth.update(overrides)
-    return auth
+    body.update(overrides)
+    return body
 
 
 def _hosts(*hosts: str) -> dict[str, object]:
@@ -60,17 +57,17 @@ async def test_vault_crud_omits_token(client: AsyncClient) -> None:
     token = "vault-crud"
     created = await client.post(
         "/v1/agents/vaults",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "GitHub", "metadata": {"k": "v"}},
     )
     assert created.status_code == 200
     vault_id = created.json()["id"]
     assert created.json()["name"] == "GitHub"
-    listed = await client.get("/v1/agents/vaults", headers=_auth(token))
+    listed = await client.get("/v1/agents/vaults", headers=auth(token))
     assert listed.json()["data"][0]["id"] == vault_id
     cred = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "pat", "auth": _static_bearer("secret-token")},
     )
     assert cred.status_code == 200
@@ -81,12 +78,12 @@ async def test_vault_crud_omits_token(client: AsyncClient) -> None:
     assert "secret-token" not in str(body)
     got = await client.get(
         f"/v1/agents/vaults/{vault_id}/credentials/{body['id']}",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert "token" not in got.json()["auth"]
     other = await client.get(
         f"/v1/agents/vaults/{vault_id}",
-        headers=_auth("other-tenant"),
+        headers=auth("other-tenant"),
     )
     assert other.status_code == 404
 
@@ -107,7 +104,7 @@ async def test_vault_list_applies_authorize_filter(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        headers = _auth("vault-filter")
+        headers = auth("vault-filter")
         first = await client.post(
             "/v1/agents/vaults", headers=headers, json={"name": "A"}
         )
@@ -130,18 +127,18 @@ async def test_session_vault_ids_and_unknown_vault(client: AsyncClient) -> None:
     vault_id = await _vault(client, token)
     cred = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials",
-        headers=_auth(token),
+        headers=auth(token),
         json={"auth": _static_bearer()},
     )
     assert cred.status_code == 200
     agent = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "bot", "model": "test"},
     )
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none"},
@@ -152,7 +149,7 @@ async def test_session_vault_ids_and_unknown_vault(client: AsyncClient) -> None:
     assert created.json()["vault_ids"] == [vault_id]
     missing = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none"},
@@ -163,7 +160,7 @@ async def test_session_vault_ids_and_unknown_vault(client: AsyncClient) -> None:
 
 
 @pytest.mark.parametrize(
-    ("auth", "stored"),
+    ("credential", "stored"),
     [
         (
             _static_bearer("keep-this-secret"),
@@ -187,15 +184,15 @@ async def test_vault_token_stays_encrypted(
     client: AsyncClient,
     store: Store,
     settings: Settings,
-    auth: dict[str, object],
+    credential: dict[str, object],
     stored: dict[str, object],
 ) -> None:
     token = "vault-store"
     vault_id = await _vault(client, token)
     cred = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials",
-        headers=_auth(token),
-        json={"auth": auth},
+        headers=auth(token),
+        json={"auth": credential},
     )
     assert cred.status_code == 200
     async with store.session() as db:
@@ -226,7 +223,7 @@ async def test_env_credential_crud_never_returns_secret(client: AsyncClient) -> 
     base = f"/v1/agents/vaults/{vault_id}/credentials"
     created = await client.post(
         base,
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "github",
             "auth": _env_auth(),
@@ -245,8 +242,8 @@ async def test_env_credential_crud_never_returns_secret(client: AsyncClient) -> 
     }
     assert body["metadata"] == {"apipi.git_username": "octocat"}
     cred_id = body["id"]
-    listed = await client.get(base, headers=_auth(token))
-    got = await client.get(f"{base}/{cred_id}", headers=_auth(token))
+    listed = await client.get(base, headers=auth(token))
+    got = await client.get(f"{base}/{cred_id}", headers=auth(token))
     for response in (created, listed, got):
         assert "ghp_live_secret" not in response.text
         assert "secret_value" not in response.text
@@ -254,7 +251,7 @@ async def test_env_credential_crud_never_returns_secret(client: AsyncClient) -> 
     assert got.json()["auth"]["networking"]["type"] == "limited"
     updated = await client.post(
         f"{base}/{cred_id}",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "github-rotated",
             "auth": {
@@ -273,9 +270,9 @@ async def test_env_credential_crud_never_returns_secret(client: AsyncClient) -> 
     assert updated.json()["name"] == "github-rotated"
     assert updated.json()["auth"]["type"] == "environment_variable"
     assert "ghp_rotated" not in updated.text
-    deleted = await client.delete(f"{base}/{cred_id}", headers=_auth(token))
+    deleted = await client.delete(f"{base}/{cred_id}", headers=auth(token))
     assert deleted.status_code == 200
-    gone = await client.get(f"{base}/{cred_id}", headers=_auth(token))
+    gone = await client.get(f"{base}/{cred_id}", headers=auth(token))
     assert gone.status_code == 404
 
 
@@ -333,7 +330,7 @@ async def test_env_credential_validation(
     vault_id = await _vault(client, token)
     response = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials",
-        headers=_auth(token),
+        headers=auth(token),
         json={"auth": _env_auth(**overrides)},
     )
     assert response.status_code == 400
@@ -343,7 +340,7 @@ async def test_env_credential_validation(
 
 
 @pytest.mark.parametrize(
-    ("auth", "error_type", "code"),
+    ("credential", "error_type", "code"),
     [
         (
             {
@@ -364,14 +361,14 @@ async def test_env_credential_validation(
     ],
 )
 async def test_credential_auth_errors(
-    client: AsyncClient, auth: dict[str, object], error_type: str, code: str
+    client: AsyncClient, credential: dict[str, object], error_type: str, code: str
 ) -> None:
     token = "auth-errors"
     vault_id = await _vault(client, token)
     response = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials",
-        headers=_auth(token),
-        json={"auth": auth},
+        headers=auth(token),
+        json={"auth": credential},
     )
     assert response.status_code == 400
     error = response.json()["error"]
@@ -383,22 +380,22 @@ async def test_env_credential_secret_name_unique_per_vault(client: AsyncClient) 
     token = "env-unique"
     vault_id = await _vault(client, token)
     base = f"/v1/agents/vaults/{vault_id}/credentials"
-    first = await client.post(base, headers=_auth(token), json={"auth": _env_auth()})
+    first = await client.post(base, headers=auth(token), json={"auth": _env_auth()})
     assert first.status_code == 200
-    second = await client.post(base, headers=_auth(token), json={"auth": _env_auth()})
+    second = await client.post(base, headers=auth(token), json={"auth": _env_auth()})
     assert second.status_code == 400
     assert second.json()["error"]["code"] == "secret_name_collision"
     other_vault = await _vault(client, token)
     third = await client.post(
         f"/v1/agents/vaults/{other_vault}/credentials",
-        headers=_auth(token),
+        headers=auth(token),
         json={"auth": _env_auth()},
     )
     assert third.status_code == 200
 
 
 @pytest.mark.parametrize(
-    ("auth", "fragment"),
+    ("credential", "fragment"),
     [
         (
             {"type": "environment_variable", "secret_name": "GH_TOKEN"},
@@ -413,14 +410,14 @@ async def test_env_credential_secret_name_unique_per_vault(client: AsyncClient) 
     ],
 )
 async def test_env_credential_update_rules(
-    client: AsyncClient, auth: dict[str, object], fragment: str
+    client: AsyncClient, credential: dict[str, object], fragment: str
 ) -> None:
     token = "env-update"
     vault_id = await _vault(client, token)
     base = f"/v1/agents/vaults/{vault_id}/credentials"
-    created = await client.post(base, headers=_auth(token), json={"auth": _env_auth()})
+    created = await client.post(base, headers=auth(token), json={"auth": _env_auth()})
     response = await client.post(
-        f"{base}/{created.json()['id']}", headers=_auth(token), json={"auth": auth}
+        f"{base}/{created.json()['id']}", headers=auth(token), json={"auth": credential}
     )
     assert response.status_code == 400
     assert fragment in response.json()["error"]["message"]
@@ -432,21 +429,21 @@ async def test_env_credential_git_username_metadata(client: AsyncClient) -> None
     base = f"/v1/agents/vaults/{vault_id}/credentials"
     bad = await client.post(
         base,
-        headers=_auth(token),
+        headers=auth(token),
         json={"auth": _env_auth(), "metadata": {"apipi.git_username": "a:b"}},
     )
     assert bad.status_code == 400
     static = await client.post(
         base,
-        headers=_auth(token),
+        headers=auth(token),
         json={"auth": _static_bearer(), "metadata": {"apipi.git_username": "bot"}},
     )
     assert static.status_code == 400
-    created = await client.post(base, headers=_auth(token), json={"auth": _env_auth()})
+    created = await client.post(base, headers=auth(token), json={"auth": _env_auth()})
     assert created.json()["metadata"] == {}
     updated = await client.post(
         f"{base}/{created.json()['id']}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"metadata": {"apipi.git_username": "forgejo-bot"}},
     )
     assert updated.status_code == 200
@@ -459,14 +456,14 @@ async def test_env_credential_unique_constraint_maps_to_collision(
     token = "env-race"
     vault_id = await _vault(client, token)
     base = f"/v1/agents/vaults/{vault_id}/credentials"
-    first = await client.post(base, headers=_auth(token), json={"auth": _env_auth()})
+    first = await client.post(base, headers=auth(token), json={"auth": _env_auth()})
     assert first.status_code == 200
 
     async def no_rows(*_args: object, **_kwargs: object) -> list[object]:
         return []
 
     monkeypatch.setattr("apipi.services.vaults.list_vault_credentials", no_rows)
-    second = await client.post(base, headers=_auth(token), json={"auth": _env_auth()})
+    second = await client.post(base, headers=auth(token), json={"auth": _env_auth()})
     assert second.status_code == 400
     assert second.json()["error"]["code"] == "secret_name_collision"
 
@@ -487,7 +484,7 @@ async def test_credential_metadata_limits(
     vault_id = await _vault(client, token)
     response = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials",
-        headers=_auth(token),
+        headers=auth(token),
         json={"auth": _env_auth(), "metadata": metadata},
     )
     assert response.status_code == 400

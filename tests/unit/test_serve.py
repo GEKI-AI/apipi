@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.support.config import none_settings
 
 from apipi.cli import main, prepare_serve, prepare_worker
 from apipi.config import (
@@ -22,13 +23,6 @@ from apipi.config import (
     Settings,
     require_run_mode,
 )
-
-
-def _none_settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-    )
 
 
 def _noop_probe(_settings: Settings) -> None:
@@ -53,7 +47,7 @@ def _skip_model_host(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_probe_run_mode_skips_none() -> None:
     from apipi.worker.pi.probe import probe_run_mode
 
-    probe_run_mode(_none_settings())
+    probe_run_mode(none_settings())
 
 
 def test_prepare_worker_none_skips_production_warning(
@@ -78,7 +72,7 @@ def test_prepare_serve_logs_default_observability(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="apipi")
-    prepare_serve(_none_settings())
+    prepare_serve(none_settings())
     messages = [record.getMessage() for record in caplog.records]
     assert USAGE_STORE_TURNS in messages
     assert "usage retention 15d" in messages
@@ -115,7 +109,7 @@ def test_prepare_serve_rejects_prompt_body_logging(
 ) -> None:
     monkeypatch.setenv("APIPI_LOG_PROMPTS", "1")
     with pytest.raises(ConfigError, match="prompt or completion bodies"):
-        prepare_serve(_none_settings())
+        prepare_serve(none_settings())
 
 
 def test_prepare_serve_warns_on_sqlite(caplog: pytest.LogCaptureFixture) -> None:

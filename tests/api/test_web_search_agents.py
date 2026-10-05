@@ -4,19 +4,20 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from tests.support.config import none_settings_for
 from tests.support.fake_worker import FakeWorker
+from tests.support.http import auth, tenant_of
+from tests.support.search import settings
 from tests.support.split_worker import api_settings_for, split_client_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.services.search import SearchService
 from apipi.services.turn_context import build_turn_context
 from apipi.store.engine import Store
@@ -29,35 +30,17 @@ from apipi.store.repo import (
 )
 from apipi.worker.fake_harness import FakeHarness
 
+__all__ = ["settings"]
+
 TAVILY_BODY = {
     "results": [{"title": "One", "url": "https://one.example/a", "content": "first"}],
     "usage": {"credits": 1},
 }
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant(token: str) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
-
-
 def _code(response: httpx.Response) -> str | None:
     error = response.json().get("error")
     return error.get("code") if isinstance(error, dict) else None
-
-
-@pytest.fixture
-def settings(tmp_path: Path) -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-        sessions_dir=str(tmp_path / "sessions"),
-        local_store_dir=str(tmp_path / "store"),
-        search_provider="tavily",
-        search_api_key="secret-key",
-    )
 
 
 @pytest.fixture
@@ -76,7 +59,7 @@ async def unconfigured(
 async def _agent(client: AsyncClient, token: str, **body: Any) -> httpx.Response:
     return await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "bot", "model": "test", **body},
     )
 
@@ -107,7 +90,7 @@ async def test_web_search_tool_round_trips(
     assert created.status_code == 200, created.text
     assert created.json()["tools"][0] == tool
     fetched = await client.get(
-        f"/v1/agents/{created.json()['id']}", headers=_auth(token)
+        f"/v1/agents/{created.json()['id']}", headers=auth(token)
     )
     assert fetched.json()["tools"][0] == tool
 
@@ -175,7 +158,7 @@ async def test_agent_update_checks_search(
     assert created.status_code == 200
     updated = await client.post(
         f"/v1/agents/{created.json()['id']}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"tools": [{"type": "web_search"}]},
     )
     assert updated.status_code == 200, updated.text
@@ -184,14 +167,14 @@ async def test_agent_update_checks_search(
     assert other.status_code == 200
     denied = await unconfigured.post(
         f"/v1/agents/{other.json()['id']}",
-        headers=_auth("ws-update-none"),
+        headers=auth("ws-update-none"),
         json={"tools": [{"type": "web_search"}]},
     )
     assert denied.status_code == 400
     assert _code(denied) == "search_not_configured"
     renamed = await unconfigured.post(
         f"/v1/agents/{other.json()['id']}",
-        headers=_auth("ws-update-none"),
+        headers=auth("ws-update-none"),
         json={"name": "renamed"},
     )
     assert renamed.status_code == 200
@@ -204,10 +187,10 @@ async def test_inline_session_checks_search(
         "agent": {"model": "test", "tools": [{"type": "web_search"}]},
         "environment": {"type": "none"},
     }
-    ok = await client.post("/v1/agents/sessions", headers=_auth("ws-inline"), json=body)
+    ok = await client.post("/v1/agents/sessions", headers=auth("ws-inline"), json=body)
     assert ok.status_code == 200, ok.text
     denied = await unconfigured.post(
-        "/v1/agents/sessions", headers=_auth("ws-inline-none"), json=body
+        "/v1/agents/sessions", headers=auth("ws-inline-none"), json=body
     )
     assert denied.status_code == 400
     assert _code(denied) == "search_not_configured"
@@ -221,31 +204,31 @@ async def test_bundle_export_and_template_create_keep_tool(
     created = await _agent(client, token, tools=tools)
     assert created.status_code == 200, created.text
     exported = await client.get(
-        f"/v1/apipi/agents/{created.json()['id']}/export", headers=_auth(token)
+        f"/v1/apipi/agents/{created.json()['id']}/export", headers=auth(token)
     )
     assert exported.status_code == 200, exported.text
     imported = await client.post(
         "/v1/apipi/templates/import",
-        headers=_auth(token),
+        headers=auth(token),
         files={"bundle": ("a.apipi-agent.zip", exported.content, "application/zip")},
     )
     assert imported.status_code == 200, imported.text
     made = await client.post(
         f"/v1/apipi/templates/{imported.json()['id']}/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={},
     )
     assert made.status_code == 200, made.text
     assert made.json()["agent"]["tools"] == tools
     denied_import = await unconfigured.post(
         "/v1/apipi/templates/import",
-        headers=_auth("ws-bundle-none"),
+        headers=auth("ws-bundle-none"),
         files={"bundle": ("a.apipi-agent.zip", exported.content, "application/zip")},
     )
     assert denied_import.status_code == 200, denied_import.text
     denied = await unconfigured.post(
         f"/v1/apipi/templates/{denied_import.json()['id']}/agents",
-        headers=_auth("ws-bundle-none"),
+        headers=auth("ws-bundle-none"),
         json={},
     )
     assert denied.status_code == 400
@@ -259,7 +242,7 @@ async def _session_for(
     assert agent.status_code == 200, agent.text
     session = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
     )
     assert session.status_code == 200, session.text
@@ -272,7 +255,7 @@ async def test_turn_context_sets_web_search(
     token = "ws-context"
     with_tool = await _session_for(client, token, [{"type": "web_search"}])
     without = await _session_for(client, token, [{"type": "function", "name": "x"}])
-    tenant_id = _tenant(token)
+    tenant_id = tenant_of(token)
     on = await build_turn_context(store, settings, tenant_id, with_tool)
     off = await build_turn_context(store, settings, tenant_id, without)
     assert on["agent"]["web_search"] is True
@@ -294,19 +277,11 @@ async def test_turn_context_denies_when_resolver_returns_none(
         update={"search_provider": None, "search_api_key": None}
     )
     with caplog.at_level(logging.WARNING, logger="apipi.search"):
-        context = await build_turn_context(store, plain, _tenant(token), session_id)
+        context = await build_turn_context(store, plain, tenant_of(token), session_id)
     assert context["agent"]["web_search"] is False
     records = [r for r in caplog.records if getattr(r, "event", "") == "search.denied"]
     assert len(records) == 1
     assert str(session_id) in str(records[0].__dict__)
-
-
-def _worker_settings(settings: Settings) -> Settings:
-    return Settings(
-        database_url=settings.database_url,
-        run_mode="none",
-        sessions_dir=settings.sessions_dir,
-    )
 
 
 async def _socket_case(
@@ -318,13 +293,13 @@ async def _socket_case(
 ) -> tuple[FakeWorker, uuid.UUID, uuid.UUID, FastAPI]:
     app = create_app(
         api_settings_for(
-            _worker_settings(settings).model_copy(
+            none_settings_for(settings).model_copy(
                 update={"search_provider": "tavily", "search_api_key": "secret-key"}
             )
         ),
         store=store,
     )
-    tenant_id = _tenant(token)
+    tenant_id = tenant_of(token)
     app.state.search = SearchService(
         store,
         app.state.settings,
@@ -337,7 +312,7 @@ async def _socket_case(
         assert agent.status_code == 200, agent.text
         session = await http.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
         )
         assert session.status_code == 200, session.text

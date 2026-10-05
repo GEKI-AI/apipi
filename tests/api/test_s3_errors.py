@@ -1,29 +1,24 @@
 import uuid
 from pathlib import Path
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from botocore.exceptions import ClientError
 from httpx import ASGITransport, AsyncClient
+from tests.support.fake_s3 import FakeS3
 from tests.support.files import zip_skill
+from tests.support.http import auth, tenant_of
 from tests.support.split_worker import api_settings_for, split_client_for
 from tests.support.workspace import hosted_dir
-from tests.unit.test_blobs import FakeS3
 
 from apipi.common.dirs import pi_session_file
 from apipi.common.errors import ObjectStoreError
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.store.blobs import S3Blobs, S3Store
 from apipi.store.engine import Store
 from apipi.store.repo import get_session
 from apipi.worker.fake_harness import FakeHarness
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _s3_settings(settings: Settings) -> Settings:
@@ -76,7 +71,7 @@ def _error(events: list[dict]) -> dict:
 
 async def _events(client: AsyncClient, token: str, session_id: str) -> list[dict]:
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     assert listed.status_code == 200
     data = listed.json()["data"]
@@ -111,19 +106,17 @@ async def test_s3_put_failure_fails_turn(
     ) as (_app, client, _worker):
         token = "s3-put"
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent.json()["id"], "input": "hello"},
         )
         assert created.status_code == 502
         assert created.json()["error"]["code"] == "artifact_store"
         session_id = created.json()["error"]["session_id"]
-        got = await client.get(
-            f"/v1/agents/sessions/{session_id}", headers=_auth(token)
-        )
+        got = await client.get(f"/v1/agents/sessions/{session_id}", headers=auth(token))
         assert got.status_code == 200
         assert got.json()["status"] == "idle"
         events = await _events(client, token, session_id)
@@ -133,7 +126,7 @@ async def test_s3_put_failure_fails_turn(
         assert error["data"]["code"] == "artifact_store"
         again = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.message", "content": "again"},
         )
         assert again.status_code == 200
@@ -163,11 +156,11 @@ async def test_pi_session_upload_failure_is_artifact_store(
     ) as (_app, client, _worker):
         token = "s3-cache-write"
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent.json()["id"]},
         )
         session_id = created.json()["id"]
@@ -176,7 +169,7 @@ async def test_pi_session_upload_failure_is_artifact_store(
         path.write_bytes(b'{"ok":true}\n')
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.message", "content": "hello"},
         )
         assert sent.status_code == 200
@@ -216,29 +209,27 @@ async def test_expected_cache_restore_fails_turn(
     ) as (_app, client, _worker):
         token = "s3-restore"
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent.json()["id"]},
         )
         assert created.status_code == 200
         session_id = uuid.UUID(created.json()["id"])
-        tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+        tenant_id = tenant_of(token)
         async with store.session() as db:
             row = await get_session(db, tenant_id, session_id)
             assert row is not None
             row.pi_session_id = uuid.uuid4()
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.message", "content": "hello"},
         )
         assert sent.status_code == 200
-        got = await client.get(
-            f"/v1/agents/sessions/{session_id}", headers=_auth(token)
-        )
+        got = await client.get(f"/v1/agents/sessions/{session_id}", headers=auth(token))
         assert got.json()["status"] == "idle"
         events = await _events(client, token, str(session_id))
         types = [event["type"] for event in events]
@@ -266,21 +257,21 @@ async def test_s3_get_error_is_503(settings: Settings, store: Store) -> None:
         token = "s3-get"
         uploaded = await client.post(
             "/v1/files",
-            headers=_auth(token),
+            headers=auth(token),
             data={"purpose": "user_data"},
             files={"file": ("note.txt", b"hi", "text/plain")},
         )
         skill = await client.post(
             "/v1/skills",
-            headers=_auth(token),
+            headers=auth(token),
             files={"files": ("demo.zip", zip_skill(), "application/zip")},
         )
         assert uploaded.status_code == 200
         assert skill.status_code == 200
         file_id = uploaded.json()["id"]
-        content = await client.get(f"/v1/files/{file_id}/content", headers=_auth(token))
+        content = await client.get(f"/v1/files/{file_id}/content", headers=auth(token))
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         inputs = [
             {
@@ -297,7 +288,7 @@ async def test_s3_get_error_is_503(settings: Settings, store: Store) -> None:
         created = [
             await client.post(
                 "/v1/agents/sessions",
-                headers=_auth(token),
+                headers=auth(token),
                 json={
                     "agent_id": agent.json()["id"],
                     "input": "hello",

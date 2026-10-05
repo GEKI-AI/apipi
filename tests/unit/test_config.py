@@ -120,6 +120,18 @@ def test_legacy_worker_token_kwarg_fails() -> None:
         Settings(**{"worker_token": "secret"})  # type: ignore
 
 
+def test_legacy_worker_token_in_toml_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "apipi.toml").write_text(
+        'database_url = "postgresql://apipi:apipi@localhost:5432/apipi"\n'
+        'worker_token = "secret"\n'
+    )
+    with pytest.raises(ConfigError, match="apipi workers token create"):
+        load_settings()
+
+
 def test_vault_master_key_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     import base64
 

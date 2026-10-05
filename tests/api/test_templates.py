@@ -3,35 +3,16 @@ import json
 import zipfile
 
 from httpx import AsyncClient
+from tests.support.files import upload_skill
+from tests.support.http import auth
 
 from apipi.services.bundles import comparable_manifest
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _zip_skill(name: str) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as archive:
-        archive.writestr(f"{name}/SKILL.md", f"---\nname: {name}\n---\nDo the thing.\n")
-    return buf.getvalue()
-
-
-async def _skill(client: AsyncClient, token: str) -> str:
-    uploaded = await client.post(
-        "/v1/skills",
-        headers=_auth(token),
-        files={"files": ("demo.zip", _zip_skill("demo"), "application/zip")},
-    )
-    assert uploaded.status_code == 200, uploaded.text
-    return str(uploaded.json()["id"])
 
 
 async def _file(client: AsyncClient, token: str) -> str:
     uploaded = await client.post(
         "/v1/files",
-        headers=_auth(token),
+        headers=auth(token),
         files={"file": ("note.txt", b"hello-file", "text/plain")},
         data={"purpose": "user_data"},
     )
@@ -46,11 +27,11 @@ def _manifest(data: bytes) -> dict[str, object]:
 
 async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     token = "tpl-round"
-    skill_id = await _skill(client, token)
+    skill_id = await upload_skill(client, token)
     file_id = await _file(client, token)
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "Research",
             "model": "test",
@@ -93,7 +74,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     agent_id = created.json()["id"]
     stored = await client.post(
         "/v1/apipi/templates",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "name": "Research agent"},
     )
     assert stored.status_code == 200, stored.text
@@ -102,7 +83,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     assert stored.json()["created_by"] is None
     assert stored.json()["visibility"] == "tenant"
     downloaded = await client.get(
-        f"/v1/apipi/templates/{template_id}/download", headers=_auth(token)
+        f"/v1/apipi/templates/{template_id}/download", headers=auth(token)
     )
     assert downloaded.status_code == 200
     assert b"secret-token" not in downloaded.content
@@ -116,7 +97,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     assert "apipi.title" not in metadata
     imported = await client.post(
         "/v1/apipi/templates/import",
-        headers=_auth(token),
+        headers=auth(token),
         files={
             "bundle": (
                 "agent.apipi-agent.zip",
@@ -128,7 +109,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     assert imported.status_code == 200, imported.text
     made = await client.post(
         f"/v1/apipi/templates/{imported.json()['id']}/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "secrets": {
                 "SEARCH_AUTHORIZATION": "secret-token",
@@ -146,7 +127,7 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
         made.json()["agent"]["metadata"]["apipi.template_id"] == imported.json()["id"]
     )
     exported = await client.get(
-        f"/v1/apipi/agents/{new_id}/export", headers=_auth(token)
+        f"/v1/apipi/agents/{new_id}/export", headers=auth(token)
     )
     assert exported.status_code == 200
     assert b"secret-token" not in exported.content
@@ -158,13 +139,13 @@ async def test_template_round_trip_hides_secrets(client: AsyncClient) -> None:
     assert "apipi.thinking" not in again["agent"]["metadata"]
     assert "apipi.template_id" not in again["agent"].get("metadata", {})
     deleted = await client.delete(
-        f"/v1/apipi/templates/{template_id}", headers=_auth(token)
+        f"/v1/apipi/templates/{template_id}", headers=auth(token)
     )
     assert deleted.status_code == 200
-    still = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
+    still = await client.get(f"/v1/agents/{agent_id}", headers=auth(token))
     assert still.status_code == 200
     other = await client.get(
-        f"/v1/apipi/templates/{imported.json()['id']}", headers=_auth("tpl-other")
+        f"/v1/apipi/templates/{imported.json()['id']}", headers=auth("tpl-other")
     )
     assert other.status_code == 404
 
@@ -173,9 +154,36 @@ async def test_import_rejects_bad_zip(client: AsyncClient) -> None:
     token = "tpl-bad"
     uploaded = await client.post(
         "/v1/apipi/templates/import",
-        headers=_auth(token),
+        headers=auth(token),
         files={"bundle": ("nope.zip", b"not-a-zip", "application/zip")},
     )
     assert uploaded.status_code == 400
-    listed = await client.get("/v1/apipi/templates", headers=_auth(token))
+    listed = await client.get("/v1/apipi/templates", headers=auth(token))
+    assert listed.json()["data"] == []
+
+
+async def test_import_rejects_self_hosted_defaults(client: AsyncClient) -> None:
+    token = "tpl-self-hosted"
+    manifest = {
+        "schema_version": "1.0",
+        "kind": "apipi.agent",
+        "agent": {
+            "name": "bot",
+            "model": "test",
+            "session_defaults": {"environment": {"type": "self_hosted"}},
+        },
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("agent.json", json.dumps(manifest))
+    uploaded = await client.post(
+        "/v1/apipi/templates/import",
+        headers=auth(token),
+        files={"bundle": ("agent.zip", buffer.getvalue(), "application/zip")},
+    )
+    assert uploaded.status_code == 400
+    error = uploaded.json()["error"]
+    assert error["type"] == "not_implemented"
+    assert error["message"] == "environment type self_hosted is not supported"
+    listed = await client.get("/v1/apipi/templates", headers=auth(token))
     assert listed.json()["data"] == []

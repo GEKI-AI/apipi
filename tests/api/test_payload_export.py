@@ -3,49 +3,15 @@ import uuid
 
 import pytest
 from httpx import AsyncClient
+from tests.support.http import auth, session_with_turn, tenant_of
+from tests.support.rows import row_json
 from tests.support.split_worker import split_client_for
 
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.services.payload_export import payload_event, redact_payload
 from apipi.store.engine import Store
 from apipi.store.models import Item
 from apipi.store.turn_logs import get_turn_log
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant_id(token: str) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
-
-
-async def _session_with_turn(client: AsyncClient, token: str) -> str:
-    agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent.json()["id"],
-            "environment": {"type": "none"},
-            "input": "hello",
-        },
-    )
-    assert created.status_code == 200
-    return str(created.json()["id"])
-
-
-def _row_blob(row: object) -> str:
-    table = getattr(row, "__table__", None)
-    if table is None:
-        return str(row)
-    return json.dumps(
-        {column.key: getattr(row, column.key) for column in table.columns},
-        default=str,
-    )
 
 
 async def test_payload_export_off_does_not_emit(
@@ -57,7 +23,7 @@ async def test_payload_export_off_does_not_emit(
         lambda self, event: emitted.append(event),
     )
     token = "off-payload"
-    await _session_with_turn(client, token)
+    await session_with_turn(client, token)
     assert emitted == []
 
 
@@ -107,9 +73,9 @@ async def test_payload_export_sends_items_not_turn_log(
         client,
         _worker,
     ):
-        session_id = await _session_with_turn(client, token)
+        session_id = await session_with_turn(client, token)
         turns = await client.get(
-            f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/turns", headers=auth(token)
         )
     turn_id = uuid.UUID(turns.json()["data"][0]["id"])
     assert len(captured) == 1
@@ -121,9 +87,9 @@ async def test_payload_export_sends_items_not_turn_log(
     contents = [item.get("content") for item in raw_items if isinstance(item, dict)]
     assert "hello" in contents
     async with store.session() as db:
-        row = await get_turn_log(db, _tenant_id(token), turn_id)
+        row = await get_turn_log(db, tenant_of(token), turn_id)
     assert row is not None
-    assert "hello" not in _row_blob(row)
+    assert "hello" not in row_json(row)
 
 
 async def test_payload_export_failure_does_not_break_turn(
@@ -145,9 +111,9 @@ async def test_payload_export_failure_does_not_break_turn(
         client,
         _worker,
     ):
-        session_id = await _session_with_turn(client, token)
+        session_id = await session_with_turn(client, token)
         session = await client.get(
-            f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}", headers=auth(token)
         )
     assert session.status_code == 200
     assert session.json()["status"] == "idle"
@@ -174,12 +140,12 @@ async def test_payload_export_redacts_vault_secrets(
         _worker,
     ):
         vault = await client.post(
-            "/v1/agents/vaults", headers=_auth(token), json={"name": "v"}
+            "/v1/agents/vaults", headers=auth(token), json={"name": "v"}
         )
         vault_id = vault.json()["id"]
         cred = await client.post(
             f"/v1/agents/vaults/{vault_id}/credentials",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "auth": {
                     "type": "static_bearer",
@@ -190,11 +156,11 @@ async def test_payload_export_redacts_vault_secrets(
         )
         assert cred.status_code == 200
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},

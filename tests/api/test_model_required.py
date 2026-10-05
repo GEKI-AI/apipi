@@ -1,5 +1,6 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.http import auth
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
@@ -7,16 +8,12 @@ from apipi.gateway import create_app
 from apipi.store.engine import Store
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
 async def test_live_turn_requires_model(client: AsyncClient) -> None:
     token = "no-model"
-    agent = await client.post("/v1/agents", headers=_auth(token), json={"name": "bot"})
+    agent = await client.post("/v1/agents", headers=auth(token), json={"name": "bot"})
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none"},
@@ -46,20 +43,20 @@ async def test_unknown_model_rejected_on_agent_write(
         token = "unknown-model"
         created = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "bot", "model": "missing"},
         )
         assert created.status_code == 400
         assert created.json()["error"]["code"] == "model_not_found"
         saved = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "bot", "model": "other"},
         )
         assert saved.status_code == 200
         changed = await client.post(
             f"/v1/agents/{saved.json()['id']}",
-            headers=_auth(token),
+            headers=auth(token),
             json={"model": "missing"},
         )
         assert changed.status_code == 400

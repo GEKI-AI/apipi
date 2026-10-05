@@ -9,17 +9,15 @@ from pathlib import Path
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
+from tests.support.http import auth
 from tests.support.procs import fake_pi_shim, free_port
+from tests.support.waits import until
 
 from apipi.dev import STOP_GRACE
 from apipi.store.engine import Store, create_engine
 from apipi.store.models import WorkerRow
 
 pytestmark = pytest.mark.e2e
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _children(pid: int) -> list[int]:
@@ -46,15 +44,6 @@ def _alive(pid: int) -> bool:
     except OSError:
         return False
     return state.split()[0] != "Z"
-
-
-async def _wait_for(check, timeout: float, what: str) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        if await check():
-            return
-        await asyncio.sleep(0.1)
-    raise TimeoutError(what)
 
 
 class DevProcess:
@@ -132,7 +121,7 @@ async def _ready(dev: DevProcess) -> None:
         return bool(count)
 
     try:
-        await _wait_for(registered, 60, "worker did not register")
+        await until(registered, timeout=60, interval=0.1)
     finally:
         await store.dispose()
 
@@ -147,11 +136,11 @@ async def test_dev_completes_a_turn_and_sigint_stops_both(dev: DevProcess) -> No
     token = "dev-user"
     async with AsyncClient(base_url=dev.base_url, timeout=30) as client:
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},
@@ -161,7 +150,7 @@ async def test_dev_completes_a_turn_and_sigint_stops_both(dev: DevProcess) -> No
         assert created.status_code == 200
         events = await client.get(
             f"/v1/agents/sessions/{created.json()['id']}/events",
-            headers=_auth(token),
+            headers=auth(token),
         )
     types = [event["type"] for event in events.json()["data"]]
     assert "agent.session.turn.completed" in types

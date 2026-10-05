@@ -8,15 +8,7 @@ import zlib
 from typing import Any, cast
 
 import pytest
-from tests.unit.test_egress_gateway import (
-    HOST,
-    Env,
-    HttpClient,
-    close,
-    env,
-    tls_connect,
-    trust,
-)
+from tests.support.egress import HOST, Env, HttpClient, close, env, tls_connect, trust
 
 from apipi.common.metrics import Metrics
 from apipi.protocol import ContextEnvCredential

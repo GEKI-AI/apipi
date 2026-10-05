@@ -4,9 +4,12 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from tests.api.test_split_robustness import _settings, _status_envelope
-from tests.api.test_workers import _leased_session
-from tests.support.fake_worker import FakeWorker
+from tests.support.fake_worker import (
+    FakeWorker,
+    acquire_lease,
+    socket_settings,
+    status_envelope,
+)
 
 from apipi.config import Settings
 from apipi.gateway import create_app
@@ -31,7 +34,7 @@ async def test_a_release_waits_for_the_envelopes_buffered_before_it(
         return await real(*args, **kwargs)
 
     monkeypatch.setattr(serve_module, "flush_batch", stuck)
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     hub = app.state.workers
     real_release = hub.release
 
@@ -44,10 +47,8 @@ async def test_a_release_waits_for_the_envelopes_buffered_before_it(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, command = await _leased_session(
-            app, client, store, worker
-        )
-        await worker.send_json(_status_envelope(session_id, 1))
+        tenant_id, session_id, command = await acquire_lease(app, client, store, worker)
+        await worker.send_json(status_envelope(session_id, 1))
         await worker.send_json(
             {
                 "type": "lease.release",
@@ -86,15 +87,13 @@ async def test_a_full_delta_lane_drops_deltas_and_keeps_the_socket_open(
         await gate.wait()
         return False
 
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     monkeypatch.setattr(app.state.workers, "handle_delta", stuck)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        _tenant, session_id, _command = await _leased_session(
-            app, client, store, worker
-        )
+        _tenant, session_id, _command = await acquire_lease(app, client, store, worker)
         turn_id = uuid.uuid4()
         for seq in range(1, 9):
             await worker.send_json(

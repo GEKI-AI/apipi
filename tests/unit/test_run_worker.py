@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from tests.support.fake_proc import FakeProc
 from tests.support.prom import metric_line
 
 from apipi.common.metrics import Metrics
@@ -14,14 +15,6 @@ from apipi.config import Settings
 from apipi.worker.client import run_worker
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
-
-
-class _Proc:
-    alive = True
-    vm_id = None
-
-    async def terminate(self) -> None:
-        self.alive = False
 
 
 class _Sock:
@@ -91,8 +84,8 @@ async def test_run_worker_reaps_idle_sessions(
     pool = PiPool(settings, metrics=metrics)
     idle = uuid.uuid4()
     hosted = uuid.uuid4()
-    pool._procs[idle] = cast(PiProc, _Proc())
-    pool._procs[hosted] = cast(PiProc, _Proc())
+    pool._procs[idle] = cast(PiProc, FakeProc())
+    pool._procs[hosted] = cast(PiProc, FakeProc())
     pool._env_types[idle] = "none"
     pool._env_types[hosted] = "openai_hosted"
     pool._last[idle] = time.monotonic() - 10

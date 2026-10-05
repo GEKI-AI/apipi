@@ -4,9 +4,11 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+from tests.support.config import none_settings
+from tests.support.fake_proc import FakeProc
 
 from apipi.common.event_bus import EventHub
-from apipi.config import CapacityError, Settings
+from apipi.config import CapacityError
 from apipi.services.sandbox_status import (
     STALE_AFTER,
     eager_boot_enabled,
@@ -17,23 +19,6 @@ from apipi.store.events import list_events
 from apipi.store.models import utc_now
 from apipi.store.repo import create_session, create_tenant, get_session
 from apipi.worker.pi.pool import PiPool
-
-
-def _settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-    )
-
-
-class _Proc:
-    def __init__(self) -> None:
-        self.alive = True
-        self.image = None
-        self.vm_id = None
-
-    async def terminate(self) -> None:
-        self.alive = False
 
 
 async def _hosted(store: Store) -> tuple[uuid.UUID, uuid.UUID]:
@@ -57,15 +42,15 @@ async def test_pool_transitions_cold_warm_and_stop(
 ) -> None:
     calls = 0
 
-    async def fake_spawn(*_args: object, **_kwargs: Any) -> _Proc:
+    async def fake_spawn(*_args: object, **_kwargs: Any) -> FakeProc:
         nonlocal calls
         calls += 1
         await asyncio.sleep(0.01)
-        return _Proc()
+        return FakeProc()
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
     hub = EventHub()
-    pool = PiPool(_settings())
+    pool = PiPool(none_settings())
 
     async def on_transition(
         session_id: uuid.UUID, phase: str, fields: dict[str, Any]
@@ -123,12 +108,12 @@ async def test_pool_transitions_cold_warm_and_stop(
 async def test_pool_reports_every_stop_reason(
     store: Store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def fake_spawn(*_args: object, **_kwargs: Any) -> _Proc:
-        return _Proc()
+    async def fake_spawn(*_args: object, **_kwargs: Any) -> FakeProc:
+        return FakeProc()
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
     hub = EventHub()
-    pool = PiPool(_settings())
+    pool = PiPool(none_settings())
 
     async def on_transition(
         session_id: uuid.UUID, phase: str, fields: dict[str, Any]
@@ -164,8 +149,8 @@ async def test_none_env_emits_no_sandbox_events(
 ) -> None:
     seen: list[str] = []
 
-    async def fake_spawn(*_args: object, **_kwargs: Any) -> _Proc:
-        return _Proc()
+    async def fake_spawn(*_args: object, **_kwargs: Any) -> FakeProc:
+        return FakeProc()
 
     async def on_transition(
         _session_id: uuid.UUID, phase: str, _fields: dict[str, Any]
@@ -173,7 +158,7 @@ async def test_none_env_emits_no_sandbox_events(
         seen.append(phase)
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
-    pool = PiPool(_settings())
+    pool = PiPool(none_settings())
     pool.on_transition = on_transition
     await pool.get(uuid.uuid4(), cwd=None, tools=False, env_type="none")
     assert seen == []
@@ -185,11 +170,11 @@ async def test_pool_kill_notifies_lease_release(
     from apipi.worker.execution import LocalExecution
     from apipi.worker.outbox import Outbox
 
-    async def fake_spawn(*_args: object, **_kwargs: Any) -> _Proc:
-        return _Proc()
+    async def fake_spawn(*_args: object, **_kwargs: Any) -> FakeProc:
+        return FakeProc()
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
-    settings = _settings()
+    settings = none_settings()
     pool = PiPool(settings)
     seen: list[uuid.UUID] = []
 
@@ -217,15 +202,15 @@ async def test_warm_attach_is_not_blocked_by_another_spawn(
     release = asyncio.Event()
     calls = 0
 
-    async def fake_spawn(*_args: object, **_kwargs: Any) -> _Proc:
+    async def fake_spawn(*_args: object, **_kwargs: Any) -> FakeProc:
         nonlocal calls
         calls += 1
         started.set()
         await release.wait()
-        return _Proc()
+        return FakeProc()
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
-    pool = PiPool(_settings())
+    pool = PiPool(none_settings())
     cold = uuid.uuid4()
     warm = uuid.uuid4()
     first = asyncio.create_task(pool.get(warm, cwd=None, tools=True))
@@ -263,7 +248,7 @@ async def test_stale_seen_at_is_worker_lost(store: Store) -> None:
 
 
 def test_eager_boot_overrides() -> None:
-    settings = _settings()
+    settings = none_settings()
     assert (
         eager_boot_enabled(
             settings,
@@ -308,12 +293,12 @@ async def test_capacity_failure_reports_environment_failed(
             "tenant_id": tenant_id,
         }
 
-    async def fake_spawn(*_args: object, **_kwargs: Any) -> _Proc:
+    async def fake_spawn(*_args: object, **_kwargs: Any) -> FakeProc:
         raise CapacityError("Too many live sessions", code="capacity")
 
     monkeypatch.setattr("apipi.worker.runtime.load_boot_kwargs", fake_kwargs)
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
-    settings = _settings()
+    settings = none_settings()
     outbox = Outbox()
     execution = LocalExecution(
         settings,

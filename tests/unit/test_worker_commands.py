@@ -7,6 +7,7 @@ from collections import deque
 from typing import Any
 
 import pytest
+from tests.support.waits import until
 
 from apipi.worker.commands import CommandDedupe
 
@@ -245,15 +246,6 @@ async def _serve(
     )
 
 
-async def _wait_for(predicate, timeout: float = 5.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(0.02)
-    raise AssertionError("timed out waiting for condition")
-
-
 async def test_reconnect_replay_dispatched_once(settings) -> None:
     """A reconnect replays the same command_id; only the first dispatches."""
     from apipi.worker.outbox import Outbox
@@ -283,7 +275,7 @@ async def test_reconnect_replay_dispatched_once(settings) -> None:
         dedupe,
     )
     try:
-        await _wait_for(lambda: len(execution.turns) == 1)
+        await until(lambda: len(execution.turns) == 1)
     finally:
         first.cancel()
         for task in list(command_tasks):
@@ -310,7 +302,7 @@ async def test_reconnect_replay_dispatched_once(settings) -> None:
         dedupe,
     )
     try:
-        await _wait_for(
+        await until(
             lambda: any(
                 message.get("type") == "lease.ack"
                 and message.get("id") == str(command_id)
@@ -439,7 +431,7 @@ async def test_heartbeat_runs_on_a_timer_when_the_socket_is_busy(settings) -> No
     sock = _BusySock({**HELLO_BASE, "worker_id": str(uuid.uuid4())})
     task, *_rest = await _start(settings, _Execution(), sock)
     try:
-        await _wait_for(lambda: len(_sent_types(sock, "heartbeat")) >= 4)
+        await until(lambda: len(_sent_types(sock, "heartbeat")) >= 4)
     finally:
         task.cancel()
 
@@ -451,7 +443,7 @@ async def test_inventory_runs_on_a_timer_when_the_socket_is_busy(
     sock = _BusySock({**HELLO_BASE, "worker_id": str(uuid.uuid4())})
     task, *_rest = await _start(settings, _Execution(), sock)
     try:
-        await _wait_for(lambda: len(_sent_types(sock, "inventory")) >= 2)
+        await until(lambda: len(_sent_types(sock, "inventory")) >= 2)
     finally:
         task.cancel()
 
@@ -463,7 +455,7 @@ async def test_first_inventory_follows_the_outbox_drain_not_the_full_interval(
     sock = _BusySock({**HELLO_BASE, "worker_id": str(uuid.uuid4())})
     task, *_rest = await _start(settings, _Execution(), sock)
     try:
-        await _wait_for(lambda: len(_sent_types(sock, "inventory")) >= 1)
+        await until(lambda: len(_sent_types(sock, "inventory")) >= 1)
         assert len(_sent_types(sock, "inventory")) == 1
     finally:
         task.cancel()
@@ -528,7 +520,7 @@ async def test_worker_heartbeat_gap_metric_and_late_warning(
     with caplog.at_level("WARNING", logger="apipi.worker"):
         task, *_rest = await _start(settings, execution, sock)
         try:
-            await _wait_for(lambda: len(_sent_types(sock, "heartbeat")) >= 2)
+            await until(lambda: len(_sent_types(sock, "heartbeat")) >= 2)
         finally:
             task.cancel()
     body = metrics.scrape().decode()
@@ -560,11 +552,11 @@ async def test_command_cursor_continues_the_sequence_and_never_goes_back(
     execution = _Execution()
     task, outbox, _leases, _tasks = await _start(settings, execution, sock)
     try:
-        await _wait_for(lambda: len(execution.turns) == 1)
+        await until(lambda: len(execution.turns) == 1)
         assert outbox.high_water(session_id) == 40
         assert outbox.append(session_id, "turn.status", {})["seq"] == 41
         sock._incoming.append(older)
-        await _wait_for(lambda: len(execution.turns) == 2)
+        await until(lambda: len(execution.turns) == 2)
         assert outbox.high_water(session_id) == 41
     finally:
         task.cancel()
@@ -581,7 +573,7 @@ async def test_command_without_cursor_is_logged(
     with caplog.at_level("WARNING", logger="apipi.worker"):
         task, *_rest = await _start(settings, execution, sock)
         try:
-            await _wait_for(lambda: len(execution.turns) == 1)
+            await until(lambda: len(execution.turns) == 1)
         finally:
             task.cancel()
     assert any(
@@ -601,7 +593,7 @@ async def _released(settings, execution, session_id):
     task, outbox, _leases, _tasks = await _start(
         settings, execution, sock, session_leases={session_id: lease_id}
     )
-    await _wait_for(lambda: execution.note_stopped is not None)
+    await until(lambda: execution.note_stopped is not None)
     return task, outbox, sock, lease_id
 
 
@@ -613,7 +605,7 @@ async def test_release_waits_until_the_outbox_is_acked(settings) -> None:
         sock._incoming.clear()
         envelope = outbox.append(session_id, "lifecycle.stop", {"reason": "idle"})
         releasing = asyncio.create_task(execution.note_stopped(session_id))
-        await _wait_for(lambda: any(m.get("seq") == envelope["seq"] for m in sock.sent))
+        await until(lambda: any(m.get("seq") == envelope["seq"] for m in sock.sent))
         await asyncio.sleep(0.1)
         assert not releasing.done()
         assert _sent_types(sock, "lease.release") == []

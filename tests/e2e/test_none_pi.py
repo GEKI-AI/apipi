@@ -2,10 +2,10 @@ import uuid
 from pathlib import Path
 
 import pytest
+from tests.support.http import auth, tenant_of
 from tests.support.procs import split_http_client
 from tests.support.prom import metric_line
 
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.repo import get_session_turn
 
@@ -24,26 +24,22 @@ _MAPPED_PI_USAGE = {
 }
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
 async def test_none_turn_persists_usage_and_counts_metrics(
     store: Store, tmp_path: Path
 ) -> None:
     token = "e2e-none"
-    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with split_http_client(
         store, tmp_path, api_env={"APIPI_METRICS": "1"}
     ) as client:
         created_agent = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "bot", "model": "test"},
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": created_agent.json()["id"],
                 "environment": {"type": "none"},
@@ -53,7 +49,7 @@ async def test_none_turn_persists_usage_and_counts_metrics(
         assert created.status_code == 200, created.text
         session_id = created.json()["id"]
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
         )
         completed = [
             event
@@ -76,7 +72,7 @@ async def test_none_turn_persists_usage_and_counts_metrics(
         turn_id = completed[0]["data"]["turn_id"]
         one = await client.get(
             f"/v1/agents/sessions/{session_id}/turns/{turn_id}",
-            headers=_auth(token),
+            headers=auth(token),
         )
         assert one.json()["usage"] == _MAPPED_PI_USAGE
         denied = await client.get("/v1/agents")
