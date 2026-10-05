@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -529,10 +530,16 @@ async def test_a_lease_release_ends_a_turn_in_progress(
     assert lease is None
 
 
-def _placed_memory(app: Any) -> int:
-    return sum(
-        sum(conn.lease_mem.values()) for conn in app.state.workers._conns.values()
-    )
+async def _placed_memory(app: Any) -> int:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 5
+    while True:
+        placed = sum(
+            sum(conn.lease_mem.values()) for conn in app.state.workers._conns.values()
+        )
+        if placed == 0 or loop.time() >= deadline:
+            return placed
+        await asyncio.sleep(0.02)
 
 
 async def test_a_failed_boot_releases_its_lease(
@@ -571,7 +578,7 @@ async def test_a_failed_boot_releases_its_lease(
             assert loop.time() < deadline
             await asyncio.sleep(0.02)
         released = await _lease_settles(store, worker, session_id, leased=False)
-        placed = _placed_memory(app)
+        placed = await _placed_memory(app)
         status = await _send(client, token, session_id, "next")
         kept = await _lease_settles(store, worker, session_id, leased=True)
     assert boots == ["capacity"]
@@ -613,7 +620,7 @@ async def test_a_turn_that_fails_before_pi_starts_releases_its_lease(
         session_id = await _session(client, token, "openai_hosted")
         failed = await _send(client, token, session_id, "first")
         released = await _lease_settles(store, worker, session_id, leased=False)
-        placed = _placed_memory(app)
+        placed = await _placed_memory(app)
         status = await _send(client, token, session_id, "second")
         kept = await _lease_settles(store, worker, session_id, leased=True)
     assert failures == ["setup"]
@@ -696,8 +703,10 @@ async def test_a_release_that_never_finishes_fails_the_request_after_the_wait(
     store: Store,
     worker_secret: str,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
     request_kind: str,
 ) -> None:
+    caplog.set_level(logging.WARNING, logger="apipi.worker")
     token = f"split-release-stuck-{request_kind}"
     environment = "none" if request_kind == "turn" else "openai_hosted"
     async with split_client_for(
@@ -730,6 +739,12 @@ async def test_a_release_that_never_finishes_fails_the_request_after_the_wait(
         await _api_released(store, session_id)
     assert 0.3 <= elapsed < 5, elapsed
     assert stuck == first
+    timeouts = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "worker.lease.release_wait_timeout"
+    ]
+    assert timeouts, caplog.records
     if response is not None:
         assert response.status_code == 429, response.json()
         assert response.json()["error"]["code"] == "capacity"
@@ -741,3 +756,43 @@ async def test_a_release_that_never_finishes_fails_the_request_after_the_wait(
         ]
         assert len(failed) == 1, events
         assert "No worker available" in json.dumps(failed[0])
+
+
+async def test_a_cancel_during_a_lease_release_answers_like_an_idle_session(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    harness = FakeHarness()
+    harness.hold = True
+    token = "split-release-cancel"
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (app, client, worker):
+        session_id = await _session(client, token, "none")
+        sid = uuid.UUID(session_id)
+        held_turn = asyncio.create_task(_send(client, token, session_id, "go"))
+        await _in_progress(app, session_id)
+        lease_id = uuid.UUID(worker.session_leases[sid])
+        held = HeldRelease(app.state.workers)
+        await worker._ws.send_json(
+            LeaseRelease(session_id=sid, lease_id=lease_id).to_wire()
+        )
+        await asyncio.wait_for(held.entered.wait(), timeout=10)
+        cancel = asyncio.create_task(
+            asyncio.wait_for(
+                client.post(
+                    f"/v1/agents/sessions/{session_id}/events",
+                    headers=_auth(token),
+                    json={"type": "agent.session.input.cancel"},
+                ),
+                timeout=15,
+            )
+        )
+        await asyncio.wait_for(held.settling.wait(), timeout=10)
+        held.gate.set()
+        cancelled = await cancel
+        await held_turn
+        lease = await _api_lease(store, session_id)
+        await worker.execution.cancel(sid, status="cancelled")
+    assert cancelled.status_code == 200, cancelled.json()
+    assert cancelled.json()["status"] != "in_progress"
+    assert lease is None

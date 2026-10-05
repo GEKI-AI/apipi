@@ -424,6 +424,40 @@ async def test_a_forwarded_turn_during_a_lease_release_gets_a_new_lease(
     assert new_lease is not None and new_lease != lease_id
 
 
+async def test_a_forward_that_finds_another_lease_is_sent_on_it(
+    replicas: Replicas,
+) -> None:
+    session_id = await _new_session(replicas.client_a)
+    first = await _message(replicas.client_a, session_id, "one")
+    assert first.status_code == 200, first.text
+    _worker_id, lease_id = await _lease(replicas.store, session_id)
+    assert lease_id is not None
+    gone = uuid.uuid4()
+    async with replicas.store.session() as db:
+        await db.execute(
+            update(SessionRow).where(SessionRow.id == session_id).values(lease_id=gone)
+        )
+    forward = replicas.hub_b._forward_command
+
+    async def restore(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await forward(*args, **kwargs)
+        finally:
+            async with replicas.store.session() as db:
+                await db.execute(
+                    update(SessionRow)
+                    .where(SessionRow.id == session_id)
+                    .values(lease_id=lease_id)
+                )
+
+    replicas.hub_b._forward_command = restore
+    posted = await _message(replicas.client_b, session_id, "two")
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["status"] == "idle"
+    assert replicas.calls == [("command", "turn.start"), ("command", "turn.start")]
+    assert (await _lease(replicas.store, session_id))[1] == lease_id
+
+
 async def test_lease_revoke_from_the_reaper_reaches_the_socket(
     replicas: Replicas,
 ) -> None:

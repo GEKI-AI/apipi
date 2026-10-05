@@ -81,9 +81,11 @@ MIN_HEARTBEAT_SECONDS = 0.05
 
 
 @dataclass
-class _Release:
+class PendingRelease:
     session_id: uuid.UUID
+    lease_id: uuid.UUID
     deadline: float
+    holders: int = 1
     done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -132,7 +134,7 @@ class WorkerHub:
         self._stopped: dict[uuid.UUID, asyncio.Event] = {}
         self.retransmit_seconds = COMMAND_RETRANSMIT_SECONDS
         self.release_wait = RELEASE_WAIT_SECONDS
-        self._releases: dict[uuid.UUID, _Release] = {}
+        self._releases: dict[uuid.UUID, PendingRelease] = {}
         self._warnings = RateLimitedLog(log)
         self._delta_hits: dict[uuid.UUID, list[float]] = {}
         self._delta_leases: dict[uuid.UUID, DeltaLease] = {}
@@ -709,10 +711,35 @@ class WorkerHub:
         forwarded `session.stop` returns once the stop is finished
         (`done`). A lease this replica is releasing is waited for first
         (`settle_release`), and a forward that finds the lease gone
-        returns None too, so the caller places the session again.
+        returns None too, so the caller places the session again. A
+        forward that finds another lease on the row is sent once more on
+        that lease.
         """
         if op not in COMMAND_OPS:
             raise ValueError(op)
+        return await self._command(
+            store,
+            tenant_id,
+            session_id,
+            op=op,
+            payload=payload,
+            command_id=command_id,
+            local_only=local_only,
+            again=True,
+        )
+
+    async def _command(
+        self,
+        store: Store,
+        tenant_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        op: str,
+        payload: BaseCommandPayload | dict[str, Any] | None,
+        command_id: uuid.UUID | None,
+        local_only: bool,
+        again: bool,
+    ) -> dict[str, Any] | None:
         leased = await self._leased(store, tenant_id, session_id)
         if leased is None:
             return None
@@ -751,9 +778,20 @@ class WorkerHub:
                 if exc.code != "worker_unreachable":
                     raise
                 now = await self._leased(store, tenant_id, session_id)
-                if now is not None and now[2] == lease_id:
+                if now is None:
+                    return None
+                if now[2] == lease_id or not again:
                     raise
-                return None
+                return await self._command(
+                    store,
+                    tenant_id,
+                    session_id,
+                    op=op,
+                    payload=payload,
+                    command_id=command_id,
+                    local_only=local_only,
+                    again=False,
+                )
         self._note_delta_lease(
             session_id,
             worker_id=worker_id,
@@ -800,21 +838,33 @@ class WorkerHub:
             return None
         return row, row.worker_id, row.lease_id
 
-    def begin_release(self, session_id: uuid.UUID, lease_id: uuid.UUID) -> None:
+    def begin_release(
+        self, session_id: uuid.UUID, lease_id: uuid.UUID
+    ) -> PendingRelease:
         """Note that this replica is clearing the lease after a `lease.release`.
 
-        Until `end_release`, a command or a placement for the session
-        waits for the release (`settle_release`) instead of failing
-        because the lease is half gone.
+        Until every `end_release` of it, a command or a placement for the
+        session waits for the release (`settle_release`) instead of
+        failing because the lease is half gone. A second handler of the
+        same lease joins the release that is already in flight.
         """
-        self._releases[lease_id] = _Release(
-            session_id, time.monotonic() + self.release_wait
-        )
-
-    def end_release(self, lease_id: uuid.UUID) -> None:
-        release = self._releases.pop(lease_id, None)
+        release = self._releases.get(lease_id)
         if release is not None:
-            release.done.set()
+            release.holders += 1
+            return release
+        release = PendingRelease(
+            session_id, lease_id, time.monotonic() + self.release_wait
+        )
+        self._releases[lease_id] = release
+        return release
+
+    def end_release(self, release: PendingRelease) -> None:
+        release.holders -= 1
+        if release.holders > 0:
+            return
+        if self._releases.get(release.lease_id) is release:
+            del self._releases[release.lease_id]
+        release.done.set()
 
     async def settle_release(
         self, session_id: uuid.UUID, lease_id: uuid.UUID | None = None
@@ -825,17 +875,16 @@ class WorkerHub:
         was in flight, or when it is still in flight at its deadline
         (`release_wait` after it began).
         """
-        found = next(
+        release = next(
             (
-                (key, release)
-                for key, release in self._releases.items()
-                if release.session_id == session_id and lease_id in (None, key)
+                item
+                for item in self._releases.values()
+                if item.session_id == session_id and lease_id in (None, item.lease_id)
             ),
             None,
         )
-        if found is None:
+        if release is None:
             return False
-        key, release = found
         try:
             await asyncio.wait_for(
                 release.done.wait(), max(release.deadline - time.monotonic(), 0.0)
@@ -846,7 +895,7 @@ class WorkerHub:
                 event="worker.lease.release_wait_timeout",
                 error_code="release_wait_timeout",
                 session_id=session_id,
-                lease_id=key,
+                lease_id=release.lease_id,
                 timeout_seconds=self.release_wait,
             )
             return False

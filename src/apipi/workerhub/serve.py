@@ -56,7 +56,7 @@ from apipi.store.engine import Store
 from apipi.store.repo import get_session_by_lease
 from apipi.workerhub.connection import WorkerConnection
 from apipi.workerhub.heartbeat import heartbeat_worker, parse_heartbeat
-from apipi.workerhub.hub import WorkerHub
+from apipi.workerhub.hub import PendingRelease, WorkerHub
 from apipi.workerhub.register import verify_store_proof
 
 log = logging.getLogger("apipi.worker")
@@ -79,6 +79,7 @@ class _Control:
     label: str
     parsed: BaseModel
     turns: int | None = None
+    release: PendingRelease | None = None
 
 
 @dataclass
@@ -465,7 +466,7 @@ class ConnectionServer:
         while True:
             item = await self._control.get()
             await self._run_item(
-                item, lambda item=item: self._handle(item.parsed, item.turns)
+                item, lambda item=item: self._handle(item.parsed, item.turns, item)
             )
 
     async def _run_item(
@@ -478,9 +479,15 @@ class ConnectionServer:
         try:
             await self._guarded(item.label, handler, attempts=RELEASE_ATTEMPTS)
         finally:
-            self.hub.end_release(parsed.lease_id)
+            if item.release is not None:
+                self.hub.end_release(item.release)
 
-    async def _handle(self, parsed: BaseModel, turns: int | None = None) -> None:
+    async def _handle(
+        self,
+        parsed: BaseModel,
+        turns: int | None = None,
+        control: _Control | None = None,
+    ) -> None:
         conn = self.conn
         hub = self.hub
         store = self.store
@@ -562,7 +569,8 @@ class ConnectionServer:
                 tenant_id = row.tenant_id
                 self._releasing[parsed.lease_id] = tenant_id
                 conn.leases.discard(parsed.lease_id)
-                hub.begin_release(row.id, parsed.lease_id)
+                if control is not None:
+                    control.release = hub.begin_release(row.id, parsed.lease_id)
             await hub.release(store, tenant_id, parsed.session_id, parsed.lease_id)
             async with store.session() as db:
                 await fail_stale_in_progress(
@@ -626,7 +634,7 @@ class ConnectionServer:
                     await self._flush(batcher)
                 await self._run_item(
                     item,
-                    lambda item=item: self._handle_ordered(item.parsed, item.turns),
+                    lambda item=item: self._handle_ordered(item),
                 )
                 continue
             if item is not None:
@@ -634,9 +642,9 @@ class ConnectionServer:
             if len(batcher) and (item is None or batcher.should_flush(window)):
                 await self._flush(batcher)
 
-    async def _handle_ordered(self, parsed: BaseModel, turns: int | None) -> None:
-        if isinstance(parsed, LeaseRelease):
-            await self._handle(parsed, turns)
+    async def _handle_ordered(self, item: _Control) -> None:
+        if isinstance(item.parsed, LeaseRelease):
+            await self._handle(item.parsed, item.turns, item)
 
     async def _flush(self, batcher: IngestBatcher) -> None:
         queued = batcher.take()

@@ -242,8 +242,10 @@ it ends that turn as `failed` with `turn_interrupted`: the release
 comes after the envelopes of the session, so that turn can never
 finish. A command for the session that the API wants to send while it
 handles the release waits until the release has finished (up to 5
-seconds) and then goes out with a new `lease_id`, so the worker never
-gets a command for the lease it has just released.
+seconds), so the worker never gets a command for the lease it has just
+released. A message or a `sandbox.boot` then goes out with a new
+`lease_id`; a cancel, a stop, or a function result is answered as for a
+session without a lease.
 
 #### `lease.revoke` (API to worker)
 

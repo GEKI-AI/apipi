@@ -173,7 +173,9 @@ bounded (5 seconds from the start of the release, below the 10 second
 forward timeout, so a forwarded command still gets its answer), and a
 release that does not finish leaves the request with the error it had
 before. A requesting replica whose forwarded command found the lease
-gone places the session itself. This was chosen over sending the
+gone answers as for a session without a lease (a message places the
+session itself), and one that finds another lease on the row sends the
+command once more on it. This was chosen over sending the
 command on the half-released lease, which the worker would take back
 only to have the API clear it, and over a new protocol message.
 
