@@ -94,9 +94,13 @@ The gateway decides by hostname, not by IP address:
   such a name is listed in `private_hosts` by name, the session gets the
   DNS resolver too, and iptables sends all guest DNS on port 53 to it.
   In `enabled` the resolver answers the private credential hosts with
-  their placeholders and forwards every other query as the guest sent it
-  (only the query id is replaced), so `enabled` keeps open DNS for all
-  other names, EDNS and DNSSEC included. Data could leave through DNS in
+  their placeholders and forwards every other standard query as the
+  guest sent it (only the query id is replaced), so `enabled` keeps open
+  DNS for all other names, EDNS and DNSSEC included. A query with a
+  non-zero opcode gets `NOTIMP`, and a query with more than one
+  question, a compressed question, or a name that is not ASCII gets
+  `FORMERR`, as in `restricted`. The resolver forwards to the fixed
+  public resolvers, whatever server the guest asked. Data could leave through DNS in
   `enabled` before too, so rebuilding the query buys nothing there. The
   gateway does not splice a connection to a placeholder to the address
   the guest chose, because the placeholder is not a real destination:

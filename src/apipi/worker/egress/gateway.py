@@ -6,7 +6,7 @@ import resource
 import socket
 import struct
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 
 import h11
 
@@ -233,9 +233,6 @@ class EgressGateway:
         if self.dns is None:
             return None
         return self.dns.udp_port, self.dns.tcp_port
-
-    def set_intercept_hosts(self, hosts: Iterable[str]) -> None:
-        self.policy = self.policy.with_intercept(hosts)
 
     def add_request_hook(self, hook: RequestHook) -> None:
         self.hooks.request.append(hook)

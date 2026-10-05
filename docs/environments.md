@@ -403,11 +403,16 @@ An `enabled` session can also reach a host on a private network by
 name when that host is a credential host of one of the session's vault
 environment credentials and the operator lists it by name in
 `private_hosts` (see [configuration](config.md#networking)). Such a
-session gets the guest DNS filter too, and every guest DNS query on
-port 53 goes to it. The filter answers those names with their
-placeholder address, numbered the same way as in `restricted`, and
-forwards every other query unchanged to the public resolvers, so all
-other names resolve as before. A connection to such a placeholder goes
+session gets the guest DNS filter too. The filter answers those names
+with their placeholder address, numbered the same way as in
+`restricted`, and forwards every other standard query to the public
+resolvers as the guest sent it, so all other names resolve as before.
+A query with a non-zero opcode gets `NOTIMP`, and a query with more
+than one question, a compressed question, or a name that is not ASCII
+gets `FORMERR`. In such a session all guest DNS on UDP and TCP port 53
+goes to the filter and is answered through the fixed public resolvers
+`1.1.1.1` and `8.8.8.8`, whatever server the guest asks, with at most
+64 UDP queries in flight and 3 seconds per upstream resolver. A connection to such a placeholder goes
 to the gateway, which checks that the server name is the name the
 placeholder stands for, resolves that name on the worker, and connects
 to the address it resolved. Other private names in `private_hosts` get

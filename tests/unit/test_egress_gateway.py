@@ -906,21 +906,6 @@ async def test_hooks_modify_and_reject(env: Env) -> None:
     assert ("X-Placeholder", "Bearer real") in upstream.seen[0].headers
 
 
-async def test_intercept_set_can_change_before_connect(env: Env) -> None:
-    upstream = await env.upstream()
-    gateway = await env.gateway("restricted", port=upstream.port)
-    gateway.set_intercept_hosts([HOST])
-    reader, writer = await tls_connect(gateway, trust(env.worker_ca))
-    status, _, _ = await HttpClient(reader, writer).request("GET", "/")
-    assert status == 200
-    await close(writer)
-    gateway.set_intercept_hosts([])
-    reader, writer = await tls_connect(gateway, trust(env.upstream_ca))
-    status, _, _ = await HttpClient(reader, writer).request("GET", "/")
-    assert status == 200
-    await close(writer)
-
-
 async def test_intercept_verifies_upstream_certificate(
     env: Env, caplog: pytest.LogCaptureFixture
 ) -> None:

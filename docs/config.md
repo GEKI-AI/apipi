@@ -816,9 +816,12 @@ A session with `enabled` gets the DNS filter only when one of its vault
 environment credentials names a host that is listed in `private_hosts`
 by name. Only those credential hosts get a placeholder, because they
 are the only private names such a session may use. The filter sends
-every other query unchanged to the public resolvers, so the guest
-resolves public names as before, and every guest DNS query on port 53
-goes to the filter. The gateway treats a connection to such a
+every other standard query to the public resolvers as the guest sent
+it (only the query id changes), so the guest resolves public names as
+before. A query with a non-zero opcode gets `NOTIMP`, and a query with
+more than one question, a compressed question, or a name that is not
+ASCII gets `FORMERR`. Every guest DNS query on port 53 goes to the
+filter, whatever server the guest asks. The gateway treats a connection to such a
 placeholder like one in `restricted`: it checks the server name,
 resolves the name on the worker, and connects to the address it
 resolved. An `enabled` session without such a credential host has no
