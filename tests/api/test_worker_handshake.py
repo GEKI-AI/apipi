@@ -1,5 +1,6 @@
 import logging
 import uuid
+from typing import Any
 
 import pytest
 from tests.support.fake_worker import FakeWorker
@@ -62,12 +63,15 @@ async def test_first_message_must_be_register(
     await worker.close()
 
 
+@pytest.mark.parametrize(
+    ("field", "value"), [("run_mode", ""), ("run_mode", None), ("memory_mb", 0)]
+)
 async def test_invalid_register_is_rejected(
-    settings: Settings, store: Store, worker_secret: str
+    settings: Settings, store: Store, worker_secret: str, field: str, value: Any
 ) -> None:
     app = create_app(api_settings_for(settings), store=store)
     worker = FakeWorker(app, worker_secret)
-    await worker.connect(run_mode="")
+    await worker.connect(**{field: value})
     assert worker.hello is not None
     assert worker.hello.get("ok") is False
     assert worker.hello.get("error") == "invalid register"

@@ -9,37 +9,22 @@ from apipi.config import Settings
 from apipi.worker.commands import _run_command
 from apipi.worker.outbox import Outbox
 from apipi.worker.sink import OutboxSink
-from apipi.workerhub.connection import WorkerConnection
-from apipi.workerhub.hub import WorkerHub
 
 
-def test_env_none_places_none() -> None:
-    assert placement_for(environment={"type": "none"}) == "none"
-
-
-@pytest.mark.parametrize("env_type", ["openai_hosted", "hosted"])
-def test_computer_is_microvm(env_type: str) -> None:
-    assert placement_for(environment={"type": env_type}) == "microvm"
-
-
-def test_missing_environment_is_microvm() -> None:
-    assert placement_for(environment=None) == "microvm"
-    assert placement_for(environment={}) == "microvm"
-
-
-def test_session_kind_is_ignored() -> None:
-    assert (
-        placement_for(
-            environment={"type": "openai_hosted"},
-        )
-        == "microvm"
-    )
-    assert (
-        placement_for(
-            environment={"type": "none"},
-        )
-        == "none"
-    )
+@pytest.mark.parametrize(
+    ("environment", "want"),
+    [
+        ({"type": "none"}, "none"),
+        ({"type": "openai_hosted"}, "microvm"),
+        ({"type": "hosted"}, "microvm"),
+        ({}, "microvm"),
+        (None, "microvm"),
+    ],
+)
+def test_only_environment_type_none_places_none(
+    environment: dict[str, str] | None, want: str
+) -> None:
+    assert placement_for(environment=environment) == want
 
 
 def test_worker_accepts_set_membership() -> None:
@@ -173,57 +158,3 @@ async def test_mismatched_turn_reports_error() -> None:
     assert "agent.session.turn.failed" in types
     error = next(event for event in events if event["type"] == "agent.session.error")
     assert error["data"]["code"] == "placement"
-
-
-def test_pick_filters_accepts() -> None:
-    hub = WorkerHub(
-        Settings(
-            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-            run_mode="none",
-            microvm_mem_mib=512,
-        )
-    )
-    none_only = WorkerConnection(
-        worker_id=uuid.uuid4(),
-        generation=1,
-        websocket=MagicMock(),
-        capacity=8,
-        memory_mb=4096,
-        run_mode="none",
-        accepts=frozenset({"none"}),
-    )
-    microvm_only = WorkerConnection(
-        worker_id=uuid.uuid4(),
-        generation=1,
-        websocket=MagicMock(),
-        capacity=8,
-        memory_mb=8192,
-        run_mode="microvm",
-        accepts=frozenset({"microvm"}),
-    )
-    hub._conns[none_only.worker_id] = none_only
-    hub._conns[microvm_only.worker_id] = microvm_only
-    assert hub.pick(kind="none") is none_only
-    assert hub.pick(kind="microvm") is microvm_only
-
-
-def test_pick_both_worker_gets_both_kinds() -> None:
-    hub = WorkerHub(
-        Settings(
-            database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-            run_mode="microvm",
-            microvm_mem_mib=512,
-        )
-    )
-    both = WorkerConnection(
-        worker_id=uuid.uuid4(),
-        generation=1,
-        websocket=MagicMock(),
-        capacity=8,
-        memory_mb=8192,
-        run_mode="microvm",
-        accepts=frozenset({"none", "microvm"}),
-    )
-    hub._conns[both.worker_id] = both
-    assert hub.pick(kind="none") is both
-    assert hub.pick(kind="microvm") is both

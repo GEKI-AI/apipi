@@ -253,7 +253,7 @@ async def test_commands_of_a_lease_queue_in_order_and_are_acked_one_by_one(
         ]
         await worker.close()
         again = FakeWorker(app, worker_secret, worker_id=worker.worker_id)
-        await again.connect()
+        assert (await again.connect())["generation"] == 2
         assert (await again.receive_json())["id"] == first["id"]
         assert (await again.receive_json())["id"] == second["id"]
         await again.send_json(
@@ -361,6 +361,7 @@ async def test_session_stop_is_acked_on_receipt_and_completed_by_the_envelope(
     from tests.api.test_split_lease_seq_release import (
         TOKEN,
         _lease_of,
+        _ledger,
         _message,
         _new_session,
     )
@@ -380,6 +381,7 @@ async def test_session_stop_is_acked_on_receipt_and_completed_by_the_envelope(
         )
         await app.state.execution.teardown(session_id)
         assert await _lease_of(store, session_id) is None
+        assert "session.stopped" in (await _ledger(store, session_id)).values()
         frames = [json.loads(text) for text in sent]
         acks = [i for i, f in enumerate(frames) if f.get("type") == "lease.ack"]
         stopped = [

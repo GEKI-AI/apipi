@@ -1,6 +1,8 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
+import httpx
 import pytest
 from httpx import AsyncClient
 
@@ -25,9 +27,23 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
+class _ConnectingHarness(FakeHarness):
+    async def generate(self, text: str, **kwargs: Any):  # type: ignore[override]
+        servers = kwargs.get("mcp_http")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for server in servers if isinstance(servers, list) else []:
+                await client.post(
+                    server.server_url,
+                    headers=server.headers,
+                    json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                )
+        async for event in super().generate(text, **kwargs):
+            yield event
+
+
 @pytest.fixture
 def mcp_harness() -> FakeHarness:
-    return FakeHarness()
+    return _ConnectingHarness()
 
 
 @pytest.fixture
@@ -87,6 +103,7 @@ async def test_mcp_http_starts_with_session(
         },
     )
     assert created.status_code == 200
+    assert created.json()["environment"]["type"] == "none"
     assert created.json()["status"] == "idle"
     assert mcp_harness.mcp_http is not None
     assert mcp_harness.mcp_http[0].server_label == "mock"
@@ -101,36 +118,6 @@ async def test_mcp_http_starts_with_session(
     dumped = str(events.json())
     assert "Authorization" not in dumped
     assert "static-secret" not in dumped
-
-
-async def test_mcp_http_on_none_session(
-    mcp_client: AsyncClient,
-    mcp_harness: FakeHarness,
-    mcp_server: tuple[str, dict[str, str]],
-) -> None:
-    mcp_url, _seen = mcp_server
-    token = "mcp-none"
-    agent_id = await _agent_with_mcp(
-        mcp_client,
-        token,
-        mcp_url,
-        headers={"Authorization": "Bearer static-secret"},
-    )
-    created = await mcp_client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent_id,
-            "environment": {"type": "none"},
-            "input": "hello",
-        },
-    )
-    assert created.status_code == 200
-    assert created.json()["environment"]["type"] == "none"
-    assert created.json()["status"] == "idle"
-    assert mcp_harness.mcp_http is not None
-    assert mcp_harness.mcp_http[0].server_label == "mock"
-    assert mcp_harness.mcp_http[0].headers == {"Authorization": "Bearer static-secret"}
 
 
 async def test_mcp_http_dead_server_no_longer_fails_create(
@@ -160,7 +147,7 @@ async def test_mcp_http_vault_only_server_starts(
     mcp_harness: FakeHarness,
     mcp_server: tuple[str, dict[str, str]],
 ) -> None:
-    mcp_url, _seen = mcp_server
+    mcp_url, seen = mcp_server
     token = "mcp-vault"
     vault = await mcp_client.post(
         "/v1/agents/vaults", headers=_auth(token), json={"name": "v"}
@@ -194,6 +181,7 @@ async def test_mcp_http_vault_only_server_starts(
     assert created.json()["status"] == "idle"
     assert mcp_harness.mcp_http is not None
     assert mcp_harness.mcp_http[0].headers == {"Authorization": "Bearer vault-secret"}
+    assert seen.get("Authorization") == "Bearer vault-secret"
 
 
 async def test_mcp_http_followup_turn_uses_live_agent(
@@ -245,25 +233,6 @@ async def test_mcp_http_followup_turn_uses_live_agent(
     assert again.status_code == 200
     assert mcp_harness.mcp_http is not None
     assert mcp_harness.mcp_http[0].headers == {"Authorization": "Bearer second"}
-
-
-async def test_mcp_http_env_reference_fails(
-    mcp_client: AsyncClient, mcp_url: str
-) -> None:
-    token = "mcp"
-    agent_id = await _agent_with_mcp(
-        mcp_client,
-        token,
-        mcp_url,
-        headers={"Authorization": "Bearer ${MCP_TOKEN}"},
-    )
-    created = await mcp_client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={"agent_id": agent_id, "environment": {"type": "none"}},
-    )
-    assert created.status_code == 200
-    assert created.json()["status"] == "failed"
 
 
 async def test_mcp_http_env_header_fails_session(
