@@ -10,7 +10,7 @@ from apipi.common.dirs import store_root
 from apipi.common.errors import store_error
 from apipi.config import Settings
 from apipi.env.setup import workspace_file_missing
-from apipi.protocol.context import redact_url
+from apipi.protocol.context import ContextEnvCredential, redact_url
 
 
 def local_ref_path(settings: Settings, local_path: str) -> Path:
@@ -232,3 +232,28 @@ def mcp_servers_from_context(context: Mapping[str, Any]) -> list[Any]:
             )
         )
     return servers
+
+
+def env_credentials_from_context(
+    context: Mapping[str, Any],
+) -> list[ContextEnvCredential]:
+    """The environment credentials of a parsed turn context, typed."""
+    raw = context.get("env_credentials")
+    if not isinstance(raw, list):
+        return []
+    return [
+        ContextEnvCredential.model_validate(item)
+        for item in raw
+        if isinstance(item, Mapping)
+    ]
+
+
+def env_credential_hosts(credentials: list[ContextEnvCredential]) -> tuple[str, ...]:
+    """The union of `allowed_hosts`, lowercased, in first-seen order."""
+    hosts: list[str] = []
+    for credential in credentials:
+        for host in credential.allowed_hosts:
+            key = host.lower()
+            if key not in hosts:
+                hosts.append(key)
+    return tuple(hosts)

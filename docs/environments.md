@@ -233,7 +233,10 @@ agent turn that needs the computer:
    and to prep. Reserved names are rejected: `PATH`, `HOME`, `USER`,
    `SHELL`, `PWD`, `LD_LIBRARY_PATH`, `LD_PRELOAD`, `OPENAI_API_KEY`,
    `OPENAI_BASE_URL`, `DATABASE_URL`, `PI_CODING_AGENT_DIR`, and any
-   name starting with `APIPI_`, `CODEX_`, or `PI_`.
+   name starting with `APIPI_`, `CODEX_`, `PI_`, or `GIT_CONFIG_`
+   (the worker uses `GIT_CONFIG_*` for the git credential helper of
+   vault credentials; other `GIT_` names such as `GIT_AUTHOR_NAME`
+   are allowed).
 3. Install `packages.python`, then `packages.system`, then
    `packages.npm`. Python packages go into a virtualenv at `.venv`
    in the session workspace, not into the system Python. The install
@@ -420,6 +423,41 @@ Debian) are added for that session if the matching package list is set.
 A nonzero exit emits `agent.session.environment.failed` and
 `agent.session.failed`. Pi does not start. Successful prep is visible
 in the workspace before the turn. `none` rejects packages, setup commands, env, and files. Environment type `none` ignores `network`.
+
+### Vault credentials and the network
+
+A vault credential of type `environment_variable` lets code in the
+guest call HTTPS APIs with a key that the guest never holds. The guest
+environment sets the credential's `secret_name` to a placeholder, and
+the egress gateway on the worker replaces it in the request headers of
+HTTPS requests on ports 443 and 8443 to the credential's `allowed_hosts`
+and masks the secret again in the responses. For those hosts only, the gateway terminates TLS with a certificate from the
+worker's certificate authority, which guest init adds to the guest's
+trusted bundle `/run/apipi/ca-bundle.pem` (see
+[configuration](config.md#networking)). Credential hosts are HTTPS
+only: a plain HTTP connection on port 80 to one of them is rejected with
+`403`. See
+[Vaults and credentials](vaults.md#how-environment-credentials-work).
+
+These credentials depend on `network.access`:
+
+- `enabled`: the credential hosts are reachable like any public host.
+- `restricted`: the `allowed_hosts` of every attached environment
+  credential are added to `allowed_domains` when the sandbox starts.
+  You do not list them twice. The stored `environment.network` keeps
+  only the hosts you wrote.
+- `disabled`: session create with environment credentials is `400`
+  with code `credential_not_allowed`, because no request could leave
+  the guest.
+
+When the operator TAP allowlist is on, every credential host must also
+be allowed by the operator, or session create is `400` with code
+`credential_host_not_allowed`. A credential host on a private network
+works only when the operator lists it in
+`APIPI_MICROVM_EGRESS_PRIVATE_HOSTS`. A `secret_name` that is also a
+key in `environment.env` is `400` with code `secret_name_collision`.
+`environment.type` `none` has no guest, so environment credentials
+there are `400` with code `credential_not_allowed`.
 
 ## `none`
 

@@ -322,7 +322,7 @@ field. Details and defaults are in [configuration](config.md).
 | `APIPI_MICROVM_EGRESS_ALLOWLIST` / `HOSTS` / `MBIT` | Optional destination allowlist (off by default) and 50 Mbit TAP rate. Private IPv4 ranges are always rejected. The worker egress gateway enforces the allowlist and session `restricted` by hostname, rejects IP addresses and other ports, and filters guest DNS. See [networking](config.md#networking). |
 | `APIPI_MICROVM_EGRESS_PRIVATE_HOSTS` / `UPSTREAM_CA` | Private upstreams (hostnames or CIDRs) that only the egress gateway may reach, for example a self-hosted Forgejo, and a PEM bundle for their internal certificate authority. Only a hostname listed by name, and explicitly allowed by the session, can use them; CIDRs only narrow where such names may resolve. The worker raises its open file limit to the hard limit at start, because each guest connection uses two file descriptors. |
 | `APIPI_INSTANCE_ID` | Sets `X-ApiPi-Instance` so you can see which replica answered. |
-| `APIPI_VAULT_MASTER_KEY` | Encrypts MCP vault tokens at rest. Put a 32-byte key in the process environment or a k8s secret. Unset uses a local default and logs a warning; do not leave that in production. Same key on every API process that writes or injects vault secrets. |
+| `APIPI_VAULT_MASTER_KEY` | Encrypts vault secrets (MCP tokens and environment credential values) at rest. Put a 32-byte key in the process environment or a k8s secret. Unset uses a local default and logs a warning; do not leave that in production. Same key on every API process that writes or injects vault secrets. |
 
 ## Worker token rotation
 

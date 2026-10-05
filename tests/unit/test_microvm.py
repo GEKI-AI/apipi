@@ -1495,3 +1495,105 @@ async def test_start_microvm_closes_gateway_on_any_failure(
         await start_microvm(_settings(tmp_path), cwd=None, tools=True)
     assert gateways[0].closed is True
     assert len(torn) == 1
+
+
+async def test_start_microvm_wires_env_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    gateways: list[_FakeGateway],
+) -> None:
+    from apipi.protocol import ContextEnvCredential
+
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+    packed: dict[str, bytes] = {}
+    names = (".apipi/env", ".apipi/git-credentials", ".apipi/git-credential")
+
+    def fake_write(dest: Path, **kwargs: Any) -> None:
+        write_workspace_image(dest, **kwargs)
+        with tarfile.open(dest, mode="r") as tar:
+            for name in names:
+                member = tar.extractfile(name)
+                assert member is not None
+                packed[name] = member.read()
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        return _Process()
+
+    monkeypatch.setattr("apipi.worker.pi.microvm.write_workspace_image", fake_write)
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    cwd = tmp_path / "session"
+    cwd.mkdir()
+    write_network_policy(
+        cwd, NetworkPolicy(access="restricted", allowed_domains=("pypi.org",))
+    )
+    hooks = EgressHooks()
+    started = await start_microvm(
+        _settings(tmp_path),
+        cwd=str(cwd),
+        tools=True,
+        session_id="sess_1",
+        intercept_hosts=("other.example.com",),
+        egress_hooks=hooks,
+        extra_env={"GITHUB_TOKEN": "user-value", "GIT_CONFIG_COUNT": "1"},
+        env_credentials=[
+            ContextEnvCredential(
+                credential_id="cred_1",
+                secret_name="GITHUB_TOKEN",
+                secret_value="ghp-must-not-leak",
+                allowed_hosts=["github.com", "api.github.com"],
+            )
+        ],
+    )
+    try:
+        kwargs = gateways[0].kwargs
+        assert kwargs["mode"] == "restricted"
+        assert kwargs["allowed_hosts"] == ("pypi.org", "github.com", "api.github.com")
+        assert kwargs["intercept_hosts"] == (
+            "other.example.com",
+            "github.com",
+            "api.github.com",
+        )
+        assert kwargs["hooks"] is not hooks
+        assert len(kwargs["hooks"].request) == 1
+        assert len(kwargs["hooks"].response) == 1
+        env_text = packed[".apipi/env"].decode()
+        assert "GITHUB_TOKEN=apipi-secret-" in env_text
+        assert "user-value" not in env_text
+        assert "GIT_CONFIG_COUNT=9" in env_text
+        assert "GIT_CONFIG_KEY_1=credential.https://github.com.helper" in env_text
+        for blob in packed.values():
+            assert b"ghp-must-not-leak" not in blob
+        line = packed[".apipi/git-credentials"].decode().splitlines()[0]
+        assert line.startswith("github.com\tx-access-token\tapipi-secret-")
+        assert packed[".apipi/git-credential"].startswith(b"#!/bin/sh")
+    finally:
+        if started.broker is not None:
+            await started.broker.stop()
+        started.cleanup()
+
+
+async def test_start_microvm_rejects_credentials_with_disabled_network(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from apipi.protocol import ContextEnvCredential
+
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+    cwd = tmp_path / "session"
+    cwd.mkdir()
+    write_network_policy(cwd, NetworkPolicy(access="disabled"))
+    with pytest.raises(ConfigError, match="need network access"):
+        await start_microvm(
+            _settings(tmp_path),
+            cwd=str(cwd),
+            tools=True,
+            env_credentials=[
+                ContextEnvCredential(
+                    credential_id="c",
+                    secret_name="T",
+                    secret_value="v",
+                    allowed_hosts=["github.com"],
+                )
+            ],
+        )

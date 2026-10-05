@@ -46,7 +46,7 @@ _RESERVED_ENV = frozenset(
         "PI_CODING_AGENT_DIR",
     }
 )
-_RESERVED_ENV_PREFIXES = ("APIPI_", "CODEX_", "PI_")
+_RESERVED_ENV_PREFIXES = ("APIPI_", "CODEX_", "PI_", "GIT_CONFIG_")
 
 PYPI_HOSTS = ("pypi.org", "files.pythonhosted.org", "pypi.python.org")
 NPM_HOSTS = ("registry.npmjs.org", "registry.npmjs.com")
@@ -291,7 +291,13 @@ def tap_policy_from(
     gateway_allowlist: bool,
     gateway_hosts: tuple[str, ...] = (),
     extra_hosts: tuple[str, ...] = (),
+    credential_hosts: tuple[str, ...] = (),
 ) -> TapPolicy:
+    floor = {host.lower() for host in (*gateway_hosts, *extra_hosts)}
+    if gateway_allowlist:
+        for host in credential_hosts:
+            if host.lower() not in floor:
+                raise SetupError(f"credential host {host} is not allowed")
     if policy is None or policy.access == "enabled":
         if not gateway_allowlist:
             return TapPolicy(mode="enabled")
@@ -299,15 +305,16 @@ def tap_policy_from(
             mode="restricted", hosts=_unique_hosts((*gateway_hosts, *extra_hosts))
         )
     if policy.access == "disabled":
+        if credential_hosts:
+            raise SetupError("environment credentials need network access")
         return TapPolicy(mode="disabled")
     if gateway_allowlist:
-        floor = {host.lower() for host in (*gateway_hosts, *extra_hosts)}
         for host in policy.allowed_domains:
             if host.lower() not in floor:
                 raise SetupError(f"network host {host} is not allowed")
     return TapPolicy(
         mode="restricted",
-        hosts=_unique_hosts((*policy.allowed_domains, *extra_hosts)),
+        hosts=_unique_hosts((*policy.allowed_domains, *extra_hosts, *credential_hosts)),
     )
 
 

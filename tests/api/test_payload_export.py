@@ -78,6 +78,7 @@ async def test_payload_export_sends_items_not_turn_log(
         turn_id: uuid.UUID,
         request_id: str | None,
         items: list[Item],
+        secrets: tuple[str, ...] = (),
     ) -> None:
         event = payload_event(
             tenant_id=tenant_id,
@@ -86,7 +87,7 @@ async def test_payload_export_sends_items_not_turn_log(
             request_id=request_id,
             items=items,
         )
-        secrets = tuple(
+        known = tuple(
             value
             for value in (
                 _settings.model_api_key_overwrite,
@@ -94,7 +95,7 @@ async def test_payload_export_sends_items_not_turn_log(
             )
             if isinstance(value, str) and value
         )
-        captured.append(redact_payload(event, secrets))
+        captured.append(redact_payload(event, (*known, *secrets)))
 
     monkeypatch.setattr("apipi.services.turn_log.export_payload", record)
     payload_settings = settings.model_copy(
@@ -150,3 +151,59 @@ async def test_payload_export_failure_does_not_break_turn(
         )
     assert session.status_code == 200
     assert session.json()["status"] == "idle"
+
+
+async def test_payload_export_redacts_vault_secrets(
+    settings: Settings,
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_secret: str,
+) -> None:
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "apipi.services.usage_export.HttpExporter.emit",
+        lambda self, event: emitted.append(event),
+    )
+    payload_settings = settings.model_copy(
+        update={"payload_export_url": "http://export.test/payloads"}
+    )
+    token = "payload-vault"
+    async with split_client_for(payload_settings, store, token=worker_secret) as (
+        _app,
+        client,
+        _worker,
+    ):
+        vault = await client.post(
+            "/v1/agents/vaults", headers=_auth(token), json={"name": "v"}
+        )
+        vault_id = vault.json()["id"]
+        cred = await client.post(
+            f"/v1/agents/vaults/{vault_id}/credentials",
+            headers=_auth(token),
+            json={
+                "auth": {
+                    "type": "static_bearer",
+                    "mcp_server_url": "https://mcp.example.com/mcp",
+                    "token": "vault-secret-in-chat",
+                }
+            },
+        )
+        assert cred.status_code == 200
+        agent = await client.post(
+            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        )
+        created = await client.post(
+            "/v1/agents/sessions",
+            headers=_auth(token),
+            json={
+                "agent_id": agent.json()["id"],
+                "environment": {"type": "none"},
+                "vault_ids": [vault_id],
+                "input": "the key is vault-secret-in-chat",
+            },
+        )
+        assert created.status_code == 200
+    assert emitted
+    dumped = json.dumps(emitted)
+    assert "vault-secret-in-chat" not in dumped
+    assert "[redacted]" in dumped

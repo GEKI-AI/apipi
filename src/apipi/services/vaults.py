@@ -1,13 +1,23 @@
 import uuid
-from typing import Any
+from typing import Any, NoReturn
 
 from pydantic import model_validator
 from pydantic_core import PydanticCustomError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
+from apipi.common.errors import ApiError
 from apipi.config import Settings
 from apipi.gateway.auth import not_found
 from apipi.gateway.schemas import StrictModel
+from apipi.services.env_credentials import (
+    ENVIRONMENT_VARIABLE,
+    STATIC_BEARER,
+    credential_metadata,
+    networking_body,
+    parse_environment_auth,
+    parse_environment_update,
+)
 from apipi.services.vault_crypto import (
     encrypt_vault_token,
     is_vault_ciphertext,
@@ -45,28 +55,53 @@ async def encrypt_plaintext_vault_tokens(store: Store, settings: Settings) -> in
     return rewritten
 
 
+SECRET_NAME_CONSTRAINT = "vault_credentials_secret_name_key"
+
+
+def _sqlite_unique(exc: IntegrityError) -> bool:
+    text = str(exc.orig)
+    return (
+        "UNIQUE constraint failed" in text and "vault_credentials.secret_name" in text
+    )
+
+
+def _secret_name_taken(secret_name: str) -> NoReturn:
+    raise ApiError(
+        "invalid_request",
+        f"secret_name {secret_name} is already used by a credential in this vault",
+        code="secret_name_collision",
+    )
+
+
 class VaultWrite(StrictModel):
     name: str | None = None
     metadata: dict[str, Any] | None = None
 
 
+def _reject_oauth(auth_type: object) -> None:
+    if auth_type == "mcp_oauth":
+        raise PydanticCustomError(
+            "not_implemented",
+            "{field} is not implemented",
+            {"field": "mcp_oauth"},
+        )
+
+
 class CredentialWrite(StrictModel):
     name: str | None = None
+    metadata: dict[str, Any] | None = None
     auth: dict[str, Any]
 
     @model_validator(mode="after")
     def known_auth(self) -> "CredentialWrite":
         auth_type = self.auth.get("type")
-        if auth_type == "mcp_oauth":
-            raise PydanticCustomError(
-                "not_implemented",
-                "{field} is not implemented",
-                {"field": "mcp_oauth"},
-            )
-        if auth_type != "static_bearer":
+        _reject_oauth(auth_type)
+        if auth_type == ENVIRONMENT_VARIABLE:
+            return self
+        if auth_type != STATIC_BEARER:
             raise PydanticCustomError(
                 "invalid_request",
-                "auth.type must be static_bearer",
+                "auth.type must be static_bearer or environment_variable",
                 {},
             )
         url = self.auth.get("mcp_server_url")
@@ -87,6 +122,7 @@ class CredentialWrite(StrictModel):
 
 class CredentialUpdate(StrictModel):
     name: str | None = None
+    metadata: dict[str, Any] | None = None
     auth: dict[str, Any] | None = None
 
     @model_validator(mode="after")
@@ -94,16 +130,13 @@ class CredentialUpdate(StrictModel):
         if self.auth is None:
             return self
         auth_type = self.auth.get("type")
-        if auth_type == "mcp_oauth":
-            raise PydanticCustomError(
-                "not_implemented",
-                "{field} is not implemented",
-                {"field": "mcp_oauth"},
-            )
-        if auth_type not in {None, "static_bearer"}:
+        _reject_oauth(auth_type)
+        if auth_type == ENVIRONMENT_VARIABLE:
+            return self
+        if auth_type not in {None, STATIC_BEARER}:
             raise PydanticCustomError(
                 "invalid_request",
-                "auth.type must be static_bearer",
+                "auth.type must be static_bearer or environment_variable",
                 {},
             )
         token = self.auth.get("token")
@@ -126,15 +159,23 @@ def vault_body(row: Vault) -> dict[str, Any]:
     }
 
 
+def credential_auth_body(row: VaultCredential) -> dict[str, Any]:
+    if row.auth_type == ENVIRONMENT_VARIABLE:
+        return {
+            "type": row.auth_type,
+            "secret_name": row.secret_name,
+            "networking": networking_body(row.allowed_hosts),
+        }
+    return {"type": row.auth_type, "mcp_server_url": row.mcp_server_url}
+
+
 def credential_body(row: VaultCredential) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "vault_id": str(row.vault_id),
         "name": row.name,
-        "auth": {
-            "type": row.auth_type,
-            "mcp_server_url": row.mcp_server_url,
-        },
+        "auth": credential_auth_body(row),
+        "metadata": row.metadata_json if isinstance(row.metadata_json, dict) else {},
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
@@ -193,6 +234,9 @@ class VaultService:
     async def create_credential(
         self, tenant_id: uuid.UUID, vault_id: uuid.UUID, body: CredentialWrite
     ) -> dict[str, Any]:
+        if body.auth.get("type") == ENVIRONMENT_VARIABLE:
+            return await self._create_env_credential(tenant_id, vault_id, body)
+        metadata = credential_metadata(body.metadata, STATIC_BEARER)
         async with self.store.session() as db:
             vault = await get_vault(db, tenant_id, vault_id)
             if vault is None:
@@ -203,14 +247,49 @@ class VaultService:
                 tenant_id,
                 vault_id,
                 name=body.name,
-                auth_type="static_bearer",
+                auth_type=STATIC_BEARER,
                 mcp_server_url=str(body.auth["mcp_server_url"]),
                 token=self._encrypt_token(
                     str(body.auth["token"]), tenant_id, credential_id
                 ),
                 credential_id=credential_id,
+                metadata=metadata,
             )
             return credential_body(row)
+
+    async def _create_env_credential(
+        self, tenant_id: uuid.UUID, vault_id: uuid.UUID, body: CredentialWrite
+    ) -> dict[str, Any]:
+        auth = parse_environment_auth(body.auth)
+        metadata = credential_metadata(body.metadata, ENVIRONMENT_VARIABLE)
+        try:
+            async with self.store.session() as db:
+                vault = await get_vault(db, tenant_id, vault_id)
+                if vault is None:
+                    not_found()
+                for existing in await list_vault_credentials(db, tenant_id, vault_id):
+                    if existing.secret_name == auth.secret_name:
+                        _secret_name_taken(auth.secret_name)
+                credential_id = uuid.uuid4()
+                row = await create_vault_credential(
+                    db,
+                    tenant_id,
+                    vault_id,
+                    name=body.name,
+                    auth_type=ENVIRONMENT_VARIABLE,
+                    token=self._encrypt_token(
+                        auth.secret_value, tenant_id, credential_id
+                    ),
+                    credential_id=credential_id,
+                    secret_name=auth.secret_name,
+                    allowed_hosts=list(auth.allowed_hosts),
+                    metadata=metadata,
+                )
+                return credential_body(row)
+        except IntegrityError as exc:
+            if SECRET_NAME_CONSTRAINT not in str(exc.orig) and not _sqlite_unique(exc):
+                raise
+            _secret_name_taken(auth.secret_name)
 
     async def list_credentials(
         self, tenant_id: uuid.UUID, vault_id: uuid.UUID
@@ -241,10 +320,27 @@ class VaultService:
         credential_id: uuid.UUID,
         body: CredentialUpdate,
     ) -> dict[str, Any]:
-        token = None
-        if body.auth is not None and isinstance(body.auth.get("token"), str):
-            token = self._encrypt_token(body.auth["token"], tenant_id, credential_id)
         async with self.store.session() as db:
+            current = await get_vault_credential(db, tenant_id, vault_id, credential_id)
+            if current is None:
+                not_found()
+            token = None
+            if body.auth is not None:
+                auth_type = body.auth.get("type")
+                if auth_type is not None and auth_type != current.auth_type:
+                    raise ApiError(
+                        "invalid_request",
+                        "auth.type cannot change; create a new credential",
+                        code="invalid_request",
+                    )
+                if current.auth_type == ENVIRONMENT_VARIABLE:
+                    secret = parse_environment_update(body.auth, current)
+                    if secret is not None:
+                        token = self._encrypt_token(secret, tenant_id, credential_id)
+                elif isinstance(body.auth.get("token"), str):
+                    token = self._encrypt_token(
+                        body.auth["token"], tenant_id, credential_id
+                    )
             row = await update_vault_credential(
                 db,
                 tenant_id,
@@ -252,6 +348,7 @@ class VaultService:
                 credential_id,
                 name=body.name,
                 token=token,
+                metadata=credential_metadata(body.metadata, current.auth_type),
             )
             if row is None:
                 not_found()

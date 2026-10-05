@@ -59,7 +59,7 @@ credentials in a vault and map them on create, instead of relying on
 plain env values.
 
 `credential_id` and `vault_ids` become `{"$credential": "<name>"}`.
-Vault ids, credential ids, and tokens are not written. The names are
+Vault ids, credential ids, tokens, and secret values are not written. The names are
 listed in `requires`.
 
 On `POST /v1/apipi/templates/{id}/agents`, `secrets` maps those names to

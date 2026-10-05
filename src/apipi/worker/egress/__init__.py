@@ -11,6 +11,8 @@ from apipi.worker.egress.gateway import (
     set_egress_metrics,
 )
 from apipi.worker.egress.intercept import (
+    BodyFilter,
+    BodyHook,
     EgressHooks,
     Reject,
     RequestHead,
@@ -25,6 +27,8 @@ from apipi.worker.egress.resolve import BLOCKED_EGRESS_CIDRS
 __all__ = [
     "BLOCKED_EGRESS_CIDRS",
     "GATEWAY_PORTS",
+    "BodyFilter",
+    "BodyHook",
     "EgressGateway",
     "EgressHooks",
     "EgressMode",

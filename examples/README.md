@@ -15,6 +15,8 @@ chat playground. Keys come from the environment, not from these files.
 | [model_credential.py](model_credential.py) | Model credential callback (`APIPI_MODEL_CREDENTIAL`): an HMAC-signed token and the model host check |
 | [isolation.py](isolation.py) | Custom isolation backend (`APIPI_RUN_MODE`) |
 | [tavily.yaml](tavily.yaml) | Web search (Tavily hosted MCP) |
+| [github-git.yaml](github-git.yaml) | Git and `gh` against GitHub with a vault `environment_variable` credential |
+| [forgejo-git.yaml](forgejo-git.yaml) | Git and the API of a self-hosted Forgejo with a vault `environment_variable` credential |
 | [sessions/browser_screenshot.py](sessions/browser_screenshot.py) | Browser via the guest `browser` skill and `agent-browser` |
 
 Session clients live in [sessions/](sessions/). How to start a split

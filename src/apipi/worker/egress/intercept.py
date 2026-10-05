@@ -3,9 +3,9 @@ import contextlib
 import inspect
 import socket
 import ssl
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 import h11
@@ -59,18 +59,52 @@ class Reject:
     reason: str = "rejected"
 
 
+class BodyFilter(Protocol):
+    def feed(self, data: bytes) -> Iterable[bytes]: ...
+
+    def end(self) -> Iterable[bytes]: ...
+
+
 RequestResult = RequestHead | Reject | None
 ResponseResult = ResponseHead | None
+BodyResult = tuple[ResponseHead, BodyFilter] | Reject | None
 RequestHook = Callable[[RequestHead], RequestResult | Awaitable[RequestResult]]
 ResponseHook = Callable[
     [RequestHead, ResponseHead], ResponseResult | Awaitable[ResponseResult]
 ]
+BodyHook = Callable[[RequestHead, ResponseHead], BodyResult]
+UNFRAMED = frozenset({"content-length", "transfer-encoding"})
 
 
 @dataclass
 class EgressHooks:
     request: list[RequestHook] = field(default_factory=list)
     response: list[ResponseHook] = field(default_factory=list)
+    body: list[BodyHook] = field(default_factory=list)
+
+
+def has_body(head: RequestHead, status: int) -> bool:
+    return head.method != "HEAD" and status >= 200 and status not in (204, 304)
+
+
+def filtered(filters: list[BodyFilter], data: bytes, *, end: bool) -> Iterator[bytes]:
+    def stage(index: int, source: Iterable[bytes]) -> Iterator[bytes]:
+        if index == len(filters):
+            yield from source
+            return
+        item = filters[index]
+
+        def run() -> Iterator[bytes]:
+            for piece in source:
+                yield from item.feed(piece)
+            if end:
+                yield from item.end()
+
+        yield from stage(index + 1, run())
+
+    for piece in stage(0, [data] if data else []):
+        if piece:
+            yield piece
 
 
 class InterceptError(Exception):
@@ -405,20 +439,24 @@ class Interceptor:
         guest = self.guest
         server = self.server
         assert guest is not None and server is not None
+        filters: list[BodyFilter] = []
         while True:
             event = await server.next_event()
             if isinstance(event, h11.InformationalResponse):
+                info = await self._response_head(head, event)
                 await guest.send(
                     h11.InformationalResponse(
-                        status_code=event.status_code,
-                        headers=event.headers.raw_items(),
-                        reason=event.reason,
+                        status_code=info.status,
+                        headers=_wire(info.headers),
+                        reason=_raw(info.reason),
                     )
                 )
                 if event.status_code == 101:
                     return True
             elif isinstance(event, h11.Response):
                 response = await self._response_head(head, event)
+                if has_body(head, response.status):
+                    response, filters = self._body_filters(head, response)
                 await guest.send(
                     h11.Response(
                         status_code=response.status,
@@ -427,15 +465,19 @@ class Interceptor:
                     )
                 )
             elif isinstance(event, h11.Data):
-                await guest.send(h11.Data(data=event.data))
+                for piece in filtered(filters, event.data, end=False):
+                    await guest.send(h11.Data(data=piece))
             elif isinstance(event, h11.EndOfMessage):
-                await guest.send(h11.EndOfMessage(headers=event.headers))
+                for piece in filtered(filters, b"", end=True):
+                    await guest.send(h11.Data(data=piece))
+                trailers = [] if filters else event.headers
+                await guest.send(h11.EndOfMessage(headers=trailers))
                 return False
             else:
                 raise InterceptError("upstream_closed", 502)
 
     async def _response_head(
-        self, head: RequestHead, event: h11.Response
+        self, head: RequestHead, event: h11.Response | h11.InformationalResponse
     ) -> ResponseHead:
         response = ResponseHead(
             status=event.status_code,
@@ -450,6 +492,32 @@ class Interceptor:
             if isinstance(result, ResponseHead):
                 response = result
         return response
+
+    def _body_filters(
+        self, head: RequestHead, response: ResponseHead
+    ) -> tuple[ResponseHead, list[BodyFilter]]:
+        filters: list[BodyFilter] = []
+        for hook in self.hooks.body:
+            try:
+                result = hook(head, response)
+            except Exception as exc:
+                raise InterceptError("hook_error", 502) from exc
+            if isinstance(result, Reject):
+                raise InterceptError(result.reason, result.status)
+            if result is not None:
+                response, body = result
+                filters.append(body)
+        if filters:
+            response = ResponseHead(
+                status=response.status,
+                reason=response.reason,
+                headers=tuple(
+                    (name, value)
+                    for name, value in response.headers
+                    if name.lower() not in UNFRAMED
+                ),
+            )
+        return response, filters
 
     async def _switch(self) -> None:
         guest = self.guest

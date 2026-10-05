@@ -86,26 +86,72 @@ HTTP/2, gRPC, and non-HTTP protocols are not intercepted.
 A vault credential of type `environment_variable` follows the OpenAI
 Agents shape: `secret_name`, `secret_value`, and `networking`
 (`type: limited`, `allowed_hosts`). `secret_value` is encrypted at rest
-like `static_bearer` tokens and is never returned.
+like `static_bearer` tokens and is never returned. It must be 8 to
+16,384 characters of printable ASCII without spaces, so it fits a
+header value unchanged and masking cannot replace short common strings.
 
 The guest environment sets `secret_name` to a random placeholder that
-is unique per session and credential. The gateway replaces the
-placeholder with `secret_value` only on intercepted HTTPS requests to
-`allowed_hosts`:
+is unique per sandbox start and credential. The gateway replaces the
+placeholder with `secret_value` only on intercepted HTTPS requests
+(ports 443 and 8443) to `allowed_hosts`:
 
 * in request header values, including `Authorization: Basic` after
   base64 decoding, so `git` over HTTPS works,
-* in the request query string,
+* never in the request line (path and query string),
 * never in the body.
 
-A request to any other host carries only the placeholder. The gateway
-replaces the secret with the placeholder again in response headers.
-Request signing (AWS SigV4, HMAC) and non-HTTP protocols cannot work
-this way. Function tools cover those.
+The query string is excluded because many services accept form fields
+there and store or render them (an issue title, a search term). If the
+gateway substituted the query string, the guest could make a credential
+host write the real secret into a page and read it back.
 
-A small git credential helper in the guest image answers with the
-placeholder for hosts in a credential's `allowed_hosts`, so
-`git clone https://host/org/repo` works without a token in the URL.
+A request to any other host carries only the placeholder. Credential
+hosts are HTTPS only: plain HTTP on port 80 to such a host is rejected
+(`credential_host_plain_http`). On requests to a credential's hosts the
+gateway removes `Upgrade` and `Connection`, so nothing is passed through
+unmasked after a `101`, removes `Range` and `If-Range`, so the secret
+cannot be split across partial responses, asks for `Accept-Encoding:
+identity`, and masks the response headers (also of `1xx` responses) and
+body with one longest-first pass, dropping response trailers. The mask
+strings are the exact secret, its JSON string forms (with and without
+`\/`), its percent-encoded forms (including the `encodeURIComponent`
+form), the Basic token the gateway built for the request itself
+(taken from that exchange, so a shared cache can never drop it while the
+response is in flight), and the Basic tokens it built for earlier
+requests to that host (a bounded cache), each replaced with the token
+the guest sent, longest first. Other transformations (hashes, partial
+copies, base64 of the bare secret built by the agent) are not masked.
+
+Body masking streams: each piece of a read is decoded, masked, and sent
+before the next is produced, so a connection holds at most one decode
+chunk and a carry. The carry is only the longest suffix that is a proper
+prefix of a mask string, so streaming responses are not delayed.
+Because the length changes, the gateway drops `Content-Length` and sends
+the body chunked. A `gzip` body (also several members) or `deflate`
+body (zlib or raw) is decompressed in bounded steps; a truncated stream
+aborts the connection before the final chunk, and a body that expands
+past 10 MiB and 100 times its compressed size is aborted
+(`egress.decode_limit`). Any other content encoding is a `502`.
+
+This is defense in depth, not a boundary: the guest chooses which header
+carries the placeholder, so a credential host that stores a request
+header and shows it somewhere other than in the response could still
+expose the secret, and with `enabled` the guest can reach the same
+server by IP address or another server name, which the gateway splices
+unchanged. Tokens and `allowed_hosts` must be scoped to what the task
+needs.
+
+Request signing (AWS SigV4, HMAC), keys that only work in the query
+string, and non-HTTP protocols cannot work this way. Function tools
+cover those.
+
+A small git credential helper, written by the worker onto the
+workspace drive and configured through `GIT_CONFIG_COUNT` in the guest
+environment, answers with the placeholder for hosts in a credential's
+`allowed_hosts` (port 443 and 8443), and `url.<https>.insteadOf` rewrites
+SSH remotes for those hosts to HTTPS. So
+`git clone https://host/org/repo` and `git clone git@host:org/repo`
+work without a token in the URL, and no guest image change is needed.
 
 The gateway parses each intercepted request with `h11`, so a later
 per-host rule (for example, which git refs may be pushed) is a hook on
@@ -116,6 +162,12 @@ rights of its token.
 
 * Environment credentials on a session that does not run in a microVM
   are `400`. MCP credentials in the same vault keep working there.
+  The API cannot know a worker's isolation at session create, because
+  `apipi serve` has no run mode. It refuses to send a command with
+  environment credentials to a worker that does not run `microvm`
+  (`400`, `credential_not_allowed`), and to a worker that does not list
+  the protocol feature `env_credentials` (`501`). A worker without an
+  egress gateway fails the sandbox start with the same code.
 * Environment credentials with `network.access` `disabled` are `400`.
 * With `restricted`, the `allowed_hosts` of the session's credentials
   are added to the session's allowed hostnames.
@@ -123,8 +175,12 @@ rights of its token.
   by the operator, or session create is `400`. A tenant cannot open a
   host by creating a credential.
 * Two attached credentials with the same `secret_name` are `400`.
-  Reserved names (`OPENAI_*`, `APIPI_*`, `PI_*`, `PATH`, and the guest
-  environment deny list) are rejected when the credential is written.
+  Reserved names are rejected when the credential is written: the
+  prefixes `OPENAI_`, `APIPI_`, `PI_`, `CODEX_`, `GIT_`, and
+  `AGENT_BROWSER_`, the guest environment deny list, and the variables
+  guest init sets (`PATH`, `HOME`, `USER`, `SHELL`, `PWD`, the CA bundle
+  variables, the npm and uv cache variables, `WS`, `CA_BUNDLE`, `CA_DIR`,
+  and `cmd`).
 
 ## When secrets are read
 
@@ -138,6 +194,8 @@ sandbox with current values.
 ## Logs
 
 The gateway logs and counts each connection with host, port, decision
-(spliced, intercepted, rejected), and for injections the credential id.
-It never logs a secret value or a placeholder. Secret values join the
-redaction list of the worker and of the payload export.
+(spliced, intercepted, rejected), and for injections the credential id
+and host. Worker logs never include a secret value or a placeholder:
+the command context is not logged, its repr leaves the values out, and
+the gateway logs only ids and hosts. The payload export redacts the
+secret values of the session's vaults.

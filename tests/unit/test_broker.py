@@ -294,6 +294,7 @@ def test_plain_vault_creds_decrypt_for_broker() -> None:
         def __init__(self) -> None:
             self.id = uuid.UUID("00000000-0000-0000-0000-000000000001")
             self.tenant_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
+            self.auth_type = "static_bearer"
             self.mcp_server_url = "https://mcp.example.com/mcp"
             self.token = encrypt_vault_token(
                 "tok",

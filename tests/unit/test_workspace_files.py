@@ -234,3 +234,72 @@ async def test_microvm_boot_writes_all_files_and_running_guest_fetches_none(
     assert spawned
     assert sorted(fake_store.fetches) == ["obj-a", "obj-b"]
     assert _image_files(workspace, tmp_path / "reboot.tar") == expected
+
+
+async def test_boot_passes_env_credentials_to_the_pool(
+    settings: Settings, fake_store: CountingStore, tmp_path: Path
+) -> None:
+    microvm = settings.model_copy(update={"run_mode": "microvm"})
+    session_id = uuid.uuid4()
+    workspace = Path(settings.sessions_dir or "") / "tenant" / str(session_id)
+    execution = _execution(microvm)
+    spawned: list[dict[str, Any]] = []
+
+    async def _fake_get(session_id: uuid.UUID, **kwargs: Any) -> None:
+        spawned.append(kwargs)
+
+    execution.pool.get = _fake_get  # ty: ignore[invalid-assignment]
+    context = _context(workspace)
+    context["env_credentials"] = [
+        {
+            "credential_id": "cred",
+            "secret_name": "GITHUB_TOKEN",
+            "secret_value": "ghp",
+            "allowed_hosts": ["github.com"],
+            "git_username": None,
+        }
+    ]
+    await execution.boot_hosted(uuid.uuid4(), session_id, turn_context=context)
+    credentials = spawned[0]["env_credentials"]
+    assert [item.secret_name for item in credentials] == ["GITHUB_TOKEN"]
+    spawned.clear()
+    await execution.boot_hosted(
+        uuid.uuid4(), session_id, turn_context=_context(workspace)
+    )
+    assert "env_credentials" not in spawned[0]
+
+
+async def test_boot_without_egress_gateway_fails_with_clear_code(
+    settings: Settings, fake_store: CountingStore, tmp_path: Path
+) -> None:
+    from apipi.worker.pi.proc import EnvCredentialsUnsupported
+
+    microvm = settings.model_copy(update={"run_mode": "microvm"})
+    session_id = uuid.uuid4()
+    workspace = Path(settings.sessions_dir or "") / "tenant" / str(session_id)
+    execution = _execution(microvm)
+
+    async def _fake_get(session_id: uuid.UUID, **kwargs: Any) -> None:
+        raise EnvCredentialsUnsupported("vault environment credentials need microvm")
+
+    execution.pool.get = _fake_get  # ty: ignore[invalid-assignment]
+    context = _context(workspace)
+    context["env_credentials"] = [
+        {
+            "credential_id": "cred",
+            "secret_name": "GITHUB_TOKEN",
+            "secret_value": "ghp-value",
+            "allowed_hosts": ["github.com"],
+            "git_username": None,
+        }
+    ]
+    await execution.boot_hosted(uuid.uuid4(), session_id, turn_context=context)
+    outbox = execution.outbox
+    assert outbox is not None
+    codes = [
+        item["payload"]["data"].get("code")
+        for item in outbox.pending(session_id)
+        if item["type"] == "event"
+        and item["payload"].get("type") == "agent.session.environment.failed"
+    ]
+    assert codes == ["credential_not_allowed"]

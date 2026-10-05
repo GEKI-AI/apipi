@@ -357,8 +357,8 @@ Supported for extenders (also listed on `apipi.__all__`):
 
 `gateway.agents`, `gateway.vaults`, `gateway.usage`, and `gateway.models`
 are the same functions as `/v1/agents`, `/v1/agents/vaults`, `/v1/apipi/usage`,
-and `/v1/models`. Vault get/list never returns credential token values.
-Vault tokens are encrypted at rest.
+and `/v1/models`. Vault get/list never returns credential secret values.
+Vault secrets are encrypted at rest.
 The worker WebSocket stays `gateway.workers`.
 | `EventHub` | In-process live events |
 | `Authenticate`, `AuthIdentity`, `AuthReject` | Auth callback types |

@@ -3,8 +3,9 @@
 The builder runs on the API, where the database, the vault and the
 object store are available. It resolves everything the worker needs
 for one turn (session, agent, effective idle TTL, files, skills, the
-Pi session blob, HTTP MCP servers and the model key) into a plain
-dict that validates as `apipi.protocol.TurnContext`.
+Pi session blob, HTTP MCP servers, environment credentials and the
+model key) into a plain dict that validates as
+`apipi.protocol.TurnContext`.
 
 File bytes never enter the context. With ``APIPI_ARTIFACT_STORE=s3``
 each file, skill and Pi session blob becomes a presigned GET URL with
@@ -35,6 +36,11 @@ from apipi.gateway.auth import not_found
 from apipi.gateway.content import InputFile
 from apipi.protocol import InputFileRef, InputImageRef, TurnContext
 from apipi.services.agents import definition_for_session
+from apipi.services.env_credentials import (
+    check_env_credentials,
+    resolve_env_credentials,
+    session_vault_ids,
+)
 from apipi.services.search import SearchResolver, web_search_tool
 from apipi.store.blobs import (
     ObjectStore,
@@ -44,7 +50,13 @@ from apipi.store.blobs import (
     skill_object_id,
 )
 from apipi.store.engine import Store
-from apipi.store.repo import get_file, get_session, get_skill, list_session_files
+from apipi.store.repo import (
+    get_file,
+    get_session,
+    get_skill,
+    list_credentials_for_vault_ids,
+    list_session_files,
+)
 
 PRESIGN_TTL = timedelta(minutes=15)
 
@@ -289,6 +301,12 @@ async def build_turn_context(
                 "url": ref["url"],
                 "local_path": ref["local_path"],
             }
+        env_credentials: list[dict[str, Any]] = []
+        vault_ids = session_vault_ids(row.vault_ids)
+        if vault_ids and env_type != "none":
+            vault_rows = await list_credentials_for_vault_ids(db, tenant_id, vault_ids)
+            check_env_credentials(settings, environment, vault_rows)
+            env_credentials = resolve_env_credentials(settings, vault_rows)
         resolved_key_id = key_id if key_id is not None else row.key_id
         context = {
             "session": {
@@ -325,6 +343,7 @@ async def build_turn_context(
                 "api_key": api_key,
             },
             "mcp": [_serialize_mcp_server(server) for server in (mcp_servers or [])],
+            "env_credentials": env_credentials,
             "files": files,
             "session_files": session_files,
             "skills": skills,

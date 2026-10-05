@@ -2,17 +2,18 @@
 
 `turn.start`, `turn.continue` and `sandbox.boot` carry a `context`
 object built by the API. The worker holds it in memory only and never
-logs it. File bytes never travel in the command: files, skills and the
-Pi session blob travel as references only, either presigned GET URLs
-(S3 store) or relative paths inside the shared local store root
-(filesystem store).
+logs it. Model keys and environment credential values are excluded
+from the model repr and replaced by `redact_context`. File bytes never
+travel in the command: files, skills and the Pi session blob travel as
+references only, either presigned GET URLs (S3 store) or relative
+paths inside the shared local store root (filesystem store).
 """
 
 import copy
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from apipi.protocol.base import ContextPart
 from apipi.protocol.constants import (
@@ -35,7 +36,7 @@ class ContextBytes(ValueError):
 
 class ContextModel(ContextPart):
     base_url: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
 
 
 class ContextMcpServer(ContextPart):
@@ -43,6 +44,14 @@ class ContextMcpServer(ContextPart):
     server_url: str
     headers: dict[str, str] = Field(default_factory=dict)
     allowed_tools: list[str] = Field(default_factory=list)
+
+
+class ContextEnvCredential(ContextPart):
+    credential_id: str
+    secret_name: str
+    secret_value: str = Field(repr=False)
+    allowed_hosts: list[str] = Field(default_factory=list)
+    git_username: str | None = None
 
 
 class ContextFileRef(ContextPart):
@@ -96,6 +105,7 @@ class TurnContext(ContextPart):
     agent: ContextAgent = Field(default_factory=ContextAgent)
     model: ContextModel = Field(default_factory=ContextModel)
     mcp: list[ContextMcpServer] = Field(default_factory=list)
+    env_credentials: list[ContextEnvCredential] = Field(default_factory=list)
     files: list[ContextFileRef] = Field(default_factory=list)
     session_files: list[ContextFileRef] = Field(default_factory=list)
     skills: list[ContextSkillRef] = Field(default_factory=list)
@@ -111,6 +121,18 @@ def _reject_bytes(value: Any) -> None:
     elif isinstance(value, (list, tuple)):
         for item in value:
             _reject_bytes(item)
+
+
+def context_error_message(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        fields = sorted(
+            {
+                ".".join(str(part) for part in error.get("loc", ()))
+                for error in exc.errors(include_input=False, include_url=False)
+            }
+        )
+        return "invalid turn context: " + ", ".join(fields)
+    return f"invalid turn context: {exc}"
 
 
 def parse_turn_context(raw: Any) -> TurnContext:
@@ -165,6 +187,11 @@ def redact_context(raw: Any) -> Any:
             url = server.get("server_url")
             if isinstance(url, str) and url:
                 server["server_url"] = redact_url(url)
+    credentials = redacted.get("env_credentials")
+    if isinstance(credentials, list):
+        for credential in credentials:
+            if isinstance(credential, dict) and "secret_value" in credential:
+                credential["secret_value"] = "..."
     for key in ("files", "session_files", "skills"):
         refs = redacted.get(key)
         if isinstance(refs, list):
@@ -193,6 +220,7 @@ def summarize_context(raw: dict[str, Any]) -> dict[str, Any]:
     files = raw.get("files") if isinstance(raw, dict) else None
     session_files = raw.get("session_files") if isinstance(raw, dict) else None
     skills = raw.get("skills") if isinstance(raw, dict) else None
+    credentials = raw.get("env_credentials") if isinstance(raw, dict) else None
     model: str | None = None
     if isinstance(agent, dict) and isinstance(agent.get("model"), str):
         model = agent["model"]
@@ -205,4 +233,7 @@ def summarize_context(raw: dict[str, Any]) -> dict[str, Any]:
             len(session_files) if isinstance(session_files, list) else 0
         ),
         "skill_count": len(skills) if isinstance(skills, list) else 0,
+        "env_credential_count": (
+            len(credentials) if isinstance(credentials, list) else 0
+        ),
     }

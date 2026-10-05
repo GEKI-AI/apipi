@@ -28,6 +28,7 @@ from apipi.protocol import (
     BASELINE_FEATURES,
     COMMAND_OPS,
     CURSOR_OPS,
+    FEATURE_ENV_CREDENTIALS,
     BaseCommandPayload,
     LeaseRevoke,
     RunningSession,
@@ -62,6 +63,7 @@ from apipi.workerhub.commands import (
     command_features,
     command_payload,
     image_unavailable_message,
+    require_credential_isolation,
     session_image,
 )
 from apipi.workerhub.connection import WorkerConnection, claimed_leases
@@ -86,6 +88,23 @@ def heartbeat_interval(settings: Settings) -> float:
     """The heartbeat interval the API tells every worker: a third of the TTL."""
     ttl = settings.worker_lease_ttl.total_seconds()
     return min(MAX_HEARTBEAT_SECONDS, max(ttl / 3, MIN_HEARTBEAT_SECONDS))
+
+
+def able_candidates(
+    candidates: list[fleet.Candidate], needed: list[str]
+) -> list[fleet.Candidate]:
+    able = [
+        item
+        for item in candidates
+        if item.conn is None or all(f in item.conn.features for f in needed)
+    ]
+    if FEATURE_ENV_CREDENTIALS in needed:
+        able = [
+            item
+            for item in able
+            if item.conn is None or item.conn.run_mode == "microvm"
+        ]
+    return able
 
 
 class WorkerHub:
@@ -226,6 +245,7 @@ class WorkerHub:
             self.metrics.observe_worker_command(op, result)
 
     def _enqueue(self, wire: dict[str, Any], conn: WorkerConnection) -> PendingCommand:
+        require_credential_isolation(wire, conn.run_mode)
         for feature in command_features(wire):
             if feature in conn.features:
                 continue
@@ -513,11 +533,7 @@ class WorkerHub:
                 ).to_wire(),
             }
         )
-        able = [
-            item
-            for item in candidates
-            if item.conn is None or all(f in item.conn.features for f in needed)
-        ]
+        able = able_candidates(candidates, needed)
         chosen = fleet.choose(
             able, kind=required, session_mem=session_mem, image=image
         ) or fleet.choose(

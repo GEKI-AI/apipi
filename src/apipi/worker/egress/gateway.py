@@ -112,6 +112,10 @@ def _warn_accept(session_id: str | None, error: str) -> None:
     )
 
 
+def egress_metrics() -> Metrics | None:
+    return _metrics
+
+
 def _tls_enough(data: bytes) -> bool:
     try:
         parse_client_hello(data)
@@ -352,6 +356,9 @@ class EgressGateway:
             decision = self.policy.decide(conn.host, conn.port)
             if decision.action == "reject":
                 conn.reason = decision.reason
+                return
+            if decision.action == "intercept" and not tls:
+                conn.reason = "credential_host_plain_http"
                 return
             owns_name = conn.host is not None and (
                 restricted or decision.action == "intercept"

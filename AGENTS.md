@@ -75,9 +75,9 @@ fallback. `host` and `jail` are not valid. OpenAI-compatible
 - Pi JSONL as the database
 - Accept `multi_agent` silently
 - A Job or cron engine, or a Slack or Teams gateway
-- Gateway auth bearers in the browser or in Postgres. MCP vault tokens
-  may be stored tenant-scoped; GET never returns them; guests never
-  see them.
+- Gateway auth bearers in the browser or in Postgres. Vault
+  credentials may be stored tenant-scoped; GET never returns their
+  secret values; guests never see them.
 - Rewrite the event log
 - A custom docs frontend
 - An old copy of a decision file

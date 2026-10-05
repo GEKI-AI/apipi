@@ -48,6 +48,7 @@ from apipi.protocol import (
     LIVE_EVENT_TYPES,
     ContextBytes,
     TurnContext,
+    context_error_message,
     parse_turn_context,
 )
 from apipi.protocol import PUBLIC_EVENT_TYPES as PUBLIC_EVENT_TYPES
@@ -58,6 +59,7 @@ from apipi.worker.pi.artifacts import (
 from apipi.worker.pi.model_host import note_pi_model
 from apipi.worker.pi.platform_prompt import compose_instructions
 from apipi.worker.pi.pool import PiPool
+from apipi.worker.pi.proc import EnvCredentialsUnsupported
 from apipi.worker.pi.settings_json import resolve_system_prompt
 from apipi.worker.sink import ResultSink
 from apipi.worker.turn_context import (
@@ -138,7 +140,7 @@ def _require_turn_context(raw: dict[str, Any] | None) -> TurnContext:
     except (ContextBytes, ValidationError) as exc:
         raise ApiError(
             "invalid_request",
-            f"invalid turn context: {exc}",
+            context_error_message(exc),
             code="invalid_request",
         ) from exc
 
@@ -364,6 +366,12 @@ async def report_environment_failed(
     await report_session_failed(sink, hub, tenant_id, session_id, message, code=code)
 
 
+def _env_credential_spawn(ctx: TurnContext) -> dict[str, Any]:
+    if not ctx.env_credentials:
+        return {}
+    return {"env_credentials": list(ctx.env_credentials)}
+
+
 async def load_boot_kwargs(
     settings: Settings,
     tenant_id: uuid.UUID,
@@ -469,6 +477,7 @@ async def load_boot_kwargs(
         _pi_spawn_overrides(settings, session_metadata, agent_metadata, builtin)
     )
     kwargs.update(_idle_spawn_from_context(settings, "openai_hosted", ctx))
+    kwargs.update(_env_credential_spawn(ctx))
     return kwargs
 
 
@@ -907,6 +916,7 @@ async def run_turn(
                         settings, session_metadata, agent_metadata, builtin_tools
                     ),
                     **_idle_spawn_from_context(settings, env_type, ctx),
+                    **_env_credential_spawn(ctx),
                 )
                 retry_state = _new_retry_state()
                 try:
@@ -996,6 +1006,23 @@ async def run_turn(
                         code="turn_timeout",
                         user_id=user_id,
                         failure=timed_out,
+                        turn_context=ctx,
+                        sink=sink,
+                    )
+                    return
+                except EnvCredentialsUnsupported as exc:
+                    await fail_turn(
+                        hub,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        str(exc),
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                        settings=settings,
+                        code=exc.code,
+                        user_id=user_id,
                         turn_context=ctx,
                         sink=sink,
                     )
@@ -1283,6 +1310,7 @@ async def continue_turn(
                         settings, session_metadata, agent_metadata, builtin_tools
                     ),
                     **_idle_spawn_from_context(settings, env_type, ctx),
+                    **_env_credential_spawn(ctx),
                 )
                 retry_state = _new_retry_state()
                 try:
@@ -1359,6 +1387,23 @@ async def continue_turn(
                         code="turn_timeout",
                         user_id=user_id,
                         failure=timed_out,
+                        turn_context=ctx,
+                        sink=sink,
+                    )
+                    return
+                except EnvCredentialsUnsupported as exc:
+                    await fail_turn(
+                        hub,
+                        tenant_id,
+                        session_id,
+                        turn_id,
+                        str(exc),
+                        request_id=request_id,
+                        metrics=metrics,
+                        tracing=tracing,
+                        settings=settings,
+                        code=exc.code,
+                        user_id=user_id,
                         turn_context=ctx,
                         sink=sink,
                     )

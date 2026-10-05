@@ -24,6 +24,7 @@ from apipi.common.dirs import (
     pi_session_file,
     xdg_data_home,
 )
+from apipi.common.guest_env import GUEST_ENV_NEVER
 from apipi.common.logutil import log_event
 from apipi.config import ConfigError, Settings
 from apipi.env.setup import (
@@ -33,6 +34,7 @@ from apipi.env.setup import (
     workspace_network_policy,
 )
 from apipi.mcp.http import McpHttpServer
+from apipi.protocol import ContextEnvCredential
 from apipi.worker.egress import (
     BLOCKED_EGRESS_CIDRS,
     GATEWAY_PORTS,
@@ -42,6 +44,7 @@ from apipi.worker.egress import (
     start_gateway,
     upstream_context,
 )
+from apipi.worker.egress.inject import injector_for
 from apipi.worker.pi.extension import (
     APIPI_EXTENSION_REL,
     MCP_EXTENSION_REL,
@@ -69,6 +72,11 @@ BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/apipi-guest"
 GUEST_WORKSPACE = "/workspace"
 GUEST_DNS = ("1.1.1.1", "8.8.8.8")
 EGRESS_CA_REL = ".apipi/egress-ca.pem"
+GIT_HELPER_REL = ".apipi/git-credential"
+GIT_CREDENTIALS_REL = ".apipi/git-credentials"
+GIT_HELPER_COMMAND = (
+    f"{GUEST_WORKSPACE}/{GIT_HELPER_REL} {GUEST_WORKSPACE}/{GIT_CREDENTIALS_REL}"
+)
 TAP_NET_BASE = 0xAC100000
 TAP_NET_SLOTS = 16384
 SHELL_WARNING = (
@@ -529,21 +537,6 @@ _GUEST_FILE_KEYS = frozenset(
     }
 )
 _MCP_HTTP_FIELDS = frozenset({"LABEL", "URL", "ALLOWED"})
-_EXTRA_NEVER = frozenset(
-    {
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-        "OPENAI_API_KEY_OVERWRITE",
-        "DATABASE_URL",
-        "PI_CODING_AGENT_DIR",
-        "NODE_OPTIONS",
-        "APIPI_SEARCH_URL",
-        "PATH",
-        "HOME",
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-    }
-)
 
 
 def _indexed_mcp_key(key: str, prefix: str, fields: frozenset[str]) -> bool:
@@ -560,7 +553,12 @@ def _guest_file_key(key: str) -> bool:
         return True
     if key.startswith(("APIPI_", "OPENAI_", "CODEX_", "PI_")):
         return False
-    return key not in _EXTRA_NEVER
+    return key not in GUEST_ENV_NEVER
+
+
+def _git_config_count(extra_env: dict[str, str] | None) -> int:
+    raw = (extra_env or {}).get("GIT_CONFIG_COUNT", "")
+    return int(raw) if raw.isdigit() else 0
 
 
 def _take(dest: dict[str, str], src: dict[str, str], key: str) -> None:
@@ -577,6 +575,7 @@ def guest_env(
     broker: object | None = None,
     extra_env: dict[str, str] | None = None,
     web_search: bool = False,
+    credential_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     built = pi_env(
         settings,
@@ -609,9 +608,13 @@ def guest_env(
         _take(guest, built, "APIPI_SEARCH_URL")
     if extra_env:
         for key, value in extra_env.items():
-            if key in guest or key in _EXTRA_NEVER or not _guest_file_key(key):
+            if key in guest or key in GUEST_ENV_NEVER or not _guest_file_key(key):
                 continue
             guest[key] = value
+    if credential_env:
+        for key, value in credential_env.items():
+            if _guest_file_key(key):
+                guest[key] = value
     return {key: value for key, value in guest.items() if _guest_file_key(key)}
 
 
@@ -727,6 +730,7 @@ def write_workspace_image(
     system_md: bytes | None = None,
     web_search: bool = False,
     egress_ca: bytes | None = None,
+    git_credentials: bytes | None = None,
 ) -> None:
     guest_py = Path(__file__).with_name("guest.py").read_bytes()
     guest_sh = Path(__file__).with_name("guest.sh").read_bytes()
@@ -760,6 +764,14 @@ def write_workspace_image(
             )
         if egress_ca is not None:
             _add_bytes(tar, EGRESS_CA_REL, egress_ca, mode=0o644)
+        if git_credentials is not None:
+            _add_bytes(tar, GIT_CREDENTIALS_REL, git_credentials, mode=0o644)
+            _add_bytes(
+                tar,
+                GIT_HELPER_REL,
+                Path(__file__).with_name("git-credential.sh").read_bytes(),
+                mode=0o755,
+            )
         _add_bytes(tar, ".apipi/random", os.urandom(256), mode=0o600)
         if shell:
             _add_bytes(tar, ".apipi/shell", b"", mode=0o644)
@@ -1497,8 +1509,27 @@ async def start_microvm(
     web_search: bool = False,
     intercept_hosts: tuple[str, ...] = (),
     egress_hooks: EgressHooks | None = None,
+    env_credentials: list[ContextEnvCredential] | None = None,
 ) -> StartedMicrovm:
     require_microvm(settings)
+    injector = injector_for(env_credentials or [], session_id=session_id)
+    credential_env: dict[str, str] = {}
+    git_credentials: bytes | None = None
+    if injector.injections:
+        hooks = egress_hooks if egress_hooks is not None else EgressHooks()
+        egress_hooks = EgressHooks(
+            request=[*hooks.request, injector.request],
+            response=[*hooks.response, injector.response],
+            body=[*hooks.body, injector.body],
+        )
+        intercept_hosts = tuple(dict.fromkeys((*intercept_hosts, *injector.hosts)))
+        credential_env = {
+            **injector.guest_env(),
+            **injector.git_config_env(
+                GIT_HELPER_COMMAND, start=_git_config_count(extra_env)
+            ),
+        }
+        git_credentials = injector.git_credentials()
     firecracker, jailer = microvm_binaries()
     ip_bin, iptables_bin, tc_bin = microvm_net_binaries()
     selected = image if image is not None else settings.sandbox_default_image
@@ -1532,6 +1563,7 @@ async def start_microvm(
             gateway_allowlist=settings.microvm_egress_allowlist,
             gateway_hosts=tuple(microvm_egress_hosts(settings, mcp_http)),
             extra_hosts=tuple(extra_hosts),
+            credential_hosts=injector.hosts,
         )
     except SetupError as exc:
         log_sandbox_boot_failed(exc, vm_id=vm_id)
@@ -1636,6 +1668,7 @@ async def start_microvm(
                 broker=broker,
                 extra_env=extra_env,
                 web_search=web_search,
+                credential_env=credential_env,
             ),
             pi_args=pi_command_args(
                 settings,
@@ -1664,6 +1697,7 @@ async def start_microvm(
             system_md=system_md,
             web_search=web_search,
             egress_ca=egress.ca_pem if egress is not None else None,
+            git_credentials=git_credentials,
         )
         config = microvm_config(
             kernel="vmlinux",
@@ -1751,6 +1785,7 @@ async def spawn_microvm_pi(
     web_search: bool = False,
     intercept_hosts: tuple[str, ...] = (),
     egress_hooks: EgressHooks | None = None,
+    env_credentials: list[ContextEnvCredential] | None = None,
 ) -> PiProc:
     started = await start_microvm(
         settings,
@@ -1774,6 +1809,7 @@ async def spawn_microvm_pi(
         web_search=web_search,
         intercept_hosts=intercept_hosts,
         egress_hooks=egress_hooks,
+        env_credentials=env_credentials,
     )
     process = started.process
     try:

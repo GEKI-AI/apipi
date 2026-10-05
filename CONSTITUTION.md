@@ -30,8 +30,8 @@ file rarely. Edit in place. Do not keep an amendment log.
    gateway does not keep. Auth is a callback; default hashes the key
    (`docs/auth.md`). ApiPi may issue a model credential from the
    authenticated identity through a callback. It does not store or
-   forward the raw bearer. MCP vault credentials may be stored
-   tenant-scoped. GET never returns token values. Guests and browsers
+   forward the raw bearer. Vault credentials may be stored
+   tenant-scoped. GET never returns secret values. Guests and browsers
    never see them.
 
 6. **Compatible where it helps, honest where it does not.**

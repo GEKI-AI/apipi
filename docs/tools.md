@@ -20,7 +20,8 @@ tools or metadata that conflict with `type=none` cannot be used for a
 even if a bad flag got through, and logs `pi.builtin_tools_forced_off`.
 See [API](api.md) and [environments](environments.md#none).
 
-Copy-paste configs live in `examples/` at the repo root (Tavily MCP).
+Copy-paste configs live in `examples/` at the repo root (Tavily MCP,
+GitHub and Forgejo credentials for git).
 The browser example is `examples/sessions/browser_screenshot.py`.
 
 ## Built-in tools
@@ -65,7 +66,7 @@ over streamable HTTP. There is no stdio MCP.
 link-local, and other special-use addresses are rejected, including hostnames
 that resolve to them. `headers` are sent as-is; values that contain `${...}`
 are rejected because the gateway never expands environment variables into
-caller-supplied headers. Store secrets in a [vault](api.md#vaults)
+caller-supplied headers. Store secrets in a [vault](vaults.md)
 (`static_bearer` bound to `mcp_server_url`, attach `vault_ids` on the session)
 and the host broker injects the bearer. `allowed_tools` is a list of tool names, or
 `{"tool_names": [...]}`. Other filter forms return `not_implemented`.
@@ -90,7 +91,7 @@ still carry the original `server_label` and tool name. A server that is down or 
 turn. The worker logs `pi.extension_error` with the server label, the phase,
 and the error, and the turn continues without that server's tools.
 
-Prefer a [vault](api.md#vaults) (`static_bearer` bound to
+Prefer a [vault](vaults.md) (`static_bearer` bound to
 `mcp_server_url`, attach `vault_ids` on the session).
 
 The SSRF guard runs when the session is created, when the broker starts,
@@ -105,11 +106,16 @@ that turns private later fails that call with a `502`, not the turn.
 
 The MCP servers travel in the command context (see
 [command context](workers.md#command-context)). The API resolves them
-from the agent tools, the session vaults, and the SSRF guard on every
-turn, so an HTTP MCP tool works on the first turn and on follow-ups,
-even when a follow-up lands on another API replica. The worker hands
-them to the broker. No MCP state is kept
-in API process memory between turns.
+from the agent tools, the session vaults, and the SSRF guard for every
+command it sends, so an HTTP MCP tool works on the first turn and on
+follow-ups, even when a follow-up lands on another API replica. No MCP
+state is kept in API process memory between turns. The worker hands
+the servers and their bearers to the broker when the sandbox starts
+(for `environment.type` `none`, when the Pi process starts). A running
+sandbox keeps that snapshot: a rotated or deleted vault token takes
+effect the next time the sandbox starts, after an idle stop, a crash,
+a move to another worker, or in a new session. See
+[when secrets are read](vaults.md#when-secrets-are-read).
 
 A bash call with no `timeout` is capped at 120 seconds so a stuck
 command cannot hold the turn until `APIPI_TURN_TIMEOUT`.
@@ -122,7 +128,8 @@ built-in [`web_search` tool](#web-search).
 Tavily's hosted MCP is one search option. Create a vault credential with
 auth type `static_bearer`, `mcp_server_url` `https://mcp.tavily.com/mcp`, and
 the Tavily key as the token, then attach `vault_ids` on the session. See
-`examples/tavily.yaml`. You can swap that for Brave, Exa, or any other
+`examples/tavily.yaml` and the full request in
+[Vaults and credentials](vaults.md#search-over-mcp-tavily). You can swap that for Brave, Exa, or any other
 server that speaks MCP. This path keeps working. Use it when a tenant
 must bring its own search key, or when you need a provider that ApiPi
 does not support. For one operator key and central counting, use the
@@ -142,6 +149,25 @@ not claim a browser from sandbox size alone.
 screenshots stay in `/workspace/.browser`. Copy a screenshot to
 `outputs/` only when the user asked for that file. A small client is
 `examples/sessions/browser_screenshot.py`.
+
+## Credentials for guest code
+
+Code that the agent runs in a microVM sandbox (`curl`, `git`, `gh`,
+`tea`, SDKs, and scripts the model writes) can call HTTPS APIs with a
+tenant's key through a vault credential of type
+`environment_variable`. The guest gets a random placeholder in the
+environment variable `secret_name`. The egress gateway on the worker
+replaces it with the real value only in request headers (including
+Basic auth) of HTTPS requests to the credential's `allowed_hosts`,
+never in the path, the query string, or the body, and it masks the
+secret again in the responses. The worker writes a small git credential
+helper onto the workspace drive that answers with the placeholder, so
+`git clone`, `git pull`, and `git push` over HTTPS work without a token
+in the URL. This does not work for request signing (such as AWS
+SigV4), for keys in the query string, for protocols other than HTTP
+(SSH, Postgres, SMTP), or for HTTP/2 and gRPC. Setup, rules, limits,
+and examples for GitHub, Forgejo, and GitLab are in
+[Vaults and credentials](vaults.md).
 
 ## Web search
 

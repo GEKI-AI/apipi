@@ -89,6 +89,24 @@ When the worker runs out of file descriptors, the gateway stops
 accepting for half a second and logs `egress.accept.failed` (warning,
 at most once per minute).
 
+When the gateway puts a vault environment credential into a request,
+it writes one more info line (`event=egress.injection`) with
+`session_id`, `credential_id`, and `host`. It never carries the secret
+value or the placeholder. When a credential host answers with a body
+encoding other than `gzip` or `deflate`, so the gateway cannot mask the
+secret in it, the gateway fails the request with `502` and writes a
+warning line (`event=egress.encoding_rejected`) with `session_id`,
+`host`, and `encoding`. When a compressed body from a credential host
+expands past 10 MiB and 100 times its compressed size, the gateway
+closes the connection and writes a warning line
+(`event=egress.decode_limit`) with `session_id`, `host`,
+`encoded_bytes`, and `decoded_bytes`. A plain HTTP connection to a
+credential host is rejected with `403`; its `egress.connection` line has
+reason `credential_host_plain_http`, and a cut compressed body or a
+decode limit ends the connection with reason `content_truncated`,
+`content_decode`, or `decode_limit`. See
+[Vaults and credentials](vaults.md).
+
 A typical shipper reads stderr and writes Loki, CloudWatch, or
 another store. Example shape (Vector):
 
@@ -133,7 +151,7 @@ Worker metric sets (same scrape, metrics on):
 | Sandbox lifecycle | Any spawn through `PiPool` | `apipi_sandbox_*` |
 | Host Pi | `none` (no `vm_id`) | `apipi_pi_processes`, `apipi_pi_rss_bytes`, `apipi_pi_pss_bytes`, `apipi_pi_spawn_total`, `apipi_pi_kill_total` |
 | MicroVM guest | `vm_id` set | `apipi_guest_*` |
-| Egress gateway | `microvm` | `apipi_egress_connections_total`, `apipi_egress_bytes_total` (see [Worker metrics](#worker-metrics)) |
+| Egress gateway | `microvm` | `apipi_egress_connections_total`, `apipi_egress_bytes_total`, `apipi_egress_injections_total` (see [Worker metrics](#worker-metrics)) |
 
 `apipi_worker_memory_mib_used` is reserved guest budget for placement. `apipi_pi_rss_bytes` is actual host Pi RAM (process group, including MCP children Pi started). Guest jailer cgroup is `apipi_guest_memory_bytes`. Do not mix them.
 
@@ -240,6 +258,7 @@ These series are exposed by the worker (`apipi worker`) on its
 | `apipi_worker_draining` | gauge | 1 while the worker drains. |
 | `apipi_egress_connections_total` | counter, `decision` | Guest connections through the microVM egress gateway: `spliced` (passed through unchanged), `intercepted` (the gateway read each HTTP request: TLS ended at the gateway, or plain HTTP on port 80 with `restricted`), or `rejected` (by policy, a private address, or a failed upstream connect). A rising `rejected` rate on one worker usually means a session tries hosts its policy does not allow. Each connection also logs `egress.connection`. |
 | `apipi_egress_bytes_total` | counter, `direction` | Bytes through the egress gateway. `up` is guest to upstream, `down` is upstream to guest. On intercepted connections it counts the HTTP bytes after TLS. |
+| `apipi_egress_injections_total` | counter | Requests in which the egress gateway replaced a vault environment credential placeholder with the secret. It has no labels. The `egress.injection` log line names the credential and the host. |
 | `apipi_background_loop_errors_total`, `apipi_background_loop_last_run_timestamp`, `apipi_event_loop_lag_seconds` | as on the API | Worker loops: `worker_observe`, `session_reaper`, `workspace_reaper`, `sandbox_seen`, `outbox_metrics`, `outbox_spool`. Tasks: `worker_metrics`, `worker_command`, `worker_stop`, `worker_revoke`, `worker_release`. |
 
 `apipi_worker_heartbeat_gap_seconds` is exposed by both processes, as

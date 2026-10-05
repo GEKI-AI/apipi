@@ -113,7 +113,7 @@ yours.
 | `POST/GET/DELETE /v1/skills` | Same shape, zip upload (no version endpoints). Max `APIPI_MAX_FILE_BYTES`. |
 | `/v1/chat/completions` | Error (no such route) |
 | ChatKit | Error (no such routes) |
-| Vaults | `/v1/agents/vaults` and credentials. `static_bearer` only. GET omits token values. Tokens encrypted at rest. `mcp_oauth` is `not_implemented`. |
+| Vaults | `/v1/agents/vaults` and credentials. `static_bearer` for HTTP MCP. `environment_variable` on microVM sessions (`openai_hosted` on isolation `microvm`), with `secret_name`, `secret_value`, and `networking` as upstream. All credentials are a snapshot taken when the sandbox starts, as upstream. GET omits secret values. Secrets encrypted at rest. `mcp_oauth` is `not_implemented`. See [Vaults and credentials](vaults.md). |
 
 ## Extension table
 
@@ -134,6 +134,7 @@ New extension fields are grouped. Older flat fields stay flat.
 | Metadata | `apipi.sandbox_eager_boot` | Session or agent metadata override for eager boot. |
 | Metadata | `apipi.system_prompt`, `apipi.idle_ttl` | Pi and idle overrides. Thinking is `reasoning.effort` (`none` is `off`); `metadata["apipi.thinking"]` is removed as client input (`400`) and stripped from response metadata. On update, `reasoning.effort` replaces the stored level and `null` clears it. |
 | Metadata | `apipi.codemode`, `apipi.builtin_tools` | Codemode (`off`, `on`, `only`, default `off`) and built-in tools (`on`, `off`, default `on`). Session wins over agent. `apipi.builtin_tools=off` runs Pi without shell and file tools and without skills. Codemode `on` or `only` with built-ins off is `400` (`builtin_tools`). Built-ins are always off for `environment.type=none`. |
+| Metadata | `apipi.git_username` | Vault credential metadata (`environment_variable` only). The user name the guest git credential helper sends for the credential's hosts. See [Vaults and credentials](vaults.md#environment_variable). |
 | Metadata | `apipi.session_kind` | Removed former chat marker. Ignored now; use `environment.type=none`. |
 | Event data | `data.sandbox` | Hosted `environment.*` events. |
 | Route | `/v1/apipi/agents/{id}/export` | Agent zip. |

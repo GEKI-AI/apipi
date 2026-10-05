@@ -68,6 +68,12 @@ class PiHarness:
         raw_search = _kwargs.get("search")
         search = raw_search if web_search and callable(raw_search) else None
         agent_id = str(raw_agent) if raw_agent else None
+        raw_credentials = _kwargs.get("env_credentials")
+        credentials = (
+            {"env_credentials": raw_credentials}
+            if isinstance(raw_credentials, list) and raw_credentials
+            else {}
+        )
         proc = await self.pool.get(
             session_id,
             cwd=cwd,
@@ -94,6 +100,7 @@ class PiHarness:
             agent_id=agent_id,
             user_id=raw_user if isinstance(raw_user, str) else None,
             org_id=raw_org if isinstance(raw_org, str) else None,
+            **credentials,
         )
         broker = getattr(proc, "broker", None)
         if broker is not None:

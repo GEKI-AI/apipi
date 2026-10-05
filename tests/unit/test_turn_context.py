@@ -116,6 +116,39 @@ async def test_redact_context_removes_secrets() -> None:
     assert raw["mcp"][0]["headers"] == {"Authorization": "Bearer vault-secret"}
 
 
+async def test_env_credentials_are_redacted_and_hidden_from_repr() -> None:
+    raw = _context(
+        env_credentials=[
+            {
+                "credential_id": "cred",
+                "secret_name": "GITHUB_TOKEN",
+                "secret_value": "ghp-live",
+                "allowed_hosts": ["github.com"],
+                "git_username": None,
+            }
+        ]
+    )
+    parsed = parse_turn_context(raw)
+    assert parsed.env_credentials[0].secret_value == "ghp-live"
+    assert "ghp-live" not in repr(parsed)
+    assert "secret-key" not in repr(parsed)
+    redacted = redact_context(raw)
+    assert redacted["env_credentials"][0]["secret_value"] == "..."
+    assert redacted["env_credentials"][0]["secret_name"] == "GITHUB_TOKEN"
+    assert raw["env_credentials"][0]["secret_value"] == "ghp-live"
+    summary = summarize_context(raw)
+    assert summary["env_credential_count"] == 1
+    assert "ghp-live" not in str(summary)
+
+
+def test_guest_env_deny_list_covers_the_worker() -> None:
+    from apipi.common.guest_env import GUEST_ENV_NEVER, reserved_secret_name
+    from apipi.worker.pi import microvm
+
+    assert microvm.GUEST_ENV_NEVER is GUEST_ENV_NEVER
+    assert all(reserved_secret_name(name) for name in microvm._GUEST_FILE_KEYS)
+
+
 async def test_summarize_context_has_no_secrets() -> None:
     summary = summarize_context(_context())
     assert summary["mcp_servers"] == ["mock"]

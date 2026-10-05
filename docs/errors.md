@@ -82,6 +82,9 @@ after a disconnect today. That mode is not implemented.
 | `tool_not_allowed` | user | Tool type not allowed for `environment.type=none` (only function tools, HTTP MCP with `server_url`, and `web_search`) | no | warning |
 | `search_not_configured` | user | Agent create or update with a `web_search` tool, and the operator has not configured search for the caller. Returned as `400` | no | warning |
 | `mcp_label_collision` | user | Agent create or update, or an inline session agent, has two `mcp` tools whose `server_label` differs only in `-` and `_`. Pi treats them as one name. Returned as `400` | no | warning |
+| `credential_not_allowed` | user | Session create, or a later turn, with a vault `environment_variable` credential on `environment.type=none` or with `network.access` `disabled`, or a turn whose worker does not run isolation `microvm`. Returned as `400`; a worker that still reaches sandbox start without an egress gateway fails the turn or the sandbox with this code. See [vaults](vaults.md#requirements) | no | warning |
+| `credential_host_not_allowed` | user | A vault environment credential host is not allowed by the operator TAP allowlist. Returned as `400` | no | warning |
+| `secret_name_collision` | user | Two vault environment credentials with the same `secret_name` in one vault or across the attached vaults, or a `secret_name` that is also an `environment.env` key. Returned as `400` | no | warning |
 | `builtin_tools` | user | `apipi.builtin_tools=on` for `environment.type=none`, or `apipi.codemode` `on`/`only` with built-in tools off | no | warning |
 | `turn_timeout` | internal | `turn_timeout` exceeded | yes | error |
 | `pi_exited` | internal | Pi stream ended without `agent_settled` | yes | error |

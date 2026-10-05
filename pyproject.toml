@@ -72,6 +72,7 @@ packages = ["src/apipi"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/apipi/worker/pi/guest.sh" = "apipi/worker/pi/guest.sh"
+"src/apipi/worker/pi/git-credential.sh" = "apipi/worker/pi/git-credential.sh"
 "src/apipi/worker/pi/extensions/mcp.ts" = "apipi/worker/pi/extensions/mcp.ts"
 "images/build.sh" = "apipi/worker/pi/images/build.sh"
 "images/kernel.env" = "apipi/worker/pi/images/kernel.env"

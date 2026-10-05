@@ -570,6 +570,7 @@ class LocalExecution:
         from apipi.common.errors import ObjectStoreError
         from apipi.config import CapacityError
         from apipi.env.setup import SetupError
+        from apipi.worker.pi.proc import EnvCredentialsUnsupported
         from apipi.worker.runtime import load_boot_kwargs, report_environment_failed
 
         sink = self.sink_for(tenant_id, session_id)
@@ -601,6 +602,8 @@ class LocalExecution:
                 kwargs["web_search"] = True
             try:
                 await self.pool.get(session_id, **kwargs)
+            except EnvCredentialsUnsupported as exc:
+                await fail(str(exc), exc.code)
             except CapacityError as exc:
                 await fail(str(exc), exc.code)
             except Exception:

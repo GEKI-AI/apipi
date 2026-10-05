@@ -1387,9 +1387,12 @@ async def create_vault_credential(
     *,
     name: str | None = None,
     auth_type: str,
-    mcp_server_url: str,
+    mcp_server_url: str | None = None,
     token: str,
     credential_id: uuid.UUID | None = None,
+    secret_name: str | None = None,
+    allowed_hosts: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> VaultCredential:
     row = VaultCredential(
         id=credential_id if credential_id is not None else uuid.uuid4(),
@@ -1399,6 +1402,9 @@ async def create_vault_credential(
         auth_type=auth_type,
         mcp_server_url=mcp_server_url,
         token=token,
+        secret_name=secret_name,
+        allowed_hosts=allowed_hosts,
+        metadata_json=metadata if metadata is not None else {},
     )
     db.add(row)
     await db.flush()
@@ -1440,6 +1446,7 @@ async def update_vault_credential(
     *,
     name: str | None = None,
     token: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> VaultCredential | None:
     row = await get_vault_credential(db, tenant_id, vault_id, credential_id)
     if row is None:
@@ -1448,6 +1455,8 @@ async def update_vault_credential(
         row.name = name
     if token is not None:
         row.token = token
+    if metadata is not None:
+        row.metadata_json = metadata
     row.updated_at = utc_now()
     await db.flush()
     return row

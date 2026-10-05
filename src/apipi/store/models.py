@@ -505,8 +505,14 @@ class VaultCredential(Base):
             ondelete="CASCADE",
         ),
         CheckConstraint(
-            "auth_type IN ('static_bearer')",
+            "auth_type IN ('static_bearer', 'environment_variable')",
             name="vault_credentials_auth_type_check",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "vault_id",
+            "secret_name",
+            name="vault_credentials_secret_name_key",
         ),
     )
 
@@ -519,8 +525,13 @@ class VaultCredential(Base):
     vault_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     auth_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    mcp_server_url: Mapped[str] = mapped_column(String, nullable=False)
+    mcp_server_url: Mapped[str | None] = mapped_column(String, nullable=True)
     token: Mapped[str] = mapped_column(String, nullable=False)
+    secret_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    allowed_hosts: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONType, default=dict, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
