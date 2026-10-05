@@ -59,6 +59,9 @@ async def test_stop_is_acked_on_receipt_or_after_session_stopped_is_acked(
             "lifecycle.stop",
             "session.stopped",
         ]
+        if features is None:
+            await asyncio.sleep(0.1)
+            assert sock.of("lease.ack") == []
         sock.push(
             {
                 "type": "ack",
@@ -69,6 +72,9 @@ async def test_stop_is_acked_on_receipt_or_after_session_stopped_is_acked(
         await _wait_for(lambda: session_id not in run.leases and sock.of("lease.ack"))
         assert [ack["id"] for ack in sock.of("lease.ack")] == [command["id"]]
         assert sock.of("lease.release") == []
+        kinds = [m.get("type") for m in sock.sent]
+        acked_after_stopped = kinds.index("lease.ack") > kinds.index("session.stopped")
+        assert acked_after_stopped is (features is None)
     finally:
         await run.stop()
 

@@ -103,7 +103,7 @@ async def test_busy_turn_keeps_its_lease(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     short = settings.model_copy(
-        update={"worker_lease_ttl": timedelta(milliseconds=200)}
+        update={"worker_lease_ttl": timedelta(milliseconds=500)}
     )
     async with split_client_for(short, store, token=worker_secret) as (
         app,
@@ -115,13 +115,13 @@ async def test_busy_turn_keeps_its_lease(
         lease_id = uuid.UUID(command["lease_id"])
         ticks = 0
         loop = asyncio.get_running_loop()
-        end = loop.time() + 0.6
+        end = loop.time() + 1.5
         while loop.time() < end:
             worker.outbox.append(session_id, "event", _error_event(f"tick {ticks}"))
             ticks += 1
             expired = await app.state.workers.expire(store, app.state.event_hub)
             assert expired == []
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.05)
         assert await _lease_of(store, session_id) == lease_id
 
         async def stored() -> bool:
