@@ -122,7 +122,7 @@ def _make_ca(tmp_path: Path) -> tuple[Path, RSAPrivateKey, x509.Certificate]:
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now)
+        .not_valid_before(now - datetime.timedelta(minutes=5))
         .not_valid_after(now + datetime.timedelta(days=1))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
         .add_extension(
@@ -169,7 +169,7 @@ def _issue_cert(
         .issuer_name(ca_cert.subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now)
+        .not_valid_before(now - datetime.timedelta(minutes=5))
         .not_valid_after(now + datetime.timedelta(days=1))
     )
     if sans:

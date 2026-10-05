@@ -972,7 +972,7 @@ sets itself:
 | `spawn_failed`, `sandbox_boot_failed`, `pi_exited`, `pi_memory` | The sandbox or Pi failed. |
 | `image_unavailable`, `placement` | The worker cannot take the session. |
 | `invalid_request` | The command or its context is invalid. |
-| `internal` | Anything else. A command that raised is answered with an `error` envelope with this code. |
+| `internal` | Anything else. A command that raised is answered with an `error` envelope with this code, unless the worker cancelled the command, for example on shutdown or a lost connection. |
 | `upstream_*`, `context_length_exceeded`, `model_*` | Failures of the model host, as Pi reports them. |
 
 ## Versioning and features

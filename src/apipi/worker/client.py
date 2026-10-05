@@ -462,6 +462,7 @@ async def run_worker(
     connect_factory = connect if connect is not None else websockets.connect
     try:
         while True:
+            stop_if_cancelled()
             connect_started = time.monotonic()
             state = ConnectionState()
             execution.note_stopped = release_offline
@@ -900,6 +901,9 @@ async def _serve_connection(
             await send_message(
                 LeaseRelease(session_id=session_id, lease_id=uuid.UUID(lease_id))
             )
+        except asyncio.CancelledError:
+            pending_releases[session_id] = lease_id
+            raise
         except Exception as exc:
             pending_releases[session_id] = lease_id
             if cancelling():
@@ -1159,7 +1163,9 @@ async def _serve_connection(
             if session_leases.get(stop_session) == raw_lease:
                 session_leases.pop(stop_session, None)
             outbox.release(stop_session)
-        except Exception:
+        except Exception as exc:
+            if cancelling():
+                raise asyncio.CancelledError from exc
             dedupe.discard(stop_session, str(command.command_id))
             report_command_failed(command)
             log.exception(

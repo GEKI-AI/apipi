@@ -661,7 +661,10 @@ logged as a rate limited warning (`worker.message.invalid`), counted in
 `apipi_worker_messages_total{type="unknown"}`, and skipped. It does not
 drop the connection. A command that raises while it runs is answered
 with an `error` envelope (code `internal`, shown as an
-`agent.session.error` event) and is not recorded as done. The worker
+`agent.session.error` event) and is not recorded as done. A command
+that the worker cancels, for example on shutdown or a lost connection,
+gets no `error` envelope, even when the cancel came back as another
+error (see below). The worker
 tracks a lease only for a command it accepted: a `turn.start` that the
 worker rejects (wrong run mode or missing image) releases its lease
 again after the failure is acked, and a `turn.cancel` for a session
@@ -684,13 +687,13 @@ loop, the outbox sender, and the heartbeat, inventory, and drain timers
 of that connection, and waits for them to end before it dials again or
 exits. A socket or store call that is cancelled can raise another error
 in place of the cancel, such as `ValueError("Connection closed")`, or
-return as if nothing happened. Each of these loops checks whether it
-was cancelled before it waits for the next frame, envelope, or timer,
-and the reconnect loop checks it before it treats an error as a lost
-connection, so a cancel always ends them and a shutdown does not hang.
-A command (including `session.stop`) or a delta flush that is
-cancelled this way also ends as cancelled: the worker does not answer the command with
-an `error` envelope and does not count the delta as dropped. A
+return as if nothing happened. Each of these loops checks whether it was
+cancelled before it waits for the next frame, envelope, or timer, and
+the reconnect loop checks it before it treats an error as a lost
+connection, so a cancel always ends them and a shutdown does not hang. A
+command (including `session.stop`) or a delta flush that is cancelled
+this way also ends as cancelled: the worker does not answer the command
+with an `error` envelope and does not count the delta as dropped. A
 `lease.release` that is cancelled while it is sent stays pending and
 goes out after the next `hello`.
 
