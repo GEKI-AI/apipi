@@ -212,6 +212,16 @@ ack a command whose `op` it does not know.
 The worker sends it only after the API acked every envelope the worker
 buffered for the session, or after 10 seconds, whichever comes first.
 
+The worker releases the lease when the Pi process of a session stops,
+for example after the idle TTL, at the memory limit, at drain, or at
+shutdown. When a turn starts a new process for the same session,
+because the turn needs a different configuration (`respawn`) or the old
+process exited (`crash`), the worker reports the stop of the old
+process and harvests its files, but it keeps the lease and sends no
+`lease.release`, because the turn goes on under that lease. It keeps
+the lease too when it stops a guest because the attachments of a
+message could not be copied into it (`push_failed`).
+
 #### `lease.revoke` (API to worker)
 
 | Field | Type | Required | Meaning |

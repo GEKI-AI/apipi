@@ -301,7 +301,7 @@ async def test_host_push_times_out_when_the_guest_hangs(tmp_path: Path) -> None:
 async def test_kill_without_the_hook_keeps_the_lease(settings: Settings) -> None:
     hooked: list[uuid.UUID] = []
 
-    async def on_kill(session_id: uuid.UUID, _proc: Any) -> None:
+    async def on_kill(session_id: uuid.UUID, _proc: Any, _release: bool) -> None:
         hooked.append(session_id)
 
     pool = PiPool(settings, on_kill=on_kill)

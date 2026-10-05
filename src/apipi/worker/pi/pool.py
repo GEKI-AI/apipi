@@ -29,7 +29,7 @@ _EVENT_REASON = {
     "push_failed": "push_failed",
 }
 
-OnKill = Callable[[uuid.UUID, PiProc | None], Awaitable[None]]
+OnKill = Callable[[uuid.UUID, PiProc | None, bool], Awaitable[None]]
 OnTransition = Callable[[uuid.UUID, str, dict[str, Any]], Awaitable[None]]
 log = logging.getLogger("apipi.worker.pi")
 
@@ -129,7 +129,7 @@ class PiPool:
                 if inflight is None:
                     current = self._procs.get(session_id)
                     if current is not None and not current.alive:
-                        await self.kill(session_id, reason="crash")
+                        await self.kill(session_id, reason="crash", release=False)
                     elif (
                         current is not None
                         and current.alive
@@ -145,7 +145,7 @@ class PiPool:
                             web_search=web_search,
                         )
                     ):
-                        await self.kill(session_id, reason="respawn")
+                        await self.kill(session_id, reason="respawn", release=False)
                         cause = "respawn"
                     ready = self._claim_or_reuse(
                         session_id,
@@ -523,12 +523,19 @@ class PiPool:
             )
 
     async def kill(
-        self, session_id: uuid.UUID, *, reason: str = "session", hook: bool = True
+        self,
+        session_id: uuid.UUID,
+        *,
+        reason: str = "session",
+        hook: bool = True,
+        release: bool = True,
     ) -> None:
         """Stop the process of a session.
 
-        With `hook` False the kill hook does not run, so the worker keeps
-        the lease and a turn of the session can go on with a new process.
+        With `release` False the kill hook harvests the files of the
+        process but the worker keeps the lease, because a turn of the
+        session goes on with a new process. With `hook` False the kill
+        hook does not run at all, so the worker keeps the lease too.
         """
         live = self._live.pop(session_id, None)
         env_type = self._env_types.get(session_id)
@@ -574,7 +581,7 @@ class PiPool:
             if proc.vm_id is None:
                 self.metrics.observe_pi_kill(reason)
         if hook and self.on_kill is not None:
-            await self.on_kill(session_id, proc)
+            await self.on_kill(session_id, proc, release)
         if proc is not None:
             proc.stop_reason = reason
             await proc.terminate()
