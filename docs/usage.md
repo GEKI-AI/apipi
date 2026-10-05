@@ -453,7 +453,9 @@ then flushes the queue for at most `APIPI_LIFECYCLE_EXPORT_TIMEOUT`.
 
 When the queue is full, the new event is dropped.
 `apipi_lifecycle_export_total{result="overflow"}` increments, and a
-rate-limited warning is logged with `type` and `session_id`.
+warning (`lifecycle.export.overflow`) is logged with `type` and
+`session_id` for the first dropped event and then at most once every
+30 seconds.
 `apipi_lifecycle_queue_depth` is the current depth. Size
 `APIPI_LIFECYCLE_QUEUE` for the burst you can tolerate losing. A full
 queue drops the newest event, so a long outage loses the tail, not the

@@ -9,6 +9,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import h11
@@ -749,6 +750,26 @@ async def test_accept_backs_off_when_out_of_files(
     await writer.drain()
     assert await reader.readexactly(1) == b"b"
     await close(writer)
+
+
+def test_first_accept_warning_is_logged_on_a_fresh_host(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.egress")
+    now = [30.0]
+    monkeypatch.setattr(
+        gateway_module, "time", SimpleNamespace(monotonic=lambda: now[0])
+    )
+    monkeypatch.setattr(gateway_module, "_last_warning", gateway_module._last_warning)
+    gateway_module._warn_accept("s1", "Too many open files")
+    now[0] = 31.0
+    gateway_module._warn_accept("s1", "Too many open files")
+    warnings = [
+        record
+        for record in caplog.records
+        if record.__dict__.get("event") == "egress.accept.failed"
+    ]
+    assert len(warnings) == 1
 
 
 async def test_intercept_terminates_tls_and_forwards_http11(

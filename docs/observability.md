@@ -88,7 +88,7 @@ sent one), `port`, `decision` (`spliced`, `intercepted`, or
 and `bytes_down`. It never carries header values, paths, or bodies.
 When the worker runs out of file descriptors, the gateway stops
 accepting for half a second and logs `egress.accept.failed` (warning,
-at most once per minute).
+for the first failure and then at most once per minute).
 
 When the gateway puts a vault environment credential into a request,
 it writes one more info line (`event=egress.injection`) with

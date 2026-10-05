@@ -91,7 +91,7 @@ class LifecycleEmitter:
         self._queue: asyncio.Queue[dict[str, Any]] | None = None
         self._task: asyncio.Task[None] | None = None
         self._busy = False
-        self._last_warn = 0.0
+        self._last_warn = float("-inf")
         self._sinks: list[EventSink] = []
         if self.active:
             self._queue = asyncio.Queue(maxsize=settings.lifecycle_queue)

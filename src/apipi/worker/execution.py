@@ -403,7 +403,7 @@ class LocalExecution:
     async def observe_loop(self) -> None:
         sample = self.settings.guest_sample_interval
         sample_every = sample.total_seconds() if sample is not None else None
-        last_sample = 0.0
+        last_sample = float("-inf")
 
         async def observe_round() -> None:
             nonlocal last_sample
