@@ -674,7 +674,8 @@ session. Without that the claim in the next `register` would be missing
 a lease the API still holds, and the API would orphan an idle session.
 Every background task of the worker has a done callback that logs an
 exception, and every loop catches an error per round and goes on (see
-`apipi_background_loop_errors_total`).
+`apipi_background_loop_errors_total`). A loop that was cancelled stops,
+even when the round raised another error in place of the cancel.
 
 ## Artifacts
 
@@ -903,7 +904,12 @@ These do not close the socket:
   timer. An ingest batch is retried three times before the connection
   is closed as `ingest_failed`. If a step after the commit fails (the
   renewal, the publish on the event bus, a lifecycle export, or the blob
-  wipe), the acks are already sent and the next steps still run.
+  wipe), the acks are already sent and the next steps still run. This
+  does not apply while the connection is being cancelled, for example
+  when the API shuts down. A database driver can then raise another
+  error in place of the cancel; the API does not count that as a failed
+  message, and the connection ends instead of waiting for the next
+  message.
 - A frame that is binary, not valid JSON, or not a JSON object. It is
   skipped, logged as `worker.frame.invalid`, and counted as
   `frame_invalid`. A message with a known `type` and invalid fields is

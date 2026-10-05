@@ -75,6 +75,14 @@ stuck thing (for example an async server fixture), the run still
 hangs. Without `-n`, the first timeout ends the whole pytest run; add
 `-v` so the name of the running test is printed before the stacks.
 
+pytest-timeout stops the timer when a test fails, so that a debugger
+can be used on the failure. Then a teardown that hangs after the
+failure, for example a task that does not end when the event loop
+of the test is closed, would have no limit. `tests/conftest.py` starts
+the timer again after a failure in setup or in the test, with the
+full limit, unless pytest runs with `--pdb`. A hang in the teardown of
+a failed test then also ends with its name.
+
 A test that needs longer sets its own limit in seconds with a mark:
 
 ```python

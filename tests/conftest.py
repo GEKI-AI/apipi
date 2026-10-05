@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import pytest_timeout
 from httpx import AsyncClient
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
@@ -38,6 +39,17 @@ def _sqlite_engine(path: Path | None = None) -> AsyncEngine:
         cursor.close()
 
     return engine
+
+
+@pytest.hookimpl
+def pytest_exception_interact(node: pytest.Item | pytest.Collector) -> None:
+    if not isinstance(node, pytest.Item) or node.config.getvalue("usepdb"):
+        return
+    settings = pytest_timeout._get_item_settings(node)
+    if settings.timeout and not settings.func_only:
+        node.config.pluginmanager.hook.pytest_timeout_set_timer(
+            item=node, settings=settings
+        )
 
 
 @pytest.fixture

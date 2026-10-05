@@ -13,6 +13,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import DBAPIError
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
+from apipi.common.background import cancelling
 from apipi.common.event_bus import EventBus
 from apipi.common.logutil import log_event
 from apipi.common.wirewatch import note_unknown_fields, note_unknown_type
@@ -454,6 +455,8 @@ class ConnectionServer:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    if cancelling():
+                        raise asyncio.CancelledError from exc
                     self._failed(label, exc)
                     if attempt + 1 >= attempts:
                         return
@@ -689,6 +692,8 @@ class ConnectionServer:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if cancelling():
+                    raise asyncio.CancelledError from exc
                 self._failed("ingest", exc)
             else:
                 if self.metrics is not None:
@@ -744,6 +749,8 @@ class ConnectionServer:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if cancelling():
+                raise asyncio.CancelledError from exc
             self._failed(f"ingest.{label}", exc)
 
     async def _start_search(self, message: dict[str, Any]) -> None:
