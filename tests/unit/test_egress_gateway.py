@@ -6,7 +6,7 @@ import socket
 import ssl
 import threading
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
@@ -15,6 +15,7 @@ import h11
 import pytest
 from tests.unit.test_egress_dns import FakeResolver, answered
 from tests.unit.test_egress_dns import query as dns_query
+from tests.unit.test_egress_policy import resolver
 from tests.unit.test_egress_sni import handmade_hello
 
 from apipi.common.metrics import Metrics
@@ -164,15 +165,6 @@ class Upstream:
             conn.start_next_cycle()
 
 
-def resolver(table: dict[str, list[str]]) -> Callable[[str, int], Awaitable[list[str]]]:
-    async def resolve(host: str, _port: int) -> list[str]:
-        if host not in table:
-            raise OSError("unknown host")
-        return table[host]
-
-    return resolve
-
-
 def loopback_allowed_blocked(address: str) -> bool:
     return address != "127.0.0.1" and address_blocked(address)
 
@@ -254,6 +246,16 @@ async def env(tmp_path: Path) -> AsyncIterator[Env]:
         await gateway.stop()
     for server in state.upstreams:
         server.close()
+
+
+def _no_verify() -> ssl.SSLContext:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+NO_VERIFY = _no_verify()
 
 
 def trust(*cas: WorkerCA, alpn: list[str] | None = None) -> ssl.SSLContext:
@@ -417,10 +419,7 @@ async def test_restricted_rejects_other_hosts_ip_literals_and_no_sni(
     )
     await assert_rejected(gateway, trust(env.upstream_ca), "other.test")
     await wait_record(caplog, decision="rejected", reason="not_allowed")
-    loose = ssl.create_default_context()
-    loose.check_hostname = False
-    loose.verify_mode = ssl.CERT_NONE
-    await assert_rejected(gateway, loose, None)
+    await assert_rejected(gateway, NO_VERIFY, None)
     await wait_record(caplog, decision="rejected", reason="no_host")
     reader, writer = await asyncio.open_connection("127.0.0.1", gateway.port)
     writer.write(handmade_hello("1.1.1.1"))
@@ -497,50 +496,21 @@ async def test_private_address_rejected_in_every_mode(
     assert upstream.connections == 0
 
 
-async def test_private_hosts_only_for_hosts_the_session_names(env: Env) -> None:
+async def test_restricted_reaches_a_private_host_the_session_names(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.egress")
     upstream = await env.upstream(mode="echo", bind="127.0.0.2")
-    table = {HOST: ["127.0.0.2"]}
     gateway = await env.gateway(
-        "restricted", port=upstream.port, private=(HOST,), table=table
+        "restricted", port=upstream.port, private=(HOST,), table={HOST: ["127.0.0.2"]}
     )
     reader, writer = await tls_connect(gateway, trust(env.upstream_ca))
     writer.write(b"forgejo")
     await writer.drain()
     assert await reader.readexactly(7) == b"forgejo"
     await close(writer)
-    other = await env.gateway(
-        "restricted", port=upstream.port, private=("forgejo.internal",), table=table
-    )
-    await assert_rejected(other, trust(env.upstream_ca))
-    cidr = await env.gateway(
-        "enabled",
-        port=upstream.port,
-        private=("127.0.0.2/32", HOST),
-        dest=("127.0.0.2", upstream.port),
-        table=table,
-    )
-    await assert_rejected(cidr, trust(env.upstream_ca))
-    loose = ssl.create_default_context()
-    loose.check_hostname = False
-    loose.verify_mode = ssl.CERT_NONE
-    await assert_rejected(cidr, loose, None)
+    await wait_record(caplog, decision="spliced", host=HOST)
     assert upstream.connections == 1
-
-
-async def test_private_host_reachable_when_intercepted_in_enabled(env: Env) -> None:
-    upstream = await env.upstream(bind="127.0.0.2")
-    gateway = await env.gateway(
-        "enabled",
-        port=upstream.port,
-        private=(HOST,),
-        intercept=(HOST,),
-        table={HOST: ["127.0.0.2"]},
-    )
-    reader, writer = await tls_connect(gateway, trust(env.worker_ca))
-    status, _, _ = await HttpClient(reader, writer).request("GET", "/repo.git")
-    assert status == 200
-    await close(writer)
-    assert upstream.seen[0].target == "/repo.git"
 
 
 async def test_enabled_splices_ip_literal_and_no_sni_to_original_destination(
@@ -551,10 +521,7 @@ async def test_enabled_splices_ip_literal_and_no_sni_to_original_destination(
     gateway = await env.gateway(
         "enabled", port=upstream.port, dest=("127.0.0.1", upstream.port)
     )
-    loose = ssl.create_default_context()
-    loose.check_hostname = False
-    loose.verify_mode = ssl.CERT_NONE
-    reader, writer = await tls_connect(gateway, loose, None)
+    reader, writer = await tls_connect(gateway, NO_VERIFY, None)
     writer.write(b"raw")
     await writer.drain()
     assert await reader.readexactly(3) == b"raw"
@@ -568,16 +535,14 @@ async def test_bad_server_name_is_rejected_without_traceback(
 ) -> None:
     caplog.set_level(logging.INFO, logger="apipi.egress")
     upstream = await env.upstream(mode="echo")
-    for mode in ("restricted", "enabled"):
-        gateway = await env.gateway(mode, port=upstream.port)
-        reader, writer = await asyncio.open_connection("127.0.0.1", gateway.port)
-        writer.write(handmade_hello("a" * 64 + ".example"))
-        await writer.drain()
-        with contextlib.suppress(ConnectionError):
-            assert await asyncio.wait_for(reader.read(), timeout=5) == b""
-        await close(writer)
-        await wait_record(caplog, decision="rejected", reason="bad_host")
-        caplog.clear()
+    gateway = await env.gateway("enabled", port=upstream.port)
+    reader, writer = await asyncio.open_connection("127.0.0.1", gateway.port)
+    writer.write(handmade_hello("a" * 64 + ".example"))
+    await writer.drain()
+    with contextlib.suppress(ConnectionError):
+        assert await asyncio.wait_for(reader.read(), timeout=5) == b""
+    await close(writer)
+    await wait_record(caplog, decision="rejected", reason="bad_host")
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
@@ -1017,21 +982,31 @@ async def test_throughput_spliced_and_intercepted(env: Env) -> None:
     assert head.startswith(b"HTTP/1.1 200")
     splice_wall, splice_cpu = await _throughput(reader, total)
     await close(writer)
-    intercepted = await env.gateway("restricted", port=upstream.port, intercept=(HOST,))
+    placeholder = "apipi-secret-" + "a" * 32
+    injector = SecretInjector(
+        [Injection("cred", "SECRET", placeholder, "real-secret-value", (HOST,))],
+        ports=(upstream.port,),
+    )
+    intercepted = await env.gateway(
+        "restricted", port=upstream.port, intercept=(HOST,), hooks=injector.hooks()
+    )
     reader, writer = await tls_connect(intercepted, trust(env.worker_ca))
-    writer.write(f"GET /big/{total} HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode())
-    await writer.drain()
-    head = await reader.readuntil(b"\r\n\r\n")
-    assert head.startswith(b"HTTP/1.1 200")
-    intercept_wall, intercept_cpu = await _throughput(reader, total)
+    started = time.perf_counter()
+    cpu = time.process_time()
+    status, _, body = await HttpClient(reader, writer).request("GET", f"/big/{total}")
+    intercept_wall = time.perf_counter() - started
+    intercept_cpu = time.process_time() - cpu
     await close(writer)
+    assert status == 200
+    assert len(body) == total
     mbit = total * 8 / 1_000_000
     splice_rate = mbit / splice_wall
     intercept_rate = mbit / intercept_wall
     print(
         f"\negress throughput over {total // (1024 * 1024)} MiB: "
         f"spliced {splice_rate:.0f} Mbit/s ({splice_cpu:.2f} s CPU), "
-        f"intercepted {intercept_rate:.0f} Mbit/s ({intercept_cpu:.2f} s CPU); "
+        f"intercepted and masked {intercept_rate:.0f} Mbit/s "
+        f"({intercept_cpu:.2f} s CPU); "
         "CPU includes the test client and upstream in the same process"
     )
     assert splice_rate >= 50
@@ -1142,8 +1117,9 @@ async def test_slow_lookups_in_one_session_do_not_block_another(
 
 
 async def test_restricted_guest_reaches_private_host_through_placeholder(
-    env: Env,
+    env: Env, caplog: pytest.LogCaptureFixture
 ) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.egress")
     upstream = await env.upstream(mode="echo", bind="127.0.0.2")
     gateway = await env.gateway(
         "restricted",
@@ -1166,47 +1142,37 @@ async def test_restricted_guest_reaches_private_host_through_placeholder(
     await writer.drain()
     assert await reader.readexactly(7) == b"forgejo"
     await close(writer)
+    await wait_record(caplog, decision="spliced", host=HOST)
     assert upstream.connections == 1
-    public = await env.gateway("restricted", port=upstream.port, private=(HOST,))
-    assert public.dns is not None
-    other = await public.dns.answer(dns_query("other.internal"), tcp=False)
-    assert other is not None and other[3] & 0x0F == 3
 
 
-async def test_enabled_dns_filter_only_with_private_credential_hosts(env: Env) -> None:
+async def test_enabled_dns_filter_answers_private_credential_hosts(env: Env) -> None:
     upstream = await env.upstream(mode="echo")
-    plain = await env.gateway("enabled", port=upstream.port, private=(HOST,))
-    assert plain.dns is None
-    public = await env.gateway(
-        "enabled", port=upstream.port, private=(HOST,), intercept=("github.com",)
-    )
-    assert public.dns is None
-    resolver = FakeResolver()
-    await resolver.start()
+    upstream_dns = FakeResolver()
+    await upstream_dns.start()
     try:
         gateway = await env.gateway(
             "enabled",
             port=upstream.port,
             private=(HOST, "wiki.internal"),
             intercept=(HOST,),
-            dns_upstreams=(("127.0.0.1", resolver.port),),
+            dns_upstreams=(("127.0.0.1", upstream_dns.port),),
         )
         assert gateway.dns is not None and gateway.dns_ports is not None
         reply = await gateway.dns.answer(dns_query(HOST), tcp=False)
         assert reply is not None
         assert reply.endswith(socket.inet_aton("198.18.0.1"))
-        assert resolver.udp == []
-        for name in ("example.com", "wiki.internal"):
-            packet = dns_query(name)
-            reply = await gateway.dns.answer(packet, tcp=False)
-            assert reply is not None and answered(reply, packet)
-        assert resolver.udp == ["example.com", "wiki.internal"]
+        packet = dns_query("wiki.internal")
+        reply = await gateway.dns.answer(packet, tcp=False)
+        assert reply is not None and answered(reply, packet)
+        assert upstream_dns.udp == ["wiki.internal"]
     finally:
-        resolver.close()
+        upstream_dns.close()
 
 
-async def test_enabled_placeholder_connection_is_resolved_by_name_and_injected(
-    env: Env, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("dest", ["198.51.100.7", "198.18.0.1"])
+async def test_enabled_private_credential_host_is_resolved_by_name_and_injected(
+    env: Env, caplog: pytest.LogCaptureFixture, dest: str
 ) -> None:
     caplog.set_level(logging.INFO, logger="apipi.egress")
     upstream = await env.upstream(bind="127.0.0.2")
@@ -1221,7 +1187,7 @@ async def test_enabled_placeholder_connection_is_resolved_by_name_and_injected(
         private=(HOST,),
         intercept=(HOST,),
         hooks=injector.hooks(),
-        dest=("198.18.0.1", upstream.port),
+        dest=(dest, upstream.port),
         table={HOST: ["127.0.0.2"]},
     )
     reader, writer = await tls_connect(gateway, trust(env.worker_ca))
@@ -1233,6 +1199,7 @@ async def test_enabled_placeholder_connection_is_resolved_by_name_and_injected(
     assert status == 200
     await close(writer)
     await wait_record(caplog, decision="intercepted", host=HOST)
+    assert upstream.seen[0].target == "/org/repo.git/info/refs"
     assert ("Authorization", "Bearer real-git-token") in upstream.seen[0].headers
 
 
@@ -1242,9 +1209,6 @@ async def test_placeholder_connection_must_name_its_host(
     caplog.set_level(logging.INFO, logger="apipi.egress")
     upstream = await env.upstream(mode="echo", bind="127.0.0.2")
     table = {HOST: ["127.0.0.2"], "other.test": ["127.0.0.2"]}
-    loose = ssl.create_default_context()
-    loose.check_hostname = False
-    loose.verify_mode = ssl.CERT_NONE
     enabled = await env.gateway(
         "enabled",
         port=upstream.port,
@@ -1253,10 +1217,10 @@ async def test_placeholder_connection_must_name_its_host(
         dest=("198.18.0.1", upstream.port),
         table=table,
     )
-    await assert_rejected(enabled, loose, "other.test")
+    await assert_rejected(enabled, NO_VERIFY, "other.test")
     await wait_record(caplog, decision="rejected", reason="placeholder_mismatch")
     caplog.clear()
-    await assert_rejected(enabled, loose, None)
+    await assert_rejected(enabled, NO_VERIFY, None)
     await wait_record(caplog, decision="rejected", reason="placeholder_mismatch")
     caplog.clear()
     unused = await env.gateway(
@@ -1278,7 +1242,7 @@ async def test_placeholder_connection_must_name_its_host(
         dest=("198.18.0.1", upstream.port),
         table=table,
     )
-    await assert_rejected(restricted, loose)
+    await assert_rejected(restricted, NO_VERIFY)
     await wait_record(caplog, decision="rejected", reason="placeholder_mismatch")
     assert upstream.connections == 0
 

@@ -1,12 +1,14 @@
 import asyncio
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any, cast
 
 import pytest
+from tests.support.postgres import needs_postgres, postgres_replicas
 
-from apipi.common.event_bus import InMemoryEventBus, live_event_body
+from apipi.common.event_bus import EventBus, InMemoryEventBus, live_event_body
 from apipi.common.ratelimit import relay_rate_allowed
 from apipi.config import Settings
 from apipi.protocol import DELTA_MAX_TEXT, WorkerEnvelope
@@ -242,21 +244,36 @@ async def _leased(
         return tenant.id, session_row.id, lease_id, worker_id
 
 
+@pytest.fixture(params=["memory", pytest.param("postgres", marks=needs_postgres)])
+async def buses(
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[tuple[EventBus, EventBus]]:
+    if request.param == "memory":
+        bus = InMemoryEventBus()
+        yield bus, bus
+        return
+    async with postgres_replicas() as pair:
+        yield pair
+
+
 async def test_handle_delta_publishes_live_without_db_writes(
-    settings: Settings, store: Store
+    settings: Settings, store: Store, buses: tuple[EventBus, EventBus]
 ) -> None:
+    publish, subscribe = buses
     hub = WorkerHub(settings)
-    bus = InMemoryEventBus()
     worker_id = uuid.uuid4()
     tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
-    queue = bus.subscribe(session_id)
+    queue = subscribe.subscribe(session_id)
     try:
         turn_id = uuid.uuid4()
         published = await hub.handle_delta(
-            store, bus, _conn(worker_id, lease_id), _envelope(session_id, turn_id, "hi")
+            store,
+            publish,
+            _conn(worker_id, lease_id),
+            _envelope(session_id, turn_id, "hi"),
         )
         assert published is True
-        message = await asyncio.wait_for(queue.get(), timeout=2)
+        message = await asyncio.wait_for(queue.get(), timeout=15)
         assert message["type"] == "agent.session.turn.output_text.delta"
         assert message["data"] == {"delta": "hi", "turn_id": str(turn_id)}
         assert "seq" not in message
@@ -265,7 +282,7 @@ async def test_handle_delta_publishes_live_without_db_writes(
 
             assert await list_events(db, tenant_id, session_id) == []
     finally:
-        bus.unsubscribe(session_id, queue)
+        subscribe.unsubscribe(session_id, queue)
 
 
 async def test_handle_delta_rejects_unleased_session(
@@ -296,39 +313,17 @@ async def _noted(
     )
 
 
-async def test_handle_delta_drops_after_done(settings: Settings, store: Store) -> None:
-    hub = WorkerHub(settings)
-    bus = InMemoryEventBus()
-    worker_id = uuid.uuid4()
-    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
-    turn_id = uuid.uuid4()
-    await _noted(hub, tenant_id, session_id, worker_id, lease_id)
-    hub.note_stored_events(
-        session_id,
-        [
-            {
-                "type": "agent.session.turn.output_text.done",
-                "data": {"text": "hello", "turn_id": str(turn_id)},
-            }
-        ],
-    )
-    queue = bus.subscribe(session_id)
-    try:
-        published = await hub.handle_delta(
-            store,
-            bus,
-            _conn(worker_id, lease_id),
-            _envelope(session_id, turn_id, "late"),
-        )
-        assert published is False
-        await asyncio.sleep(0.05)
-        assert queue.empty()
-    finally:
-        bus.unsubscribe(session_id, queue)
-
-
-async def test_handle_delta_drops_after_terminal_turn(
-    settings: Settings, store: Store
+@pytest.mark.parametrize(
+    ("stored", "same_turn", "published"),
+    [
+        ("agent.session.turn.output_text.done", True, False),
+        ("agent.session.turn.completed", True, False),
+        ("agent.session.turn.output_text.done", False, True),
+    ],
+    ids=["after_done", "after_terminal_turn", "other_turn"],
+)
+async def test_handle_delta_drops_only_deltas_of_ended_turns(
+    settings: Settings, store: Store, stored: str, same_turn: bool, published: bool
 ) -> None:
     hub = WorkerHub(settings)
     bus = InMemoryEventBus()
@@ -336,58 +331,23 @@ async def test_handle_delta_drops_after_terminal_turn(
     tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
     turn_id = uuid.uuid4()
     await _noted(hub, tenant_id, session_id, worker_id, lease_id)
+    ended = turn_id if same_turn else uuid.uuid4()
     hub.note_stored_events(
-        session_id,
-        [
-            {
-                "type": "agent.session.turn.completed",
-                "data": {"turn_id": str(turn_id)},
-            }
-        ],
+        session_id, [{"type": stored, "data": {"turn_id": str(ended)}}]
     )
     queue = bus.subscribe(session_id)
     try:
-        published = await hub.handle_delta(
-            store,
-            bus,
-            _conn(worker_id, lease_id),
-            _envelope(session_id, turn_id, "late"),
+        assert (
+            await hub.handle_delta(
+                store,
+                bus,
+                _conn(worker_id, lease_id),
+                _envelope(session_id, turn_id, "late"),
+            )
+            is published
         )
-        assert published is False
-        await asyncio.sleep(0.05)
-        assert queue.empty()
-    finally:
-        bus.unsubscribe(session_id, queue)
-
-
-async def test_handle_delta_keeps_deltas_for_other_turns(
-    settings: Settings, store: Store
-) -> None:
-    hub = WorkerHub(settings)
-    bus = InMemoryEventBus()
-    worker_id = uuid.uuid4()
-    tenant_id, session_id, lease_id, _ = await _leased(store, worker_id)
-    await _noted(hub, tenant_id, session_id, worker_id, lease_id)
-    hub.note_stored_events(
-        session_id,
-        [
-            {
-                "type": "agent.session.turn.output_text.done",
-                "data": {"text": "old", "turn_id": str(uuid.uuid4())},
-            }
-        ],
-    )
-    queue = bus.subscribe(session_id)
-    try:
-        published = await hub.handle_delta(
-            store,
-            bus,
-            _conn(worker_id, lease_id),
-            _envelope(session_id, uuid.uuid4(), "new"),
-        )
-        assert published is True
-        message = await asyncio.wait_for(queue.get(), timeout=2)
-        assert message["data"]["delta"] == "new"
+        sent = [queue.get_nowait()["data"]["delta"] for _ in range(queue.qsize())]
+        assert sent == (["late"] if published else [])
     finally:
         bus.unsubscribe(session_id, queue)
 
@@ -428,7 +388,6 @@ async def test_handle_delta_ignores_reasoning(settings: Settings, store: Store) 
             await hub.handle_delta(store, bus, _conn(worker_id, lease_id), envelope)
             is False
         )
-        await asyncio.sleep(0.05)
         assert queue.empty()
     finally:
         bus.unsubscribe(session_id, queue)

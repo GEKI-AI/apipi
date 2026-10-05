@@ -151,15 +151,6 @@ def answered(reply: bytes, packet: bytes) -> bool:
     )
 
 
-async def test_allowed_name_is_forwarded_over_udp(
-    dns: DnsFilter, resolver: FakeResolver
-) -> None:
-    packet = query("API.example.com")
-    reply = await udp_ask(dns.udp_port, packet)
-    assert answered(reply, packet)
-    assert resolver.udp == ["api.example.com"]
-
-
 async def test_forwarded_query_is_rebuilt(
     dns: DnsFilter, resolver: FakeResolver
 ) -> None:
@@ -274,16 +265,33 @@ async def test_passthrough_answers_private_names_and_forwards_the_rest_unchanged
         await filt.stop()
 
 
-async def test_multi_question_and_other_class_are_refused(
-    dns: DnsFilter, resolver: FakeResolver
+def _edited(packet: bytes, at: int, value: int, extra: bytes = b"") -> bytes:
+    changed = bytearray(packet)
+    changed[at] = value
+    return bytes(changed) + extra
+
+
+ALLOWED = query("api.example.com")
+
+
+@pytest.mark.parametrize(
+    ("packet", "code"),
+    [
+        (_edited(ALLOWED, 5, 2, ALLOWED[12:]), RCODE_FORMERR),
+        (_edited(ALLOWED, -1, 3), RCODE_NOTIMP),
+        (ALLOWED[:15], RCODE_FORMERR),
+        (_edited(ALLOWED, 2, 0x28), RCODE_NOTIMP),
+        (_edited(ALLOWED, 2, 0x80), None),
+    ],
+    ids=["two_questions", "other_class", "truncated", "update_opcode", "response"],
+)
+async def test_bad_queries_are_refused(
+    dns: DnsFilter, resolver: FakeResolver, packet: bytes, code: int | None
 ) -> None:
-    double = bytearray(query("api.example.com"))
-    double[5] = 2
-    double += query("api.example.com")[12:]
-    assert rcode(await udp_ask(dns.udp_port, bytes(double))) == RCODE_FORMERR
-    chaos = bytearray(query("api.example.com"))
-    chaos[-1] = 3
-    assert rcode(await udp_ask(dns.udp_port, bytes(chaos))) == RCODE_NOTIMP
+    if code is None:
+        assert await dns.answer(packet, tcp=False) is None
+    else:
+        assert rcode(await udp_ask(dns.udp_port, packet)) == code
     assert resolver.udp == []
 
 
@@ -320,54 +328,27 @@ async def test_tcp_clients_are_capped(
     del reader
 
 
-async def test_other_names_get_nxdomain(dns: DnsFilter, resolver: FakeResolver) -> None:
+@pytest.mark.parametrize("tcp", [False, True], ids=["udp", "tcp"])
+async def test_allowed_names_are_forwarded_and_others_get_nxdomain(
+    dns: DnsFilter, resolver: FakeResolver, tcp: bool
+) -> None:
+    async def ask(packet: bytes) -> bytes:
+        if tcp:
+            return await tcp_ask(dns.tcp_port, packet)
+        return await udp_ask(dns.udp_port, packet)
+
+    packet = query("API.example.com", ident=7)
+    assert answered(await ask(packet), packet)
     for name in ("evil.example.com", "example.com", "secret-data.attacker.test"):
         packet = query(name, ident=0x4321, qtype=16)
-        reply = await udp_ask(dns.udp_port, packet)
+        reply = await ask(packet)
         assert reply[:2] == packet[:2]
         assert reply[2] & 0x80
         assert rcode(reply) == RCODE_NXDOMAIN
         assert parse_question(reply).name == name
         assert int.from_bytes(reply[6:8], "big") == 0
-    assert resolver.udp == []
-    assert resolver.tcp == []
-
-
-async def test_tcp_queries(dns: DnsFilter, resolver: FakeResolver) -> None:
-    packet = query("api.example.com", ident=7)
-    assert answered(await tcp_ask(dns.tcp_port, packet), packet)
-    assert resolver.tcp == ["api.example.com"]
-    denied = await tcp_ask(dns.tcp_port, query("other.example.com"))
-    assert rcode(denied) == RCODE_NXDOMAIN
-    assert resolver.tcp == ["api.example.com"]
-
-
-async def test_malformed_and_unsupported(dns: DnsFilter) -> None:
-    bad = query("api.example.com")[:15]
-    assert rcode(await udp_ask(dns.udp_port, bad)) == RCODE_FORMERR
-    update = bytearray(query("api.example.com"))
-    update[2] = 0x28
-    assert rcode(await udp_ask(dns.udp_port, bytes(update))) == RCODE_NOTIMP
-    assert await dns.answer(b"\x00\x01\x80\x00" + b"\x00" * 8, tcp=False) is None
-
-
-async def test_upstream_down_is_servfail() -> None:
-    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    probe.bind(("127.0.0.1", 0))
-    dead = probe.getsockname()[1]
-    probe.close()
-    filt = DnsFilter(
-        host="127.0.0.1",
-        allow=lambda name: True,
-        upstreams=(("127.0.0.1", dead),),
-        timeout=0.2,
-    )
-    await filt.start()
-    try:
-        reply = await udp_ask(filt.udp_port, query("api.example.com"))
-        assert rcode(reply) == RCODE_SERVFAIL
-    finally:
-        await filt.stop()
+    assert (resolver.tcp if tcp else resolver.udp) == ["api.example.com"]
+    assert (resolver.udp if tcp else resolver.tcp) == []
 
 
 def test_reply_must_echo_the_question() -> None:
@@ -383,27 +364,34 @@ def test_reply_must_echo_the_question() -> None:
     assert not reply_matches(sent, sent)
 
 
-async def test_mismatched_upstream_reply_is_dropped() -> None:
-    loop = asyncio.get_running_loop()
+class _Liar(asyncio.DatagramProtocol):
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        self.transport = transport
 
-    class Liar(asyncio.DatagramProtocol):
-        def connection_made(self, transport: asyncio.BaseTransport) -> None:
-            self.transport = transport
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        assert isinstance(self.transport, asyncio.DatagramTransport)
+        forged = query("evil.example.com", ident=int.from_bytes(data[:2], "big"))
+        self.transport.sendto(answer_for(forged), addr)
 
-        def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-            assert isinstance(self.transport, asyncio.DatagramTransport)
-            forged = query("evil.example.com", ident=int.from_bytes(data[:2], "big"))
-            self.transport.sendto(answer_for(forged), addr)
 
-    transport, _ = await loop.create_datagram_endpoint(
-        Liar, local_addr=("127.0.0.1", 0)
-    )
-    port = transport.get_extra_info("sockname")[1]
+@pytest.mark.parametrize("upstream", ["down", "mismatched_reply"])
+async def test_upstream_without_a_matching_reply_is_servfail(upstream: str) -> None:
+    liar: asyncio.DatagramTransport | None = None
+    if upstream == "down":
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+    else:
+        liar, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+            _Liar, local_addr=("127.0.0.1", 0)
+        )
+        port = liar.get_extra_info("sockname")[1]
     filt = DnsFilter(
         host="127.0.0.1",
         allow=lambda name: True,
         upstreams=(("127.0.0.1", port),),
-        timeout=0.3,
+        timeout=0.2,
     )
     await filt.start()
     try:
@@ -411,4 +399,5 @@ async def test_mismatched_upstream_reply_is_dropped() -> None:
         assert rcode(reply) == RCODE_SERVFAIL
     finally:
         await filt.stop()
-        transport.close()
+        if liar is not None:
+            liar.close()

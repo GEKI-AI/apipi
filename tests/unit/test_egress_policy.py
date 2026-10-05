@@ -1,4 +1,5 @@
 import ipaddress
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any, cast
 
@@ -232,17 +233,17 @@ def test_blocked_cidrs_cover_private_ranges() -> None:
     assert all(":" not in cidr for cidr in BLOCKED_EGRESS_CIDRS)
 
 
-def _resolver(table: dict[str, list[str]]):
+def resolver(table: dict[str, list[str]]) -> Callable[[str, int], Awaitable[list[str]]]:
     async def resolve(host: str, _port: int) -> list[str]:
         if host not in table:
-            raise OSError("no such host")
+            raise OSError("unknown host")
         return table[host]
 
     return resolve
 
 
 async def test_resolve_rejects_any_private_address() -> None:
-    resolve = _resolver(
+    resolve = resolver(
         {
             "public.example": ["93.184.216.34"],
             "rebind.example": ["93.184.216.34", "10.0.0.5"],
@@ -266,63 +267,50 @@ async def test_resolve_rejects_any_private_address() -> None:
     assert await resolve_upstream("1.1.1.1", 443, resolve=resolve) == ["1.1.1.1"]
 
 
-async def _blocked_reason(host: str, private: tuple[str, ...], resolve) -> str:
-    with pytest.raises(EgressBlocked) as err:
-        await resolve_upstream(host, 443, private_hosts=private, resolve=resolve)
-    return err.value.reason
+async def _resolve_or_reason(
+    host: str,
+    private: tuple[str, ...],
+    resolve: Callable[[str, int], Awaitable[list[str]]],
+) -> str | list[str]:
+    try:
+        return await resolve_upstream(host, 443, private_hosts=private, resolve=resolve)
+    except EgressBlocked as err:
+        return err.reason
 
 
-async def test_private_hosts_need_the_name() -> None:
-    resolve = _resolver(
-        {
-            "forgejo.internal": ["10.1.2.3"],
-            "10-0-0-5.nip.io": ["10.0.0.5"],
-            "net.internal": ["192.168.7.7"],
-        }
-    )
-    named = ("Forgejo.Internal",)
-    assert await resolve_upstream(
-        "forgejo.internal", 443, private_hosts=named, resolve=resolve
-    ) == ["10.1.2.3"]
-    cidr_only = ("10.0.0.0/8", "192.168.7.0/24")
-    for host in ("10-0-0-5.nip.io", "net.internal", "forgejo.internal"):
-        assert await _blocked_reason(host, cidr_only, resolve) == "private_address"
-    assert await _blocked_reason("192.168.7.8", cidr_only, resolve) == (
-        "private_address"
-    )
-
-
-async def test_cidrs_restrict_named_private_hosts() -> None:
-    resolve = _resolver(
+async def test_private_hosts_need_the_name_and_an_allowed_address() -> None:
+    resolve = resolver(
         {
             "forgejo.internal": ["10.1.2.3"],
             "moved.internal": ["10.9.9.9"],
-        }
-    )
-    private = ("forgejo.internal", "moved.internal", "10.1.0.0/16")
-    assert await resolve_upstream(
-        "forgejo.internal", 443, private_hosts=private, resolve=resolve
-    ) == ["10.1.2.3"]
-    assert await _blocked_reason("moved.internal", private, resolve) == (
-        "private_address"
-    )
-
-
-async def test_named_private_hosts_never_reach_metadata() -> None:
-    resolve = _resolver(
-        {
+            "10-0-0-5.nip.io": ["10.0.0.5"],
+            "net.internal": ["192.168.7.7"],
             "meta.internal": ["169.254.169.254"],
             "link.internal": ["169.254.10.10"],
             "v6meta.internal": ["fd00:ec2::254"],
             "local.internal": ["127.0.0.1"],
         }
     )
-    private = ("meta.internal", "link.internal", "v6meta.internal", "local.internal")
-    for host in ("meta.internal", "link.internal", "v6meta.internal"):
-        assert await _blocked_reason(host, private, resolve) == "private_address"
-    assert await resolve_upstream(
-        "local.internal", 443, private_hosts=private, resolve=resolve
-    ) == ["127.0.0.1"]
+    cidr_only = ("10.0.0.0/8", "192.168.7.0/24")
+    restricted = ("forgejo.internal", "moved.internal", "10.1.0.0/16")
+    special = ("meta.internal", "link.internal", "v6meta.internal", "local.internal")
+    table = [
+        ("forgejo.internal", ("Forgejo.Internal",), ["10.1.2.3"]),
+        ("10-0-0-5.nip.io", cidr_only, "private_address"),
+        ("net.internal", cidr_only, "private_address"),
+        ("forgejo.internal", cidr_only, "private_address"),
+        ("192.168.7.8", cidr_only, "private_address"),
+        ("forgejo.internal", restricted, ["10.1.2.3"]),
+        ("moved.internal", restricted, "private_address"),
+        ("meta.internal", special, "private_address"),
+        ("link.internal", special, "private_address"),
+        ("v6meta.internal", special, "private_address"),
+        ("local.internal", special, ["127.0.0.1"]),
+    ]
+    got = [
+        await _resolve_or_reason(host, private, resolve) for host, private, _ in table
+    ]
+    assert got == [expected for _, _, expected in table]
 
 
 async def test_resolve_maps_bad_names_to_resolve_failed() -> None:

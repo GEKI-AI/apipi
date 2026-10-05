@@ -4,7 +4,6 @@ import contextlib
 import gzip
 import logging
 import re
-import time
 import zlib
 from typing import Any, cast
 
@@ -118,38 +117,37 @@ def test_query_and_path_are_never_substituted() -> None:
     assert path.target == f"/{PH}/x"
 
 
-def test_request_forces_identity_encoding() -> None:
-    result = _injector().request(
-        _head([("Accept-Encoding", "gzip, br"), ("accept-encoding", "deflate")])
-    )
+@pytest.mark.parametrize(
+    ("sent", "kept"),
+    [
+        ([("Connection", "Upgrade"), ("Upgrade", "websocket")], []),
+        (
+            [("Range", "bytes=0-3"), ("If-Range", '"etag"'), ("Accept", "*/*")],
+            [("Accept", "*/*")],
+        ),
+        ([("Accept-Encoding", "gzip, br"), ("accept-encoding", "deflate")], []),
+    ],
+    ids=["upgrade", "range", "encoding"],
+)
+def test_request_rewrites_headers_for_credential_hosts(
+    sent: list[tuple[str, str]], kept: list[tuple[str, str]]
+) -> None:
+    result = _injector().request(_head(sent))
     assert result is not None
-    assert [v for k, v in result.headers if k.lower() == "accept-encoding"] == [
-        "identity"
-    ]
-    assert _injector().request(_head([], host="evil.test")) is None
-
-
-def test_headers_mask_longest_secret_first() -> None:
-    injector = SecretInjector(
-        [
-            Injection("short", "A", PH, "abcdefgh", (API,)),
-            Injection("long", "B", OTHER_PH, "abcdefgh-longer", (API,)),
-        ]
-    )
-    response = ResponseHead(
-        status=200, reason="OK", headers=(("X-Echo", "abcdefgh-longer"),)
-    )
-    masked = injector.response(_head([]), response)
-    assert masked is not None
-    assert masked.headers == (("X-Echo", OTHER_PH),)
+    assert result.headers == (("Host", API), *kept, ("Accept-Encoding", "identity"))
 
 
 def test_placeholder_to_other_host_stays() -> None:
     injector = _injector()
-    assert (
-        injector.request(_head([("Authorization", f"Bearer {PH}")], host="evil.test"))
-        is None
+    evil = _head([("Authorization", f"Bearer {PH}")], host="evil.test")
+    assert injector.request(evil) is None
+    echoed = ResponseHead(
+        status=200,
+        reason="OK",
+        headers=(("X-Echo", "token ghp_real"), ("Content-Encoding", "br")),
     )
+    assert injector.response(evil, echoed) is None
+    assert injector.body(evil, echoed) is None
     other = injector.request(
         _head([("Authorization", f"Bearer {PH}")], host="other.example.com")
     )
@@ -203,7 +201,6 @@ def test_response_headers_are_masked() -> None:
     masked = injector.response(_head([]), response)
     assert masked is not None
     assert masked.headers[0] == ("X-Echo", f"token {PH}")
-    assert injector.response(_head([], host="evil.test"), response) is None
     clean = ResponseHead(status=200, reason="OK", headers=(("A", "b"),))
     assert injector.response(_head([]), clean) is None
 
@@ -295,17 +292,6 @@ def test_body_masks_secret_split_across_chunks() -> None:
         assert out == b"a" * 100 + PH.encode() + b"b" * 50 + b"other_real" + b"x"
 
 
-def test_body_masks_longest_secret_first() -> None:
-    injector = SecretInjector(
-        [
-            Injection("short", "A", PH, "abcdefgh", (API,)),
-            Injection("long", "B", OTHER_PH, "abcdefgh-longer", (API,)),
-        ]
-    )
-    _, out = _body(injector, (), [b"x abcdefgh-lon", b"ger y abcdefgh z"])
-    assert out == f"x {OTHER_PH} y {PH} z".encode()
-
-
 @pytest.mark.parametrize("coding", ["gzip", "x-gzip", "deflate", "raw-deflate"])
 def test_body_decodes_compressed_responses(coding: str) -> None:
     payload = b"token=ghp_real; " * 2000
@@ -333,11 +319,6 @@ def test_body_rejects_unknown_encoding() -> None:
     )
     assert isinstance(result, Reject)
     assert result.status == 502
-    other = _injector().body(
-        _head([], host="evil.test"),
-        ResponseHead(status=200, reason="OK", headers=(("Content-Encoding", "br"),)),
-    )
-    assert other is None
 
 
 async def test_gateway_sends_secret_upstream_and_masks_responses(env: Env) -> None:
@@ -380,30 +361,6 @@ async def test_gateway_sends_secret_upstream_and_masks_responses(env: Env) -> No
     assert first.body == f"body keeps {PH}".encode()
     assert ("Authorization", f"Bearer {secret}") in second.headers
     assert upstream.connections == 1
-
-
-@pytest.mark.slow
-async def test_masked_body_throughput(env: Env) -> None:
-    total = 64 * 1024 * 1024
-    upstream = await env.upstream()
-    injector = SecretInjector(
-        [Injection("cred", "SECRET", PH, "real-secret-value", (HOST,))],
-        ports=(upstream.port,),
-    )
-    gateway = await env.gateway(
-        "restricted", port=upstream.port, intercept=(HOST,), hooks=injector.hooks()
-    )
-    reader, writer = await tls_connect(gateway, trust(env.worker_ca))
-    client = HttpClient(reader, writer)
-    started = time.perf_counter()
-    status, _, body = await client.request("GET", f"/big/{total}")
-    wall = time.perf_counter() - started
-    await close(writer)
-    assert status == 200
-    assert len(body) == total
-    rate = total * 8 / 1_000_000 / wall
-    print(f"\nmasked body throughput over 64 MiB: {rate:.0f} Mbit/s")
-    assert rate >= 50
 
 
 def _mask(masks: list[tuple[bytes, bytes]], chunks: list[bytes]) -> bytes:
@@ -480,16 +437,6 @@ def test_body_masks_escaped_forms_and_basic_tokens() -> None:
     )
     assert header is not None
     assert header.headers == (("X-Echo", f"Basic {guest_basic.decode()}"),)
-
-
-def test_request_strips_upgrade_for_credential_hosts() -> None:
-    result = _injector().request(
-        _head([("Connection", "Upgrade"), ("Upgrade", "websocket")])
-    )
-    assert result is not None
-    names = {name.lower() for name, _ in result.headers}
-    assert "upgrade" not in names
-    assert "connection" not in names
 
 
 def test_gzip_multi_member_truncation_and_short_deflate() -> None:
@@ -573,9 +520,39 @@ async def _canned_gateway(
     return upstream, gateway
 
 
-async def test_gzip_bomb_memory_stays_bounded_with_a_slow_client(env: Env) -> None:
+async def test_gzip_bomb_memory_stays_bounded_with_a_slow_client(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import tracemalloc
 
+    from apipi.worker.egress import intercept
+
+    clients = 4
+    stalled: set[asyncio.StreamWriter] = set()
+    all_stalled = asyncio.Event()
+    accept = intercept.accept_stream
+
+    async def watched_accept(
+        *args: Any, **kwargs: Any
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        reader, writer = await accept(*args, **kwargs)
+        drain = writer.drain
+
+        async def watched_drain() -> None:
+            transport = writer.transport
+            if (
+                transport.get_write_buffer_size()
+                >= transport.get_write_buffer_limits()[1]
+            ):
+                stalled.add(writer)
+                if len(stalled) == clients:
+                    all_stalled.set()
+            await drain()
+
+        monkeypatch.setattr(writer, "drain", watched_drain)
+        return reader, writer
+
+    monkeypatch.setattr(intercept, "accept_stream", watched_accept)
     body = gzip.compress(b"\0" * (256 * 1024 * 1024), compresslevel=9)
     response = (
         b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n"
@@ -586,13 +563,13 @@ async def test_gzip_bomb_memory_stays_bounded_with_a_slow_client(env: Env) -> No
     tracemalloc.start()
     try:
         writers = []
-        for _ in range(4):
+        for _ in range(clients):
             reader, writer = await tls_connect(cast(Any, gateway), trust(env.worker_ca))
             writer.write(f"GET /bomb HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode())
             await writer.drain()
             await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
             writers.append(writer)
-        await asyncio.sleep(1.5)
+        await asyncio.wait_for(all_stalled.wait(), timeout=10)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
@@ -662,20 +639,7 @@ def test_encode_uri_component_form_is_masked() -> None:
     assert out == f"x={PH}&y={PH}".encode()
 
 
-def test_request_strips_range_for_credential_hosts() -> None:
-    result = _injector().request(
-        _head([("Range", "bytes=0-3"), ("If-Range", '"etag"'), ("Accept", "*/*")])
-    )
-    assert result is not None
-    names = {name.lower() for name, _ in result.headers}
-    assert "range" not in names
-    assert "if-range" not in names
-    assert "accept" in names
-    other = _injector().request(_head([("Range", "bytes=0-3")], host="evil.test"))
-    assert other is None
-
-
-def test_header_and_body_masking_agree() -> None:
+def test_header_and_body_mask_the_longest_secret_first() -> None:
     injector = SecretInjector(
         [
             Injection("short", "A", PH, "abcdefgh", (API,)),
@@ -683,12 +647,14 @@ def test_header_and_body_masking_agree() -> None:
         ]
     )
     text = "1 abcdefgh-longer 2 abcdefgh 3 abcdefgh-lo"
-    _, body = _body(injector, (), [text.encode()])
+    expected = f"1 {OTHER_PH} 2 {PH} 3 {PH}-lo"
+    _, body = _body(injector, (), [text[:14].encode(), text[14:].encode()])
+    assert body == expected.encode()
     header = injector.response(
         _head([]), ResponseHead(status=200, reason="OK", headers=(("X", text),))
     )
     assert header is not None
-    assert header.headers[0][1].encode() == body
+    assert header.headers == (("X", expected),)
 
 
 async def test_informational_response_headers_are_masked(env: Env) -> None:
@@ -702,7 +668,7 @@ async def test_informational_response_headers_are_masked(env: Env) -> None:
     await writer.drain()
     data = b""
     with contextlib.suppress(Exception):
-        while b"ok" not in data.split(b"\r\n\r\n")[-1]:
+        while not data.endswith(b"0\r\n\r\n"):
             chunk = await asyncio.wait_for(reader.read(65536), timeout=5)
             if not chunk:
                 break
@@ -710,6 +676,7 @@ async def test_informational_response_headers_are_masked(env: Env) -> None:
     await close(writer)
     upstream.close()
     assert data.startswith(b"HTTP/1.1 103")
+    assert data.endswith(b"\r\n\r\n2\r\nok\r\n0\r\n\r\n")
     assert b"real-secret-value" not in data
     assert PH.encode() in data
 
