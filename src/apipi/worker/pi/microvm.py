@@ -45,6 +45,7 @@ from apipi.worker.egress import (
     upstream_context,
 )
 from apipi.worker.egress.inject import injector_for
+from apipi.worker.egress.sockets import close_writer
 from apipi.worker.pi.extension import (
     APIPI_EXTENSION_REL,
     MCP_EXTENSION_REL,
@@ -715,7 +716,7 @@ async def push_workspace_files(
             await writer.drain()
             line = await reader.readline()
         finally:
-            await _close_writer(writer)
+            await close_writer(writer)
     if not line.startswith(b"OK"):
         raise ConfigError("microvm guest did not take the files")
 
@@ -1483,12 +1484,6 @@ def _link_or_copy(src: Path, dest: Path) -> None:
         shutil.copy2(src, dest)
 
 
-async def _close_writer(writer: asyncio.StreamWriter) -> None:
-    writer.close()
-    with contextlib.suppress(OSError):
-        await writer.wait_closed()
-
-
 def _console_level(text: str) -> int:
     if text.startswith("mcp:") or text.startswith("mcp "):
         return logging.INFO
@@ -1532,14 +1527,17 @@ async def connect_vsock(
             line = await asyncio.wait_for(reader.readline(), timeout=1)
         except (OSError, TimeoutError) as exc:
             last = exc
-            await _close_writer(writer)
+            await close_writer(writer)
             await asyncio.sleep(0.05)
             continue
+        except BaseException:
+            await close_writer(writer)
+            raise
         if line.startswith(b"OK"):
             log.info("vsock", extra={"port": port})
             return reader, writer
         last = ConfigError("microvm cannot start")
-        await _close_writer(writer)
+        await close_writer(writer)
         await asyncio.sleep(0.05)
     raise ConfigError("microvm cannot start") from last
 
@@ -1900,9 +1898,10 @@ async def spawn_microvm_pi(
             timeout=5.0,
             process=process,
         )
-        data = await art_reader.read()
-        await _close_writer(art_writer)
-        return data
+        try:
+            return await art_reader.read()
+        finally:
+            await close_writer(art_writer)
 
     async def pull_artifacts() -> bytes:
         return await _pull(VSOCK_ARTIFACT_PORT)
