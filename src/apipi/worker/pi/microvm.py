@@ -1403,6 +1403,8 @@ def _enable_forward() -> None:
 def _disable_ipv6(net: TapNet) -> None:
     path = IPV6_SYS / "conf" / net.name / "disable_ipv6"
     try:
+        if path.read_text().strip() == "1":
+            return
         path.write_text("1")
     except OSError as exc:
         detail = _exc_detail(exc)

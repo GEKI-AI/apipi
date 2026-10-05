@@ -31,7 +31,6 @@ from apipi.worker.egress import (
 )
 from apipi.worker.egress import gateway as gateway_module
 from apipi.worker.egress import resolve as resolve_module
-from apipi.worker.egress.dns import PLACEHOLDER_IP
 from apipi.worker.egress.resolve import address_blocked
 
 HOST = "allowed.test"
@@ -1147,14 +1146,18 @@ async def test_restricted_guest_reaches_private_host_through_placeholder(
     gateway = await env.gateway(
         "restricted",
         port=upstream.port,
-        private=(HOST,),
-        dest=(PLACEHOLDER_IP, upstream.port),
+        allowed=(HOST, "a.internal"),
+        private=(HOST, "a.internal", "z.internal"),
+        dest=("198.18.0.2", upstream.port),
         table={HOST: ["127.0.0.2"]},
     )
     assert gateway.dns is not None
     reply = await gateway.dns.answer(dns_query(HOST), tcp=False)
     assert reply is not None
-    assert reply.endswith(socket.inet_aton(PLACEHOLDER_IP))
+    assert reply.endswith(socket.inet_aton("198.18.0.2"))
+    first = await gateway.dns.answer(dns_query("a.internal"), tcp=False)
+    assert first is not None
+    assert first.endswith(socket.inet_aton("198.18.0.1"))
     assert b"\x7f\x00\x00\x02" not in reply
     reader, writer = await tls_connect(gateway, trust(env.upstream_ca))
     writer.write(b"forgejo")

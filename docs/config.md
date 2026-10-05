@@ -737,10 +737,13 @@ session. The guest has no IPv6. The worker sets
 the host side of the TAP never gets a link-local address, and adds
 `ip6tables` rules that drop every IPv6 packet from the TAP in `INPUT`
 and `FORWARD`. The rules are removed with the TAP. A worker without
-`ip6tables` fails at startup like one without `iptables`. On a kernel
+`ip6tables` fails at startup like one without `iptables`. When the
+value is already `1`, for example because the host sets
+`net.ipv6.conf.default.disable_ipv6=1`, the worker does not write it,
+so a worker with a read-only `/proc/sys` still starts guests. On a kernel
 without IPv6 (`/proc/sys/net/ipv6` is missing) there is nothing to
-close, and the worker skips both steps. Each worker also creates a certificate authority in memory
-when it starts. It is valid for one year, and a worker restart makes a
+close, and the worker skips both steps. Each worker also creates a
+certificate authority in memory when it starts. It is valid for one year, and a worker restart makes a
 new one. The key never leaves worker memory. Only the certificate goes
 to the guest, on the workspace drive. Guest init joins the image's
 system authorities and that certificate into `/run/apipi/ca-bundle.pem`
@@ -749,8 +752,8 @@ and points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`,
 image built from this ApiPi version; an older image skips the bundle.
 The gateway uses the authority only for hosts whose HTTPS traffic it
 must read: the hosts of the session's vault environment credentials
-(see [Vaults and credentials](vaults.md#how-environment-credentials-work)). On such a connection
-the gateway forwards HTTP/1.1 requests one at a time. It rejects a
+(see [Vaults and credentials](vaults.md#how-environment-credentials-work)).
+On such a connection the gateway forwards HTTP/1.1 requests one at a time. It rejects a
 request that has both `Content-Length` and `Transfer-Encoding`, drops
 hop-by-hop headers, and allows only WebSocket upgrades. After an
 upgrade the connection is passed through unchanged, so only the upgrade
@@ -791,10 +794,16 @@ tenants that must not reach them.
 The worker resolves a private hostname with its own system resolver,
 not with the public resolvers that the guest uses. When a `restricted`
 session (or the allowlist) allows a listed name, the guest DNS filter
-answers an `A` query for that name with the placeholder address
-`198.18.0.1` and answers every other query type for it with no
-records. The guest never learns the internal address. A connection to
-the placeholder on port 80, 443, or 8443 goes to the gateway, which
+answers an `A` query for that name with a placeholder address and
+answers every other query type for it with no records. Each private
+name that the session allows gets its own placeholder from
+`198.18.0.0/15`: `198.18.0.1` for the first name in alphabetical
+order, `198.18.0.2` for the next, and so on. Separate addresses keep
+HTTP/2 clients from sending requests for one private host on an open
+connection to another, which they could do when both hosts share a
+wildcard certificate and one address. The guest never learns the
+internal address. A connection to a placeholder on port 80, 443, or
+8443 goes to the gateway, which
 reads the hostname from the server name or the `Host` header, resolves
 it on the worker, and checks the addresses as described below. So
 `git clone https://forgejo.internal/org/repo.git` works in the guest

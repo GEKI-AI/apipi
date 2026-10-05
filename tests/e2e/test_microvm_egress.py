@@ -14,7 +14,7 @@ from tests.e2e.test_microvm_pi import _image_paths, _microvm_or_skip
 from apipi.config import Settings
 from apipi.env.setup import NetworkPolicy, write_network_policy
 from apipi.worker.egress import WorkerCA
-from apipi.worker.egress.dns import PLACEHOLDER_IP
+from apipi.worker.egress.policy import PLACEHOLDER_NET
 from apipi.worker.pi.microvm import spawn_microvm_pi
 from apipi.worker.pi.proc import PiProc
 
@@ -293,7 +293,7 @@ async def test_restricted_guest_egress(
     assert results["requests_intercepted"]["rc"] == 0, report
     assert results["node_fetch_intercepted"]["rc"] == 0, report
     assert results["git_ls_remote"]["rc"] == 0, report
-    assert results["dns_private"]["out"] == PLACEHOLDER_IP, report
+    assert results["dns_private"]["out"] == str(PLACEHOLDER_NET[1]), report
     assert results["curl_private"]["rc"] == 0, report
     assert results["curl_private"]["out"] == "200", report
     assert _failed(results, "tcp_host_direct"), report

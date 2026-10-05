@@ -374,9 +374,10 @@ sends upstream only a new query built from the name and type, so DNS
 cannot carry data out. It answers HTTPS and SVCB queries with no
 records. A name that the session allows and that the operator lists in
 `private_hosts` (see [configuration](config.md#networking)) is not
-forwarded: the resolver answers it with the placeholder address
-`198.18.0.1`, so the guest never learns the internal address. A
-connection to the placeholder on port 80, 443, or 8443 goes to the
+forwarded: the resolver answers it with a placeholder address from
+`198.18.0.0/15`, one per allowed private name (`198.18.0.1` for the
+first in alphabetical order), so the guest never learns the internal
+address. A connection to a placeholder on port 80, 443, or 8443 goes to the
 gateway like any other, and the gateway resolves the name from the
 server name or `Host` header on the worker. Other ports to the
 placeholder are rejected.

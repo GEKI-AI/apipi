@@ -19,7 +19,7 @@ from apipi.config import (
 from apipi.env.setup import NetworkPolicy, write_network_policy
 from apipi.mcp.http import McpConnectError, McpHttpServer
 from apipi.worker.egress import EgressHooks
-from apipi.worker.egress.dns import PLACEHOLDER_IP
+from apipi.worker.egress.policy import PLACEHOLDER_NET
 from apipi.worker.pi.artifacts import unpack_workspace_tar
 from apipi.worker.pi.guest import (
     RNDADDENTROPY,
@@ -582,7 +582,9 @@ def test_tap_setup_restricted_rejects_other_ports_and_filters_dns() -> None:
 
 def test_dns_placeholder_is_sent_to_the_gateway() -> None:
     net = tap_net(NET_ID)
-    assert ipaddress.ip_address(PLACEHOLDER_IP) not in ipaddress.ip_network(net.subnet)
+    tap_pool = ipaddress.ip_network(f"{tap_net(NET_ID).network}/16", strict=False)
+    assert not PLACEHOLDER_NET.overlaps(tap_pool)
+    assert not PLACEHOLDER_NET.overlaps(ipaddress.ip_network(net.subnet))
     argv = _tap_argv("restricted")
     nat = [cmd for cmd in argv if "nat" in cmd and f"{net.name}gw" in cmd]
     web = [cmd for cmd in nat if "80,443,8443" in cmd]
@@ -782,6 +784,27 @@ def test_disable_ipv6_failure_names_the_step(
     monkeypatch.setattr("apipi.worker.pi.microvm.IPV6_SYS", tmp_path)
     with pytest.raises(ConfigError, match="disable IPv6 on the TAP device"):
         _disable_ipv6(tap_net(NET_ID))
+
+
+def test_disable_ipv6_skips_a_preset_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    net = tap_net(NET_ID)
+    conf = tmp_path / "conf" / net.name
+    conf.mkdir(parents=True)
+    flag = conf / "disable_ipv6"
+    flag.write_text("1\n")
+
+    def read_only(*_args: Any, **_kwargs: Any) -> int:
+        raise PermissionError("read-only file system")
+
+    monkeypatch.setattr("apipi.worker.pi.microvm.IPV6_SYS", tmp_path)
+    monkeypatch.setattr(Path, "write_text", read_only)
+    _disable_ipv6(net)
+    flag.unlink()
+    flag.touch()
+    with pytest.raises(ConfigError, match="read-only file system"):
+        _disable_ipv6(net)
 
 
 def test_microvm_needs_ip6tables(monkeypatch: pytest.MonkeyPatch) -> None:

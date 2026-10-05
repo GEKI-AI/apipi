@@ -74,11 +74,16 @@ The gateway decides by hostname, not by IP address:
   gateway terminates its TLS. The list is per worker, not per tenant.
   The guest cannot resolve an internal name with public resolvers, so
   the DNS resolver of a `restricted` guest answers an allowed listed
-  name with the placeholder `198.18.0.1` (no records for other query
-  types). The guest's connection to the placeholder on 80, 443, or 8443
-  is sent to the gateway like any other, and the gateway resolves the
-  name from SNI or `Host` on the worker. The guest never learns the
-  internal address.
+  name with a placeholder address (no records for other query types).
+  Each allowed private name gets its own placeholder from
+  `198.18.0.0/15`, numbered in alphabetical order of the session's
+  allowed private names from `198.18.0.1`, so HTTP/2 connection
+  coalescing cannot send a request for one private host over a
+  connection to another that shares its certificate. The guest's
+  connection to a placeholder on 80, 443, or 8443 is sent to the
+  gateway like any other, and the gateway still decides and resolves
+  by SNI or `Host` on the worker. The guest never learns the internal
+  address.
 
 This replaces the current allowlist, which resolves hostnames to IP
 addresses once at boot and opens those addresses on every port. That

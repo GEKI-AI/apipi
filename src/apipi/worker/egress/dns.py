@@ -16,7 +16,6 @@ RCODE_NXDOMAIN = 3
 RCODE_NOTIMP = 4
 CLASS_IN = 1
 TYPE_A = 1
-PLACEHOLDER_IP = "198.18.0.1"
 PLACEHOLDER_TTL = 60
 NODATA_TYPES = frozenset({64, 65})
 MAX_UDP_INFLIGHT = 64
@@ -104,7 +103,7 @@ def error_reply(query: bytes, rcode: int, question_end: int | None = None) -> by
     return header + question
 
 
-def placeholder_reply(query: bytes, question: Question) -> bytes:
+def placeholder_reply(query: bytes, question: Question, address: str) -> bytes:
     reply = error_reply(query, 0, question.end)
     if question.qtype != TYPE_A:
         return reply
@@ -114,7 +113,7 @@ def placeholder_reply(query: bytes, question: Question) -> bytes:
         + CLASS_IN.to_bytes(2, "big")
         + PLACEHOLDER_TTL.to_bytes(4, "big")
         + (4).to_bytes(2, "big")
-        + socket.inet_aton(PLACEHOLDER_IP)
+        + socket.inet_aton(address)
     )
     return reply[:6] + (1).to_bytes(2, "big") + reply[8:] + record
 
@@ -175,13 +174,13 @@ class DnsFilter:
         host: str,
         allow: Callable[[str], bool],
         upstreams: tuple[Upstream, ...],
-        private: Callable[[str], bool] | None = None,
+        placeholder: Callable[[str], str | None] | None = None,
         timeout: float = DNS_TIMEOUT,
         freebind: bool = False,
     ) -> None:
         self.host = host
         self.allow = allow
-        self.private = private
+        self.placeholder = placeholder
         self.upstreams = upstreams
         self.timeout = timeout
         self.freebind = freebind
@@ -246,8 +245,11 @@ class DnsFilter:
             return error_reply(query, RCODE_NOTIMP, question.end)
         if not question.name or not self.allow(question.name):
             return error_reply(query, RCODE_NXDOMAIN, question.end)
-        if self.private is not None and self.private(question.name):
-            return placeholder_reply(query, question)
+        address = (
+            self.placeholder(question.name) if self.placeholder is not None else None
+        )
+        if address is not None:
+            return placeholder_reply(query, question, address)
         if question.qtype in NODATA_TYPES:
             return error_reply(query, 0, question.end)
         outgoing = build_query(question, os.urandom(2))

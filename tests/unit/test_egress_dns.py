@@ -6,7 +6,6 @@ from collections.abc import AsyncIterator
 import pytest
 
 from apipi.worker.egress.dns import (
-    PLACEHOLDER_IP,
     RCODE_FORMERR,
     RCODE_NOTIMP,
     RCODE_NXDOMAIN,
@@ -190,11 +189,12 @@ async def test_https_records_get_no_data(
 
 
 async def test_private_names_get_the_placeholder(resolver: FakeResolver) -> None:
-    allowed = {"api.example.com", "git.internal"}
+    allowed = {"api.example.com", "git.internal", "wiki.internal"}
+    places = {"git.internal": "198.18.0.1", "wiki.internal": "198.18.0.2"}
     filt = DnsFilter(
         host="127.0.0.1",
         allow=lambda name: name in allowed,
-        private=lambda name: name == "git.internal",
+        placeholder=lambda name: places.get(name),
         upstreams=(("127.0.0.1", resolver.port),),
         timeout=1.0,
     )
@@ -209,12 +209,14 @@ async def test_private_names_get_the_placeholder(resolver: FakeResolver) -> None
             assert rcode(reply) == 0
             assert int.from_bytes(reply[6:8], "big") == 1
             assert parse_question(reply).name == "git.internal"
-            assert reply.endswith(socket.inet_aton(PLACEHOLDER_IP))
+            assert reply.endswith(socket.inet_aton("198.18.0.1"))
         for qtype in (28, 64, 65, 255):
             reply = await udp_ask(filt.udp_port, query("git.internal", qtype=qtype))
             assert rcode(reply) == 0
             assert int.from_bytes(reply[6:8], "big") == 0
         reply = await udp_ask(filt.udp_port, query("wiki.internal"))
+        assert reply.endswith(socket.inet_aton("198.18.0.2"))
+        reply = await udp_ask(filt.udp_port, query("other.internal"))
         assert rcode(reply) == RCODE_NXDOMAIN
         assert resolver.udp == [] and resolver.tcp == []
         reply = await udp_ask(filt.udp_port, query("api.example.com"))

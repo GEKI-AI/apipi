@@ -250,7 +250,7 @@ class EgressGateway:
             self.dns = DnsFilter(
                 host=self.host,
                 allow=lambda name: self.policy.allows_name(name),
-                private=lambda name: self.policy.private_name(name),
+                placeholder=lambda name: self.policy.placeholder(name),
                 upstreams=self.dns_upstreams,
                 freebind=self.freebind,
             )
