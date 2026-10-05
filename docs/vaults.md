@@ -252,11 +252,14 @@ credential's `allowed_hosts`, the gateway:
    request body,
 3. removes `Upgrade` and `Connection`, so the connection is never
    switched to WebSocket or another protocol that it could not mask,
+   and removes `Range` and `If-Range`, so a response always carries the
+   whole body and the secret cannot be split across partial responses,
 4. asks the server for an uncompressed response (`Accept-Encoding:
    identity`),
 5. connects to the real host, checks its real certificate, and sends
    the request,
-6. masks the secret in the response headers and the response body, and
+6. masks the secret in the response headers (also of informational
+   `1xx` responses such as `103 Early Hints`) and the response body, and
    drops response trailers.
 
 The query string is not substituted on purpose. Many APIs accept form
@@ -267,8 +270,9 @@ the real secret into a page that it or other users can read.
 
 #### What is masked in responses
 
-In the headers and the body of HTTPS responses from a credential's
-hosts, the gateway replaces these strings with the placeholder:
+In the headers (including `1xx` responses) and the body of HTTPS
+responses from a credential's hosts, the gateway replaces these strings
+with the placeholder:
 
 - the exact `secret_value`,
 - its JSON string form (with `\"` and `\\`, with and without `\/`),
@@ -278,7 +282,11 @@ hosts, the gateway replaces these strings with the placeholder:
   host in the session (base64 of `user:secret_value`); it is replaced
   with the token the guest sent.
 
-The longest string is replaced first. The gateway does not mask other
+Headers and body use the same single pass, so the longest string is
+replaced first in both. Because `Range` and `If-Range` are removed from
+the request, the server sends whole bodies, and a secret cannot be cut
+into pieces across range requests or a `multipart/byteranges` response.
+The gateway does not mask other
 transformations of the secret: a hash, a part of the secret, another
 escaping, or base64 of the bare secret that the agent builds itself.
 The masking is defense in depth for the credential hosts you chose, not

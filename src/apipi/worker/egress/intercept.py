@@ -443,11 +443,12 @@ class Interceptor:
         while True:
             event = await server.next_event()
             if isinstance(event, h11.InformationalResponse):
+                info = await self._response_head(head, event)
                 await guest.send(
                     h11.InformationalResponse(
-                        status_code=event.status_code,
-                        headers=event.headers.raw_items(),
-                        reason=event.reason,
+                        status_code=info.status,
+                        headers=_wire(info.headers),
+                        reason=_raw(info.reason),
                     )
                 )
                 if event.status_code == 101:
@@ -476,7 +477,7 @@ class Interceptor:
                 raise InterceptError("upstream_closed", 502)
 
     async def _response_head(
-        self, head: RequestHead, event: h11.Response
+        self, head: RequestHead, event: h11.Response | h11.InformationalResponse
     ) -> ResponseHead:
         response = ResponseHead(
             status=event.status_code,

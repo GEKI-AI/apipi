@@ -109,10 +109,13 @@ A request to any other host carries only the placeholder. Credential
 hosts are HTTPS only: plain HTTP on port 80 to such a host is rejected
 (`credential_host_plain_http`). On requests to a credential's hosts the
 gateway removes `Upgrade` and `Connection`, so nothing is passed through
-unmasked after a `101`, asks for `Accept-Encoding: identity`, and masks
-the response headers and body, dropping response trailers. The mask
+unmasked after a `101`, removes `Range` and `If-Range`, so the secret
+cannot be split across partial responses, asks for `Accept-Encoding:
+identity`, and masks the response headers (also of `1xx` responses) and
+body with one longest-first pass, dropping response trailers. The mask
 strings are the exact secret, its JSON string forms (with and without
-`\/`), its percent-encoded forms, and every Basic token the gateway
+`\/`), its percent-encoded forms (including the `encodeURIComponent`
+form), and every Basic token the gateway
 built for that host (base64 of `user:secret`, replaced with the token
 the guest sent), longest first. Other transformations (hashes, partial
 copies, base64 of the bare secret built by the agent) are not masked.

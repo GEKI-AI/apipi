@@ -646,3 +646,69 @@ async def test_plain_http_to_credential_host_is_rejected(env: Env) -> None:
     reply = await asyncio.wait_for(reader.read(1024), timeout=5)
     await close(writer)
     assert reply.startswith(b"HTTP/1.1 403")
+
+
+def test_encode_uri_component_form_is_masked() -> None:
+    from urllib.parse import quote
+
+    from apipi.worker.egress.inject import secret_forms
+
+    secret = "ab/cd!ef*gh(1)"
+    component = quote(secret, safe="!'()*~-_.")
+    assert component == "ab%2Fcd!ef*gh(1)"
+    assert component in secret_forms(secret)
+    injector = SecretInjector([Injection("cred", "TOKEN", PH, secret, (API,))])
+    _, out = _body(injector, (), [f"x={component}&y={secret}".encode()])
+    assert out == f"x={PH}&y={PH}".encode()
+
+
+def test_request_strips_range_for_credential_hosts() -> None:
+    result = _injector().request(
+        _head([("Range", "bytes=0-3"), ("If-Range", '"etag"'), ("Accept", "*/*")])
+    )
+    assert result is not None
+    names = {name.lower() for name, _ in result.headers}
+    assert "range" not in names
+    assert "if-range" not in names
+    assert "accept" in names
+    other = _injector().request(_head([("Range", "bytes=0-3")], host="evil.test"))
+    assert other is None
+
+
+def test_header_and_body_masking_agree() -> None:
+    injector = SecretInjector(
+        [
+            Injection("short", "A", PH, "abcdefgh", (API,)),
+            Injection("long", "B", OTHER_PH, "abcdefgh-longer", (API,)),
+        ]
+    )
+    text = "1 abcdefgh-longer 2 abcdefgh 3 abcdefgh-lo"
+    _, body = _body(injector, (), [text.encode()])
+    header = injector.response(
+        _head([]), ResponseHead(status=200, reason="OK", headers=(("X", text),))
+    )
+    assert header is not None
+    assert header.headers[0][1].encode() == body
+
+
+async def test_informational_response_headers_are_masked(env: Env) -> None:
+    response = (
+        b"HTTP/1.1 103 Early Hints\r\nLink: </a?k=real-secret-value>\r\n\r\n"
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+    )
+    upstream, gateway = await _canned_gateway(env, response)
+    reader, writer = await tls_connect(cast(Any, gateway), trust(env.worker_ca))
+    writer.write(f"GET /hints HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode())
+    await writer.drain()
+    data = b""
+    with contextlib.suppress(Exception):
+        while b"ok" not in data.split(b"\r\n\r\n")[-1]:
+            chunk = await asyncio.wait_for(reader.read(65536), timeout=5)
+            if not chunk:
+                break
+            data += chunk
+    await close(writer)
+    upstream.close()
+    assert data.startswith(b"HTTP/1.1 103")
+    assert b"real-secret-value" not in data
+    assert PH.encode() in data

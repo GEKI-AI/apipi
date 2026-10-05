@@ -35,7 +35,7 @@ DECODE_CHUNK = 256 * 1024
 DECODE_FREE = 10 * 1024 * 1024
 DECODE_RATIO = 100
 MAX_BASIC_TOKENS = 64
-NO_UPGRADE = frozenset({"upgrade", "connection"})
+STRIPPED = frozenset({"upgrade", "connection", "range", "if-range"})
 
 Masks = list[tuple[bytes, bytes]]
 
@@ -71,6 +71,7 @@ def secret_forms(value: str) -> list[str]:
         escaped.replace("/", "\\/"),
         quote(value, safe=""),
         quote(value, safe="/"),
+        quote(value, safe="!'()*~-_."),
     ]
     return list(dict.fromkeys(forms))
 
@@ -81,6 +82,10 @@ def ordered_masks(pairs: Iterable[tuple[bytes, bytes]]) -> Masks:
         if needle and needle not in unique:
             unique[needle] = replacement
     return sorted(unique.items(), key=lambda pair: len(pair[0]), reverse=True)
+
+
+def mask_pattern(masks: Masks) -> re.Pattern[bytes]:
+    return re.compile(b"|".join(re.escape(needle) for needle, _ in masks))
 
 
 def _header(headers: Headers, name: str) -> list[str]:
@@ -233,11 +238,17 @@ class SecretMask:
         yield rest
 
 
-def mask_text(masks: Masks, text: str) -> str:
-    raw = text.encode("latin-1", "replace")
-    for needle, replacement in masks:
-        raw = raw.replace(needle, replacement)
-    return raw.decode("latin-1")
+class HeaderMask:
+    def __init__(self, masks: Masks) -> None:
+        self.replacements = dict(ordered_masks(masks))
+        self.pattern = mask_pattern(ordered_masks(masks))
+
+    def _sub(self, match: re.Match[bytes]) -> bytes:
+        return self.replacements[match.group(0)]
+
+    def text(self, value: str) -> str:
+        raw = value.encode("latin-1", "replace")
+        return self.pattern.sub(self._sub, raw).decode("latin-1")
 
 
 class SecretInjector:
@@ -349,7 +360,7 @@ class SecretInjector:
         headers = [
             (name, value)
             for name, value in head.headers
-            if name.lower() != "accept-encoding" and name.lower() not in NO_UPGRADE
+            if name.lower() != "accept-encoding" and name.lower() not in STRIPPED
         ]
         headers.append(("Accept-Encoding", "identity"))
         used: list[Injection] = []
@@ -382,9 +393,9 @@ class SecretInjector:
         applying = self._applying(head)
         if not applying:
             return None
-        masks = self._masks(head, applying)
+        mask = HeaderMask(self._masks(head, applying))
         headers: Headers = tuple(
-            (name, mask_text(masks, value)) for name, value in response.headers
+            (name, mask.text(value)) for name, value in response.headers
         )
         if headers == response.headers:
             return None
