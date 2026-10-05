@@ -27,7 +27,7 @@ LOG = logging.getLogger("apipi.test.worker")
 
 class _Clock:
     def __init__(self) -> None:
-        self.now = 100.0
+        self.now = 30.0
 
     def __call__(self) -> float:
         return self.now

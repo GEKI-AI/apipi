@@ -74,7 +74,7 @@ OriginalDst = Callable[[socket.socket], tuple[str, int]]
 
 _metrics: Metrics | None = None
 _worker_open = 0
-_last_warning = 0.0
+_last_warning = float("-inf")
 
 
 def set_egress_metrics(metrics: Metrics | None) -> None:

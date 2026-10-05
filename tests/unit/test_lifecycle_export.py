@@ -4,6 +4,7 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -655,6 +656,28 @@ async def test_overflow_drops_new_events(caplog: pytest.LogCaptureFixture) -> No
         if record.__dict__.get("event") == "lifecycle.export.overflow"
     ]
     assert len(warnings) == 1
+
+
+def test_first_overflow_warning_is_logged_on_a_fresh_host(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caplog.set_level(logging.WARNING, logger="apipi")
+    now = [10.0]
+    monkeypatch.setattr(
+        "apipi.services.lifecycle_export.time",
+        SimpleNamespace(monotonic=lambda: now[0]),
+    )
+    emitter = LifecycleEmitter(_settings(lifecycle_queue=1), Metrics())
+    emitter.emit_start({"session_id": "a"}, cause="spawn")
+    emitter.emit_start({"session_id": "b"}, cause="spawn")
+    now[0] = 20.0
+    emitter.emit_start({"session_id": "c"}, cause="spawn")
+    warnings = [
+        record.__dict__.get("session_id")
+        for record in caplog.records
+        if record.__dict__.get("event") == "lifecycle.export.overflow"
+    ]
+    assert warnings == ["b"]
 
 
 async def test_custom_sinks_isolate_failures(monkeypatch: pytest.MonkeyPatch) -> None:

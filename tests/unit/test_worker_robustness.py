@@ -6,6 +6,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -971,6 +972,40 @@ async def test_observe_loop_survives_a_failing_round(
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_observe_loop_samples_guests_at_once_on_a_fresh_host(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    from apipi.worker import execution as execution_module
+    from apipi.worker.execution import local_execution
+
+    real = execution_module.run_loop
+    loop = asyncio.get_running_loop()
+    now = [5.0]
+
+    async def instant(_seconds: float) -> None:
+        now[0] += 5.0
+
+    async def two_rounds(*args: Any, **kwargs: Any) -> None:
+        kwargs.update(sleep=instant, rounds=2)
+        with monkeypatch.context() as patch:
+            patch.setattr(loop, "time", lambda: now[0])
+            await real(*args, **kwargs)
+
+    monkeypatch.setattr(execution_module, "run_loop", two_rounds)
+    sampled = settings.model_copy(
+        update={"guest_sample_interval": timedelta(seconds=15)}
+    )
+    execution = local_execution(sampled, outbox=Outbox(), metrics=Metrics())
+    samples: list[float] = []
+
+    async def sample() -> None:
+        samples.append(now[0])
+
+    monkeypatch.setattr(execution, "_observe_guest_samples", sample)
+    await execution.observe_loop()
+    assert samples == [5.0]
 
 
 async def _closed_on_cancel(entered: asyncio.Event) -> None:
