@@ -1,11 +1,10 @@
 import uuid
-from datetime import timedelta
 from typing import Any
 
 import pytest
+from tests.support.ingest import envelope, leased_session
 
 from apipi.config import Settings
-from apipi.protocol import WorkerEnvelope
 from apipi.services.ingest import IngestBatcher, flush_batch, last_seq_for
 from apipi.services.turn_log import _write_turn_log
 from apipi.store.engine import Store
@@ -18,7 +17,6 @@ from apipi.store.repo import (
     get_turn_log,
     record_search_usage,
     search_usage_for_turn,
-    set_session_lease,
     usage_day,
     usage_totals,
 )
@@ -27,36 +25,10 @@ from apipi.store.repo import (
 async def _leased(
     store: Store, worker_id: uuid.UUID
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(
-            db, tenant.id, environment={"type": "none"}, metadata={}
-        )
-        await set_session_lease(
-            db,
-            tenant.id,
-            row.id,
-            worker_id=worker_id,
-            lease_id=uuid.uuid4(),
-            lease_until=utc_now() + timedelta(seconds=30),
-        )
-        turn = await create_turn(db, tenant.id, row.id, status="in_progress")
-        return tenant.id, row.id, turn.id
-
-
-def _envelope(
-    session_id: uuid.UUID, seq: int, type: str, payload: dict[str, Any]
-) -> WorkerEnvelope:
-    return WorkerEnvelope.model_validate(
-        {
-            "v": 2,
-            "session_id": str(session_id),
-            "turn_id": payload.get("turn_id"),
-            "seq": seq,
-            "type": type,
-            "payload": payload,
-        }
-    )
+        turn = await create_turn(db, tenant_id, session_id, status="in_progress")
+        return tenant_id, session_id, turn.id
 
 
 async def _send_usage(
@@ -69,7 +41,7 @@ async def _send_usage(
     batcher = IngestBatcher()
     seq = (await last_seq_for(store, worker_id, session_id) or 0) + 1
     batcher.add(
-        _envelope(
+        envelope(
             session_id,
             seq,
             "usage",

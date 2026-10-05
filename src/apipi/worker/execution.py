@@ -4,7 +4,6 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
 from typing import Any
 
 from pydantic import ValidationError
@@ -31,10 +30,6 @@ from apipi.worker.runtime import continue_turn, prepare_for_new_turn, run_turn
 from apipi.worker.sink import OutboxSink, ResultSink
 
 log = logging.getLogger("apipi.worker")
-
-# How long a follow-up waits for a worker to acknowledge a cancel with
-# events before treating the stale turn as abandoned.
-CANCEL_GRACE = timedelta(seconds=5)
 
 SEARCH_TIMEOUT = 30.0
 

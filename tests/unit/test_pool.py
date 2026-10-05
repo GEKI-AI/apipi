@@ -6,6 +6,8 @@ from typing import Any, cast
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from tests.support.config import none_settings
+from tests.support.fake_proc import FakeProc
 from tests.support.prom import metric_line
 
 from apipi.common.metrics import Metrics
@@ -13,10 +15,6 @@ from apipi.common.otel import Tracing
 from apipi.config import Settings
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
-
-
-class _Alive:
-    alive = True
 
 
 def test_has_capacity_counts_live_procs() -> None:
@@ -30,7 +28,7 @@ def test_has_capacity_counts_live_procs() -> None:
     first = uuid.uuid4()
     second = uuid.uuid4()
     assert pool.has_capacity(first)
-    pool._procs[first] = cast(PiProc, _Alive())
+    pool._procs[first] = cast(PiProc, FakeProc())
     assert pool.has_capacity(first)
     assert not pool.has_capacity(second)
     assert pool.live() == 1
@@ -50,7 +48,7 @@ def test_has_capacity_ram_cap() -> None:
     first = uuid.uuid4()
     second = uuid.uuid4()
     assert pool.has_capacity(first)
-    pool._procs[first] = cast(PiProc, _Alive())
+    pool._procs[first] = cast(PiProc, FakeProc())
     assert pool.has_capacity(first)
     assert not pool.has_capacity(second)
     assert pool.capacity_code(second) == "capacity"
@@ -68,7 +66,7 @@ def test_has_capacity_mixed_session_mem() -> None:
     )
     first = uuid.uuid4()
     second = uuid.uuid4()
-    pool._procs[first] = cast(PiProc, _Alive())
+    pool._procs[first] = cast(PiProc, FakeProc())
     pool._mem[first] = 2048
     assert pool.capacity_code(first, session_mem_mib=2048) is None
     assert pool.capacity_code(second, session_mem_mib=512) is None
@@ -89,7 +87,7 @@ def test_has_capacity_per_tenant() -> None:
     first = uuid.uuid4()
     second = uuid.uuid4()
     other = uuid.uuid4()
-    pool._procs[first] = cast(PiProc, _Alive())
+    pool._procs[first] = cast(PiProc, FakeProc())
     pool._tenants[first] = tenant_a
     assert pool.has_capacity(first, tenant_a)
     assert not pool.has_capacity(second, tenant_a)
@@ -99,32 +97,17 @@ def test_has_capacity_per_tenant() -> None:
     assert pool.live_for(tenant_b) == 0
 
 
-def _settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-    )
-
-
-class _Proc:
-    def __init__(self) -> None:
-        self.alive = True
-
-    async def terminate(self) -> None:
-        self.alive = False
-
-
 async def test_pool_respawns_when_instructions_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spawned: list[str | None] = []
 
-    async def fake_spawn(*_args: object, **kwargs: Any) -> _Proc:
+    async def fake_spawn(*_args: object, **kwargs: Any) -> FakeProc:
         spawned.append(kwargs.get("instructions"))
-        return _Proc()
+        return FakeProc()
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
-    pool = PiPool(_settings())
+    pool = PiPool(none_settings())
     session_id = uuid.uuid4()
     await pool.get(session_id, cwd=None, tools=True, instructions="a")
     await pool.get(session_id, cwd=None, tools=True, instructions="a")
@@ -137,12 +120,12 @@ async def test_pool_treats_empty_instructions_as_none(
 ) -> None:
     spawned: list[str | None] = []
 
-    async def fake_spawn(*_args: object, **kwargs: Any) -> _Proc:
+    async def fake_spawn(*_args: object, **kwargs: Any) -> FakeProc:
         spawned.append(kwargs.get("instructions"))
-        return _Proc()
+        return FakeProc()
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
-    pool = PiPool(_settings())
+    pool = PiPool(none_settings())
     session_id = uuid.uuid4()
     await pool.get(session_id, cwd=None, tools=True, instructions=None)
     await pool.get(session_id, cwd=None, tools=True, instructions="")
@@ -160,8 +143,8 @@ async def test_hosted_reap_uses_sandbox_ttl() -> None:
     )
     hosted = uuid.uuid4()
     other = uuid.uuid4()
-    pool._procs[hosted] = cast(PiProc, _Proc())
-    pool._procs[other] = cast(PiProc, _Proc())
+    pool._procs[hosted] = cast(PiProc, FakeProc())
+    pool._procs[other] = cast(PiProc, FakeProc())
     pool._env_types[hosted] = "openai_hosted"
     pool._env_types[other] = "none"
     pool._last[hosted] = time.monotonic() - 30
@@ -172,7 +155,7 @@ async def test_hosted_reap_uses_sandbox_ttl() -> None:
 
 
 def test_hold_and_release() -> None:
-    pool = PiPool(_settings())
+    pool = PiPool(none_settings())
     sid = uuid.uuid4()
     assert not pool.held(sid)
     pool.hold(sid)
@@ -184,7 +167,7 @@ def test_hold_and_release() -> None:
 
 
 def test_hold_counts_nested_holds() -> None:
-    pool = PiPool(_settings())
+    pool = PiPool(none_settings())
     sid = uuid.uuid4()
     pool.hold(sid)
     pool.hold(sid)
@@ -204,7 +187,7 @@ def _hooked_pool() -> tuple[PiPool, list[bool], list[uuid.UUID]]:
     async def on_release(session_id: uuid.UUID) -> None:
         released.append(session_id)
 
-    pool = PiPool(_settings(), on_kill=on_kill)
+    pool = PiPool(none_settings(), on_kill=on_kill)
     pool.on_release = on_release
     return pool, hooked, released
 
@@ -212,7 +195,7 @@ def _hooked_pool() -> tuple[PiPool, list[bool], list[uuid.UUID]]:
 async def test_a_kill_during_a_turn_releases_the_lease_after_the_turn() -> None:
     pool, hooked, released = _hooked_pool()
     sid = uuid.uuid4()
-    pool._procs[sid] = cast(PiProc, _Proc())
+    pool._procs[sid] = cast(PiProc, FakeProc())
     pool.hold(sid)
     await pool.kill(sid, reason="memory")
     assert hooked == [False]
@@ -226,7 +209,7 @@ async def test_a_kill_during_a_turn_releases_the_lease_after_the_turn() -> None:
 async def test_a_kill_without_a_turn_releases_at_once() -> None:
     pool, hooked, released = _hooked_pool()
     sid = uuid.uuid4()
-    pool._procs[sid] = cast(PiProc, _Proc())
+    pool._procs[sid] = cast(PiProc, FakeProc())
     await pool.kill(sid, reason="idle")
     await pool.after_turn(sid)
     assert hooked == [True]
@@ -236,10 +219,10 @@ async def test_a_kill_without_a_turn_releases_at_once() -> None:
 async def test_a_turn_with_a_new_process_keeps_the_lease() -> None:
     pool, hooked, released = _hooked_pool()
     sid = uuid.uuid4()
-    pool._procs[sid] = cast(PiProc, _Proc())
+    pool._procs[sid] = cast(PiProc, FakeProc())
     pool.hold(sid)
     await pool.kill(sid, reason="crash")
-    pool._procs[sid] = cast(PiProc, _Proc())
+    pool._procs[sid] = cast(PiProc, FakeProc())
     pool.release(sid)
     await pool.after_turn(sid)
     assert hooked == [False]
@@ -259,10 +242,10 @@ async def test_a_turn_that_ends_during_the_harvest_releases_after_it() -> None:
     async def on_release(session_id: uuid.UUID) -> None:
         released.append(session_id)
 
-    pool = PiPool(_settings(), on_kill=on_kill)
+    pool = PiPool(none_settings(), on_kill=on_kill)
     pool.on_release = on_release
     sid = uuid.uuid4()
-    pool._procs[sid] = cast(PiProc, _Proc())
+    pool._procs[sid] = cast(PiProc, FakeProc())
     pool.hold(sid)
     kill = asyncio.create_task(pool.kill(sid, reason="crash"))
     await asyncio.sleep(0)
@@ -285,7 +268,7 @@ async def test_get_emits_sandbox_attach_span() -> None:
         tracing=tracing,
     )
     sid = uuid.uuid4()
-    pool._procs[sid] = cast(PiProc, _Alive())
+    pool._procs[sid] = cast(PiProc, FakeProc())
     pool._spawn_tools[sid] = True
     pool._thinking[sid] = "off"
     pool._system_prompts[sid] = None
@@ -312,7 +295,7 @@ async def test_get_emits_sandbox_boot_span(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
     async def _spawn(*_args: object, **_kwargs: object) -> PiProc:
-        return cast(PiProc, _Alive())
+        return cast(PiProc, FakeProc())
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", _spawn)
     sid = uuid.uuid4()
@@ -334,14 +317,14 @@ async def test_hosted_reap_kills_after_sandbox_ttl() -> None:
         )
     )
     hosted = uuid.uuid4()
-    pool._procs[hosted] = cast(PiProc, _Proc())
+    pool._procs[hosted] = cast(PiProc, FakeProc())
     pool._env_types[hosted] = "openai_hosted"
     pool._last[hosted] = time.monotonic() - 30
     await pool.reap()
     assert hosted not in pool._procs
 
 
-class _HostProc(_Proc):
+class _HostProc(FakeProc):
     vm_id = None
 
     def __init__(self, pid: int) -> None:

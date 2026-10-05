@@ -6,16 +6,13 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from tests.support import auth_plugin
+from tests.support.http import auth
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import ConfigError, Settings
 from apipi.gateway import create_app
 from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _settings(tmp_path: Path, plugin: str, ttl: timedelta) -> Settings:
@@ -52,8 +49,8 @@ async def test_plugin_second_request_uses_cache(
 ) -> None:
     client, app = plugin_client
     token = "cached-key"
-    first = await client.get("/v1/agents", headers=_auth(token))
-    second = await client.get("/v1/agents", headers=_auth(token))
+    first = await client.get("/v1/agents", headers=auth(token))
+    second = await client.get("/v1/agents", headers=auth(token))
     assert first.status_code == 200
     assert second.status_code == 200
     assert auth_plugin.calls == [token]
@@ -71,7 +68,7 @@ async def test_plugin_reject_is_401(
     plugin_client: tuple[AsyncClient, FastAPI],
 ) -> None:
     client, _app = plugin_client
-    response = await client.get("/v1/agents", headers=_auth("nope"))
+    response = await client.get("/v1/agents", headers=auth("nope"))
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "unauthorized"
     assert auth_plugin.calls == ["nope"]
@@ -86,8 +83,8 @@ async def test_plugin_typed_401_is_cached(
     plugin_client: tuple[AsyncClient, FastAPI],
 ) -> None:
     client, app = plugin_client
-    first = await client.get("/v1/agents", headers=_auth("expired"))
-    second = await client.get("/v1/agents", headers=_auth("expired"))
+    first = await client.get("/v1/agents", headers=auth("expired"))
+    second = await client.get("/v1/agents", headers=auth("expired"))
     assert first.status_code == 401
     assert first.json()["error"] == {
         "type": "invalid_request",
@@ -109,8 +106,8 @@ async def test_plugin_429_is_not_cached(
     plugin_client: tuple[AsyncClient, FastAPI],
 ) -> None:
     client, app = plugin_client
-    first = await client.get("/v1/agents", headers=_auth("hot"))
-    second = await client.get("/v1/agents", headers=_auth("hot"))
+    first = await client.get("/v1/agents", headers=auth("hot"))
+    second = await client.get("/v1/agents", headers=auth("hot"))
     assert first.status_code == 429
     assert first.json()["error"] == {
         "type": "invalid_request",
@@ -131,7 +128,7 @@ async def test_plugin_quota_dict_is_429(
     plugin_client: tuple[AsyncClient, FastAPI],
 ) -> None:
     client, _app = plugin_client
-    response = await client.get("/v1/agents", headers=_auth("full"))
+    response = await client.get("/v1/agents", headers=auth("full"))
     assert response.status_code == 429
     assert response.json()["error"]["code"] == "quota"
     assert response.json()["error"]["message"] == "No more agents for this tenant"
@@ -146,8 +143,8 @@ async def test_plugin_error_is_not_cached_as_success(
     plugin_client: tuple[AsyncClient, FastAPI],
 ) -> None:
     client, app = plugin_client
-    first = await client.get("/v1/agents", headers=_auth("x"))
-    second = await client.get("/v1/agents", headers=_auth("x"))
+    first = await client.get("/v1/agents", headers=auth("x"))
+    second = await client.get("/v1/agents", headers=auth("x"))
     assert first.status_code == 401
     assert second.status_code == 401
     assert auth_plugin.calls == ["x", "x"]
@@ -164,8 +161,8 @@ async def test_expired_cache_calls_plugin_again(
 ) -> None:
     client, _app = plugin_client
     token = "ttl-key"
-    await client.get("/v1/agents", headers=_auth(token))
-    await client.get("/v1/agents", headers=_auth(token))
+    await client.get("/v1/agents", headers=auth(token))
+    await client.get("/v1/agents", headers=auth(token))
     assert auth_plugin.calls == [token, token]
 
 

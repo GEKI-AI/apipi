@@ -4,18 +4,12 @@ from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
+from tests.support.fake_proc import FakeProc
+
 from apipi.config import Settings
 from apipi.worker.client import drain_idle, drain_timeout_seconds, worker_heartbeat
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
-
-
-class _Proc:
-    alive = True
-    vm_id = None
-
-    async def terminate(self) -> None:
-        self.alive = False
 
 
 def test_worker_heartbeat_omits_drain_by_default() -> None:
@@ -71,8 +65,8 @@ async def test_kill_unheld_skips_held_sessions() -> None:
     )
     idle = uuid.uuid4()
     busy = uuid.uuid4()
-    pool._procs[idle] = cast(PiProc, _Proc())
-    pool._procs[busy] = cast(PiProc, _Proc())
+    pool._procs[idle] = cast(PiProc, FakeProc())
+    pool._procs[busy] = cast(PiProc, FakeProc())
     pool.hold(busy)
     await pool.kill_unheld(reason="idle")
     assert pool.alive(idle) is False
@@ -91,7 +85,7 @@ async def test_drain_reason_is_not_idle() -> None:
     outbox = Outbox()
     pool.lifecycle = OutboxLifecycleReporter(outbox)
     sid = uuid.uuid4()
-    pool._procs[sid] = cast(PiProc, _Proc())
+    pool._procs[sid] = cast(PiProc, FakeProc())
     pool._live[sid] = {
         "session_id": sid,
         "start_seq": 1,

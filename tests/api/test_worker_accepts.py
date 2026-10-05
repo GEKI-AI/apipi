@@ -2,38 +2,15 @@ import uuid
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.config import none_settings_for
 from tests.support.fake_worker import FakeWorker
+from tests.support.http import auth, create_agent, tenant_of
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.services.worker_tokens import create_token
 from apipi.store.engine import Store
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant(token: str) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
-
-
-def _worker_settings(settings: Settings) -> Settings:
-    return Settings(
-        database_url=settings.database_url,
-        run_mode="none",
-        sessions_dir=settings.sessions_dir,
-    )
-
-
-async def _agent(client: AsyncClient, token: str) -> str:
-    agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    assert agent.status_code == 200
-    return str(agent.json()["id"])
 
 
 @pytest.mark.parametrize(
@@ -55,16 +32,16 @@ async def test_placement_matrix(
     pools: str,
     want: str | None,
 ) -> None:
-    app = create_app(api_settings_for(_worker_settings(settings)), store=store)
+    app = create_app(api_settings_for(none_settings_for(settings)), store=store)
     token = f"matrix-{kind}-{pools}"
-    tenant_id = _tenant(token)
+    tenant_id = tenant_of(token)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "environment": {
@@ -113,10 +90,10 @@ async def test_placement_matrix(
 
 async def test_type_none_rejects_bash_tools(client: AsyncClient) -> None:
     token = "deny"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     bash = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -134,7 +111,7 @@ async def test_type_none_rejects_non_http_mcp(client: AsyncClient) -> None:
     token = "deny-mcp"
     stdio = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "environment": {"type": "none"},
             "agent": {
@@ -157,7 +134,7 @@ async def test_type_none_allows_function_and_http_mcp(client: AsyncClient) -> No
     token = "allow"
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "environment": {"type": "none"},
             "agent": {
@@ -180,7 +157,7 @@ async def test_agent_with_none_defaults_rejects_bad_tools(
     token = "agent-none"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",

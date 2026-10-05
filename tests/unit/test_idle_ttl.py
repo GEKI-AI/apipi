@@ -4,6 +4,7 @@ from datetime import timedelta
 from typing import cast
 
 import pytest
+from tests.support.fake_proc import FakeProc
 
 from apipi.common.errors import ApiError
 from apipi.common.idle import normalize_idle_ttl, resolve_idle_ttl
@@ -75,20 +76,12 @@ def test_resolve_session_over_agent_over_default() -> None:
     )
 
 
-class _Proc:
-    alive = True
-    vm_id = None
-
-    async def terminate(self) -> None:
-        self.alive = False
-
-
 async def test_pool_reap_uses_stored_ttl() -> None:
     pool = PiPool(_settings())
     short = uuid.uuid4()
     default = uuid.uuid4()
-    pool._procs[short] = cast(PiProc, _Proc())
-    pool._procs[default] = cast(PiProc, _Proc())
+    pool._procs[short] = cast(PiProc, FakeProc())
+    pool._procs[default] = cast(PiProc, FakeProc())
     pool._env_types[short] = "none"
     pool._env_types[default] = "none"
     pool._last[short] = time.monotonic() - 120

@@ -2,6 +2,7 @@ import uuid
 from typing import cast
 
 import pytest
+from tests.support.fake_proc import FakeProc
 
 from apipi.common.errors import ApiError
 from apipi.common.event_bus import EventHub
@@ -14,10 +15,6 @@ from apipi.worker.outbox import Outbox
 from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 from apipi.workerhub.execution import RemoteExecution
-
-
-class _Alive:
-    alive = True
 
 
 def test_create_app_sets_remote_execution(settings: Settings, store: Store) -> None:
@@ -47,7 +44,7 @@ def test_local_execution_capacity_uses_pool(settings: Settings) -> None:
     second = uuid.uuid4()
     tenant_id = uuid.uuid4()
     assert execution.capacity_code(first, tenant_id) is None
-    pool._procs[first] = cast(PiProc, _Alive())
+    pool._procs[first] = cast(PiProc, FakeProc())
     assert execution.capacity_code(first, tenant_id) is None
     assert execution.capacity_code(second, tenant_id) == "capacity"
 

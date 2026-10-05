@@ -4,15 +4,14 @@ import zipfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.http import auth, create_agent, tenant_of
 
 from apipi.common.errors import ApiError
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.protocol import TurnContext, redact_context
 from apipi.services.turn_context import build_turn_context
 from apipi.store.engine import Store
@@ -20,14 +19,6 @@ from apipi.worker.turn_context import (
     env_credential_hosts,
     env_credentials_from_context,
 )
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant(token: str) -> uuid.UUID:
-    return uuid5(NAMESPACE_URL, hash_token(token))
 
 
 def _settings(tmp_path: Path, **extra: Any) -> Settings:
@@ -59,20 +50,9 @@ async def client(settings: Settings, store: Store) -> AsyncIterator[AsyncClient]
         yield item
 
 
-async def _agent(
-    client: AsyncClient, token: str, defaults: dict[str, Any] | None = None
-) -> str:
-    body: dict[str, Any] = {"name": "bot", "model": "test"}
-    if defaults is not None:
-        body["session_defaults"] = defaults
-    response = await client.post("/v1/agents", headers=_auth(token), json=body)
-    assert response.status_code == 200, response.text
-    return str(response.json()["id"])
-
-
 async def _vault(client: AsyncClient, token: str) -> str:
     response = await client.post(
-        "/v1/agents/vaults", headers=_auth(token), json={"name": "v"}
+        "/v1/agents/vaults", headers=auth(token), json={"name": "v"}
     )
     return str(response.json()["id"])
 
@@ -101,7 +81,7 @@ async def _env_cred(
     if metadata is not None:
         body["metadata"] = metadata
     response = await client.post(
-        f"/v1/agents/vaults/{vault_id}/credentials", headers=_auth(token), json=body
+        f"/v1/agents/vaults/{vault_id}/credentials", headers=auth(token), json=body
     )
     assert response.status_code == 200, response.text
     return str(response.json()["id"])
@@ -119,7 +99,7 @@ async def _session(
         body["vault_ids"] = vault_ids
     if environment is not None:
         body["environment"] = environment
-    return await client.post("/v1/agents/sessions", headers=_auth(token), json=body)
+    return await client.post("/v1/agents/sessions", headers=auth(token), json=body)
 
 
 def _code(response: Any) -> str:
@@ -154,7 +134,7 @@ async def test_session_create_checks_env_credentials(
     fragment: str,
 ) -> None:
     token = "env-rules"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     vault_ids = [await _vault(client, token) for _ in range(vaults)]
     for vault_id in vault_ids:
         await _env_cred(client, token, vault_id)
@@ -167,19 +147,21 @@ async def test_agent_session_defaults_are_checked(client: AsyncClient) -> None:
     token = "env-defaults"
     first = await _vault(client, token)
     await _env_cred(client, token, first)
-    agent_none = await _agent(
-        client, token, {"vault_ids": [first], "environment": {"type": "none"}}
+    agent_none = await create_agent(
+        client,
+        token,
+        session_defaults={"vault_ids": [first], "environment": {"type": "none"}},
     )
     response = await _session(client, token, agent_none)
     assert _code(response) == "credential_not_allowed"
     second = await _vault(client, token)
     await _env_cred(client, token, second)
-    agent = await _agent(client, token, {"vault_ids": [first]})
+    agent = await create_agent(client, token, session_defaults={"vault_ids": [first]})
     merged = await _session(client, token, agent, [second])
     assert _code(merged) == "secret_name_collision"
     skipped = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent,
             "vault_ids": [second],
@@ -199,7 +181,7 @@ async def test_operator_allowlist_must_allow_credential_hosts(
         microvm_egress_hosts="github.com",
     )
     async for client in _client(locked, store):
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         vault_id = await _vault(client, token)
         await _env_cred(client, token, vault_id)
         response = await _session(client, token, agent_id, [vault_id])
@@ -211,7 +193,7 @@ async def test_operator_allowlist_must_allow_credential_hosts(
         microvm_egress_hosts="github.com,https://API.github.com",
     )
     async for client in _client(opened, store):
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         vault_id = await _vault(client, token)
         await _env_cred(client, token, vault_id)
         response = await _session(client, token, agent_id, [vault_id])
@@ -222,7 +204,7 @@ async def test_context_carries_decrypted_env_credentials(
     settings: Settings, store: Store, client: AsyncClient
 ) -> None:
     token = "env-context"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     vault_id = await _vault(client, token)
     cred_id = await _env_cred(
         client,
@@ -245,7 +227,7 @@ async def test_context_carries_decrypted_env_credentials(
     )
     assert created.status_code == 200
     session_id = uuid.UUID(created.json()["id"])
-    context = await build_turn_context(store, settings, _tenant(token), session_id)
+    context = await build_turn_context(store, settings, tenant_of(token), session_id)
     assert context["env_credentials"] == [
         {
             "credential_id": cred_id,
@@ -263,11 +245,11 @@ async def test_context_carries_decrypted_env_credentials(
     assert env_credential_hosts(typed) == ("git.example.com",)
     rotated = await client.post(
         f"/v1/agents/vaults/{vault_id}/credentials/{cred_id}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"auth": {"type": "environment_variable", "secret_value": "rotated-1"}},
     )
     assert rotated.status_code == 200
-    again = await build_turn_context(store, settings, _tenant(token), session_id)
+    again = await build_turn_context(store, settings, tenant_of(token), session_id)
     assert again["env_credentials"][0]["secret_value"] == "rotated-1"
 
 
@@ -275,7 +257,7 @@ async def test_context_rechecks_vaults_that_changed(
     settings: Settings, store: Store, client: AsyncClient
 ) -> None:
     token = "env-recheck"
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     first = await _vault(client, token)
     second = await _vault(client, token)
     await _env_cred(client, token, first)
@@ -286,11 +268,11 @@ async def test_context_rechecks_vaults_that_changed(
     await _env_cred(client, token, second)
     with pytest.raises(ApiError) as clash:
         await build_turn_context(
-            store, settings, _tenant(token), uuid.UUID(hosted.json()["id"])
+            store, settings, tenant_of(token), uuid.UUID(hosted.json()["id"])
         )
     assert clash.value.code == "secret_name_collision"
     context = await build_turn_context(
-        store, settings, _tenant(token), uuid.UUID(chat.json()["id"])
+        store, settings, tenant_of(token), uuid.UUID(chat.json()["id"])
     )
     assert context["env_credentials"] == []
 
@@ -299,9 +281,11 @@ async def test_agent_export_never_contains_secret_values(client: AsyncClient) ->
     token = "env-export"
     vault_id = await _vault(client, token)
     await _env_cred(client, token, vault_id, secret_value="export-must-not-see")
-    agent_id = await _agent(client, token, {"vault_ids": [vault_id]})
+    agent_id = await create_agent(
+        client, token, session_defaults={"vault_ids": [vault_id]}
+    )
     exported = await client.get(
-        f"/v1/apipi/agents/{agent_id}/export", headers=_auth(token)
+        f"/v1/apipi/agents/{agent_id}/export", headers=auth(token)
     )
     assert exported.status_code == 200
     with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
@@ -309,7 +293,7 @@ async def test_agent_export_never_contains_secret_values(client: AsyncClient) ->
             assert b"export-must-not-see" not in archive.read(name)
     assert b"export-must-not-see" not in exported.content
     template = await client.post(
-        "/v1/apipi/templates", headers=_auth(token), json={"agent_id": agent_id}
+        "/v1/apipi/templates", headers=auth(token), json={"agent_id": agent_id}
     )
     assert template.status_code == 200
     assert "export-must-not-see" not in template.text

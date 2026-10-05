@@ -2,16 +2,17 @@ import uuid
 from pathlib import Path
 
 import pytest
-from alembic import command
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
+from tests.support.migrations import SqliteRevisions
 
-from apipi.store.migrate import alembic_config, upgrade_head
+from apipi.store.migrate import upgrade_head
 
 
-def test_worker_ingest_migration_adds_cursor_and_ledger(tmp_path: Path) -> None:
-    url = f"sqlite:///{tmp_path / 'apipi.db'}"
-    command.upgrade(alembic_config(url), "0025_worker_tokens")
+def test_worker_ingest_migration_adds_cursor_and_ledger(
+    tmp_path: Path, sqlite_revisions: SqliteRevisions
+) -> None:
+    url = sqlite_revisions.copy_at("0025_worker_tokens", tmp_path / "apipi.db")
     tenant = uuid.uuid4().hex
     session = uuid.uuid4().hex
     engine = create_engine(url)

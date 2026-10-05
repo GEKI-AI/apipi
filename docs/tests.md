@@ -40,7 +40,7 @@ requires the mode it asked for.
 | Path | Marker | What | GitHub |
 | --- | --- | --- | --- |
 | `tests/unit/` | none | Internals with mocks: config, store, isolation contract, microvm image packing, artifacts | yes |
-| `tests/api/` | none | Public HTTP vs [api.md](api.md). Every API test runs the API app (`create_app`, which is always the API) through an in-process worker (`split_client_for`, `tests/support/split_worker.py`) that connects over the real worker socket and runs FakeHarness. The API and the worker talk only over that socket, the same as in production. There is no combined test mode. Tenant isolation. `test_compat.py` has one named test per yes row on the API page. `test_worker_accepts.py` is the worker accepts placement and `type=none` tool-policy matrix | yes |
+| `tests/api/` | none | Public HTTP vs [api.md](api.md). Every API test runs the API app (`create_app`, which is always the API) through an in-process worker (`split_client_for`, `tests/support/split_worker.py`) that connects over the real worker socket and runs FakeHarness. The API and the worker talk only over that socket, the same as in production. There is no combined test mode. Tenant isolation. `test_compat.py` has one named test per supported row of the [OpenAI compatibility](openai-compatibility.md) page. `test_worker_accepts.py` is the worker accepts placement and `type=none` tool-policy matrix | yes |
 | `tests/e2e/test_none_pi.py` | `e2e` | Real `apipi serve` and `apipi worker` subprocesses (`tests/support/procs.py`, ephemeral loopback port, tmp dirs) with a fake Pi in `none` mode. One turn checks the stored usage and the `/metrics` scrape of the API | yes |
 | `tests/e2e/test_dev_processes.py` | `e2e` | `apipi dev` as a subprocess with a fake Pi: its two children run a turn, SIGINT stops both, and when one child exits, `apipi dev` stops the other | yes |
 | `tests/e2e/test_microvm_pi.py` | `e2e`, `microvm` | Same two-process shape with a microvm worker, inside a real Firecracker guest | no (skips without KVM) |
@@ -48,7 +48,7 @@ requires the mode it asked for.
 | `tests/e2e/test_pi_live.py` | `slow` | A real `pi --mode rpc` from `PATH` ends a turn on a slash command | no |
 | `tests/e2e/test_openai_sdk.py` | `slow` | Official OpenAI Python client `beta.agents` against the in-process `client` fixture (the API app and an in-process worker, as in `tests/api/`) | no |
 | `tests/unit/test_worker_protocol_schema.py`, `tests/api/test_conformance_api.py`, `tests/unit/test_conformance_worker.py` | none | The worker protocol contract: the committed JSON Schema matches the models and every frame the API and the worker send validates against it, and the real API and the real worker each play the golden transcripts in `tests/fixtures/worker-protocol/` (see [worker protocol](worker-protocol.md#json-schema-and-golden-transcripts)) | yes |
-| `tests/support/` | — | FakeHarness helpers, fake Pi, fake worker, and the transcript player (`conformance.py`). Not a suite | — |
+| `tests/support/` | — | Helpers that test files share: request headers and tenant ids (`http.py`), waits (`waits.py`), fakes for S3, Pi processes, Pi, and the worker, and the transcript player (`conformance.py`). A test file imports shared helpers from here, never from another test file. Not a suite | — |
 
 GitHub runs `pytest -n auto -m "not slow"` (pytest-xdist; drop `-n` to debug one test or when `APIPI_TEST_DATABASE_URL` is set). That is unit, API, and `e2e`.
 Microvm tests skip if KVM, Firecracker, images, or net tools cannot
@@ -108,6 +108,16 @@ These tests have their own limit:
 | --- | --- | --- |
 | `tests/e2e/test_microvm_pi.py` | 300 s | Boots Firecracker guests and waits up to 90 s for the API and the worker to start |
 | `tests/e2e/test_microvm_egress.py` | 900 s | Waits up to 10 minutes for the probe inside the guest, which reaches hosts on the internet |
+
+## Warnings
+
+`filterwarnings` in `[tool.pytest.ini_options]` in `pyproject.toml`
+turns `ResourceWarning` and `pytest.PytestUnraisableExceptionWarning`
+into errors. A test that leaves a socket, a file, a subprocess, or a
+database connection open fails. Python reports an unclosed object only
+when it is garbage collected, so the test that fails can be a later
+test in the same pytest process. Run the failing test together with
+the tests that ran before it, without `-n`, to find the one that leaks.
 
 ## None e2e
 

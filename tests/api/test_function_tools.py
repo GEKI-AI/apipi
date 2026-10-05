@@ -1,42 +1,16 @@
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from tests.support.http import auth
+from tests.support.split_worker import block_storage
 
 from apipi.config import Settings
 from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.turn_logs import get_turn_log
 from apipi.worker.fake_harness import FakeHarness
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture
-def tool_harness() -> FakeHarness:
-    harness = FakeHarness()
-    harness.function_calls = [
-        {"name": "echo", "arguments": {"text": "hi"}, "call_id": "call_1"}
-    ]
-    return harness
-
-
-def _block_storage(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _boom(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("split worker must not construct storage clients")
-
-    import apipi.store.blobs as blobs
-    import apipi.store.engine as engine
-
-    monkeypatch.setattr(engine, "create_engine", _boom)
-    monkeypatch.setattr(engine, "Store", _boom)
-    monkeypatch.setattr(blobs, "object_store", _boom)
-    monkeypatch.setattr(blobs, "blob_store", _boom)
-    monkeypatch.setattr(blobs, "S3Store", _boom)
 
 
 @pytest.fixture
@@ -52,14 +26,14 @@ async def tool_client(
     async with split_client_for(
         settings, store, harness=tool_harness, token=worker_secret
     ) as (_app, client, _worker):
-        _block_storage(monkeypatch)
+        block_storage(monkeypatch)
         yield client
 
 
 async def _agent_with_echo(client: AsyncClient, token: str) -> str:
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -84,7 +58,7 @@ async def test_function_tool_requires_action(
     agent_id = await _agent_with_echo(tool_client, token)
     created = await tool_client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -107,7 +81,7 @@ async def test_function_tool_requires_action(
     assert tool_harness.function_tools[0]["name"] == "echo"
     session_id = body["id"]
     events = await tool_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     types = [event["type"] for event in events.json()["data"]]
     assert "agent.session.requires_action" in types
@@ -119,14 +93,14 @@ async def test_function_tool_requires_action(
     ]
     turn_id = require[0]["data"]["turn_id"]
     items = await tool_client.get(
-        f"/v1/agents/sessions/{session_id}/items", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/items", headers=auth(token)
     )
     kinds = [item["type"] for item in items.json()["data"]]
     assert kinds == ["message", "function_call"]
 
     resumed = await tool_client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "type": "agent.session.input.tool_result",
             "turn_id": turn_id,
@@ -139,7 +113,7 @@ async def test_function_tool_requires_action(
     assert resumed.json()["status"] == "idle"
     assert resumed.json()["required_actions"] == []
     events = await tool_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     texts = [
         event["data"]["text"]
@@ -158,7 +132,7 @@ async def test_completed_turn_log_counts_function_tools(
     agent_id = await _agent_with_echo(tool_client, token)
     created = await tool_client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -167,7 +141,7 @@ async def test_completed_turn_log_counts_function_tools(
     )
     session_id = created.json()["id"]
     events = await tool_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     require = [
         event
@@ -177,7 +151,7 @@ async def test_completed_turn_log_counts_function_tools(
     turn_id = require[0]["data"]["turn_id"]
     resumed = await tool_client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "type": "agent.session.input.tool_result",
             "turn_id": turn_id,
@@ -205,7 +179,7 @@ async def test_tool_result_wrong_tenant_is_404(tool_client: AsyncClient) -> None
     agent_id = await _agent_with_echo(tool_client, token_a)
     created = await tool_client.post(
         "/v1/agents/sessions",
-        headers=_auth(token_a),
+        headers=auth(token_a),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -214,7 +188,7 @@ async def test_tool_result_wrong_tenant_is_404(tool_client: AsyncClient) -> None
     )
     session_id = created.json()["id"]
     events = await tool_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token_a)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token_a)
     )
     require = [
         event
@@ -224,7 +198,7 @@ async def test_tool_result_wrong_tenant_is_404(tool_client: AsyncClient) -> None
     turn_id = require[0]["data"]["turn_id"]
     other = await tool_client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token_b),
+        headers=auth(token_b),
         json={
             "type": "agent.session.input.tool_result",
             "turn_id": turn_id,

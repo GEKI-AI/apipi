@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from starlette.websockets import WebSocketState
+from tests.support.config import none_settings
 from tests.support.logs import field
 from tests.support.prom import metric_line
 
@@ -21,13 +22,6 @@ from apipi.worker.deltas import DeltaRelay
 from apipi.worker.outbox import Outbox, OutboxFull
 from apipi.workerhub.connection import WorkerConnection
 from apipi.workerhub.hub import WorkerHub
-
-
-def _settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-    )
 
 
 def _ws() -> SimpleNamespace:
@@ -174,7 +168,7 @@ async def test_hub_command_ack_and_retransmit(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     metrics = Metrics()
-    hub = WorkerHub(_settings(), metrics=metrics)
+    hub = WorkerHub(none_settings(), metrics=metrics)
     ws = _ws()
     conn = _conn(ws=ws)
     wire = _wire()
@@ -222,7 +216,7 @@ async def test_hub_command_ack_and_retransmit(
 async def test_hub_command_ack_timeout(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.WARNING, logger="apipi.worker")
     metrics = Metrics()
-    hub = WorkerHub(_settings(), metrics=metrics)
+    hub = WorkerHub(none_settings(), metrics=metrics)
     wire = _wire("session.stop")
     lease = uuid.UUID(str(wire["lease_id"]))
     entry = hub.commands.push(wire)
@@ -245,7 +239,7 @@ async def test_hub_command_ack_timeout(caplog: pytest.LogCaptureFixture) -> None
 
 async def test_hub_takeover_counts_lease_event() -> None:
     metrics = Metrics()
-    hub = WorkerHub(_settings(), metrics=metrics)
+    hub = WorkerHub(none_settings(), metrics=metrics)
     first = _conn()
     first.leases.add(uuid.uuid4())
     await hub.attach(first)
@@ -364,7 +358,7 @@ async def test_presign_waiter_timeout_is_counted(
         await upload_via_presign(
             outbox,
             {},
-            _settings(),
+            none_settings(),
             uuid.uuid4(),
             kind="artifact",
             filename="a.txt",

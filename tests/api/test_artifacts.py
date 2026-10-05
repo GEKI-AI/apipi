@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from tests.support.fake_s3 import FakeS3
+from tests.support.http import auth
 from tests.support.split_worker import split_client_for
-from tests.unit.test_blobs import FakeS3
 
 from apipi.common.dirs import store_root
 from apipi.config import Settings
@@ -17,21 +18,13 @@ from apipi.store.repo import create_artifact
 from apipi.worker.pi.artifacts import reap_workspaces
 
 
-def _token(name: str = "t") -> str:
-    return name
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
 async def _hosted_session(client: AsyncClient, token: str) -> tuple[str, Path]:
     agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
     )
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent.json()["id"]},
     )
     assert created.status_code == 200
@@ -51,7 +44,7 @@ async def _hosted_session(client: AsyncClient, token: str) -> tuple[str, Path]:
 async def _publish(client: AsyncClient, token: str, session_id: str) -> None:
     turned = await client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={"type": "agent.session.input.message", "content": "publish"},
     )
     assert turned.status_code == 200
@@ -59,7 +52,7 @@ async def _publish(client: AsyncClient, token: str, session_id: str) -> None:
 
 async def _events(client: AsyncClient, token: str, session_id: str) -> list[dict]:
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     assert listed.status_code == 200
     return listed.json()["data"]
@@ -68,7 +61,7 @@ async def _events(client: AsyncClient, token: str, session_id: str) -> list[dict
 async def test_write_host_file_and_fetch_content(
     client: AsyncClient,
 ) -> None:
-    token = _token()
+    token = "t"
     session_id, directory = await _hosted_session(client, token)
     (directory / "outputs").mkdir()
     (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
@@ -76,7 +69,7 @@ async def test_write_host_file_and_fetch_content(
     assert directory.exists()
 
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     assert listed.status_code == 200
     data = listed.json()["data"]
@@ -87,7 +80,7 @@ async def test_write_host_file_and_fetch_content(
 
     content = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert content.status_code == 200
     assert content.content == b"hello"
@@ -96,19 +89,19 @@ async def test_write_host_file_and_fetch_content(
 
 
 async def test_published_artifact_content_type_is_guessed(client: AsyncClient) -> None:
-    token = _token()
+    token = "t"
     session_id, directory = await _hosted_session(client, token)
     (directory / "outputs").mkdir()
     (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     await _publish(client, token, session_id)
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     data = listed.json()["data"]
     assert data[0]["content_type"] == "text/plain"
     content = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{data[0]['id']}/content",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert content.headers["content-type"].startswith("text/plain")
 
@@ -122,12 +115,12 @@ async def test_artifact_content_disposition_non_ascii(
     (directory / "outputs" / "Bericht_Größe_✓.txt").write_text("hi", encoding="utf-8")
     await _publish(client, token, session_id)
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     artifact_id = listed.json()["data"][0]["id"]
     content = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert content.status_code == 200
     disposition = content.headers["content-disposition"]
@@ -175,7 +168,7 @@ async def test_publish_puts_guessed_content_type(
             presign.get("ContentType") for presign in client_s3.presigns
         }
         listed = await client.get(
-            f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
         )
         assert listed.json()["data"][0]["content_type"] == "text/html"
 
@@ -183,7 +176,7 @@ async def test_publish_puts_guessed_content_type(
 async def test_harvest_skips_workspace_artifacts_folder(
     client: AsyncClient,
 ) -> None:
-    token = _token()
+    token = "t"
     session_id, directory = await _hosted_session(client, token)
     (directory / "artifacts").mkdir()
     (directory / "artifacts" / "note.txt").write_text("skip", encoding="utf-8")
@@ -191,7 +184,7 @@ async def test_harvest_skips_workspace_artifacts_folder(
     (directory / "outputs" / "keep.txt").write_text("keep", encoding="utf-8")
     await _publish(client, token, session_id)
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     data = listed.json()["data"]
     assert [item["path"] for item in data] == ["outputs/keep.txt"]
@@ -200,7 +193,7 @@ async def test_harvest_skips_workspace_artifacts_folder(
 async def test_artifact_content_gone_if_never_published(
     client: AsyncClient, store: Store
 ) -> None:
-    token = _token()
+    token = "t"
     session_id, _directory = await _hosted_session(client, token)
     async with store.session() as db:
         row = await db.scalar(
@@ -214,7 +207,7 @@ async def test_artifact_content_gone_if_never_published(
 
     content = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert content.status_code == 410
     assert content.json()["error"]["code"] == "gone"
@@ -223,63 +216,63 @@ async def test_artifact_content_gone_if_never_published(
 async def test_delete_artifact_removes_file_and_metadata(
     client: AsyncClient,
 ) -> None:
-    token = _token()
+    token = "t"
     session_id, directory = await _hosted_session(client, token)
     (directory / "outputs").mkdir()
     (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     await _publish(client, token, session_id)
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     artifact_id = listed.json()["data"][0]["id"]
 
     deleted = await client.delete(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert deleted.status_code == 200
     assert deleted.json() == {"id": artifact_id, "deleted": True}
 
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     assert listed.json() == {"data": []}
     missing = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert missing.status_code == 404
 
 
 async def test_cross_tenant_artifacts_are_404(client: AsyncClient) -> None:
-    token_a = _token("a")
-    token_b = _token("b")
+    token_a = "a"
+    token_b = "b"
     session_id, directory = await _hosted_session(client, token_a)
     (directory / "outputs").mkdir()
     (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     await _publish(client, token_a, session_id)
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token_a)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token_a)
     )
     artifact_id = listed.json()["data"][0]["id"]
 
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token_b)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token_b)
     )
     assert listed.status_code == 404
     content = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
-        headers=_auth(token_b),
+        headers=auth(token_b),
     )
     assert content.status_code == 404
     deleted = await client.delete(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}",
-        headers=_auth(token_b),
+        headers=auth(token_b),
     )
     assert deleted.status_code == 404
     content_a = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
-        headers=_auth(token_a),
+        headers=auth(token_a),
     )
     assert content_a.status_code == 200
     assert content_a.content == b"hello"
@@ -288,7 +281,7 @@ async def test_cross_tenant_artifacts_are_404(client: AsyncClient) -> None:
 async def test_workspace_persists_after_harvest(
     client: AsyncClient,
 ) -> None:
-    token = _token()
+    token = "t"
     session_id, directory = await _hosted_session(client, token)
     (directory / "keep.txt").write_text("stay", encoding="utf-8")
     (directory / "outputs").mkdir()
@@ -297,13 +290,13 @@ async def test_workspace_persists_after_harvest(
     assert directory.exists()
     assert (directory / "keep.txt").read_text(encoding="utf-8") == "stay"
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     assert listed.json()["data"][0]["path"] == "outputs/note.txt"
 
 
 async def test_publish_on_turn_complete(client: AsyncClient) -> None:
-    token = _token()
+    token = "t"
     session_id, directory = await _hosted_session(client, token)
     (directory / "artifacts").mkdir()
     (directory / "artifacts" / "note.txt").write_text("hello", encoding="utf-8")
@@ -311,12 +304,12 @@ async def test_publish_on_turn_complete(client: AsyncClient) -> None:
     (directory / "outputs" / "out.bin").write_bytes(b"xyz")
     turned = await client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={"type": "agent.session.input.message", "content": "done"},
     )
     assert turned.status_code == 200
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     data = listed.json()["data"]
     by_path = {item["path"]: item for item in data}
@@ -327,14 +320,14 @@ async def test_publish_on_turn_complete(client: AsyncClient) -> None:
     note = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/"
         f"{by_path['outputs/out.bin']['id']}/content",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert note.content == b"xyz"
 
 
 async def _turn_ids(client: AsyncClient, token: str, session_id: str) -> set[str]:
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(token)
     )
     assert listed.status_code == 200
     return {item["id"] for item in listed.json()["data"]}
@@ -343,25 +336,25 @@ async def _turn_ids(client: AsyncClient, token: str, session_id: str) -> set[str
 async def test_later_turn_publishes_new_artifact_for_same_path(
     client: AsyncClient,
 ) -> None:
-    token = _token()
+    token = "t"
     session_id, directory = await _hosted_session(client, token)
     (directory / "outputs").mkdir()
     (directory / "outputs" / "note.txt").write_text("one", encoding="utf-8")
     await client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={"type": "agent.session.input.message", "content": "first"},
     )
     (first_turn,) = await _turn_ids(client, token, session_id)
     (directory / "outputs" / "note.txt").write_text("two", encoding="utf-8")
     await client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={"type": "agent.session.input.message", "content": "second"},
     )
     (second_turn,) = await _turn_ids(client, token, session_id) - {first_turn}
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     data = listed.json()["data"]
     assert [item["path"] for item in data] == [
@@ -373,11 +366,11 @@ async def test_later_turn_publishes_new_artifact_for_same_path(
     assert set(by_turn) == {first_turn, second_turn}
     first = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{by_turn[first_turn]}/content",
-        headers=_auth(token),
+        headers=auth(token),
     )
     second = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts/{by_turn[second_turn]}/content",
-        headers=_auth(token),
+        headers=auth(token),
     )
     assert first.content == b"one"
     assert second.content == b"two"
@@ -391,7 +384,7 @@ async def test_sandbox_ttl_openai_hosted_wipes_dir_keeps_artifacts(
         client,
         worker,
     ):
-        token = _token()
+        token = "t"
         session_id, directory = await _hosted_session(client, token)
         (directory / "keep.txt").write_text("stay", encoding="utf-8")
         (directory / "outputs").mkdir()
@@ -405,16 +398,16 @@ async def test_sandbox_ttl_openai_hosted_wipes_dir_keeps_artifacts(
         )
         assert not directory.exists()
         listed = await client.get(
-            f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
         )
         artifact_id = listed.json()["data"][0]["id"]
         content = await client.get(
             f"/v1/agents/sessions/{session_id}/artifacts/{artifact_id}/content",
-            headers=_auth(token),
+            headers=auth(token),
         )
         assert content.content == b"hello"
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
         )
         assert events.json()["data"]
 
@@ -422,20 +415,20 @@ async def test_sandbox_ttl_openai_hosted_wipes_dir_keeps_artifacts(
 async def test_delete_session_removes_workspace_and_artifacts(
     client: AsyncClient,
 ) -> None:
-    token = _token()
+    token = "t"
     session_id, directory = await _hosted_session(client, token)
     (directory / "keep.txt").write_text("stay", encoding="utf-8")
     (directory / "outputs").mkdir()
     (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
     await _publish(client, token, session_id)
     deleted = await client.delete(
-        f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}", headers=auth(token)
     )
     assert deleted.status_code == 200
     assert deleted.json() == {"id": session_id, "deleted": True}
     assert not directory.exists()
     listed = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
     )
     assert listed.status_code == 404
 
@@ -462,7 +455,7 @@ async def test_artifact_cap_rejects_publish(
         ]
         assert codes == ["artifact_too_large"]
         listed = await client.get(
-            f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
         )
         assert listed.status_code == 200
         assert listed.json()["data"] == []
@@ -512,7 +505,7 @@ async def test_artifact_cap_allows_under_limit(
         (directory / "outputs" / "note.txt").write_text("hello", encoding="utf-8")
         await _publish(client, token, session_id)
         listed = await client.get(
-            f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
         )
         assert listed.status_code == 200
         assert listed.json()["data"][0]["path"] == "outputs/note.txt"
@@ -543,7 +536,7 @@ async def test_workspace_cap_emits_error_and_can_still_publish(
         ]
         assert codes == ["workspace_too_large"]
         listed = await client.get(
-            f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/artifacts", headers=auth(token)
         )
         assert listed.status_code == 200
         assert listed.json()["data"][0]["path"] == "outputs/note.txt"

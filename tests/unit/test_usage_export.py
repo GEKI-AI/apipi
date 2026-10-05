@@ -4,11 +4,10 @@ import logging
 import httpx
 import pytest
 from tests.support import fake_sink
+from tests.support.http import MockClient
 
 from apipi.config import ConfigError, Settings
 from apipi.services.usage_export import UsageExporter, export_usage, load_usage_sinks
-
-_OriginalClient = httpx.AsyncClient
 
 
 def _settings(*, retries: int = 1) -> Settings:
@@ -18,17 +17,6 @@ def _settings(*, retries: int = 1) -> Settings:
         usage_export_url="http://export.test/usage",
         usage_export_retries=retries,
     )
-
-
-class _Client:
-    def __init__(self, transport: httpx.MockTransport) -> None:
-        self._client = _OriginalClient(transport=transport)
-
-    async def __aenter__(self) -> httpx.AsyncClient:
-        return self._client
-
-    async def __aexit__(self, *_args: object) -> None:
-        await self._client.aclose()
 
 
 async def test_usage_export_posts_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -41,7 +29,7 @@ async def test_usage_export_posts_json(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(
         "apipi.services.usage_export.httpx.AsyncClient",
-        lambda **_kwargs: _Client(transport),
+        lambda **_kwargs: MockClient(transport),
     )
     await UsageExporter(_settings())._post({"tenant_id": "t", "status": "completed"})
     assert len(captured) == 1
@@ -63,7 +51,7 @@ async def test_usage_export_drop_does_not_raise(
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(
         "apipi.services.usage_export.httpx.AsyncClient",
-        lambda **_kwargs: _Client(transport),
+        lambda **_kwargs: MockClient(transport),
     )
     await UsageExporter(_settings(retries=0))._post(
         {

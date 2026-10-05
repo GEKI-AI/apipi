@@ -30,9 +30,11 @@ def do_run_migrations(connection: Connection) -> None:
 async def run_async_migrations() -> None:
     url = config.get_main_option("sqlalchemy.url") or ""
     connectable = create_engine(url.replace("%%", "%"))
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-    await connectable.dispose()
+    try:
+        async with connectable.connect() as connection:
+            await connection.run_sync(do_run_migrations)
+    finally:
+        await connectable.dispose()
 
 
 def run_migrations_online() -> None:

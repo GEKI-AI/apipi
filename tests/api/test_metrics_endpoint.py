@@ -1,24 +1,15 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from httpx import AsyncClient
+from tests.support.http import auth, tenant_of
 from tests.support.prom import metric_line
 
 from apipi.common.metrics import Metrics
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.worker.fake_harness import FAKE_USAGE
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant(token: str) -> str:
-    return str(uuid5(NAMESPACE_URL, hash_token(token)))
 
 
 @pytest.fixture
@@ -71,13 +62,13 @@ async def test_scrape_after_turn_has_series_without_prompt(
 ) -> None:
     client, worker_metrics = metrics_client
     token = "metrics-t"
-    tenant = _tenant(token)
+    tenant = str(tenant_of(token))
     agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
     )
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none"},

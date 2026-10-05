@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
 from tests.support.files import input_file, message, spy_commands, vision
+from tests.support.http import auth, create_agent
 from tests.support.split_worker import api_settings_for, split_client_for
 
 from apipi.config import Settings
@@ -18,24 +19,12 @@ _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _PNG = b"\x89PNG\r\n\x1a\n"
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-async def _agent(client: AsyncClient, token: str) -> str:
-    agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    assert agent.status_code == 200
-    return str(agent.json()["id"])
-
-
 async def _session(client: AsyncClient, token: str, environment: str = "none") -> str:
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
-            "agent_id": await _agent(client, token),
+            "agent_id": await create_agent(client, token),
             "environment": {"type": environment},
         },
     )
@@ -52,7 +41,7 @@ async def _upload(
 ) -> str:
     uploaded = await client.post(
         "/v1/files",
-        headers=_auth(token),
+        headers=auth(token),
         data={"purpose": "user_data"},
         files={"file": (filename, data, content_type)},
     )
@@ -62,7 +51,7 @@ async def _upload(
 
 async def _user_item(client: AsyncClient, token: str, session_id: str) -> Any:
     items = await client.get(
-        f"/v1/agents/sessions/{session_id}/items", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/items", headers=auth(token)
     )
     assert items.status_code == 200
     users = [item for item in items.json()["data"] if item["data"]["role"] == "user"]
@@ -91,7 +80,7 @@ async def test_text_files_reach_the_model_with_their_names(
         )
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message(
                 {"type": "input_text", "text": "read these"},
                 input_file(notes),
@@ -103,10 +92,10 @@ async def test_text_files_reach_the_model_with_their_names(
         assert sent.status_code == 200, sent.json()
         item = await _user_item(client, token, session_id)
         bound = await client.get(
-            f"/v1/apipi/sessions/{session_id}/files?order=asc", headers=_auth(token)
+            f"/v1/apipi/sessions/{session_id}/files?order=asc", headers=auth(token)
         )
         kinds = await client.get(
-            f"/v1/apipi/files?session_id={session_id}", headers=_auth(token)
+            f"/v1/apipi/files?session_id={session_id}", headers=auth(token)
         )
     assert harness.prompts == [
         "read these\n"
@@ -156,9 +145,9 @@ async def test_session_create_with_only_a_text_file_starts_a_turn(
         file_id = await _upload(client, token, b"hello", "a.txt", "text/plain")
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
-                "agent_id": await _agent(client, token),
+                "agent_id": await create_agent(client, token),
                 "environment": {"type": "none"},
                 "input": {"role": "user", "content": [input_file(file_id)]},
             },
@@ -167,7 +156,7 @@ async def test_session_create_with_only_a_text_file_starts_a_turn(
         session_id = created.json()["id"]
         item = await _user_item(client, token, session_id)
         bound = await client.get(
-            f"/v1/apipi/sessions/{session_id}/files", headers=_auth(token)
+            f"/v1/apipi/sessions/{session_id}/files", headers=auth(token)
         )
     assert harness.prompts == ['<file name="a.txt">\nhello\n</file>']
     assert item["data"]["content"] == [
@@ -189,7 +178,7 @@ async def test_image_file_reaches_a_vision_model_as_an_image(
         file_id = await _upload(client, token, image, "shot.png", "image/png")
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message({"type": "input_text", "text": "look"}, input_file(file_id)),
         )
         assert sent.status_code == 200, sent.json()
@@ -222,7 +211,7 @@ async def test_image_file_to_a_model_without_images_is_unsupported_input(
         file_id = await _upload(client, token, _PNG, "a.png", "image/png")
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message(input_file(file_id)),
         )
     assert sent.status_code == 400
@@ -257,7 +246,7 @@ async def test_files_the_model_cannot_read_fail_before_the_turn(
         path = f"/v1/agents/sessions/{session_id}/events"
         results = {
             name: await client.post(
-                path, headers=_auth(token), json=message(input_file(file_id))
+                path, headers=auth(token), json=message(input_file(file_id))
             )
             for name, file_id in {
                 "xlsx": xlsx,
@@ -269,7 +258,7 @@ async def test_files_the_model_cannot_read_fail_before_the_turn(
             }.items()
         }
         ok = await client.post(
-            path, headers=_auth(token), json=message(input_file(exact))
+            path, headers=auth(token), json=message(input_file(exact))
         )
     for name in ("xlsx", "pdf", "latin", "unknown_ext"):
         assert results[name].status_code == 400, name
@@ -333,12 +322,12 @@ async def test_invalid_input_parts_fail_before_the_turn(
         ]
         path = f"/v1/agents/sessions/{session_id}/events"
         failed = [
-            await client.post(path, headers=_auth(token), json=message(*parts))
+            await client.post(path, headers=auth(token), json=message(*parts))
             for parts, _code, _message in cases
         ]
         two = await client.post(
             path,
-            headers=_auth(token),
+            headers=auth(token),
             json=message(input_file(file_id), input_file(file_id)),
         )
     for (parts, code, text), response in zip(cases, failed, strict=True):
@@ -389,19 +378,19 @@ async def test_worker_without_the_feature_gets_no_turn(
         session_id = await _session(client, token, environment)
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message(part),
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
-                "agent_id": await _agent(client, token),
+                "agent_id": await create_agent(client, token),
                 "environment": {"type": environment},
                 "input": {"role": "user", "content": [part]},
             },
         )
-        files = await client.get("/v1/apipi/files", headers=_auth(token))
+        files = await client.get("/v1/apipi/files", headers=auth(token))
     await worker.close()
     assert sent.status_code == 501
     assert sent.json()["error"]["code"] == "unsupported_op"

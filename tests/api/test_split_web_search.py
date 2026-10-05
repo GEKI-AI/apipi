@@ -1,19 +1,20 @@
 import uuid
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any
 
 import httpx
-import pytest
 from httpx import AsyncClient
+from tests.support.http import auth, tenant_of
+from tests.support.search import settings
 from tests.support.split_worker import split_client_for, wait_for_idle
 
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.services.search import SearchService
 from apipi.store.engine import Store
 from apipi.store.repo import search_usage_for_turn
 from apipi.worker.fake_harness import FakeHarness
+
+__all__ = ["settings"]
 
 TAVILY_BODY = {
     "results": [
@@ -51,41 +52,25 @@ class SearchingHarness(FakeHarness):
             yield item
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture
-def settings(tmp_path: Path) -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-        sessions_dir=str(tmp_path / "sessions"),
-        local_store_dir=str(tmp_path / "store"),
-        search_provider="tavily",
-        search_api_key="secret-key",
-    )
-
-
 async def _run_turn(
     client: AsyncClient, token: str, tools: list[dict[str, Any]]
 ) -> uuid.UUID:
     agent = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "bot", "model": "test", "tools": tools},
     )
     assert agent.status_code == 200, agent.text
     session = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
     )
     assert session.status_code == 200, session.text
     session_id = session.json()["id"]
     posted = await client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={"type": "agent.session.input.message", "content": "search please"},
     )
     assert posted.status_code == 200, posted.text
@@ -120,10 +105,10 @@ async def test_search_goes_worker_to_api_to_provider_and_is_counted(
         assert len(seen) == 1
         assert seen[0].headers["authorization"] == "Bearer secret-key"
         assert "secret-key" not in str(reply)
-        tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+        tenant_id = tenant_of(token)
         usage = await client.get(
             "/v1/apipi/usage",
-            headers=_auth(token),
+            headers=auth(token),
             params={"session_id": str(session_id)},
         )
         assert usage.status_code == 200, usage.text

@@ -132,3 +132,23 @@ def test_protocol_loads_without_other_apipi_packages() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == []
+
+
+def test_test_files_share_helpers_only_through_support() -> None:
+    tests = SRC.parent.parent / "tests"
+    bad: list[str] = []
+    for path in sorted(tests.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                modules = [node.module]
+            elif isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            else:
+                continue
+            bad.extend(
+                f"{path.relative_to(tests.parent)}:{node.lineno} imports {module}"
+                for module in modules
+                if _is(module, "tests") and not _is(module, "tests.support")
+            )
+    assert bad == []

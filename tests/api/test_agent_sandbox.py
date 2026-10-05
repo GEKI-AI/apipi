@@ -1,21 +1,10 @@
 from httpx import ASGITransport, AsyncClient
+from tests.support.http import auth, create_agent
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.store.engine import Store
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-async def _agent(client: AsyncClient, token: str, **extra: object) -> str:
-    payload: dict[str, object] = {"name": "bot", "model": "test"}
-    payload.update(extra)
-    created = await client.post("/v1/agents", headers=_auth(token), json=payload)
-    assert created.status_code == 200, created.text
-    return str(created.json()["id"])
 
 
 async def test_agent_rejects_unknown_sandbox_image(
@@ -34,15 +23,15 @@ async def test_agent_rejects_unknown_sandbox_image(
         token = "agent-image-bad"
         created = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "bot", "metadata": {"apipi.sandbox_image": "notreal"}},
         )
         assert created.status_code == 400
         assert "sandbox_image" in created.json()["error"]["message"]
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         updated = await client.post(
             f"/v1/agents/{agent_id}",
-            headers=_auth(token),
+            headers=auth(token),
             json={"metadata": {"apipi.sandbox_image": "notreal"}},
         )
         assert updated.status_code == 400
@@ -52,7 +41,7 @@ async def test_agent_rejects_browser_below_min_size(client: AsyncClient) -> None
     token = "agent-browser-s"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "metadata": {"apipi.sandbox_image": "browser"},
@@ -67,7 +56,7 @@ async def test_agent_rejects_browser_below_min_size(client: AsyncClient) -> None
 
 async def test_agent_sandbox_pair_is_inherited(client: AsyncClient) -> None:
     token = "agent-browser-m"
-    agent_id = await _agent(
+    agent_id = await create_agent(
         client,
         token,
         metadata={"apipi.sandbox_image": "browser"},
@@ -77,7 +66,7 @@ async def test_agent_sandbox_pair_is_inherited(client: AsyncClient) -> None:
     )
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "openai_hosted", "sandbox_size": "M"},
@@ -91,10 +80,10 @@ async def test_agent_sandbox_pair_is_inherited(client: AsyncClient) -> None:
 
 async def test_agent_without_sandbox_metadata(client: AsyncClient) -> None:
     token = "agent-sandbox-omit"
-    agent_id = await _agent(client, token, metadata={"keep": "me"})
+    agent_id = await create_agent(client, token, metadata={"keep": "me"})
     updated = await client.post(
         f"/v1/agents/{agent_id}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "renamed"},
     )
     assert updated.status_code == 200

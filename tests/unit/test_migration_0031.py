@@ -7,7 +7,6 @@ database, so it never touches the shared schema.
 import asyncio
 import os
 import uuid
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -15,9 +14,9 @@ from typing import Any
 import pytest
 import sqlalchemy as sa
 from alembic import command
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
+from tests.support.migrations import SqliteRevisions
 
 from apipi.config import store_url
 from apipi.store.migrate import alembic_config, upgrade_head
@@ -253,7 +252,6 @@ def _check_downgraded(url: str, ids: dict[str, Any]) -> None:
 
 
 def _migrate(url: str) -> None:
-    command.upgrade(alembic_config(url), "0030_worker_forwards")
     ids = _seed(url)
     upgrade_head(url)
     _check_upgraded(url, ids)
@@ -263,32 +261,14 @@ def _migrate(url: str) -> None:
     _check_upgraded(url, ids)
 
 
-@pytest.fixture
-def postgres_url() -> Iterator[str]:
-    assert PG_URL is not None
-    base = make_url(store_url(PG_URL))
-    name = f"apipi_mig_{uuid.uuid4().hex[:12]}"
-
-    async def admin(sql: str) -> None:
-        engine = create_async_engine(base, isolation_level="AUTOCOMMIT")
-        try:
-            async with engine.connect() as connection:
-                await connection.execute(sa.text(sql))
-        finally:
-            await engine.dispose()
-
-    asyncio.run(admin(f'CREATE DATABASE "{name}"'))
-    try:
-        yield base.set(database=name).render_as_string(hide_password=False)
-    finally:
-        asyncio.run(admin(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-
-
-def test_file_kinds_migration_on_sqlite(tmp_path: Path) -> None:
-    _migrate(f"sqlite:///{tmp_path / 'apipi.db'}")
+def test_file_kinds_migration_on_sqlite(
+    tmp_path: Path, sqlite_revisions: SqliteRevisions
+) -> None:
+    _migrate(sqlite_revisions.copy_at("0030_worker_forwards", tmp_path / "apipi.db"))
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(not PG_URL, reason="needs APIPI_TEST_DATABASE_URL")
 def test_file_kinds_migration_on_postgres(postgres_url: str) -> None:
+    command.upgrade(alembic_config(postgres_url), "0030_worker_forwards")
     _migrate(postgres_url)

@@ -6,22 +6,15 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
+from tests.support.http import auth, tenant_of
+from tests.support.ingest import frame
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import record_search_usage, set_session_lease
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant(token: str) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
 
 
 def _api_settings(settings: Settings) -> Settings:
@@ -40,33 +33,16 @@ async def _session(app: FastAPI, token: str) -> uuid.UUID:
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         agent = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         assert agent.status_code == 200
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
         )
         assert created.status_code == 200
         return uuid.UUID(created.json()["id"])
-
-
-def _envelope(
-    session_id: uuid.UUID, seq: int, type: str, payload: dict[str, Any]
-) -> dict[str, Any]:
-    turn_id = payload.get("turn_id")
-    if turn_id is None and isinstance(payload.get("data"), dict):
-        maybe = payload["data"].get("turn_id")
-        turn_id = maybe if isinstance(maybe, str) else None
-    return {
-        "v": 2,
-        "session_id": str(session_id),
-        "turn_id": turn_id,
-        "seq": seq,
-        "type": type,
-        "payload": payload,
-    }
 
 
 def _start(session_id: uuid.UUID, turn_id: uuid.UUID) -> list[dict[str, Any]]:
@@ -74,7 +50,7 @@ def _start(session_id: uuid.UUID, turn_id: uuid.UUID) -> list[dict[str, Any]]:
         ("session.status", {"status": "in_progress"}),
         ("turn.status", {"turn_id": str(turn_id), "status": "started"}),
     ]
-    return [_envelope(session_id, i + 1, t, p) for i, (t, p) in enumerate(flow)]
+    return [frame(session_id, i + 1, t, p) for i, (t, p) in enumerate(flow)]
 
 
 def _search_item(
@@ -122,7 +98,7 @@ def _search_item(
             },
         ),
     ]
-    return [_envelope(session_id, start + i, t, p) for i, (t, p) in enumerate(flow)]
+    return [frame(session_id, start + i, t, p) for i, (t, p) in enumerate(flow)]
 
 
 def _finish(
@@ -150,7 +126,7 @@ def _finish(
         ),
         ("session.status", {"status": "idle"}),
     ]
-    return [_envelope(session_id, start + i, t, p) for i, (t, p) in enumerate(flow)]
+    return [frame(session_id, start + i, t, p) for i, (t, p) in enumerate(flow)]
 
 
 async def _drain(worker: FakeWorker, last_seq: int) -> None:
@@ -196,17 +172,17 @@ async def _setup(
     async with store.session() as db:
         await set_session_lease(
             db,
-            _tenant("t"),
+            tenant_of("t"),
             session_id,
             worker_id=uuid.UUID(str(hello["worker_id"])),
             lease_id=uuid.uuid4(),
             lease_until=utc_now() + timedelta(seconds=30),
         )
-    return app, worker, _tenant("t"), session_id
+    return app, worker, tenant_of("t"), session_id
 
 
 async def _usage(client: AsyncClient, token: str, **params: str) -> dict[str, Any]:
-    response = await client.get("/v1/apipi/usage", headers=_auth(token), params=params)
+    response = await client.get("/v1/apipi/usage", headers=auth(token), params=params)
     assert response.status_code == 200
     return response.json()
 
@@ -229,7 +205,7 @@ async def test_web_search_item_is_stored_and_served(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         items = await client.get(
-            f"/v1/agents/sessions/{session_id}/items", headers=_auth("t")
+            f"/v1/agents/sessions/{session_id}/items", headers=auth("t")
         )
         assert items.status_code == 200
         data = items.json()["data"]
@@ -241,14 +217,14 @@ async def test_web_search_item_is_stored_and_served(
             "action": {"type": "search", "query": "apipi"},
         }
         exported = await client.get(
-            f"/v1/apipi/sessions/{session_id}/export", headers=_auth("t")
+            f"/v1/apipi/sessions/{session_id}/export", headers=auth("t")
         )
         assert exported.status_code == 200
         assert [item["type"] for item in exported.json()["items"]] == [
             "web_search_call"
         ]
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth("t")
+            f"/v1/agents/sessions/{session_id}/events", headers=auth("t")
         )
         added = [
             event["data"]

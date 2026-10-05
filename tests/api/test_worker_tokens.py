@@ -7,6 +7,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from tests.support.fake_worker import FakeWorker
+from tests.support.http import auth
 from tests.support.split_worker import api_settings_for
 
 from apipi.cli import main, prepare_worker
@@ -200,7 +201,7 @@ async def test_worker_token_rejected_on_public_routes(
     ) as client:
         denied = await client.post(
             "/v1/agents",
-            headers={"Authorization": f"Bearer {worker_secret}"},
+            headers=auth(worker_secret),
             json={"name": "bot", "model": "test"},
         )
         assert denied.status_code == 401

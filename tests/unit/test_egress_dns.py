@@ -4,6 +4,7 @@ import socket
 from collections.abc import AsyncIterator
 
 import pytest
+from tests.support.egress import FakeResolver, answer_for, answered, query, rcode
 
 from apipi.worker.egress.dns import (
     RCODE_FORMERR,
@@ -13,79 +14,6 @@ from apipi.worker.egress.dns import (
     DnsFilter,
     parse_question,
 )
-
-
-def query(name: str, ident: int = 0x1234, qtype: int = 1) -> bytes:
-    labels = b"".join(
-        len(part).to_bytes(1, "big") + part.encode() for part in name.split(".")
-    )
-    header = ident.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
-    return header + labels + b"\x00" + qtype.to_bytes(2, "big") + b"\x00\x01"
-
-
-def answer_for(packet: bytes) -> bytes:
-    question = parse_question(packet)
-    record = b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04\x5d\xb8\xd8\x22"
-    return (
-        packet[:2]
-        + b"\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00"
-        + packet[12 : question.end]
-        + record
-    )
-
-
-def rcode(packet: bytes) -> int:
-    return packet[3] & 0x0F
-
-
-class FakeResolver:
-    def __init__(self) -> None:
-        self.udp: list[str] = []
-        self.tcp: list[str] = []
-        self.raw: list[bytes] = []
-        self.port = 0
-        self._udp: asyncio.DatagramTransport | None = None
-        self._tcp: asyncio.Server | None = None
-
-    async def start(self) -> None:
-        loop = asyncio.get_running_loop()
-        owner = self
-
-        class Proto(asyncio.DatagramProtocol):
-            def connection_made(self, transport: asyncio.BaseTransport) -> None:
-                self.transport = transport
-
-            def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-                owner.udp.append(parse_question(data).name)
-                owner.raw.append(data)
-                assert isinstance(self.transport, asyncio.DatagramTransport)
-                self.transport.sendto(answer_for(data), addr)
-
-        tcp = await asyncio.start_server(self._serve, "127.0.0.1", 0)
-        self.port = int(tcp.sockets[0].getsockname()[1])
-        self._tcp = tcp
-        transport, _ = await loop.create_datagram_endpoint(
-            Proto, local_addr=("127.0.0.1", self.port)
-        )
-        self._udp = transport
-
-    async def _serve(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        size = int.from_bytes(await reader.readexactly(2), "big")
-        data = await reader.readexactly(size)
-        self.tcp.append(parse_question(data).name)
-        self.raw.append(data)
-        reply = answer_for(data)
-        writer.write(len(reply).to_bytes(2, "big") + reply)
-        await writer.drain()
-        writer.close()
-
-    def close(self) -> None:
-        if self._udp is not None:
-            self._udp.close()
-        if self._tcp is not None:
-            self._tcp.close()
 
 
 @pytest.fixture
@@ -140,15 +68,6 @@ async def tcp_ask(port: int, packet: bytes) -> bytes:
         writer.close()
         with contextlib.suppress(OSError):
             await writer.wait_closed()
-
-
-def answered(reply: bytes, packet: bytes) -> bool:
-    return (
-        reply[:2] == packet[:2]
-        and rcode(reply) == 0
-        and int.from_bytes(reply[6:8], "big") == 1
-        and reply.endswith(b"\x5d\xb8\xd8\x22")
-    )
 
 
 async def test_forwarded_query_is_rebuilt(

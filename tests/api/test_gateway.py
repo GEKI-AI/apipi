@@ -8,16 +8,13 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from tests.support.http import auth
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings, extend_settings
 from apipi.gateway import Gateway, create_app
 from apipi.gateway.auth import AuthIdentity
 from apipi.store.engine import Store
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _only_ok(bearer: str) -> AuthIdentity | None:
@@ -58,7 +55,7 @@ async def test_verbose_gateway_pattern(settings: Settings, store: Store) -> None
         health = await client.get("/health")
         assert health.status_code == 200
         assert health.json() == {"status": "ok"}
-        agents = await client.get("/v1/agents", headers=_auth("t"))
+        agents = await client.get("/v1/agents", headers=auth("t"))
         assert agents.status_code == 200
         assert agents.json() == {"data": []}
 
@@ -80,9 +77,9 @@ async def test_authenticate_inject(settings: Settings, store: Store) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        denied = await client.get("/v1/agents", headers=_auth("nope"))
+        denied = await client.get("/v1/agents", headers=auth("nope"))
         assert denied.status_code == 401
-        allowed = await client.get("/v1/agents", headers=_auth("ok"))
+        allowed = await client.get("/v1/agents", headers=auth("ok"))
         assert allowed.status_code == 200
 
 
@@ -119,7 +116,7 @@ async def test_prefix_skips_health_context(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         health = await client.get("/apipi/health")
-        agents = await client.get("/apipi/v1/agents", headers=_auth("t"))
+        agents = await client.get("/apipi/v1/agents", headers=auth("t"))
     assert health.status_code == 200
     assert "x-apipi-instance" not in health.headers
     assert "x-request-id" not in health.headers

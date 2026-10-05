@@ -9,12 +9,12 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from tests.support.http import auth, create_agent, parse_sse, tenant_of
 
 from apipi.api.sessions import _event_stream
 from apipi.common.errors import ApiError
 from apipi.common.event_bus import EventHub
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.services.session_events import persist_event
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -27,30 +27,6 @@ from apipi.store.repo import (
     set_session_lease,
     update_session,
 )
-
-
-def _token(name: str = "t") -> str:
-    return name
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _parse_sse(text: str) -> list[dict[str, object]]:
-    events: list[dict[str, object]] = []
-    for block in text.split("\n\n"):
-        if not block.strip() or block.startswith(":"):
-            continue
-        data = None
-        for line in block.split("\n"):
-            if line.startswith("data: "):
-                data = line[6:]
-        if data is not None:
-            parsed = json.loads(data)
-            assert isinstance(parsed, dict)
-            events.append(parsed)
-    return events
 
 
 async def _read_stream_until_idle(
@@ -67,20 +43,12 @@ async def _read_stream_until_idle(
             if chunk.startswith(":"):
                 continue
             chunks.append(chunk)
-            types = [event["type"] for event in _parse_sse("".join(chunks))]
+            types = [event["type"] for event in parse_sse("".join(chunks))]
             if types and types[-1] == "agent.session.idle":
                 return "".join(chunks)
     finally:
         await agen.aclose()
     return "".join(chunks)
-
-
-async def _create_agent(client: AsyncClient, token: str) -> str:
-    response = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    assert response.status_code == 200
-    return str(response.json()["id"])
 
 
 async def test_health_is_not_request_logged(
@@ -96,11 +64,11 @@ async def test_request_and_turn_are_logged(
     client: AsyncClient, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO)
-    token = _token()
-    agent_id = await _create_agent(client, token)
+    token = "t"
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -136,11 +104,11 @@ async def test_request_and_turn_are_logged(
 
 
 async def test_session_crud_environment_none(client: AsyncClient) -> None:
-    token = _token()
-    agent_id = await _create_agent(client, token)
+    token = "t"
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -162,36 +130,36 @@ async def test_session_crud_environment_none(client: AsyncClient) -> None:
     assert body["required_actions"] == []
     session_id = body["id"]
 
-    listed = await client.get("/v1/agents/sessions", headers=_auth(token))
+    listed = await client.get("/v1/agents/sessions", headers=auth(token))
     assert listed.status_code == 200
     assert [row["id"] for row in listed.json()["data"]] == [session_id]
 
-    got = await client.get(f"/v1/agents/sessions/{session_id}", headers=_auth(token))
+    got = await client.get(f"/v1/agents/sessions/{session_id}", headers=auth(token))
     assert got.status_code == 200
     assert got.json()["id"] == session_id
 
     updated = await client.post(
         f"/v1/agents/sessions/{session_id}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"metadata": {"k": "2"}},
     )
     assert updated.status_code == 200
     assert updated.json()["metadata"] == {"k": "2"}
 
     deleted = await client.delete(
-        f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}", headers=auth(token)
     )
     assert deleted.status_code == 200
     assert deleted.json() == {"id": session_id, "deleted": True}
-    gone = await client.get(f"/v1/agents/sessions/{session_id}", headers=_auth(token))
+    gone = await client.get(f"/v1/agents/sessions/{session_id}", headers=auth(token))
     assert gone.status_code == 404
 
 
 async def test_inline_agent_is_not_saved(client: AsyncClient) -> None:
-    token = _token()
+    token = "t"
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent": {"name": "inline", "model": "test"},
             "environment": {"type": "none"},
@@ -199,16 +167,16 @@ async def test_inline_agent_is_not_saved(client: AsyncClient) -> None:
     )
     assert created.status_code == 200
     assert created.json()["agent_id"] is None
-    agents = await client.get("/v1/agents", headers=_auth(token))
+    agents = await client.get("/v1/agents", headers=auth(token))
     assert agents.json() == {"data": []}
 
 
 async def test_unknown_environment_type(client: AsyncClient) -> None:
-    token = _token()
-    agent_id = await _create_agent(client, token)
+    token = "t"
+    agent_id = await create_agent(client, token)
     response = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "foo"}},
     )
     assert response.status_code == 400
@@ -217,11 +185,11 @@ async def test_unknown_environment_type(client: AsyncClient) -> None:
 
 
 async def test_sse_replays_persisted_events(store: Store, client: AsyncClient) -> None:
-    token = _token()
-    agent_id = await _create_agent(client, token)
+    token = "t"
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -230,7 +198,7 @@ async def test_sse_replays_persisted_events(store: Store, client: AsyncClient) -
     )
     session_id = created.json()["id"]
     stored = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     stored_types = [event["type"] for event in stored.json()["data"]]
     assert stored_types[0] == "agent.session.created"
@@ -240,13 +208,13 @@ async def test_sse_replays_persisted_events(store: Store, client: AsyncClient) -
         assert row is not None
         tenant_id = row.tenant_id
         sid = row.id
-    streamed = _parse_sse(
+    streamed = parse_sse(
         await _read_stream_until_idle(store, EventHub(), tenant_id, sid)
     )
     assert [event["type"] for event in streamed] == stored_types
 
     last_seq = stored.json()["data"][-1]["seq"]
-    replay = _parse_sse(
+    replay = parse_sse(
         await _read_stream_until_idle(
             store, EventHub(), tenant_id, sid, after_seq=last_seq - 1
         )
@@ -272,7 +240,7 @@ async def test_output_text_delta_is_live_only(store: Store) -> None:
             async for chunk in agen:
                 if chunk.startswith(":"):
                     continue
-                parsed.extend(_parse_sse(chunk))
+                parsed.extend(parse_sse(chunk))
                 types = [event["type"] for event in parsed]
                 if "agent.session.turn.output_text.done" in types:
                     finished.set()
@@ -372,7 +340,7 @@ async def test_thinking_events_are_stored_and_replayed(store: Store) -> None:
     assert started is not None
     assert completed is not None
     assert dropped is None
-    streamed = _parse_sse(
+    streamed = parse_sse(
         await _read_stream_until_idle(store, EventHub(), tenant_id, session_id)
     )
     assert [event["type"] for event in streamed] == [
@@ -390,21 +358,21 @@ async def test_failed_turn_logs_event_and_code(
     client: AsyncClient, store: Store, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.ERROR, logger="apipi")
-    token = _token()
-    agent_id = await _create_agent(client, token)
+    token = "t"
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "none"}},
     )
     assert created.status_code == 200
     sid = uuid.UUID(created.json()["id"])
-    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         await update_session(db, tenant_id, sid, changes={"status": "in_progress"})
         turn = await create_turn(db, tenant_id, sid, status="in_progress")
         turn_id = turn.id
-    got = await client.get(f"/v1/agents/sessions/{sid}", headers=_auth(token))
+    got = await client.get(f"/v1/agents/sessions/{sid}", headers=auth(token))
     assert got.status_code == 200
     failed = [
         record
@@ -423,23 +391,23 @@ async def test_failed_turn_logs_event_and_code(
 async def test_get_session_recovers_stale_in_progress(
     client: AsyncClient, store: Store
 ) -> None:
-    token = _token()
-    agent_id = await _create_agent(client, token)
+    token = "t"
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "none"}},
     )
     assert created.status_code == 200
     sid = uuid.UUID(created.json()["id"])
-    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         await update_session(db, tenant_id, sid, changes={"status": "in_progress"})
         await create_turn(db, tenant_id, sid, status="in_progress")
-    got = await client.get(f"/v1/agents/sessions/{sid}", headers=_auth(token))
+    got = await client.get(f"/v1/agents/sessions/{sid}", headers=auth(token))
     assert got.status_code == 200
     assert got.json()["status"] == "idle"
-    events = await client.get(f"/v1/agents/sessions/{sid}/events", headers=_auth(token))
+    events = await client.get(f"/v1/agents/sessions/{sid}/events", headers=auth(token))
     types = [event["type"] for event in events.json()["data"]]
     assert "agent.session.turn.failed" in types
     assert types[-1] == "agent.session.idle"
@@ -448,26 +416,26 @@ async def test_get_session_recovers_stale_in_progress(
 async def test_follow_up_on_stale_in_progress_starts_turn(
     client: AsyncClient, store: Store
 ) -> None:
-    token = _token()
-    agent_id = await _create_agent(client, token)
+    token = "t"
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "none"}},
     )
     sid = uuid.UUID(created.json()["id"])
-    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         await update_session(db, tenant_id, sid, changes={"status": "in_progress"})
         await create_turn(db, tenant_id, sid, status="in_progress")
     posted = await client.post(
         f"/v1/agents/sessions/{sid}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={"type": "agent.session.input.message", "content": "hello"},
     )
     assert posted.status_code == 200
     assert posted.json()["status"] == "idle"
-    turns = await client.get(f"/v1/agents/sessions/{sid}/turns", headers=_auth(token))
+    turns = await client.get(f"/v1/agents/sessions/{sid}/turns", headers=auth(token))
     statuses = [row["status"] for row in turns.json()["data"]]
     assert "failed" in statuses
 
@@ -475,22 +443,21 @@ async def test_follow_up_on_stale_in_progress_starts_turn(
 async def _stale_leased_session(
     client: AsyncClient,
     store: Store,
-    name: str,
+    token: str,
     *,
     worker_id: uuid.UUID,
     lease_id: uuid.UUID,
     lease_in: timedelta,
 ) -> tuple[str, uuid.UUID, uuid.UUID]:
-    token = _token(name)
-    agent_id = await _create_agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "none"}},
     )
     assert created.status_code == 200
     sid = uuid.UUID(created.json()["id"])
-    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         await update_session(db, tenant_id, sid, changes={"status": "in_progress"})
         stale = await create_turn(db, tenant_id, sid, status="in_progress")
@@ -508,7 +475,7 @@ async def _stale_leased_session(
 async def _follow_up(client: AsyncClient, token: str, sid: uuid.UUID) -> Any:
     return await client.post(
         f"/v1/agents/sessions/{sid}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={"type": "agent.session.input.message", "content": "hello"},
     )
 
@@ -516,7 +483,7 @@ async def _follow_up(client: AsyncClient, token: str, sid: uuid.UUID) -> Any:
 async def _turn_statuses(
     client: AsyncClient, token: str, sid: uuid.UUID
 ) -> dict[str, str]:
-    turns = await client.get(f"/v1/agents/sessions/{sid}/turns", headers=_auth(token))
+    turns = await client.get(f"/v1/agents/sessions/{sid}/turns", headers=auth(token))
     return {row["id"]: row["status"] for row in turns.json()["data"]}
 
 
@@ -672,12 +639,12 @@ async def test_stream_create_ends_when_first_turn_fails(
             )
 
         app.state.execution.run_turn = fail_turn
-        token = _token("stream-fail")
-        agent_id = await _create_agent(client, token)
+        token = "stream-fail"
+        agent_id = await create_agent(client, token)
         async with client.stream(
             "POST",
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "environment": {"type": "none"},
@@ -688,7 +655,7 @@ async def test_stream_create_ends_when_first_turn_fails(
         ) as response:
             assert response.status_code == 200
             body = await response.aread()
-    events = _parse_sse(body.decode())
+    events = parse_sse(body.decode())
     types = [event["type"] for event in events]
     assert types[0] == "agent.session.created"
     assert "agent.session.error" in types
@@ -718,22 +685,22 @@ async def test_delete_stops_guest_before_dropping_the_row(
             seen["row"] = row is not None
 
         app.state.execution.teardown = teardown
-        token = _token("delete-order")
-        agent_id = await _create_agent(client, token)
+        token = "delete-order"
+        agent_id = await create_agent(client, token)
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent_id, "environment": {"type": "none"}},
         )
         assert created.status_code == 200
         session_id = created.json()["id"]
         deleted = await client.delete(
-            f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}", headers=auth(token)
         )
         assert deleted.status_code == 200
         assert deleted.json()["deleted"] is True
         missing = await client.get(
-            f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}", headers=auth(token)
         )
         assert missing.status_code == 404
     assert seen["row"] is True

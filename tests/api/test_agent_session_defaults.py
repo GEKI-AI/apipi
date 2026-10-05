@@ -1,34 +1,12 @@
-import io
-import zipfile
-
 from httpx import AsyncClient
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _zip_skill(name: str) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as archive:
-        archive.writestr(f"{name}/SKILL.md", f"---\nname: {name}\n---\nDo the thing.\n")
-    return buf.getvalue()
-
-
-async def _skill(client: AsyncClient, token: str, name: str = "demo") -> str:
-    uploaded = await client.post(
-        "/v1/skills",
-        headers=_auth(token),
-        files={"files": (f"{name}.zip", _zip_skill(name), "application/zip")},
-    )
-    assert uploaded.status_code == 200, uploaded.text
-    return str(uploaded.json()["id"])
+from tests.support.files import upload_skill
+from tests.support.http import auth
 
 
 async def _file(client: AsyncClient, token: str) -> str:
     uploaded = await client.post(
         "/v1/files",
-        headers=_auth(token),
+        headers=auth(token),
         files={"file": ("note.txt", b"hello", "text/plain")},
         data={"purpose": "user_data"},
     )
@@ -39,7 +17,7 @@ async def _file(client: AsyncClient, token: str) -> str:
 async def _vault(client: AsyncClient, token: str) -> str:
     created = await client.post(
         "/v1/agents/vaults",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "v"},
     )
     assert created.status_code == 200, created.text
@@ -63,12 +41,12 @@ def _defaults(skill_id: str, file_id: str, vault_id: str) -> dict[str, object]:
 
 async def test_agent_session_defaults_round_trip(client: AsyncClient) -> None:
     token = "defaults-round"
-    skill_id = await _skill(client, token)
+    skill_id = await upload_skill(client, token)
     file_id = await _file(client, token)
     vault_id = await _vault(client, token)
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -83,7 +61,7 @@ async def test_agent_session_defaults_round_trip(client: AsyncClient) -> None:
     agent_id = body["id"]
     cleared = await client.post(
         f"/v1/agents/{agent_id}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"session_defaults": None},
     )
     assert cleared.status_code == 200, cleared.text
@@ -93,14 +71,14 @@ async def test_agent_session_defaults_round_trip(client: AsyncClient) -> None:
 
 async def test_session_uses_and_overrides_defaults(client: AsyncClient) -> None:
     token = "defaults-merge"
-    skill_id = await _skill(client, token, "one")
-    extra = await _skill(client, token, "two")
+    skill_id = await upload_skill(client, token, "one")
+    extra = await upload_skill(client, token, "two")
     file_id = await _file(client, token)
     vault_id = await _vault(client, token)
     other = await _vault(client, token)
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -110,7 +88,7 @@ async def test_session_uses_and_overrides_defaults(client: AsyncClient) -> None:
     agent_id = created.json()["id"]
     session = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -136,7 +114,7 @@ async def test_inherit_false_skips_defaults(client: AsyncClient) -> None:
     token = "defaults-opt-out"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -154,7 +132,7 @@ async def test_inherit_false_skips_defaults(client: AsyncClient) -> None:
     assert created.json()["session_defaults"]["environment"]["sandbox_size"] == "M"
     opted = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "inherit_agent_defaults": False,
@@ -166,7 +144,7 @@ async def test_inherit_false_skips_defaults(client: AsyncClient) -> None:
     assert opted.json()["environment"]["sandbox_size"] == "S"
     none_session = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id, "environment": {"type": "none"}},
     )
     assert none_session.status_code == 200, none_session.text
@@ -176,7 +154,7 @@ async def test_unknown_and_dangling_refs(client: AsyncClient) -> None:
     token = "defaults-refs"
     missing = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "session_defaults": {
@@ -190,10 +168,10 @@ async def test_unknown_and_dangling_refs(client: AsyncClient) -> None:
         },
     )
     assert missing.status_code == 404
-    skill_id = await _skill(client, token)
+    skill_id = await upload_skill(client, token)
     other = await client.post(
         "/v1/agents",
-        headers=_auth("defaults-other"),
+        headers=auth("defaults-other"),
         json={
             "name": "bot",
             "session_defaults": {
@@ -207,7 +185,7 @@ async def test_unknown_and_dangling_refs(client: AsyncClient) -> None:
     assert other.status_code == 404
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -221,11 +199,11 @@ async def test_unknown_and_dangling_refs(client: AsyncClient) -> None:
     )
     assert created.status_code == 200, created.text
     agent_id = created.json()["id"]
-    deleted = await client.delete(f"/v1/skills/{skill_id}", headers=_auth(token))
+    deleted = await client.delete(f"/v1/skills/{skill_id}", headers=auth(token))
     assert deleted.status_code == 200
     session = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent_id},
     )
     assert session.status_code == 400
@@ -238,7 +216,7 @@ async def test_alias_conflict_and_hosted_only(client: AsyncClient) -> None:
     token = "defaults-alias"
     conflict = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "metadata": {"apipi.sandbox_size": "S"},
@@ -251,7 +229,7 @@ async def test_alias_conflict_and_hosted_only(client: AsyncClient) -> None:
     assert "container_size" in conflict.json()["error"]["message"]
     hosted = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "session_defaults": {"environment": {"type": "none", "env": {"A": "1"}}},
@@ -260,7 +238,7 @@ async def test_alias_conflict_and_hosted_only(client: AsyncClient) -> None:
     assert hosted.status_code == 400
     inline = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent": {
                 "name": "inline",
@@ -279,11 +257,27 @@ async def test_alias_conflict_and_hosted_only(client: AsyncClient) -> None:
     assert inline.json()["agent_id"] is None
 
 
+async def test_self_hosted_defaults_are_not_implemented(client: AsyncClient) -> None:
+    response = await client.post(
+        "/v1/agents",
+        headers=auth("defaults-self-hosted"),
+        json={
+            "name": "bot",
+            "model": "test",
+            "session_defaults": {"environment": {"type": "self_hosted"}},
+        },
+    )
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["type"] == "not_implemented"
+    assert error["message"] == "environment type self_hosted is not supported"
+
+
 async def test_session_field_beats_agent_sandbox(client: AsyncClient) -> None:
     token = "defaults-size"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -299,7 +293,7 @@ async def test_session_field_beats_agent_sandbox(client: AsyncClient) -> None:
     agent_id = created.json()["id"]
     session = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "metadata": {"apipi.sandbox_size": "S"},

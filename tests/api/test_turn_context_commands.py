@@ -1,21 +1,19 @@
-import io
 import uuid
-import zipfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
-from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.fake_worker import FakeWorker
+from tests.support.files import upload_skill
+from tests.support.http import auth, tenant_of
 from tests.support.split_worker import split_client_for, wait_for_event_types
 
 from apipi.common.dirs import pi_session_file, store_root
 from apipi.common.errors import ApiError
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.protocol import MAX_COMMAND_BYTES, check_command_size, redact_context
 from apipi.services.turn_context import build_turn_context
 from apipi.store.blobs import blob_store
@@ -25,14 +23,6 @@ from apipi.worker.fake_harness import FakeHarness
 from apipi.workerhub.commands import _check_command_context
 
 pytest_plugins = ["tests.support.mcp_http_server"]
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant(token: str) -> uuid.UUID:
-    return uuid5(NAMESPACE_URL, hash_token(token))
 
 
 @pytest.fixture
@@ -59,24 +49,12 @@ def worker_settings(settings: Settings) -> Settings:
 
 
 @pytest.fixture
-def worker_harness() -> FakeHarness:
-    return FakeHarness()
-
-
-@pytest.fixture
 async def client(settings: Settings, store: Store) -> AsyncIterator[AsyncClient]:
     app = create_app(settings, store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         yield client
-
-
-def _zip_skill(name: str) -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr(f"{name}/SKILL.md", f"---\nname: {name}\n---\nDo things.\n")
-    return buffer.getvalue()
 
 
 async def _agent(
@@ -94,7 +72,7 @@ async def _agent(
         body["tools"] = tools
     if reasoning is not None:
         body["reasoning"] = reasoning
-    response = await client.post("/v1/agents", headers=_auth(token), json=body)
+    response = await client.post("/v1/agents", headers=auth(token), json=body)
     assert response.status_code == 200
     return str(response.json()["id"])
 
@@ -102,19 +80,9 @@ async def _agent(
 async def _file(client: AsyncClient, token: str) -> str:
     uploaded = await client.post(
         "/v1/files",
-        headers=_auth(token),
+        headers=auth(token),
         data={"purpose": "user_data"},
         files={"file": ("notes.txt", b"workspace notes", "text/plain")},
-    )
-    assert uploaded.status_code == 200
-    return str(uploaded.json()["id"])
-
-
-async def _skill(client: AsyncClient, token: str) -> str:
-    uploaded = await client.post(
-        "/v1/skills",
-        headers=_auth(token),
-        files={"files": ("demo.zip", _zip_skill("demo"), "application/zip")},
     )
     assert uploaded.status_code == 200
     return str(uploaded.json()["id"])
@@ -129,7 +97,7 @@ async def _idle_session(
 ) -> str:
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -160,7 +128,7 @@ async def test_turn_start_command_carries_turn_context(
     worker_secret: str,
 ) -> None:
     token = "ctx-command"
-    tenant_id = _tenant(token)
+    tenant_id = tenant_of(token)
     agent_id = await _agent(
         client,
         token,
@@ -175,7 +143,11 @@ async def test_turn_start_command_carries_turn_context(
         reasoning={"effort": "high"},
     )
     session_id = await _idle_session(
-        client, token, agent_id, await _file(client, token), await _skill(client, token)
+        client,
+        token,
+        agent_id,
+        await _file(client, token),
+        await upload_skill(client, token),
     )
     transport = client._transport
     assert isinstance(transport, ASGITransport)
@@ -238,7 +210,7 @@ async def test_worker_runs_turn_from_context_without_db_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = "ctx-worker"
-    tenant_id = _tenant(token)
+    tenant_id = tenant_of(token)
     async with split_client_for(
         settings,
         store,
@@ -264,7 +236,7 @@ async def test_worker_runs_turn_from_context_without_db_reads(
             token,
             agent_id,
             await _file(client, token),
-            await _skill(client, token),
+            await upload_skill(client, token),
         )
         session_uuid = uuid.UUID(session_id)
         async with store.session() as db:
@@ -278,7 +250,7 @@ async def test_worker_runs_turn_from_context_without_db_reads(
 
         posted = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.message", "text": "hi"},
         )
         assert posted.status_code == 200
@@ -307,14 +279,14 @@ async def test_followup_turn_rebuilds_mcp_from_db_and_vault(
 ) -> None:
     mcp_url, _seen = mcp_server
     token = "ctx-mcp"
-    tenant_id = _tenant(token)
+    tenant_id = tenant_of(token)
     vault = await client.post(
-        "/v1/agents/vaults", headers=_auth(token), json={"name": "v"}
+        "/v1/agents/vaults", headers=auth(token), json={"name": "v"}
     )
     assert vault.status_code == 200
     cred = await client.post(
         f"/v1/agents/vaults/{vault.json()['id']}/credentials",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "c",
             "auth": {
@@ -327,7 +299,7 @@ async def test_followup_turn_rebuilds_mcp_from_db_and_vault(
     assert cred.status_code == 200
     agent = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "bot",
             "model": "test",
@@ -337,7 +309,7 @@ async def test_followup_turn_rebuilds_mcp_from_db_and_vault(
     assert agent.status_code == 200
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none"},
@@ -363,7 +335,7 @@ async def test_followup_turn_rebuilds_mcp_from_db_and_vault(
     assert first["mcp"][0]["headers"] == {"Authorization": "Bearer vault-secret"}
     rotated = await client.post(
         f"/v1/agents/vaults/{vault.json()['id']}/credentials/{cred.json()['id']}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"auth": {"type": "static_bearer", "token": "rotated-secret"}},
     )
     assert rotated.status_code == 200
@@ -380,7 +352,7 @@ async def test_followup_turn_rebuilds_mcp_from_db_and_vault(
 async def test_filesystem_refs_become_presigned_urls_on_s3(
     settings: Settings, store: Store
 ) -> None:
-    from tests.unit.test_blobs import FakeS3
+    from tests.support.fake_s3 import FakeS3
 
     from apipi.store.blobs import S3Store
 
@@ -401,7 +373,7 @@ async def test_filesystem_refs_become_presigned_urls_on_s3(
         objects=S3Store(s3_settings, client=FakeS3()),
     )
     token = "ctx-s3"
-    tenant_id = _tenant(token)
+    tenant_id = tenant_of(token)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -411,7 +383,7 @@ async def test_filesystem_refs_become_presigned_urls_on_s3(
             token,
             agent_id,
             await _file(client, token),
-            await _skill(client, token),
+            await upload_skill(client, token),
         )
     objects = S3Store(s3_settings, client=FakeS3())
     context = await build_turn_context(
@@ -473,7 +445,7 @@ async def test_command_over_the_limit_fails_with_a_clear_message(
     ):
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": await _agent(client, token),
                 "environment": {"type": "none"},
@@ -482,7 +454,7 @@ async def test_command_over_the_limit_fails_with_a_clear_message(
         assert created.status_code == 200
         sent = await client.post(
             f"/v1/agents/sessions/{created.json()['id']}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "type": "agent.session.input.message",
                 "content": "x" * (MAX_COMMAND_BYTES + 1),

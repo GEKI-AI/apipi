@@ -6,38 +6,13 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 from httpx import AsyncClient
 from tests.support import fake_sink
+from tests.support.http import auth, session_with_turn, tenant_of
 from tests.support.split_worker import split_client_for
 
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
 from apipi.store.repo import get_turn_log, list_turn_logs, usage_day
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant_id(token: str) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
-
-
-async def _session_with_turn(client: AsyncClient, token: str) -> str:
-    agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent.json()["id"],
-            "environment": {"type": "none"},
-            "input": "hello",
-        },
-    )
-    assert created.status_code == 200
-    return str(created.json()["id"])
 
 
 @pytest.fixture
@@ -83,12 +58,12 @@ async def test_usage_store_off_writes_no_rows(
     off_client: AsyncClient, store: Store
 ) -> None:
     token = "off"
-    session_id = await _session_with_turn(off_client, token)
+    session_id = await session_with_turn(off_client, token)
     turns = await off_client.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(token)
     )
     turn_id = uuid.UUID(turns.json()["data"][0]["id"])
-    tenant_id = _tenant_id(token)
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         assert await get_turn_log(db, tenant_id, turn_id) is None
         listed = await list_turn_logs(db, tenant_id, uuid.UUID(session_id))
@@ -96,7 +71,7 @@ async def test_usage_store_off_writes_no_rows(
         day = utc_now().date()
         assert (await usage_day(db, tenant_id, day))["turns"] == 0
     usage = await off_client.get(
-        "/v1/apipi/usage", headers=_auth(token), params={"session_id": session_id}
+        "/v1/apipi/usage", headers=auth(token), params={"session_id": session_id}
     )
     assert usage.status_code == 200
     assert usage.json()["turns"] == 0
@@ -107,24 +82,24 @@ async def test_usage_store_rollups_skips_turn_rows(
     rollup_client: AsyncClient, store: Store
 ) -> None:
     token = "rollups"
-    session_id = await _session_with_turn(rollup_client, token)
+    session_id = await session_with_turn(rollup_client, token)
     turns = await rollup_client.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(token)
     )
     turn_id = uuid.UUID(turns.json()["data"][0]["id"])
-    tenant_id = _tenant_id(token)
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         assert await get_turn_log(db, tenant_id, turn_id) is None
         day = utc_now().date()
         assert (await usage_day(db, tenant_id, day))["turns"] == 1
     day = utc_now().date().isoformat()
     usage = await rollup_client.get(
-        "/v1/apipi/usage", headers=_auth(token), params={"day": day}
+        "/v1/apipi/usage", headers=auth(token), params={"day": day}
     )
     assert usage.status_code == 200
     assert usage.json()["turns"] == 1
     turn_usage = await rollup_client.get(
-        "/v1/apipi/usage", headers=_auth(token), params={"turn_id": str(turn_id)}
+        "/v1/apipi/usage", headers=auth(token), params={"turn_id": str(turn_id)}
     )
     assert turn_usage.status_code == 200
     assert turn_usage.json()["turns"] == 0
@@ -153,7 +128,7 @@ async def test_usage_export_receives_event(
         client,
         _worker,
     ):
-        session_id = await _session_with_turn(client, token)
+        session_id = await session_with_turn(client, token)
     assert len(captured) == 1
     event = captured[0]
     blob = json.dumps(event)
@@ -181,11 +156,11 @@ async def test_usage_export_failure_does_not_break_turn(
         _worker,
     ):
         created = await client.post(
-            "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
         )
         session = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": created.json()["id"],
                 "environment": {"type": "none"},
@@ -201,7 +176,7 @@ async def test_usage_event_includes_plugin_user_id(
 ) -> None:
     fake_sink.reset()
 
-    def auth(bearer: str) -> dict[str, str]:
+    def authenticate(bearer: str) -> dict[str, str]:
         del bearer
         return {
             "key_id": "plugin-key",
@@ -213,14 +188,14 @@ async def test_usage_event_includes_plugin_user_id(
         settings.model_copy(update={"usage_sinks": "tests.support.fake_sink:FakeSink"}),
         store,
         token=worker_secret,
-        authenticate=auth,
+        authenticate=authenticate,
     ) as (_app, client, _worker):
         agent = await client.post(
-            "/v1/agents", headers=_auth("t"), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth("t"), json={"name": "bot", "model": "test"}
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth("t"),
+            headers=auth("t"),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},

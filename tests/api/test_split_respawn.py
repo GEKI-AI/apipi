@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from tests.support.http import auth
 from tests.support.procs import fake_pi_shim
 from tests.support.split_worker import (
     HeldRelease,
@@ -36,10 +37,6 @@ class _Run:
     leased: bool = False
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
 def _message(text: str) -> dict[str, Any]:
     content = [{"type": "input_text", "text": text}]
     return {
@@ -56,7 +53,7 @@ async def _send(client: AsyncClient, token: str, session_id: str, text: str) -> 
     response = await asyncio.wait_for(
         client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=_message(text),
         ),
         timeout=15,
@@ -119,14 +116,14 @@ async def _two_turns(
         pool.sweep_dead = sweep_dead
         agent = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "bot", "model": "test", "instructions": "one"},
         )
         assert agent.status_code == 200, agent.json()
         agent_id = agent.json()["id"]
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={"agent_id": agent_id, "environment": {"type": environment}},
         )
         assert created.status_code == 200, created.json()
@@ -135,7 +132,7 @@ async def _two_turns(
         if between == "respawn":
             updated = await client.post(
                 f"/v1/agents/{agent_id}",
-                headers=_auth(token),
+                headers=auth(token),
                 json={"instructions": "two"},
             )
             assert updated.status_code == 200, updated.json()
@@ -145,7 +142,7 @@ async def _two_turns(
             await proc.terminate()
         run.statuses.append(await _send(client, token, session_id, "second"))
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events?limit=100", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events?limit=100", headers=auth(token)
         )
         run.types = [event["type"] for event in events.json()["data"]]
         run.leased = uuid.UUID(session_id) in worker.session_leases
@@ -181,13 +178,13 @@ async def test_a_new_pi_at_turn_start_keeps_the_lease(
 async def _session(client: AsyncClient, token: str, environment: str) -> str:
     agent = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "bot", "model": "test", "instructions": "one"},
     )
     assert agent.status_code == 200, agent.json()
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent.json()["id"], "environment": {"type": environment}},
     )
     assert created.status_code == 200, created.json()
@@ -228,7 +225,7 @@ async def _lease_settles(
 
 async def _events(client: AsyncClient, token: str, session_id: str) -> list[Any]:
     events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events?limit=200", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events?limit=200", headers=auth(token)
     )
     return list(events.json()["data"])
 
@@ -644,7 +641,7 @@ async def _post(client: AsyncClient, token: str, session_id: str, text: str) -> 
     return await asyncio.wait_for(
         client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=_message(text),
         ),
         timeout=15,
@@ -781,7 +778,7 @@ async def test_a_cancel_during_a_lease_release_answers_like_an_idle_session(
             asyncio.wait_for(
                 client.post(
                     f"/v1/agents/sessions/{session_id}/events",
-                    headers=_auth(token),
+                    headers=auth(token),
                     json={"type": "agent.session.input.cancel"},
                 ),
                 timeout=15,

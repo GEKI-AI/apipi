@@ -8,6 +8,8 @@ from typing import Any, cast
 import pytest
 from httpx import AsyncClient
 from pydantic import ValidationError
+from tests.support.fake_proc import FakeProc
+from tests.support.waits import until
 
 from apipi.config import Settings
 from apipi.protocol import ContextAgent, SearchResultItem, parse_turn_context
@@ -432,22 +434,14 @@ def test_write_workspace_image_adds_extension_only_with_flag(tmp_path: Path) -> 
     assert f"/workspace/{WEB_SEARCH_EXTENSION_REL}" == GUEST_WEB_SEARCH_EXTENSION
 
 
-class _PoolProc:
-    def __init__(self) -> None:
-        self.alive = True
-
-    async def terminate(self) -> None:
-        self.alive = False
-
-
 async def test_pool_respawns_when_web_search_flag_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spawned: list[dict[str, Any]] = []
 
-    async def fake_spawn(*_args: object, **kwargs: Any) -> _PoolProc:
+    async def fake_spawn(*_args: object, **kwargs: Any) -> FakeProc:
         spawned.append(kwargs)
-        return _PoolProc()
+        return FakeProc()
 
     monkeypatch.setattr("apipi.worker.pi.pool.spawn_pi", fake_spawn)
     pool = PiPool(_settings())
@@ -701,14 +695,6 @@ class _Connect:
         return False
 
 
-async def _until(predicate: Any, timeout: float = 3.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not predicate():
-        if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError("condition not met")
-        await asyncio.sleep(0.01)
-
-
 async def test_run_worker_routes_search_request_reply_and_fails_on_disconnect(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -746,14 +732,14 @@ async def test_run_worker_routes_search_request_reply_and_fails_on_disconnect(
         run_worker(settings, url="http://127.0.0.1:8000", connect=connect)
     )
     try:
-        await _until(lambda: execution.search_sender is not None)
+        await until(lambda: execution.search_sender is not None)
         first = sockets[0]
         session_id, turn_id = uuid.uuid4(), uuid.uuid4()
 
         answered = asyncio.create_task(
             execution.search(str(session_id), str(turn_id), "cats", 2)
         )
-        await _until(lambda: len(first.requests()) == 1)
+        await until(lambda: len(first.requests()) == 1)
         request = first.requests()[0]
         assert request["query"] == "cats"
         assert request["max_results"] == 2
@@ -776,14 +762,14 @@ async def test_run_worker_routes_search_request_reply_and_fails_on_disconnect(
         pending = asyncio.create_task(
             execution.search(str(session_id), str(turn_id), "lost", None)
         )
-        await _until(lambda: len(first.requests()) == 2)
+        await until(lambda: len(first.requests()) == 2)
         first.inbox.put_nowait(ConnectionResetError("socket lost"))
         with pytest.raises(SearchHookError) as raised:
             await asyncio.wait_for(pending, timeout=2)
         assert raised.value.code == "search_unavailable"
         assert execution.search_waiters == {}
 
-        await _until(lambda: len(sockets) == 2 and execution.search_sender is not None)
+        await until(lambda: len(sockets) == 2 and execution.search_sender is not None)
         await asyncio.sleep(0.1)
         assert sockets[1].requests() == []
         assert execution.search_waiters == {}

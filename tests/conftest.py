@@ -1,5 +1,7 @@
+import asyncio
 import os
 import shutil
+import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -8,12 +10,14 @@ import pytest
 import pytest_timeout
 from httpx import AsyncClient
 from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
-from apipi.config import Settings
+from apipi.config import Settings, store_url
 from apipi.store.engine import Store
 from apipi.store.models import Base
 from apipi.worker.fake_harness import FakeHarness
+from tests.support.migrations import SqliteRevisions
 
 
 def _sqlite_engine(path: Path) -> AsyncEngine:
@@ -54,6 +58,33 @@ def _sqlite_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     Base.metadata.create_all(engine)
     engine.dispose()
     return path
+
+
+@pytest.fixture(scope="session")
+def sqlite_revisions(tmp_path_factory: pytest.TempPathFactory) -> SqliteRevisions:
+    return SqliteRevisions(tmp_path_factory.mktemp("revisions"))
+
+
+@pytest.fixture
+def postgres_url() -> Iterator[str]:
+    url = os.environ.get("APIPI_TEST_DATABASE_URL")
+    assert url is not None
+    base = make_url(store_url(url))
+    name = f"apipi_mig_{uuid.uuid4().hex[:12]}"
+
+    async def admin(sql: str) -> None:
+        engine = create_async_engine(base, isolation_level="AUTOCOMMIT")
+        try:
+            async with engine.connect() as connection:
+                await connection.execute(text(sql))
+        finally:
+            await engine.dispose()
+
+    asyncio.run(admin(f'CREATE DATABASE "{name}"'))
+    try:
+        yield base.set(database=name).render_as_string(hide_password=False)
+    finally:
+        asyncio.run(admin(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
 
 
 @pytest.fixture
@@ -145,6 +176,15 @@ async def worker_secret(store: Store) -> AsyncIterator[str]:
 @pytest.fixture
 def worker_harness() -> FakeHarness:
     return FakeHarness()
+
+
+@pytest.fixture
+def tool_harness() -> FakeHarness:
+    harness = FakeHarness()
+    harness.function_calls = [
+        {"name": "echo", "arguments": {"text": "hi"}, "call_id": "call_1"}
+    ]
+    return harness
 
 
 @pytest.fixture

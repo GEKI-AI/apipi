@@ -1,23 +1,18 @@
 import asyncio
 import uuid
-from uuid import NAMESPACE_URL, uuid5
 
 from httpx import ASGITransport, AsyncClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from tests.support.http import auth, tenant_of
 from tests.support.prom import metric_line
 
 from apipi.common.metrics import Metrics
 from apipi.common.otel import Tracing
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.worker.execution import worker_observability
 from apipi.worker.fake_harness import FAKE_USAGE, FakeHarness
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def test_without_worker_is_429(settings: Settings, store: Store) -> None:
@@ -26,11 +21,11 @@ async def test_without_worker_is_429(settings: Settings, store: Store) -> None:
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         agent = await client.post(
-            "/v1/agents", headers=_auth("t"), json={"name": "bot", "model": "test"}
+            "/v1/agents", headers=auth("t"), json={"name": "bot", "model": "test"}
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth("t"),
+            headers=auth("t"),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},
@@ -54,12 +49,12 @@ async def test_remote_turn_via_worker(
     ):
         agent = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "bot", "model": "test"},
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},
@@ -71,7 +66,7 @@ async def test_remote_turn_via_worker(
         assert body["status"] == "idle"
         session_id = uuid.UUID(body["id"])
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
         )
         types = [event["type"] for event in events.json()["data"]]
         assert "agent.session.turn.completed" in types
@@ -98,12 +93,12 @@ async def test_get_during_remote_turn_stays_in_progress(
     ):
         agent = await client.post(
             "/v1/agents",
-            headers=_auth("remote-get"),
+            headers=auth("remote-get"),
             json={"name": "bot", "model": "test"},
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth("remote-get"),
+            headers=auth("remote-get"),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},
@@ -114,7 +109,7 @@ async def test_get_during_remote_turn_stays_in_progress(
         turn = asyncio.create_task(
             client.post(
                 f"/v1/agents/sessions/{session_id}/events",
-                headers=_auth("remote-get"),
+                headers=auth("remote-get"),
                 json={
                     "type": "agent.session.input.message",
                     "content": "hello",
@@ -125,7 +120,7 @@ async def test_get_during_remote_turn_stays_in_progress(
         for _ in range(40):
             got = await client.get(
                 f"/v1/agents/sessions/{session_id}",
-                headers=_auth("remote-get"),
+                headers=auth("remote-get"),
             )
             status = got.json()["status"]
             if status == "in_progress":
@@ -134,7 +129,7 @@ async def test_get_during_remote_turn_stays_in_progress(
         assert status == "in_progress"
         again = await client.get(
             f"/v1/agents/sessions/{session_id}",
-            headers=_auth("remote-get"),
+            headers=auth("remote-get"),
         )
         assert again.json()["status"] == "in_progress"
         gate.set()
@@ -158,7 +153,7 @@ async def test_remote_turn_records_metrics_and_spans_on_worker(
     exporter = InMemorySpanExporter()
     tracing = Tracing(exporter=exporter)
     token = "t"
-    tenant = str(uuid5(NAMESPACE_URL, hash_token(token)))
+    tenant = str(tenant_of(token))
     async with split_client_for(
         api_settings,
         store,
@@ -168,12 +163,12 @@ async def test_remote_turn_records_metrics_and_spans_on_worker(
     ) as (_app, client, _worker):
         agent = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "bot", "model": "test"},
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},
@@ -220,12 +215,12 @@ async def test_remote_turn_shares_trace_and_assign_span(
     ) as (_app, client, _worker):
         agent = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "bot", "model": "test"},
         )
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},

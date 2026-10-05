@@ -10,6 +10,7 @@ from typing import Any, cast
 import httpx
 import pytest
 from tests.support import fake_sink
+from tests.support.http import MockClient
 from tests.support.prom import metric_line
 
 from apipi.common.metrics import Metrics
@@ -28,7 +29,6 @@ from apipi.worker.pi.pool import PiPool
 from apipi.worker.pi.proc import PiProc
 
 _DB = "postgresql+asyncpg://apipi:apipi@localhost:5432/apipi"
-_OriginalClient = httpx.AsyncClient
 
 
 class _Proc:
@@ -47,17 +47,6 @@ class _Image:
         self.id = image_id
         self.version = version
         self.digest = digest
-
-
-class _Client:
-    def __init__(self, transport: httpx.MockTransport) -> None:
-        self._client = _OriginalClient(transport=transport)
-
-    async def __aenter__(self) -> httpx.AsyncClient:
-        return self._client
-
-    async def __aexit__(self, *_args: object) -> None:
-        await self._client.aclose()
 
 
 def _settings(**updates: Any) -> Settings:
@@ -577,7 +566,7 @@ def _patch_client(monkeypatch: pytest.MonkeyPatch, handler) -> list[dict[str, An
     transport = httpx.MockTransport(wrapped)
     monkeypatch.setattr(
         "apipi.services.lifecycle_export.httpx.AsyncClient",
-        lambda **_kwargs: _Client(transport),
+        lambda **_kwargs: MockClient(transport),
     )
     return captured
 

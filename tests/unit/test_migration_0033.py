@@ -5,6 +5,7 @@ import pytest
 from alembic import command
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
+from tests.support.migrations import SqliteRevisions
 
 from apipi.store.migrate import alembic_config, upgrade_head
 
@@ -68,9 +69,9 @@ def _insert_env(connection, ids: dict[str, str], secret_name: str) -> None:
 
 def test_env_credentials_migration_keeps_rows_and_adds_columns(
     tmp_path: Path,
+    sqlite_revisions: SqliteRevisions,
 ) -> None:
-    url = f"sqlite:///{tmp_path / 'apipi.db'}"
-    command.upgrade(alembic_config(url), "0032_session_file_paths")
+    url = sqlite_revisions.copy_at("0032_session_file_paths", tmp_path / "apipi.db")
     ids = _seed(url)
     upgrade_head(url)
     engine = create_engine(url)
@@ -119,9 +120,10 @@ def test_env_credentials_migration_keeps_rows_and_adds_columns(
         engine.dispose()
 
 
-def test_env_credentials_migration_downgrade_drops_env_rows(tmp_path: Path) -> None:
-    url = f"sqlite:///{tmp_path / 'apipi.db'}"
-    command.upgrade(alembic_config(url), "0032_session_file_paths")
+def test_env_credentials_migration_downgrade_drops_env_rows(
+    tmp_path: Path, sqlite_revisions: SqliteRevisions
+) -> None:
+    url = sqlite_revisions.copy_at("0032_session_file_paths", tmp_path / "apipi.db")
     ids = _seed(url)
     upgrade_head(url)
     engine = create_engine(url)

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from alembic import command
 from sqlalchemy import create_engine, text
+from tests.support.migrations import SqliteRevisions
 
 from apipi.store.migrate import alembic_config, upgrade_head
 
@@ -27,9 +28,9 @@ def _indexes(url: str, table: str) -> dict[str, list[str]]:
 
 def test_creation_order_migration_indexes_turns_items_and_artifacts(
     tmp_path: Path,
+    sqlite_revisions: SqliteRevisions,
 ) -> None:
-    url = f"sqlite:///{tmp_path / 'apipi.db'}"
-    command.upgrade(alembic_config(url), "0033_env_credentials")
+    url = sqlite_revisions.copy_at("0033_env_credentials", tmp_path / "apipi.db")
     assert "ix_turns_session_created" not in _indexes(url, "turns")
     assert "ix_items_session_created" not in _indexes(url, "items")
     upgrade_head(url)

@@ -7,7 +7,6 @@ only a real API can do (create a session, post a message, cancel) are
 """
 
 import asyncio
-import json
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -18,16 +17,16 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import update
 from tests.support import conformance
-from tests.support.fake_runner import AsgiWebsocket
+from tests.support.asgi_websocket import AsgiWebsocket
+from tests.support.fake_s3 import FakeS3
+from tests.support.http import auth, tenant_of
 from tests.support.split_worker import api_settings_for
-from tests.unit.test_blobs import FakeS3
 
 from apipi.common.dirs import store_root
 from apipi.common.objects import NS_ARTIFACTS
 from apipi.common.store_check import write_store_check
 from apipi.config import Settings
 from apipi.gateway import create_app
-from apipi.gateway.tokens import hash_token
 from apipi.services.search import SearchService
 from apipi.store.blobs import S3Store
 from apipi.store.engine import Store
@@ -46,21 +45,6 @@ TAVILY_BODY = {
     ],
     "usage": {"credits": 1},
 }
-
-
-class _ListableFakeS3(FakeS3):
-    def list_objects_v2(self, **kwargs: object) -> dict[str, object]:
-        prefix = str(kwargs.get("Prefix") or "")
-        contents = [
-            {"Key": key, "Size": len(data)}
-            for key, data in self.objects.items()
-            if key.startswith(prefix)
-        ]
-        return {"Contents": contents, "IsTruncated": False}
-
-
-def _auth() -> dict[str, str]:
-    return {"Authorization": f"Bearer {TOKEN}"}
 
 
 class ApiPlayer:
@@ -93,7 +77,7 @@ class ApiPlayer:
         self.settings = api_settings_for(settings.model_copy(update=update_settings))
         kwargs: dict[str, Any] = {}
         if options.get("artifact_store") == "s3":
-            self.fake_s3 = _ListableFakeS3()
+            self.fake_s3 = FakeS3()
             self.objects = S3Store(self.settings, client=self.fake_s3)
             kwargs["objects"] = self.objects
         self.app = create_app(self.settings, store=store, **kwargs)
@@ -180,7 +164,7 @@ class ApiPlayer:
     async def post(self, body: dict[str, Any]) -> httpx.Response:
         return await self.client.post(
             f"/v1/agents/sessions/{self.binds['session']}/events",
-            headers=_auth(),
+            headers=auth(TOKEN),
             json=body,
         )
 
@@ -200,16 +184,16 @@ class ApiPlayer:
                 )
         agent = await self.client.post(
             "/v1/agents",
-            headers=_auth(),
+            headers=auth(TOKEN),
             json={"name": "bot", "model": "test", "tools": specs},
         )
         created = await self.client.post(
             "/v1/agents/sessions",
-            headers=_auth(),
+            headers=auth(TOKEN),
             json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
         )
         self.binds["session"] = created.json()["id"]
-        self.binds["tenant"] = str(uuid.uuid5(uuid.NAMESPACE_URL, hash_token(TOKEN)))
+        self.binds["tenant"] = str(tenant_of(TOKEN))
 
     async def do_start_turn(self, text: str) -> None:
         self.tasks.append(
@@ -309,8 +293,3 @@ async def test_the_real_api_follows_the_transcript(
 ) -> None:
     player = ApiPlayer(conformance.load(name), settings, store, worker_secret, tmp_path)
     await player.run()
-
-
-def test_the_transcripts_exist() -> None:
-    assert len(conformance.names("api")) >= 6
-    json.dumps(conformance.load("register-hello").steps)

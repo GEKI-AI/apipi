@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 from tests.support.files import input_file, message, spy_commands, vision
+from tests.support.http import auth, create_agent
 from tests.support.split_worker import split_client_for
 from tests.support.workspace import hosted_dir
 
@@ -27,20 +28,8 @@ _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _SHEET = b"PK\x03\x04" + b"x" * 240
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
 def _text(text: str) -> dict[str, Any]:
     return {"type": "input_text", "text": text}
-
-
-async def _agent(client: AsyncClient, token: str) -> str:
-    agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    assert agent.status_code == 200
-    return str(agent.json()["id"])
 
 
 async def _session(
@@ -52,9 +41,9 @@ async def _session(
 ) -> str:
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
-            "agent_id": agent_id or await _agent(client, token),
+            "agent_id": agent_id or await create_agent(client, token),
             "environment": environment or {"type": "openai_hosted"},
         },
     )
@@ -71,7 +60,7 @@ async def _upload(
 ) -> str:
     uploaded = await client.post(
         "/v1/files",
-        headers=_auth(token),
+        headers=auth(token),
         data={"purpose": "user_data"},
         files={"file": (filename, data, content_type)},
     )
@@ -84,7 +73,7 @@ async def _send(
 ) -> Any:
     return await client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json=message(*parts),
     )
 
@@ -97,7 +86,7 @@ async def _lease_of(store: Store, session_id: uuid.UUID) -> uuid.UUID | None:
 
 async def _user_items(client: AsyncClient, token: str, session_id: str) -> list[Any]:
     items = await client.get(
-        f"/v1/agents/sessions/{session_id}/items", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/items", headers=auth(token)
     )
     assert items.status_code == 200
     return [item for item in items.json()["data"] if item["data"]["role"] == "user"]
@@ -105,7 +94,7 @@ async def _user_items(client: AsyncClient, token: str, session_id: str) -> list[
 
 async def _bound(client: AsyncClient, token: str, session_id: str) -> list[Any]:
     listed = await client.get(
-        f"/v1/apipi/sessions/{session_id}/files?order=asc", headers=_auth(token)
+        f"/v1/apipi/sessions/{session_id}/files?order=asc", headers=auth(token)
     )
     assert listed.status_code == 200
     return list(listed.json()["data"])
@@ -133,7 +122,7 @@ async def test_input_file_lands_in_attachments_before_the_turn(
         item = (await _user_items(client, token, session_id))[-1]
         bound = await _bound(client, token, session_id)
         session = await client.get(
-            f"/v1/agents/sessions/{session_id}", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}", headers=auth(token)
         )
     directory = hosted_dir(settings, token, session_id)
     assert (directory / "attachments" / "report.xlsx").read_bytes() == _SHEET
@@ -236,9 +225,9 @@ async def test_session_create_with_only_a_file_starts_a_turn(
         inline = base64.b64encode(b"rows").decode()
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
-                "agent_id": await _agent(client, token),
+                "agent_id": await create_agent(client, token),
                 "environment": {
                     "type": "openai_hosted",
                     "files": [
@@ -271,7 +260,7 @@ async def test_session_files_come_back_after_a_wipe_and_stay_in_their_session(
     ) as (app, client, worker):
         commands = spy_commands(app)
         token = "attach-wipe"
-        agent_id = await _agent(client, token)
+        agent_id = await create_agent(client, token)
         session_id = await _session(client, token, agent_id=agent_id)
         other_id = await _session(client, token, agent_id=agent_id)
         kept = await _upload(client, token, b"keep", "keep.csv", "text/csv")
@@ -286,7 +275,7 @@ async def test_session_files_come_back_after_a_wipe_and_stay_in_their_session(
             await _send(client, token, session_id, _text("again"))
         ).status_code == 200
         edited = (directory / "attachments" / "keep.csv").read_bytes()
-        deleted = await client.delete(f"/v1/files/{gone}", headers=_auth(token))
+        deleted = await client.delete(f"/v1/files/{gone}", headers=auth(token))
         assert deleted.status_code == 200
         await reap_workspaces(
             worker.execution.settings,
@@ -412,7 +401,7 @@ async def test_concurrent_messages_get_different_paths(
         )
         gone = await _upload(client, token, b"g", "g.txt", "text/plain")
         assert (
-            await client.delete(f"/v1/files/{gone}", headers=_auth(token))
+            await client.delete(f"/v1/files/{gone}", headers=auth(token))
         ).is_success
         with pytest.raises(ApiError) as raised:
             await files.attach(
@@ -479,7 +468,7 @@ async def test_a_new_attachment_replaces_an_old_file_at_its_path(
         assert (
             await _send(client, token, session_id, input_file(old))
         ).status_code == 200
-        deleted = await client.delete(f"/v1/files/{old}", headers=_auth(token))
+        deleted = await client.delete(f"/v1/files/{old}", headers=auth(token))
         assert deleted.status_code == 200
         new = await _upload(client, token, b"new", "report.csv", "text/csv")
         assert (
@@ -544,7 +533,7 @@ async def test_a_failed_push_ends_the_turn_and_the_retry_works(
             _send(client, token, session_id, input_file(file_id)), timeout=15
         )
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
         )
         del pool.settled
         sid = uuid.UUID(session_id)
@@ -601,11 +590,11 @@ async def test_an_over_limit_attachment_does_not_cancel_a_running_turn(
                 break
         over = await _send(client, token, session_id, input_file(big))
         events = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
         )
         cancelled = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.cancel"},
         )
         await asyncio.wait_for(running, timeout=10)

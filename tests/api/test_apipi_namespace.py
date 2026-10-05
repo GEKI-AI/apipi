@@ -2,6 +2,7 @@ import uuid
 
 from fastapi.routing import APIRoute
 from httpx import AsyncClient
+from tests.support.http import auth
 
 from apipi.gateway import create_app
 from apipi.services.session_events import event_body
@@ -41,10 +42,6 @@ _CANONICAL = frozenset(
         "/v1/apipi/skills/{skill_id}/download",
     }
 )
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _paths(app: object) -> set[str]:
@@ -164,9 +161,9 @@ def test_body_functions_are_the_public_shapes() -> None:
 
 async def test_old_alias_paths_are_gone(client: AsyncClient) -> None:
     token = "namespace"
-    old = await client.get("/v1/usage", headers=_auth(token))
+    old = await client.get("/v1/usage", headers=auth(token))
     assert old.status_code == 404
-    new = await client.get("/v1/apipi/usage", headers=_auth(token))
+    new = await client.get("/v1/apipi/usage", headers=auth(token))
     assert new.status_code == 400
     assert new.json() != old.json()
 
@@ -175,13 +172,13 @@ async def test_container_size_maps_to_sandbox_size(client: AsyncClient) -> None:
     token = "container-size"
     agent = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "bot", "model": "test"},
     )
     assert agent.status_code == 200
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent.json()["id"],
             "environment": {"type": "none", "container_size": "large"},
@@ -193,7 +190,7 @@ async def test_container_size_maps_to_sandbox_size(client: AsyncClient) -> None:
     assert env["container_size"] == "large"
     clash = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent.json()["id"],
             "environment": {

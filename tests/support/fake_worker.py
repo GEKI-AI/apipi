@@ -1,9 +1,17 @@
+import uuid
+from datetime import timedelta
 from typing import Any
 
 from fastapi import FastAPI
+from httpx import AsyncClient
 
+from apipi.config import Settings
 from apipi.protocol import PROTOCOL_VERSION
-from tests.support.fake_runner import AsgiWebsocket
+from apipi.store.engine import Store
+from tests.support.asgi_websocket import AsgiWebsocket
+from tests.support.config import none_settings_for
+from tests.support.http import auth, tenant_of
+from tests.support.split_worker import api_settings_for
 
 
 class FakeWorker:
@@ -68,3 +76,45 @@ class FakeWorker:
 
     async def close(self) -> None:
         await self.ws.close()
+
+
+def socket_settings(
+    settings: Settings, ttl: timedelta = timedelta(seconds=30), **kw: Any
+) -> Settings:
+    return api_settings_for(
+        none_settings_for(settings, worker_lease_ttl=ttl, **kw).model_copy(
+            update={"metrics": True}
+        )
+    )
+
+
+def status_envelope(session_id: uuid.UUID, seq: int, **extra: Any) -> dict[str, Any]:
+    return {
+        "v": 2,
+        "session_id": str(session_id),
+        "seq": seq,
+        "type": "session.status",
+        "payload": {"status": "idle", **extra},
+    }
+
+
+async def acquire_lease(
+    app: Any, client: AsyncClient, store: Store, worker: FakeWorker, token: str = "t"
+) -> tuple[uuid.UUID, uuid.UUID, dict[str, Any]]:
+    tenant_id = tenant_of(token)
+    agent = await client.post(
+        "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
+    )
+    created = await client.post(
+        "/v1/agents/sessions",
+        headers=auth(token),
+        json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
+    )
+    session_id = uuid.UUID(created.json()["id"])
+    await worker.connect()
+    command = await app.state.workers.acquire(
+        store, tenant_id, session_id, op="turn.cancel"
+    )
+    assert command is not None
+    await worker.receive_json()
+    return tenant_id, session_id, command

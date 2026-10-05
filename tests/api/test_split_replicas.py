@@ -7,7 +7,7 @@ B, which has no socket, so each command must be forwarded.
 import asyncio
 import base64
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,6 +17,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, update
+from tests.support.http import auth, post_message, tenant_of
 from tests.support.notify_bus import NotifyNetwork
 from tests.support.procs import fake_pi_shim
 from tests.support.split_worker import (
@@ -27,6 +28,7 @@ from tests.support.split_worker import (
     wait_for_idle,
     worker_settings_for,
 )
+from tests.support.waits import until
 
 from apipi.config import Settings
 from apipi.gateway import create_app
@@ -43,20 +45,12 @@ from apipi.worker.fake_harness import FakeHarness
 TOKEN = "replicas"
 
 
-def _auth() -> dict[str, str]:
-    return {"Authorization": f"Bearer {TOKEN}"}
-
-
 def _credential(identity: AuthIdentity, bearer: str | None) -> str:
     return f"model:{identity.key_id}"
 
 
 CREDENTIAL = f"model:{hash_token(TOKEN)}"
 IMAGE = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"pixels" * 100).decode()
-
-
-def _tenant() -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(TOKEN))
 
 
 @dataclass
@@ -79,17 +73,6 @@ class Replicas:
         return self.app_b.state.workers
 
 
-async def _until(predicate: Callable[[], Any], timeout: float = 10.0) -> Any:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while True:
-        value = await predicate()
-        if value:
-            return value
-        if asyncio.get_running_loop().time() >= deadline:
-            raise AssertionError("condition not met in time")
-        await asyncio.sleep(0.02)
-
-
 def _stop_loops(app: FastAPI, *names: str) -> None:
     for task in list(app.state.gateway._tasks):
         if task.get_name() in (names or ("lease_reaper", "command_retransmit")):
@@ -109,16 +92,11 @@ def _spy(app: FastAPI, calls: list[tuple[str, str]]) -> None:
 
 
 @pytest.fixture
-def replica_harness() -> FakeHarness:
-    return FakeHarness()
-
-
-@pytest.fixture
 async def replicas(
     settings: Settings,
     store: Store,
     worker_secret: str,
-    replica_harness: FakeHarness,
+    worker_harness: FakeHarness,
     tmp_path: Path,
 ) -> AsyncIterator[Replicas]:
     network = NotifyNetwork()
@@ -147,7 +125,7 @@ async def replicas(
         worker_settings_for(
             settings.model_copy(update={"pi_command": str(fake_pi_shim(tmp_path))})
         ),
-        replica_harness,
+        worker_harness,
         worker_secret,
     )
     async with (
@@ -173,13 +151,13 @@ async def _new_session(
 ) -> uuid.UUID:
     agent = await client.post(
         "/v1/agents",
-        headers=_auth(),
+        headers=auth(TOKEN),
         json={"name": "bot", "model": "test", **extra.pop("agent", {})},
     )
     assert agent.status_code == 200, agent.text
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(),
+        headers=auth(TOKEN),
         json={
             "agent_id": agent.json()["id"],
             "environment": environment or {"type": "none"},
@@ -190,20 +168,12 @@ async def _new_session(
     return uuid.UUID(created.json()["id"])
 
 
-async def _message(client: AsyncClient, session_id: uuid.UUID, text: str) -> Any:
-    return await client.post(
-        f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(),
-        json={"type": "agent.session.input.message", "content": text},
-    )
-
-
 async def _finish_held_turn(
     replicas: Replicas, session_id: uuid.UUID, task: asyncio.Task[Any]
 ) -> None:
     cancelled = await replicas.client_b.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(),
+        headers=auth(TOKEN),
         json={"type": "agent.session.input.cancel"},
     )
     assert cancelled.status_code == 200, cancelled.text
@@ -213,16 +183,16 @@ async def _finish_held_turn(
 async def _in_progress(replicas: Replicas, session_id: uuid.UUID) -> None:
     async def running() -> bool:
         got = await replicas.client_b.get(
-            f"/v1/agents/sessions/{session_id}", headers=_auth()
+            f"/v1/agents/sessions/{session_id}", headers=auth(TOKEN)
         )
         return got.json()["status"] == "in_progress"
 
-    await _until(running)
+    await until(running, timeout=10.0)
 
 
 async def _lease(store: Store, session_id: uuid.UUID) -> tuple[Any, Any]:
     async with store.session() as db:
-        row = await get_session(db, _tenant(), session_id)
+        row = await get_session(db, tenant_of(TOKEN), session_id)
         assert row is not None
         return row.worker_id, row.lease_id
 
@@ -236,7 +206,7 @@ async def _no_forward_rows(store: Store) -> None:
     async def empty() -> bool:
         return await _forward_rows(store) == []
 
-    await _until(empty)
+    await until(empty, timeout=10.0)
 
 
 async def test_turn_start_is_forwarded_without_the_body_on_the_bus(
@@ -244,7 +214,7 @@ async def test_turn_start_is_forwarded_without_the_body_on_the_bus(
 ) -> None:
     session_id = await _new_session(replicas.client_b)
     text = "x" * 100_000
-    posted = await _message(replicas.client_b, session_id, text)
+    posted = await post_message(replicas.client_b, TOKEN, session_id, text)
     assert posted.status_code == 200, posted.text
     assert posted.json()["status"] == "idle"
     assert replicas.calls == [("acquire", "turn.start")]
@@ -255,21 +225,21 @@ async def test_turn_start_is_forwarded_without_the_body_on_the_bus(
     assert sizes and max(sizes) < 400
     await _no_forward_rows(replicas.store)
     items = await replicas.client_b.get(
-        f"/v1/agents/sessions/{session_id}/items", headers=_auth()
+        f"/v1/agents/sessions/{session_id}/items", headers=auth(TOKEN)
     )
     assert text in str(items.json())
 
 
 async def test_turn_cancel_is_forwarded(
-    replicas: Replicas, replica_harness: FakeHarness
+    replicas: Replicas, worker_harness: FakeHarness
 ) -> None:
-    replica_harness.hold = True
+    worker_harness.hold = True
     session_id = await _new_session(replicas.client_b)
-    task = asyncio.create_task(_message(replicas.client_b, session_id, "go"))
+    task = asyncio.create_task(post_message(replicas.client_b, TOKEN, session_id, "go"))
     await _in_progress(replicas, session_id)
     cancelled = await replicas.client_b.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(),
+        headers=auth(TOKEN),
         json={"type": "agent.session.input.cancel"},
     )
     assert cancelled.status_code == 200, cancelled.text
@@ -278,17 +248,19 @@ async def test_turn_cancel_is_forwarded(
     assert posted.json()["status"] == "idle"
     assert ("command", "turn.cancel") in replicas.calls
     turns = await replicas.client_b.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth()
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(TOKEN)
     )
     assert turns.json()["data"][0]["status"] == "cancelled"
 
 
 async def test_session_stop_is_forwarded_and_waits(replicas: Replicas) -> None:
     session_id = await _new_session(replicas.client_a)
-    assert (await _message(replicas.client_a, session_id, "hi")).status_code == 200
+    assert (
+        await post_message(replicas.client_a, TOKEN, session_id, "hi")
+    ).status_code == 200
     worker_id, lease_id = await _lease(replicas.store, session_id)
     deleted = await replicas.client_b.delete(
-        f"/v1/agents/sessions/{session_id}", headers=_auth()
+        f"/v1/agents/sessions/{session_id}", headers=auth(TOKEN)
     )
     assert deleted.status_code == 200, deleted.text
     assert ("command", "session.stop") in replicas.calls
@@ -296,7 +268,7 @@ async def test_session_stop_is_forwarded_and_waits(replicas: Replicas) -> None:
     assert session_id not in replicas.worker.session_leases
     await _no_forward_rows(replicas.store)
     gone = await replicas.client_b.get(
-        f"/v1/agents/sessions/{session_id}", headers=_auth()
+        f"/v1/agents/sessions/{session_id}", headers=auth(TOKEN)
     )
     assert gone.status_code == 404
 
@@ -306,10 +278,10 @@ async def test_sandbox_boot_is_forwarded(replicas: Replicas) -> None:
         replicas.client_b, environment={"type": "openai_hosted"}
     )
     context = await build_turn_context(
-        replicas.store, replicas.app_b.state.settings, _tenant(), session_id
+        replicas.store, replicas.app_b.state.settings, tenant_of(TOKEN), session_id
     )
     await replicas.app_b.state.execution.boot_hosted(
-        _tenant(), session_id, turn_context=context
+        tenant_of(TOKEN), session_id, turn_context=context
     )
     assert replicas.calls == [("acquire", "sandbox.boot")]
     worker_id, lease_id = await _lease(replicas.store, session_id)
@@ -319,7 +291,7 @@ async def test_sandbox_boot_is_forwarded(replicas: Replicas) -> None:
     async def acked() -> bool:
         return len(replicas.hub_a.commands) == 0
 
-    await _until(acked)
+    await until(acked, timeout=10.0)
     assert (await _lease(replicas.store, session_id))[1] == lease_id
 
 
@@ -329,7 +301,7 @@ async def test_a_forwarded_boot_that_fails_releases_its_lease(
     session_id = await _new_session(
         replicas.client_b, environment={"type": "openai_hosted"}
     )
-    await replicas.app_b.state.execution.boot_hosted(_tenant(), session_id)
+    await replicas.app_b.state.execution.boot_hosted(tenant_of(TOKEN), session_id)
     assert replicas.calls == [("acquire", "sandbox.boot")]
 
     async def released() -> bool:
@@ -340,16 +312,18 @@ async def test_a_forwarded_boot_that_fails_releases_its_lease(
             and not any(conn.lease_mem for conn in replicas.hub_a._conns.values())
         )
 
-    await _until(released)
+    await until(released, timeout=10.0)
 
 
 @pytest.mark.parametrize("busy", [False, True])
 async def test_a_forwarded_turn_during_a_lease_release_gets_a_new_lease(
-    replicas: Replicas, replica_harness: FakeHarness, busy: bool
+    replicas: Replicas, worker_harness: FakeHarness, busy: bool
 ) -> None:
-    replica_harness.hold = busy
+    worker_harness.hold = busy
     session_id = await _new_session(replicas.client_a)
-    first = asyncio.create_task(_message(replicas.client_a, session_id, "one"))
+    first = asyncio.create_task(
+        post_message(replicas.client_a, TOKEN, session_id, "one")
+    )
     if busy:
         await _in_progress(replicas, session_id)
     else:
@@ -361,8 +335,10 @@ async def test_a_forwarded_turn_during_a_lease_release_gets_a_new_lease(
         LeaseRelease(session_id=session_id, lease_id=lease_id).to_wire()
     )
     await asyncio.wait_for(held.entered.wait(), timeout=10)
-    replica_harness.hold = False
-    second = asyncio.create_task(_message(replicas.client_b, session_id, "two"))
+    worker_harness.hold = False
+    second = asyncio.create_task(
+        post_message(replicas.client_b, TOKEN, session_id, "two")
+    )
     await asyncio.wait_for(held.settling.wait(), timeout=10)
     held.gate.set()
     posted = await asyncio.wait_for(second, timeout=20)
@@ -381,7 +357,7 @@ async def test_a_forward_that_finds_another_lease_is_sent_on_it(
     replicas: Replicas,
 ) -> None:
     session_id = await _new_session(replicas.client_a)
-    first = await _message(replicas.client_a, session_id, "one")
+    first = await post_message(replicas.client_a, TOKEN, session_id, "one")
     assert first.status_code == 200, first.text
     _worker_id, lease_id = await _lease(replicas.store, session_id)
     assert lease_id is not None
@@ -404,7 +380,7 @@ async def test_a_forward_that_finds_another_lease_is_sent_on_it(
                 )
 
     replicas.hub_b._forward_command = restore
-    posted = await _message(replicas.client_b, session_id, "two")
+    posted = await post_message(replicas.client_b, TOKEN, session_id, "two")
     assert posted.status_code == 200, posted.text
     assert posted.json()["status"] == "idle"
     assert replicas.calls == [("command", "turn.start"), ("command", "turn.start")]
@@ -415,7 +391,9 @@ async def test_lease_revoke_from_the_reaper_reaches_the_socket(
     replicas: Replicas,
 ) -> None:
     session_id = await _new_session(replicas.client_a)
-    assert (await _message(replicas.client_a, session_id, "hi")).status_code == 200
+    assert (
+        await post_message(replicas.client_a, TOKEN, session_id, "hi")
+    ).status_code == 200
     worker_id, lease_id = await _lease(replicas.store, session_id)
     assert lease_id in replicas.hub_a._conns[worker_id].leases
     async with replicas.store.session() as db:
@@ -436,22 +414,22 @@ async def test_lease_revoke_from_the_reaper_reaches_the_socket(
             and session_id not in replicas.worker.session_leases
         )
 
-    await _until(revoked)
+    await until(revoked, timeout=10.0)
 
 
 async def test_cancel_that_cannot_reach_the_worker_is_an_error(
-    replicas: Replicas, replica_harness: FakeHarness
+    replicas: Replicas, worker_harness: FakeHarness
 ) -> None:
-    replica_harness.hold = True
+    worker_harness.hold = True
     session_id = await _new_session(replicas.client_b)
-    task = asyncio.create_task(_message(replicas.client_b, session_id, "go"))
+    task = asyncio.create_task(post_message(replicas.client_b, TOKEN, session_id, "go"))
     await _in_progress(replicas, session_id)
     replicas.network.dropped.add(replicas.hub_a.instance_id)
     _stop_loops(replicas.app_a, "worker_forwards")
     replicas.hub_b.forwarder.sent_timeout = 0.3
     cancelled = await replicas.client_b.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(),
+        headers=auth(TOKEN),
         json={"type": "agent.session.input.cancel"},
     )
     assert cancelled.status_code == 504, cancelled.text
@@ -472,11 +450,13 @@ async def _last_seen(store: Store, worker_id: uuid.UUID, last_seen: datetime) ->
 
 @pytest.mark.parametrize("busy", [False, True])
 async def test_stale_replica_fails_fast_with_a_clear_code(
-    replicas: Replicas, replica_harness: FakeHarness, busy: bool
+    replicas: Replicas, worker_harness: FakeHarness, busy: bool
 ) -> None:
-    replica_harness.hold = busy
+    worker_harness.hold = busy
     session_id = await _new_session(replicas.client_a)
-    first = asyncio.create_task(_message(replicas.client_a, session_id, "hi"))
+    first = asyncio.create_task(
+        post_message(replicas.client_a, TOKEN, session_id, "hi")
+    )
     if busy:
         await _in_progress(replicas, session_id)
     else:
@@ -486,7 +466,7 @@ async def test_stale_replica_fails_fast_with_a_clear_code(
     started = asyncio.get_running_loop().time()
     follow = await replicas.client_b.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(),
+        headers=auth(TOKEN),
         json={"type": "agent.session.input.cancel"}
         if busy
         else {"type": "agent.session.input.message", "content": "again"},
@@ -510,8 +490,12 @@ async def test_placement_sees_workers_on_other_replicas(
     try:
         first_id = await _new_session(replicas.client_a)
         second_id = await _new_session(replicas.client_a)
-        assert (await _message(replicas.client_a, first_id, "one")).status_code == 200
-        assert (await _message(replicas.client_a, second_id, "two")).status_code == 200
+        assert (
+            await post_message(replicas.client_a, TOKEN, first_id, "one")
+        ).status_code == 200
+        assert (
+            await post_message(replicas.client_a, TOKEN, second_id, "two")
+        ).status_code == 200
         workers = {
             (await _lease(replicas.store, first_id))[0],
             (await _lease(replicas.store, second_id))[0],
@@ -528,9 +512,11 @@ async def test_capacity_counts_leases_held_through_other_replicas(
         await db.execute(update(WorkerRow).values(capacity=1))
     replicas.hub_a._conns[next(iter(replicas.hub_a._conns))].capacity = 1
     first_id = await _new_session(replicas.client_b)
-    assert (await _message(replicas.client_b, first_id, "one")).status_code == 200
+    assert (
+        await post_message(replicas.client_b, TOKEN, first_id, "one")
+    ).status_code == 200
     second_id = await _new_session(replicas.client_b)
-    full = await _message(replicas.client_b, second_id, "two")
+    full = await post_message(replicas.client_b, TOKEN, second_id, "two")
     assert full.status_code == 429, full.text
     assert full.json()["error"]["code"] == "capacity"
     await wait_for_idle(replicas.client_b, TOKEN, str(first_id))
@@ -538,7 +524,9 @@ async def test_capacity_counts_leases_held_through_other_replicas(
 
 async def test_a_forward_claimed_twice_is_sent_once(replicas: Replicas) -> None:
     session_id = await _new_session(replicas.client_a)
-    assert (await _message(replicas.client_a, session_id, "hi")).status_code == 200
+    assert (
+        await post_message(replicas.client_a, TOKEN, session_id, "hi")
+    ).status_code == 200
     worker_id, _lease_id = await _lease(replicas.store, session_id)
     forwarder = replicas.hub_a.forwarder
     forward_id = uuid.uuid4()
@@ -549,12 +537,12 @@ async def test_a_forward_claimed_twice_is_sent_once(replicas: Replicas) -> None:
                 action="command",
                 op="turn.cancel",
                 wait="none",
-                tenant_id=_tenant(),
+                tenant_id=tenant_of(TOKEN),
                 session_id=session_id,
                 worker_id=worker_id,
                 target=replicas.hub_a.instance_id,
                 origin=replicas.hub_b.instance_id,
-                body={"payload": {"tenant_id": str(_tenant())}},
+                body={"payload": {"tenant_id": str(tenant_of(TOKEN))}},
                 status="pending",
             )
         )
@@ -575,18 +563,18 @@ async def test_a_lost_notification_is_recovered_by_the_poll(
 ) -> None:
     replicas.network.dropped.add(replicas.hub_a.instance_id)
     session_id = await _new_session(replicas.client_b)
-    posted = await _message(replicas.client_b, session_id, "hello")
+    posted = await post_message(replicas.client_b, TOKEN, session_id, "hello")
     assert posted.status_code == 200, posted.text
     assert posted.json()["status"] == "idle"
 
 
 async def test_every_forwarded_turn_carries_the_callback_credential(
     replicas: Replicas,
-    replica_harness: FakeHarness,
+    worker_harness: FakeHarness,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(0)
-    replica_harness.function_calls = [
+    worker_harness.function_calls = [
         {"name": "echo", "arguments": {"text": "hi"}, "call_id": "call_1"}
     ]
     session_id = await _new_session(
@@ -602,11 +590,11 @@ async def test_every_forwarded_turn_carries_the_callback_credential(
             ]
         },
     )
-    first = await _message(replicas.client_b, session_id, "use echo")
+    first = await post_message(replicas.client_b, TOKEN, session_id, "use echo")
     assert first.status_code == 200, first.text
     assert first.json()["status"] == "requires_action"
     events = await replicas.client_b.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth()
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(TOKEN)
     )
     turn_id = next(
         event["data"]["turn_id"]
@@ -615,7 +603,7 @@ async def test_every_forwarded_turn_carries_the_callback_credential(
     )
     resumed = await replicas.client_b.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(),
+        headers=auth(TOKEN),
         json={
             "type": "agent.session.input.tool_result",
             "turn_id": turn_id,
@@ -626,7 +614,7 @@ async def test_every_forwarded_turn_carries_the_callback_credential(
     )
     assert resumed.status_code == 200, resumed.text
     assert resumed.json()["status"] == "idle"
-    follow = await _message(replicas.client_b, session_id, "again")
+    follow = await post_message(replicas.client_b, TOKEN, session_id, "again")
     assert follow.status_code == 200, follow.text
     assert follow.json()["status"] == "idle"
     assert replicas.calls == [
@@ -634,35 +622,35 @@ async def test_every_forwarded_turn_carries_the_callback_credential(
         ("command", "turn.continue"),
         ("command", "turn.start"),
     ]
-    assert replica_harness.api_keys == [CREDENTIAL] * 3
+    assert worker_harness.api_keys == [CREDENTIAL] * 3
     assert CREDENTIAL not in caplog.text
 
 
 async def test_forwarded_turn_without_a_credential_fails_at_once(
-    replicas: Replicas, replica_harness: FakeHarness
+    replicas: Replicas, worker_harness: FakeHarness
 ) -> None:
     replicas.app_a.state.gateway.model_credentials.callback = None
     session_id = await _new_session(replicas.client_b)
-    posted = await _message(replicas.client_b, session_id, "go")
+    posted = await post_message(replicas.client_b, TOKEN, session_id, "go")
     assert posted.status_code == 503, posted.text
     assert posted.json()["error"]["code"] == "model_key_unavailable"
-    assert replica_harness.api_keys == []
+    assert worker_harness.api_keys == []
     await _no_forward_rows(replicas.store)
 
 
 async def test_callback_that_raises_fails_the_turn_without_its_error_text(
-    replicas: Replicas, replica_harness: FakeHarness
+    replicas: Replicas, worker_harness: FakeHarness
 ) -> None:
     def broken(identity: AuthIdentity, bearer: str | None) -> str:
         raise RuntimeError("hunter2")
 
     session_id = await _new_session(replicas.client_b)
     replicas.app_b.state.gateway.model_credentials.callback = broken
-    posted = await _message(replicas.client_b, session_id, "go")
+    posted = await post_message(replicas.client_b, TOKEN, session_id, "go")
     assert posted.status_code == 503, posted.text
     assert posted.json()["error"]["code"] == "model_key_unavailable"
     assert "hunter2" not in posted.text
-    assert replica_harness.api_keys == []
+    assert worker_harness.api_keys == []
 
 
 async def _input_part(replicas: Replicas, kind: str) -> dict[str, Any]:
@@ -675,7 +663,7 @@ async def _input_part(replicas: Replicas, kind: str) -> dict[str, Any]:
     )
     uploaded = await replicas.client_b.post(
         "/v1/files",
-        headers=_auth(),
+        headers=auth(TOKEN),
         data={"purpose": "user_data"},
         files={"file": upload},
     )
@@ -689,7 +677,7 @@ async def _input_part(replicas: Replicas, kind: str) -> dict[str, Any]:
 @pytest.mark.parametrize("kind", ["image", "file", "attachment"])
 async def test_turn_start_with_an_input_part_is_forwarded_without_its_content(
     replicas: Replicas,
-    replica_harness: FakeHarness,
+    worker_harness: FakeHarness,
     monkeypatch: pytest.MonkeyPatch,
     kind: str,
 ) -> None:
@@ -713,7 +701,7 @@ async def test_turn_start_with_an_input_part_is_forwarded_without_its_content(
     content = [{"type": "input_text", "text": "see"}, part]
     posted = await replicas.client_b.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(),
+        headers=auth(TOKEN),
         json={
             "events": [
                 {
@@ -731,7 +719,7 @@ async def test_turn_start_with_an_input_part_is_forwarded_without_its_content(
     forwarded = payload["parts"][1]
     if kind == "image":
         assert set(forwarded) == {"type", "file_id"}
-        assert replica_harness.images == [
+        assert worker_harness.images == [
             [{"type": "image", "data": IMAGE, "mimeType": "image/png"}]
         ]
     elif kind == "file":
@@ -740,7 +728,7 @@ async def test_turn_start_with_an_input_part_is_forwarded_without_its_content(
             "file_id": part["file_id"],
             "filename": "plan.md",
         }
-        assert replica_harness.prompts == [
+        assert worker_harness.prompts == [
             'see\n<file name="plan.md">\n# notes\n</file>'
         ]
     else:
@@ -750,7 +738,7 @@ async def test_turn_start_with_an_input_part_is_forwarded_without_its_content(
             "filename": "report.xlsx",
             "path": "attachments/report.xlsx",
         }
-        assert replica_harness.prompts == [
+        assert worker_harness.prompts == [
             "see\nAttached: attachments/report.xlsx (xlsx, 5 B)"
         ]
-        assert replica_harness.workspaces[-1]["attachments/report.xlsx"] == b"sheet"
+        assert worker_harness.workspaces[-1]["attachments/report.xlsx"] == b"sheet"

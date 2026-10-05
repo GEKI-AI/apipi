@@ -1,4 +1,5 @@
 from httpx import ASGITransport, AsyncClient
+from tests.support.http import auth
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
@@ -8,17 +9,10 @@ from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 
 
-def _auth(token: str, user: str | None = None) -> dict[str, str]:
-    headers = {"Authorization": f"Bearer {token}"}
-    if user is not None:
-        headers["X-End-User"] = user
-    return headers
-
-
 async def _agent(client: AsyncClient, token: str, user: str | None) -> str:
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token, user),
+        headers=auth(token, user),
         json={"name": "bot", "model": "test"},
     )
     assert created.status_code == 200
@@ -54,37 +48,37 @@ async def test_same_bearer_different_users_are_separate(
         agent_id = await _agent(client, "org", "ada")
         ada = await client.post(
             "/v1/agents/sessions",
-            headers=_auth("org", "ada"),
+            headers=auth("org", "ada"),
             json={"agent_id": agent_id, "environment": {"type": "none"}},
         )
         assert ada.status_code == 200
         assert ada.json()["user_id"] == "ada"
         before = len(authenticate.calls)
-        again = await client.get("/v1/agents", headers=_auth("org", "ada"))
+        again = await client.get("/v1/agents", headers=auth("org", "ada"))
         assert again.status_code == 200
         assert len(authenticate.calls) == before
         bea = await client.post(
             "/v1/agents/sessions",
-            headers=_auth("org", "bea"),
+            headers=auth("org", "bea"),
             json={"agent_id": agent_id, "environment": {"type": "none"}},
         )
         assert bea.status_code == 200
-        listed = await client.get("/v1/agents/sessions", headers=_auth("org", "ada"))
+        listed = await client.get("/v1/agents/sessions", headers=auth("org", "ada"))
         assert listed.status_code == 200
         assert [row["id"] for row in listed.json()["data"]] == [ada.json()["id"]]
         hidden = await client.get(
             f"/v1/agents/sessions/{ada.json()['id']}",
-            headers=_auth("org", "bea"),
+            headers=auth("org", "bea"),
         )
         assert hidden.status_code == 404
         removed = await client.delete(
             f"/v1/agents/sessions/{ada.json()['id']}",
-            headers=_auth("org", "bea"),
+            headers=auth("org", "bea"),
         )
         assert removed.status_code == 404
         resumed = await client.post(
             f"/v1/agents/sessions/{ada.json()['id']}/events",
-            headers=_auth("org", "bea"),
+            headers=auth("org", "bea"),
             json={"type": "agent.session.input.message", "text": "hi"},
         )
         assert resumed.status_code == 404
@@ -106,11 +100,11 @@ async def test_missing_user_id_stays_tenant_scoped(
         agent_id = await _agent(client, "left", None)
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth("left"),
+            headers=auth("left"),
             json={"agent_id": agent_id, "environment": {"type": "none"}},
         )
         assert created.status_code == 200
         assert created.json()["user_id"] is None
-        listed = await client.get("/v1/agents/sessions", headers=_auth("right"))
+        listed = await client.get("/v1/agents/sessions", headers=auth("right"))
         assert listed.status_code == 200
         assert [row["id"] for row in listed.json()["data"]] == [created.json()["id"]]

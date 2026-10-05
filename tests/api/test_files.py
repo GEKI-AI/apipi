@@ -10,6 +10,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from tests.support.files import Users, message, vision
+from tests.support.http import auth, create_agent
 from tests.support.split_worker import split_client_for
 
 from apipi.common.objects import NS_FILES
@@ -22,23 +23,11 @@ from apipi.store.repo import get_file
 from apipi.worker.fake_harness import FakeHarness
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-async def _agent(client: AsyncClient, token: str) -> str:
-    response = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    assert response.status_code == 200
-    return str(response.json()["id"])
-
-
 async def test_files_crud_and_session_attach(client: AsyncClient) -> None:
     token = "files-crud"
     uploaded = await client.post(
         "/v1/files",
-        headers=_auth(token),
+        headers=auth(token),
         data={"purpose": "user_data"},
         files={"file": ("amounts.csv", b"a,b\n1,2\n", "text/csv")},
     )
@@ -52,20 +41,20 @@ async def test_files_crud_and_session_attach(client: AsyncClient) -> None:
     assert body["purpose"] == "user_data"
     assert body["status"] == "processed"
     assert isinstance(body["created_at"], int)
-    listed = await client.get("/v1/files", headers=_auth(token))
+    listed = await client.get("/v1/files", headers=auth(token))
     assert listed.json()["object"] == "list"
     assert listed.json()["data"][0]["id"] == file_id
-    got = await client.get(f"/v1/files/{file_id}", headers=_auth(token))
+    got = await client.get(f"/v1/files/{file_id}", headers=auth(token))
     assert got.json()["id"] == file_id
-    content = await client.get(f"/v1/files/{file_id}/content", headers=_auth(token))
+    content = await client.get(f"/v1/files/{file_id}/content", headers=auth(token))
     assert content.status_code == 200
     assert content.content == b"a,b\n1,2\n"
-    other = await client.get(f"/v1/files/{file_id}", headers=_auth("other-tenant"))
+    other = await client.get(f"/v1/files/{file_id}", headers=auth("other-tenant"))
     assert other.status_code == 404
-    agent_id = await _agent(client, token)
+    agent_id = await create_agent(client, token)
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {
@@ -99,7 +88,7 @@ async def test_files_crud_and_session_attach(client: AsyncClient) -> None:
 async def test_file_purpose_not_implemented(client: AsyncClient) -> None:
     response = await client.post(
         "/v1/files",
-        headers=_auth("files-purpose"),
+        headers=auth("files-purpose"),
         data={"purpose": "fine-tune"},
         files={"file": ("data.jsonl", b"{}", "application/json")},
     )
@@ -113,17 +102,17 @@ async def test_file_id_missing_or_deleted_is_not_found(client: AsyncClient) -> N
     token = "files-missing"
     uploaded = await client.post(
         "/v1/files",
-        headers=_auth(token),
+        headers=auth(token),
         data={"purpose": "assistants"},
         files={"file": ("note.txt", b"hi", "text/plain")},
     )
     file_id = uploaded.json()["id"]
-    deleted = await client.delete(f"/v1/files/{file_id}", headers=_auth(token))
-    agent_id = await _agent(client, token)
+    deleted = await client.delete(f"/v1/files/{file_id}", headers=auth(token))
+    agent_id = await create_agent(client, token)
     created = [
         await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent_id,
                 "environment": {
@@ -149,25 +138,18 @@ async def test_file_content_disposition_non_ascii(client: AsyncClient) -> None:
     name = "Bericht_Größe_✓.pdf"
     uploaded = await client.post(
         "/v1/files",
-        headers=_auth(token),
+        headers=auth(token),
         data={"purpose": "user_data"},
         files={"file": (name, b"%PDF", "application/pdf")},
     )
     assert uploaded.status_code == 200
     file_id = uploaded.json()["id"]
-    content = await client.get(f"/v1/files/{file_id}/content", headers=_auth(token))
+    content = await client.get(f"/v1/files/{file_id}/content", headers=auth(token))
     assert content.status_code == 200
     disposition = content.headers["content-disposition"]
     assert disposition.startswith("attachment;")
     assert "filename*=UTF-8''" in disposition
     assert content.headers["x-content-type-options"] == "nosniff"
-
-
-def _as(token: str, user: str | None = None) -> dict[str, str]:
-    headers = _auth(token)
-    if user is not None:
-        headers["X-End-User"] = user
-    return headers
 
 
 def _png() -> bytes:
@@ -265,7 +247,7 @@ async def test_files_list_kinds_filters_and_session_files(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     async with _vision_client(settings, store, worker_secret) as (_app, client):
-        ada = _as("kinds", "ada")
+        ada = auth("kinds", "ada")
         doc = await _upload(client, ada, "doc.csv")
         session_id = await _session(client, ada)
         [image] = await _send(
@@ -317,24 +299,24 @@ async def test_files_list_kinds_filters_and_session_files(
         )
         bea_session = await client.get(
             "/v1/apipi/files",
-            headers=_as("kinds", "bea"),
+            headers=auth("kinds", "bea"),
             params={"session_id": session_id},
         )
         foreign_session = await client.get(
             "/v1/apipi/files",
-            headers=_as("kinds-other", "ada"),
+            headers=auth("kinds-other", "ada"),
             params={"session_id": session_id},
         )
         foreign_user = await client.get(
             "/v1/apipi/files",
-            headers=_as("kinds-other", "ada"),
+            headers=auth("kinds-other", "ada"),
             params={"user_id": "ada"},
         )
         session_files = await client.get(
             f"/v1/apipi/sessions/{session_id}/files", headers=ada
         )
         foreign_files = await client.get(
-            f"/v1/apipi/sessions/{session_id}/files", headers=_as("kinds-other")
+            f"/v1/apipi/sessions/{session_id}/files", headers=auth("kinds-other")
         )
     assert _ids(default) == [doc]
     assert default.json()["object"] == "list"
@@ -380,10 +362,10 @@ async def test_file_lists_paginate(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     async with _vision_client(settings, store, worker_secret) as (_app, client):
-        headers = _as("pages")
+        headers = auth("pages")
         uploaded = [await _upload(client, headers, f"f{n}.csv") for n in range(5)]
         created = await _created_order(store, uploaded)
-        foreign = await _upload(client, _as("pages-other"), "x.csv")
+        foreign = await _upload(client, auth("pages-other"), "x.csv")
         full = _ids(await client.get("/v1/files", headers=headers))
         pages: list[dict[str, Any]] = []
         after: str | None = None
@@ -467,7 +449,7 @@ async def test_session_delete_removes_files_only_it_uses(
 ) -> None:
     async with _vision_client(settings, store, worker_secret) as (app, client):
         token = "owned"
-        headers = _as(token)
+        headers = auth(token)
         tenant_id = tenant_from_key(token)
         files = app.state.gateway.files
         kept_file = await _upload(client, headers, "photo.png", _png(), "image/png")
@@ -536,7 +518,7 @@ async def test_file_delete_removes_session_bindings(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     async with _vision_client(settings, store, worker_secret) as (_app, client):
-        headers = _as("unbind")
+        headers = auth("unbind")
         session_id = await _session(client, headers)
         [image] = await _send(client, headers, session_id, _data_url(_png()))
         deleted = await client.delete(f"/v1/files/{image}", headers=headers)
@@ -561,7 +543,7 @@ async def test_unbound_attachments_are_swept_after_the_ttl(
 ) -> None:
     async with _vision_client(settings, store, worker_secret) as (app, client):
         token = "sweep"
-        headers = _as(token)
+        headers = auth(token)
         tenant_id = tenant_from_key(token)
         files = app.state.gateway.files
 
@@ -620,7 +602,7 @@ async def test_file_lists_apply_the_authorization_filter(
         _app,
         client,
     ):
-        headers = _as("authz")
+        headers = auth("authz")
         uploaded = [await _upload(client, headers, f"a{n}.csv") for n in range(3)]
         allowed.add(uploaded[1])
         session_id = await _session(client, headers)
@@ -670,7 +652,7 @@ async def test_vision_upload_is_an_image(
 ) -> None:
     small = settings.model_copy(update={"max_image_bytes": 64})
     async with _vision_client(small, store, worker_secret) as (_app, client):
-        headers = _as("vision")
+        headers = auth("vision")
         uploaded = await client.post(
             "/v1/files",
             headers=headers,
@@ -723,7 +705,7 @@ async def test_attachments_used_as_environment_files_become_files(
 ) -> None:
     async with _vision_client(settings, store, worker_secret) as (app, client):
         token = "promote"
-        headers = _as(token)
+        headers = auth(token)
         tenant_id = tenant_from_key(token)
         files = app.state.gateway.files
         await _upload(client, headers, "plain.csv")
@@ -797,7 +779,7 @@ async def test_user_files_are_visible_only_to_their_user(
     async with _vision_client(settings, store, worker_secret) as (app, client):
         token = "user-files"
         tenant_id = tenant_from_key(token)
-        u1, u2, anyone = _as(token, "u1"), _as(token, "u2"), _as(token)
+        u1, u2, anyone = auth(token, "u1"), auth(token, "u2"), auth(token)
         files = app.state.gateway.files
 
         async def _attachment(user_id: str | None) -> str:
@@ -904,7 +886,7 @@ async def test_user_files_of_another_user_are_not_session_inputs(
     async with _vision_client(settings, store, worker_secret) as (app, client):
         token = "user-inputs"
         tenant_id = tenant_from_key(token)
-        u1, u2 = _as(token, "u1"), _as(token, "u2")
+        u1, u2 = auth(token, "u1"), auth(token, "u2")
         agent_file = await _upload(client, u1, "agent.csv")
         created = await app.state.gateway.files.create(
             tenant_id,
@@ -1003,8 +985,12 @@ async def test_user_files_of_another_user_are_not_input_parts(
         client,
     ):
         token = "user-parts"
-        users = {"u1": _as(token, "u1"), "u2": _as(token, "u2"), "anyone": _as(token)}
-        other = _as("user-parts-other")
+        users = {
+            "u1": auth(token, "u1"),
+            "u2": auth(token, "u2"),
+            "anyone": auth(token),
+        }
+        other = auth("user-parts-other")
 
         async def _create(headers: dict[str, str], *content: Any) -> Any:
             agent = await client.post(
@@ -1093,7 +1079,7 @@ async def test_images_in_agent_defaults_become_agent_files(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
     async with _vision_client(settings, store, worker_secret) as (_app, client):
-        u1, u2 = _as("agent-images", "u1"), _as("agent-images", "u2")
+        u1, u2 = auth("agent-images", "u1"), auth("agent-images", "u2")
         image, agent_id = await _image_agent(client, u1)
         kinds = {
             row["id"]: row["kind"]
@@ -1115,7 +1101,7 @@ async def test_user_files_of_an_older_agent_are_not_exported_to_another_user(
 ) -> None:
     async with _vision_client(settings, store, worker_secret) as (_app, client):
         token = "agent-older"
-        u1, u2 = _as(token, "u1"), _as(token, "u2")
+        u1, u2 = auth(token, "u1"), auth(token, "u2")
         image, agent_id = await _image_agent(client, u1)
         async with store.session() as db:
             row = await get_file(db, tenant_from_key(token), image)

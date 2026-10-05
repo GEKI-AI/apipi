@@ -4,8 +4,8 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from apipi.protocol import WorkerEnvelope
-from apipi.services.ingest import IngestBatcher, flush_batch
+from tests.support.ingest import envelope, flush
+
 from apipi.services.lifecycle_export import LifecycleEmitter, api_heartbeat_loop
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -39,39 +39,6 @@ async def _hosted(
         return tenant.id, row.id, lease_id
 
 
-def _envelope(
-    session_id: uuid.UUID, seq: int, type: str, payload: dict[str, Any]
-) -> WorkerEnvelope:
-    return WorkerEnvelope.model_validate(
-        {
-            "v": 2,
-            "session_id": str(session_id),
-            "turn_id": None,
-            "seq": seq,
-            "type": type,
-            "payload": payload,
-        }
-    )
-
-
-async def _flush(
-    store: Store,
-    worker_id: uuid.UUID,
-    envelopes: list[WorkerEnvelope],
-    settings: Any = None,
-):
-    batcher = IngestBatcher()
-    for envelope in envelopes:
-        batcher.add(envelope, 128)
-    return await flush_batch(
-        store,
-        batcher.take(),
-        worker_id=worker_id,
-        settings=settings,
-        metrics=None,
-    )
-
-
 class _Emitter:
     def __init__(self) -> None:
         self.starts: list[tuple[dict[str, Any], str]] = []
@@ -89,11 +56,11 @@ class _Emitter:
 async def test_sandbox_status_ready_looks_like_today(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
     _tenant, session_id, _lease = await _hosted(store, worker_id)
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "sandbox.status",
@@ -104,7 +71,7 @@ async def test_sandbox_status_ready_looks_like_today(store: Store, settings) -> 
                     "cause": "spawn",
                 },
             ),
-            _envelope(
+            envelope(
                 session_id,
                 2,
                 "sandbox.status",
@@ -147,10 +114,10 @@ async def test_sandbox_status_ready_looks_like_today(store: Store, settings) -> 
 async def test_sandbox_status_unknown_phase_rejected(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
     _tenant, session_id, _lease = await _hosted(store, worker_id)
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
-        [_envelope(session_id, 1, "sandbox.status", {"status": "flying"})],
+        [envelope(session_id, 1, "sandbox.status", {"status": "flying"})],
         settings,
     )
     assert [reason for _, _, reason in outcome.rejected] == ["invalid_envelope"]
@@ -160,12 +127,12 @@ async def test_sandbox_status_unknown_phase_rejected(store: Store, settings) -> 
 async def test_only_stopped_deletes_blobs(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
     tenant_id, session_id, _lease = await _hosted(store, worker_id)
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(session_id, 1, "session.stopped", {"reason": "stop"}),
-            _envelope(session_id, 2, "workspace.reaped", {"reason": "idle"}),
+            envelope(session_id, 1, "session.stopped", {"reason": "stop"}),
+            envelope(session_id, 2, "workspace.reaped", {"reason": "idle"}),
         ],
         settings,
     )
@@ -182,10 +149,10 @@ async def test_stopped_after_release_is_acked_past(store: Store, settings) -> No
     tenant_id, session_id, _lease = await _hosted(store, worker_id)
     async with store.session() as db:
         await clear_session_lease(db, tenant_id, session_id)
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
-        [_envelope(session_id, 1, "session.stopped", {"reason": "stop"})],
+        [envelope(session_id, 1, "session.stopped", {"reason": "stop"})],
         settings,
     )
     # The normal stop already deleted the blobs synchronously; the
@@ -198,10 +165,10 @@ async def test_stopped_after_release_is_acked_past(store: Store, settings) -> No
 async def test_reaped_unknown_session_is_acked_past(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
     session_id = uuid.uuid4()
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
-        [_envelope(session_id, 1, "workspace.reaped", {"reason": "idle"})],
+        [envelope(session_id, 1, "workspace.reaped", {"reason": "idle"})],
         settings,
     )
     # The worker already wiped its local directory; there is no row
@@ -218,20 +185,20 @@ async def test_lifecycle_events_export_once_on_replay(store: Store, settings) ->
     _tenant, session_id, _lease = await _hosted(store, worker_id)
     emitter = _Emitter()
     flow = [
-        _envelope(
+        envelope(
             session_id,
             1,
             "lifecycle.start",
             {"cause": "spawn", "environment_type": "openai_hosted"},
         ),
-        _envelope(
+        envelope(
             session_id,
             2,
             "lifecycle.stop",
             {"reason": "stop", "live_ms": 9},
         ),
     ]
-    first = await _flush(store, worker_id, flow, settings)
+    first = await flush(store, worker_id, flow, settings)
     assert first.rejected == []
     # Nothing is exported inside the transaction: the intents wait for
     # commit so a rolled back batch cannot export twice on replay.
@@ -245,7 +212,7 @@ async def test_lifecycle_events_export_once_on_replay(store: Store, settings) ->
     assert len(emitter.stops) == 1
     assert emitter.stops[0][1] == "stop"
     assert emitter.stops[0][2] == 9
-    replayed = await _flush(store, worker_id, flow, settings)
+    replayed = await flush(store, worker_id, flow, settings)
     assert replayed.rejected == []
     assert replayed.acks == {session_id: 2}
     assert replayed.lifecycle == []
@@ -258,11 +225,11 @@ async def test_lifecycle_identity_comes_from_row(store: Store, settings) -> None
     worker_id = uuid.uuid4()
     tenant_id, session_id, _lease = await _hosted(store, worker_id)
     spoofed = str(uuid.uuid4())
-    outcome = await _flush(
+    outcome = await flush(
         store,
         worker_id,
         [
-            _envelope(
+            envelope(
                 session_id,
                 1,
                 "lifecycle.start",

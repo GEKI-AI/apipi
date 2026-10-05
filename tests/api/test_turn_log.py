@@ -1,66 +1,27 @@
-import json
 import uuid
 from collections.abc import AsyncIterator
 
 import pytest
 from httpx import AsyncClient
+from tests.support.http import auth, session_with_turn, tenant_of
+from tests.support.rows import row_json
 
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.store.turn_logs import get_turn_log, list_turn_logs
 from apipi.worker.fake_harness import FAKE_USAGE, FakeHarness
 
 
-def _token(name: str = "t") -> str:
-    return name
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant_id(token: str) -> uuid.UUID:
-    return uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
-
-
-def _blob(row: object) -> str:
-    table = getattr(row, "__table__", None)
-    if table is None:
-        return str(row)
-    return json.dumps(
-        {column.key: getattr(row, column.key) for column in table.columns},
-        default=str,
-    )
-
-
-async def _session_with_turn(client: AsyncClient, token: str) -> str:
-    agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent.json()["id"],
-            "environment": {"type": "none"},
-            "input": "hello",
-        },
-    )
-    assert created.status_code == 200
-    return str(created.json()["id"])
-
-
 async def test_completed_turn_writes_log_without_message_text(
     client: AsyncClient, store: Store
 ) -> None:
-    token = _token()
-    session_id = await _session_with_turn(client, token)
+    token = "t"
+    session_id = await session_with_turn(client, token)
     turns = await client.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(token)
     )
     turn_id = uuid.UUID(turns.json()["data"][0]["id"])
-    tenant_id = _tenant_id(token)
+    tenant_id = tenant_of(token)
     async with store.session() as db:
         row = await get_turn_log(db, tenant_id, turn_id)
         listed = await list_turn_logs(db, tenant_id, uuid.UUID(session_id))
@@ -89,7 +50,7 @@ async def test_completed_turn_writes_log_without_message_text(
     assert row.environment_type == "none"
     assert row.run_mode == "none"
     assert row.artifact_bytes == 0
-    blob = _blob(row)
+    blob = row_json(row)
     assert "hello" not in blob
     assert "secret-prompt" not in blob
 
@@ -97,18 +58,18 @@ async def test_completed_turn_writes_log_without_message_text(
 async def test_turn_log_reads_are_tenant_scoped(
     client: AsyncClient, store: Store
 ) -> None:
-    token_a = _token("a")
-    token_b = _token("b")
-    session_id = await _session_with_turn(client, token_a)
+    token_a = "a"
+    token_b = "b"
+    session_id = await session_with_turn(client, token_a)
     turns = await client.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token_a)
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(token_a)
     )
     turn_id = uuid.UUID(turns.json()["data"][0]["id"])
     async with store.session() as db:
-        assert await get_turn_log(db, _tenant_id(token_a), turn_id) is not None
-        assert await get_turn_log(db, _tenant_id(token_b), turn_id) is None
+        assert await get_turn_log(db, tenant_of(token_a), turn_id) is not None
+        assert await get_turn_log(db, tenant_of(token_b), turn_id) is None
         assert (
-            await list_turn_logs(db, _tenant_id(token_b), uuid.UUID(session_id)) is None
+            await list_turn_logs(db, tenant_of(token_b), uuid.UUID(session_id)) is None
         )
 
 
@@ -138,16 +99,16 @@ async def test_completed_turn_log_counts_mcp_calls(
     mcp_log_client: AsyncClient, store: Store
 ) -> None:
     token = "mcp-log"
-    session_id = await _session_with_turn(mcp_log_client, token)
+    session_id = await session_with_turn(mcp_log_client, token)
     turns = await mcp_log_client.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(token)
     )
     turn_id = uuid.UUID(turns.json()["data"][0]["id"])
     async with store.session() as db:
-        row = await get_turn_log(db, _tenant_id(token), turn_id)
+        row = await get_turn_log(db, tenant_of(token), turn_id)
     assert row is not None
     assert row.mcp_names == ["mcp_tavily_search"]
     assert row.mcp_counts == {"mcp_tavily_search": 1}
-    blob = _blob(row)
+    blob = row_json(row)
     assert "hello" not in blob
     assert "secret-reply" not in blob

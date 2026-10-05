@@ -1,6 +1,7 @@
 import ssl
 
 import pytest
+from tests.support.egress import handmade_hello
 
 from apipi.worker.egress.sni import (
     Incomplete,
@@ -23,24 +24,6 @@ def client_hello(server_hostname: str | None, alpn: list[str] | None = None) -> 
     with pytest.raises(ssl.SSLWantReadError):
         tls.do_handshake()
     return outgoing.read()
-
-
-def handmade_hello(server_name: str) -> bytes:
-    name = server_name.encode()
-    entry = b"\x00" + len(name).to_bytes(2, "big") + name
-    sni = len(entry).to_bytes(2, "big") + entry
-    extension = b"\x00\x00" + len(sni).to_bytes(2, "big") + sni
-    body = (
-        b"\x03\x03"
-        + b"\x11" * 32
-        + b"\x00"
-        + b"\x00\x02\x13\x01"
-        + b"\x01\x00"
-        + len(extension).to_bytes(2, "big")
-        + extension
-    )
-    handshake = b"\x01" + len(body).to_bytes(3, "big") + body
-    return b"\x16\x03\x01" + len(handshake).to_bytes(2, "big") + handshake
 
 
 def test_parse_sni_and_alpn_from_real_client_hello() -> None:

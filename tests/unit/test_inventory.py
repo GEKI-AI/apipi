@@ -2,8 +2,9 @@
 
 import uuid
 from datetime import UTC, timedelta
-from typing import Any
 from unittest.mock import MagicMock
+
+from tests.support.ingest import leased_session
 
 from apipi.services.event_bus import create_event_bus
 from apipi.store.engine import Store
@@ -22,33 +23,13 @@ from apipi.worker.commands import CommandDedupe
 from apipi.workerhub.hub import WorkerHub
 
 
-async def _leased(
-    store: Store, worker_id: uuid.UUID, **kwargs: Any
-) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(
-            db, tenant.id, environment={"type": "none"}, metadata={}, **kwargs
-        )
-        lease_id = uuid.uuid4()
-        await set_session_lease(
-            db,
-            tenant.id,
-            row.id,
-            worker_id=worker_id,
-            lease_id=lease_id,
-            lease_until=utc_now() + timedelta(seconds=30),
-        )
-        return tenant.id, row.id, lease_id
-
-
 def _hub(settings) -> WorkerHub:
     return WorkerHub(settings)
 
 
 async def test_reconcile_keeps_reported_and_shares_ttl(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, lease_id = await _leased(store, worker_id)
+    _tenant, session_id, lease_id, _key = await leased_session(store, worker_id)
     hub = _hub(settings)
     bus = create_event_bus(settings, store=store)
     try:
@@ -64,7 +45,7 @@ async def test_reconcile_keeps_reported_and_shares_ttl(store: Store, settings) -
 
 async def test_reconcile_orphan_fails_and_clears_lease(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     hub = _hub(settings)
     bus = create_event_bus(settings, store=store)
     try:
@@ -82,7 +63,7 @@ async def test_reconcile_orphan_fails_and_clears_lease(store: Store, settings) -
 
 async def test_reconcile_orphan_fails_the_running_turn(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, _lease = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     async with store.session() as db:
         await update_session(
             db, tenant_id, session_id, changes={"status": "in_progress"}
@@ -126,7 +107,7 @@ async def test_reconcile_unknown_session_is_revoked(store: Store, settings) -> N
 
 async def test_reconcile_mismatched_lease_is_revoked(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     hub = _hub(settings)
     bus = create_event_bus(settings, store=store)
     other_lease = uuid.uuid4()
@@ -145,7 +126,7 @@ async def test_reconnect_to_another_replica_renews_lease(
     store: Store, settings
 ) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, lease_id = await _leased(store, worker_id)
+    tenant_id, session_id, lease_id, _key = await leased_session(store, worker_id)
     first = _hub(settings)
     second = _hub(settings)
     bus = create_event_bus(settings, store=store)
@@ -215,8 +196,8 @@ async def test_owned_sessions_filters_other_workers(store: Store, settings) -> N
 
     worker_id = uuid.uuid4()
     other_id = uuid.uuid4()
-    _t, session_id, lease_id = await _leased(store, worker_id)
-    _t2, other_session, _other_lease = await _leased(store, other_id)
+    _t, session_id, lease_id, _key = await leased_session(store, worker_id)
+    _t2, other_session, _other_lease, _key = await leased_session(store, other_id)
     hub = _hub(settings)
     conn = WorkerConnection(
         worker_id=worker_id,
@@ -235,7 +216,7 @@ async def test_reconcile_spares_orphan_with_command_in_flight(
     store: Store, settings
 ) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id, lease_id = await _leased(store, worker_id)
+    tenant_id, session_id, lease_id, _key = await leased_session(store, worker_id)
     hub = _hub(settings)
     bus = create_event_bus(settings, store=store)
     pending = hub.commands.push(
@@ -272,8 +253,8 @@ async def test_takeover_renews_only_claimed_leases(store: Store, settings) -> No
     from apipi.workerhub.connection import WorkerConnection
 
     worker_id = uuid.uuid4()
-    tenant_a, first_id, first_lease = await _leased(store, worker_id)
-    tenant_b, second_id, _second_lease = await _leased(store, worker_id)
+    tenant_a, first_id, first_lease, _key = await leased_session(store, worker_id)
+    tenant_b, second_id, _second_lease, _key = await leased_session(store, worker_id)
     async with store.session() as db:
         stale = await get_session(db, tenant_b, second_id)
         assert stale is not None
@@ -306,7 +287,7 @@ async def test_takeover_renews_only_claimed_leases(store: Store, settings) -> No
 
 async def test_reconcile_unleased_gets_ttl_while_leased(store: Store, settings) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id, _lease = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     hub = _hub(settings)
     bus = create_event_bus(settings, store=store)
     try:

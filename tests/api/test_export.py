@@ -1,38 +1,14 @@
 from httpx import AsyncClient
+from tests.support.http import auth, session_with_turn
 
 from apipi.protocol import PUBLIC_EVENT_TYPES
 
 
-def _token(name: str = "t") -> str:
-    return name
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-async def _session_with_turn(client: AsyncClient, token: str) -> str:
-    agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
-    )
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent.json()["id"],
-            "environment": {"type": "none"},
-            "input": "hello",
-        },
-    )
-    assert created.status_code == 200
-    return str(created.json()["id"])
-
-
 async def test_export_after_a_turn(client: AsyncClient) -> None:
-    token = _token()
-    session_id = await _session_with_turn(client, token)
+    token = "t"
+    session_id = await session_with_turn(client, token)
     exported = await client.get(
-        f"/v1/apipi/sessions/{session_id}/export", headers=_auth(token)
+        f"/v1/apipi/sessions/{session_id}/export", headers=auth(token)
     )
     assert exported.status_code == 200
     body = exported.json()
@@ -55,13 +31,13 @@ async def test_export_after_a_turn(client: AsyncClient) -> None:
     assert body["items"][0]["data"]["content"] == "hello"
     assert body["items"][1]["data"]["content"] == "hello"
     events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     turns = await client.get(
-        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/turns", headers=auth(token)
     )
     items = await client.get(
-        f"/v1/agents/sessions/{session_id}/items", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/items", headers=auth(token)
     )
     assert body["events"] == events.json()["data"]
     assert body["turns"] == turns.json()["data"]

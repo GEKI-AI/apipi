@@ -5,16 +5,13 @@ from typing import Any
 import httpx
 import pytest
 from httpx import AsyncClient
+from tests.support.http import auth
 
 from apipi.config import Settings
 from apipi.store.engine import Store
 from apipi.worker.fake_harness import FakeHarness
 
 pytest_plugins = ["tests.support.mcp_http_server"]
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
@@ -73,7 +70,7 @@ async def _agent_with_mcp(
         tool["headers"] = headers
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "bot", "model": "test", "tools": [tool]},
     )
     assert created.status_code == 200
@@ -95,7 +92,7 @@ async def test_mcp_http_starts_with_session(
     )
     created = await mcp_client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -110,7 +107,7 @@ async def test_mcp_http_starts_with_session(
     assert mcp_harness.mcp_http[0].headers == {"Authorization": "Bearer static-secret"}
     session_id = created.json()["id"]
     events = await mcp_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     types = [event["type"] for event in events.json()["data"]]
     assert "agent.session.failed" not in types
@@ -129,7 +126,7 @@ async def test_mcp_http_dead_server_no_longer_fails_create(
     agent_id = await _agent_with_mcp(mcp_client, token, mcp_fail_url)
     created = await mcp_client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -150,12 +147,12 @@ async def test_mcp_http_vault_only_server_starts(
     mcp_url, seen = mcp_server
     token = "mcp-vault"
     vault = await mcp_client.post(
-        "/v1/agents/vaults", headers=_auth(token), json={"name": "v"}
+        "/v1/agents/vaults", headers=auth(token), json={"name": "v"}
     )
     assert vault.status_code == 200
     cred = await mcp_client.post(
         f"/v1/agents/vaults/{vault.json()['id']}/credentials",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "c",
             "auth": {
@@ -169,7 +166,7 @@ async def test_mcp_http_vault_only_server_starts(
     agent_id = await _agent_with_mcp(mcp_client, token, mcp_url)
     created = await mcp_client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -199,7 +196,7 @@ async def test_mcp_http_followup_turn_uses_live_agent(
     )
     created = await mcp_client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -212,7 +209,7 @@ async def test_mcp_http_followup_turn_uses_live_agent(
     assert mcp_harness.mcp_http[0].headers == {"Authorization": "Bearer first"}
     updated = await mcp_client.post(
         f"/v1/agents/{agent_id}",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "tools": [
                 {
@@ -227,7 +224,7 @@ async def test_mcp_http_followup_turn_uses_live_agent(
     assert updated.status_code == 200
     again = await mcp_client.post(
         f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
+        headers=auth(token),
         json={"type": "agent.session.input.message", "content": "again"},
     )
     assert again.status_code == 200
@@ -248,7 +245,7 @@ async def test_mcp_http_env_header_fails_session(
     )
     created = await mcp_client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent_id": agent_id,
             "environment": {"type": "none"},
@@ -259,6 +256,6 @@ async def test_mcp_http_env_header_fails_session(
     assert created.json()["status"] == "failed"
     session_id = created.json()["id"]
     events = await mcp_client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
     )
     assert "vault" in str(events.json())

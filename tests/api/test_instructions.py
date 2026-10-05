@@ -1,15 +1,12 @@
 from pathlib import Path
 
+from tests.support.http import auth
 from tests.support.split_worker import split_client_for
 
 from apipi.config import Settings
 from apipi.store.engine import Store
 from apipi.worker.fake_harness import FakeHarness
 from apipi.worker.pi.platform_prompt import compose_instructions
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def test_saved_agent_instructions_reach_harness(
@@ -22,13 +19,13 @@ async def test_saved_agent_instructions_reach_harness(
         token = "saved-instructions"
         agent = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "bot", "model": "test", "instructions": "be brief"},
         )
         assert agent.status_code == 200
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},
@@ -51,7 +48,7 @@ async def test_inline_instructions_kept_for_follow_up(
         token = "inline-instructions"
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent": {
                     "name": "bot",
@@ -69,7 +66,7 @@ async def test_inline_instructions_kept_for_follow_up(
         harness.instructions = None
         posted = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.message", "content": "again"},
         )
         assert posted.status_code == 200
@@ -86,7 +83,7 @@ async def test_empty_agent_instructions_keep_platform_prompt(
         token = "empty-instructions"
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent": {"name": "bot", "model": "test", "instructions": ""},
                 "environment": {"type": "none"},
@@ -109,7 +106,7 @@ async def test_omitted_agent_instructions_keep_platform_prompt(
         token = "omit-instructions"
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent": {"name": "bot", "model": "test"},
                 "environment": {"type": "none"},
@@ -138,7 +135,7 @@ async def test_empty_main_platform_prompt_keeps_additional(
     ) as (_app, client, _worker):
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth("empty-main"),
+            headers=auth("empty-main"),
             json={
                 "agent": {
                     "name": "bot",
@@ -170,7 +167,7 @@ async def test_override_main_platform_prompt(
     ) as (_app, client, _worker):
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth("override-main"),
+            headers=auth("override-main"),
             json={
                 "agent": {"name": "bot", "model": "test"},
                 "environment": {"type": "none"},

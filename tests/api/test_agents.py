@@ -1,28 +1,21 @@
 import uuid
 
 from httpx import AsyncClient
-
-
-def _token(name: str = "t") -> str:
-    return name
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+from tests.support.http import auth
 
 
 async def test_fresh_tenant_has_no_agents(client: AsyncClient) -> None:
-    token = _token()
-    response = await client.get("/v1/agents", headers=_auth(token))
+    token = "t"
+    response = await client.get("/v1/agents", headers=auth(token))
     assert response.status_code == 200
     assert response.json() == {"data": []}
 
 
 async def test_agent_crud(client: AsyncClient) -> None:
-    token = _token()
+    token = "t"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "one",
             "model": "test-model",
@@ -76,31 +69,31 @@ async def test_agent_crud(client: AsyncClient) -> None:
     assert body["tools"][2]["allowed_tools"] == ["search"]
     agent_id = body["id"]
 
-    listed = await client.get("/v1/agents", headers=_auth(token))
+    listed = await client.get("/v1/agents", headers=auth(token))
     assert listed.status_code == 200
     assert [row["id"] for row in listed.json()["data"]] == [agent_id]
 
-    got = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
+    got = await client.get(f"/v1/agents/{agent_id}", headers=auth(token))
     assert got.status_code == 200
     assert got.json()["name"] == "one"
 
     updated = await client.post(
         f"/v1/agents/{agent_id}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "two"},
     )
     assert updated.status_code == 200
     assert updated.json()["name"] == "two"
     assert updated.json()["model"] == "test-model"
 
-    missing = await client.get(f"/v1/agents/{uuid.uuid4()}", headers=_auth(token))
+    missing = await client.get(f"/v1/agents/{uuid.uuid4()}", headers=auth(token))
     assert missing.status_code == 404
 
-    deleted = await client.delete(f"/v1/agents/{agent_id}", headers=_auth(token))
+    deleted = await client.delete(f"/v1/agents/{agent_id}", headers=auth(token))
     assert deleted.status_code == 200
     assert deleted.json() == {"id": agent_id, "deleted": True}
 
-    gone = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token))
+    gone = await client.get(f"/v1/agents/{agent_id}", headers=auth(token))
     assert gone.status_code == 404
 
 
@@ -115,30 +108,30 @@ def _mcp(label: str) -> dict[str, str]:
 async def test_mcp_labels_differing_only_in_dash_and_underscore_are_rejected(
     client: AsyncClient,
 ) -> None:
-    token = _token()
+    token = "t"
     response = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "one", "tools": [_mcp("my-docs"), _mcp("my_docs")]},
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "mcp_label_collision"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "two", "tools": [_mcp("my-docs"), _mcp("other")]},
     )
     assert created.status_code == 200
     updated = await client.post(
         f"/v1/agents/{created.json()['id']}",
-        headers=_auth(token),
+        headers=auth(token),
         json={"tools": [_mcp("a-b"), _mcp("a_b")]},
     )
     assert updated.status_code == 400
     assert updated.json()["error"]["code"] == "mcp_label_collision"
     inline = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "agent": {"name": "inline", "tools": [_mcp("x-y"), _mcp("x_y")]},
             "environment": {"type": "none"},
@@ -149,10 +142,10 @@ async def test_mcp_labels_differing_only_in_dash_and_underscore_are_rejected(
 
 
 async def test_nested_mcp_transport_is_rejected(client: AsyncClient) -> None:
-    token = _token()
+    token = "t"
     response = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "one",
             "tools": [
@@ -173,10 +166,10 @@ async def test_nested_mcp_transport_is_rejected(client: AsyncClient) -> None:
 
 
 async def test_mcp_environment_origin_not_implemented(client: AsyncClient) -> None:
-    token = _token()
+    token = "t"
     response = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={
             "name": "one",
             "tools": [
@@ -196,7 +189,7 @@ async def test_mcp_environment_origin_not_implemented(client: AsyncClient) -> No
 
 
 async def test_mcp_connector_and_approval_rejected(client: AsyncClient) -> None:
-    token = _token()
+    token = "t"
     for tool in (
         {
             "type": "mcp",
@@ -218,35 +211,35 @@ async def test_mcp_connector_and_approval_rejected(client: AsyncClient) -> None:
     ):
         response = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "one", "tools": [tool]},
         )
         assert response.status_code == 400
 
 
 async def test_codemode_metadata_validates(client: AsyncClient) -> None:
-    token = _token()
+    token = "t"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "one", "metadata": {"apipi.codemode": "on"}},
     )
     assert created.status_code == 200
     assert created.json()["metadata"]["apipi.codemode"] == "on"
     bad = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "two", "metadata": {"apipi.codemode": "sometimes"}},
     )
     assert bad.status_code == 400
 
 
 async def test_unimplemented_agent_fields(client: AsyncClient) -> None:
-    token = _token()
+    token = "t"
     for field in ("multi_agent", "tool_search", "programmatic_tool_calling"):
         response = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "one", field: True},
         )
         assert response.status_code == 400
@@ -256,39 +249,39 @@ async def test_unimplemented_agent_fields(client: AsyncClient) -> None:
 
 
 async def test_cross_tenant_agent_is_404(client: AsyncClient) -> None:
-    token_a = _token("a")
-    token_b = _token("b")
+    token_a = "a"
+    token_b = "b"
     created = await client.post(
-        "/v1/agents", headers=_auth(token_a), json={"name": "secret"}
+        "/v1/agents", headers=auth(token_a), json={"name": "secret"}
     )
     agent_id = created.json()["id"]
 
-    listed = await client.get("/v1/agents", headers=_auth(token_b))
+    listed = await client.get("/v1/agents", headers=auth(token_b))
     assert listed.json() == {"data": []}
 
-    got = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token_b))
+    got = await client.get(f"/v1/agents/{agent_id}", headers=auth(token_b))
     assert got.status_code == 404
 
     updated = await client.post(
         f"/v1/agents/{agent_id}",
-        headers=_auth(token_b),
+        headers=auth(token_b),
         json={"name": "stolen"},
     )
     assert updated.status_code == 404
 
-    deleted = await client.delete(f"/v1/agents/{agent_id}", headers=_auth(token_b))
+    deleted = await client.delete(f"/v1/agents/{agent_id}", headers=auth(token_b))
     assert deleted.status_code == 404
 
-    still = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token_a))
+    still = await client.get(f"/v1/agents/{agent_id}", headers=auth(token_a))
     assert still.status_code == 200
     assert still.json()["name"] == "secret"
 
 
 async def test_agent_versions_routes_are_gone(client: AsyncClient) -> None:
-    token = _token("no-versions")
+    token = "no-versions"
     created = await client.post(
         "/v1/agents",
-        headers=_auth(token),
+        headers=auth(token),
         json={"name": "bot", "model": "test"},
     )
     assert created.status_code == 200
@@ -297,29 +290,29 @@ async def test_agent_versions_routes_are_gone(client: AsyncClient) -> None:
     assert (
         await client.post(
             f"/v1/apipi/agents/{agent_id}/versions",
-            headers=_auth(token),
+            headers=auth(token),
             json={},
         )
     ).status_code == 404
     assert (
-        await client.get(f"/v1/apipi/agents/{agent_id}/versions", headers=_auth(token))
+        await client.get(f"/v1/apipi/agents/{agent_id}/versions", headers=auth(token))
     ).status_code == 404
     assert (
         await client.get(
             f"/v1/apipi/agents/{agent_id}/versions/{version_id}",
-            headers=_auth(token),
+            headers=auth(token),
         )
     ).status_code == 404
     assert (
         await client.post(
             f"/v1/apipi/agents/{agent_id}/versions/{version_id}/restore",
-            headers=_auth(token),
+            headers=auth(token),
             json={},
         )
     ).status_code == 404
     assert (
         await client.delete(
             f"/v1/apipi/agents/{agent_id}/versions/{version_id}",
-            headers=_auth(token),
+            headers=auth(token),
         )
     ).status_code == 404

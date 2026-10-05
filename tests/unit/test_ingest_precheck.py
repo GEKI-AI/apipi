@@ -2,10 +2,10 @@ import hashlib
 import threading
 import uuid
 from contextlib import asynccontextmanager
-from datetime import timedelta
 from typing import Any, cast
 
 import pytest
+from tests.support.ingest import leased_session
 
 from apipi.common.dirs import store_root
 from apipi.config import Settings
@@ -14,12 +14,8 @@ from apipi.services import worker_artifacts
 from apipi.services.ingest import QueuedEnvelope, flush_batch
 from apipi.store.blobs import MemoryStore
 from apipi.store.engine import Store
-from apipi.store.models import utc_now
 from apipi.store.repo import (
     create_artifact,
-    create_session,
-    create_tenant,
-    set_session_lease,
 )
 
 
@@ -55,21 +51,6 @@ class WatchedObjects(MemoryStore):
         return await super().digest(namespace, object_id)
 
 
-async def _leased(store: Store, worker_id: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
-    async with store.session() as db:
-        tenant = await create_tenant(db, name="t")
-        row = await create_session(db, tenant.id, environment={"type": "none"})
-        await set_session_lease(
-            db,
-            tenant.id,
-            row.id,
-            worker_id=worker_id,
-            lease_id=uuid.uuid4(),
-            lease_until=utc_now() + timedelta(seconds=60),
-        )
-        return tenant.id, row.id
-
-
 def _queued(session_id: uuid.UUID, seq: int, type: str, payload: dict[str, Any]):
     envelope = parse_envelope(
         {
@@ -87,7 +68,7 @@ async def test_presign_store_reads_run_outside_any_database_session(
     store: Store, settings: Settings
 ) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     data = b"hello"
     async with store.session() as db:
         artifact = await create_artifact(
@@ -140,7 +121,7 @@ async def test_completed_filesystem_check_runs_in_a_thread_outside_the_row_lock(
     store: Store, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     worker_id = uuid.uuid4()
-    tenant_id, session_id = await _leased(store, worker_id)
+    tenant_id, session_id, _lease, _key = await leased_session(store, worker_id)
     counting = CountingStore(store)
     objects = WatchedObjects(counting)
     data = b"x" * 5000
@@ -216,7 +197,7 @@ async def test_a_store_failure_is_answered_like_before(
     store: Store, settings: Settings
 ) -> None:
     worker_id = uuid.uuid4()
-    _tenant, session_id = await _leased(store, worker_id)
+    _tenant, session_id, _lease, _key = await leased_session(store, worker_id)
     counting = CountingStore(store)
 
     class Broken(WatchedObjects):

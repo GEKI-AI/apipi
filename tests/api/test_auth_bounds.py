@@ -4,16 +4,13 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.http import auth
 from tests.support.split_worker import api_settings_for
 
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import AuthFilter, AuthIdentity, AuthReject
 from apipi.store.engine import Store
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _settings(tmp_path: Path, auth: str | None = None) -> Settings:
@@ -51,7 +48,7 @@ async def test_off_loop_sync_plugin_does_not_serialise(
     ) as client:
         start = time.monotonic()
         results = await asyncio.gather(
-            *[client.get("/v1/agents", headers=_auth(f"k{i}")) for i in range(4)]
+            *[client.get("/v1/agents", headers=auth(f"k{i}")) for i in range(4)]
         )
         elapsed = time.monotonic() - start
     assert all(r.status_code == 200 for r in results)
@@ -61,7 +58,7 @@ async def test_off_loop_sync_plugin_does_not_serialise(
 async def test_async_plugin_supported(store: Store, tmp_path: Path) -> None:
     settings = _settings(tmp_path, auth="tests.support.auth_plugin:async_accept")
     async with await _client(settings, store) as client:
-        response = await client.get("/v1/agents", headers=_auth("a-key"))
+        response = await client.get("/v1/agents", headers=auth("a-key"))
         assert response.status_code == 200
 
 
@@ -109,11 +106,11 @@ async def test_cache_hit_makes_no_db_call(store: Store, tmp_path: Path) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        first = await client.get("/v1/agents", headers=_auth("hit-key"))
+        first = await client.get("/v1/agents", headers=auth("hit-key"))
         assert first.status_code == 200
         assert len(gateway._tenant_cache) == 1
         cached_tenant = next(iter(gateway._tenant_cache.values()))
-        second = await client.get("/v1/agents", headers=_auth("hit-key"))
+        second = await client.get("/v1/agents", headers=auth("hit-key"))
         assert second.status_code == 200
     assert plugin_mod.calls == ["hit-key"]
     assert len(gateway._tenant_cache) == 1
@@ -132,10 +129,10 @@ async def test_gateway_invalidation_reauthenticates(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        await client.get("/v1/agents", headers=_auth("rev-key"))
+        await client.get("/v1/agents", headers=auth("rev-key"))
         assert plugin_mod.calls == ["rev-key"]
         assert gateway.invalidate_auth("rev-key") is True
-        await client.get("/v1/agents", headers=_auth("rev-key"))
+        await client.get("/v1/agents", headers=auth("rev-key"))
         assert plugin_mod.calls == ["rev-key", "rev-key"]
         assert gateway.clear_auth_cache() >= 1
 
@@ -159,20 +156,20 @@ async def test_http_invalidate_is_tenant_scoped(store: Store, tmp_path: Path) ->
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         assert (
-            await client.get("/v1/agents", headers=_auth("a-one"))
+            await client.get("/v1/agents", headers=auth("a-one"))
         ).status_code == 200
         assert (
-            await client.get("/v1/agents", headers=_auth("b-one"))
+            await client.get("/v1/agents", headers=auth("b-one"))
         ).status_code == 200
         response = await client.post(
-            "/v1/apipi/auth/invalidate", headers=_auth("a-one"), json={}
+            "/v1/apipi/auth/invalidate", headers=auth("a-one"), json={}
         )
         assert response.status_code == 200
         assert response.json() == {"invalidated": 1}
         # b-one entry survives: plugin would fail if called again
         calls_before = len(plugin_mod.calls)
         assert (
-            await client.get("/v1/agents", headers=_auth("b-one"))
+            await client.get("/v1/agents", headers=auth("b-one"))
         ).status_code == 200
         assert len(plugin_mod.calls) == calls_before
 
@@ -212,7 +209,7 @@ async def test_authorize_restricts_to_one_agent(store: Store, tmp_path: Path) ->
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        headers = _auth("worker")
+        headers = auth("worker")
         first = await client.post("/v1/agents", headers=headers, json={"name": "a1"})
         second = await client.post("/v1/agents", headers=headers, json={"name": "a2"})
         assert first.status_code == 200
@@ -235,7 +232,7 @@ async def test_authorize_restricts_to_one_agent(store: Store, tmp_path: Path) ->
         sid = good.json()["id"]
         # other agent session: create via a second key outside the filter
         other = await client.post(
-            "/v1/agents/sessions", headers=_auth("admin"), json={"agent_id": id2}
+            "/v1/agents/sessions", headers=auth("admin"), json={"agent_id": id2}
         )
         assert other.status_code == 200
         other_id = other.json()["id"]

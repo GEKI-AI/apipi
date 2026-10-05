@@ -4,37 +4,17 @@ import asyncio
 import json
 import uuid
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+
+from tests.support.http import auth, parse_sse, tenant_of
 
 from apipi.api.sessions import _event_stream
 from apipi.common.usage import usage_from
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.store.engine import Store
 from apipi.worker.fake_harness import FakeHarness
 
 CHUNKS = ["hel", "lo ", "wor", "ld"]
 FULL_TEXT = "".join(CHUNKS)
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _parse_sse(text: str) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    for block in text.split("\n\n"):
-        if not block.strip() or block.startswith(":"):
-            continue
-        data = None
-        for line in block.split("\n"):
-            if line.startswith("data: "):
-                data = line[6:]
-        if data is not None:
-            parsed = json.loads(data)
-            assert isinstance(parsed, dict)
-            events.append(parsed)
-    return events
 
 
 class StreamHarness(FakeHarness):
@@ -66,20 +46,20 @@ async def test_split_mode_streams_deltas_before_done(
     from tests.support.split_worker import split_client_for
 
     token = "delta-split"
-    tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+    tenant_id = tenant_of(token)
     sent: list[str] = []
     async with split_client_for(
         settings, store, harness=StreamHarness(), token=worker_secret, sent=sent
     ) as (app, client, _worker):
         agent = await client.post(
             "/v1/agents",
-            headers=_auth(token),
+            headers=auth(token),
             json={"name": "bot", "model": "test"},
         )
         assert agent.status_code == 200
         created = await client.post(
             "/v1/agents/sessions",
-            headers=_auth(token),
+            headers=auth(token),
             json={
                 "agent_id": agent.json()["id"],
                 "environment": {"type": "none"},
@@ -105,7 +85,7 @@ async def test_split_mode_streams_deltas_before_done(
                         if chunk.startswith(":"):
                             continue
                         chunks.append(chunk)
-                        types = [event["type"] for event in _parse_sse("".join(chunks))]
+                        types = [event["type"] for event in parse_sse("".join(chunks))]
                         if "agent.session.turn.completed" in types:
                             return "".join(chunks)
             finally:
@@ -115,12 +95,12 @@ async def test_split_mode_streams_deltas_before_done(
         collector = asyncio.create_task(collect())
         posted = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json={"type": "agent.session.input.message", "content": "hello"},
         )
         assert posted.status_code == 200
         raw = await collector
-        events = _parse_sse(raw)
+        events = parse_sse(raw)
         kinds = [event["type"] for event in events]
         assert "agent.session.turn.output_text.done" in kinds
         deltas = [
@@ -151,7 +131,7 @@ async def test_split_mode_streams_deltas_before_done(
         assert "".join(str(item["payload"]["text"]) for item in envelopes) == FULL_TEXT
 
         stored = await client.get(
-            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+            f"/v1/agents/sessions/{session_id}/events", headers=auth(token)
         )
         stored_types = [event["type"] for event in stored.json()["data"]]
         assert "agent.session.turn.output_text.delta" not in stored_types

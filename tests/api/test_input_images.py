@@ -1,32 +1,22 @@
 import base64
 import os
-import uuid
 from typing import Any
 from urllib.parse import urlparse
-from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from httpx import AsyncClient
+from tests.support.fake_s3 import FakeS3
 from tests.support.fake_worker import FakeWorker
 from tests.support.files import message, spy_commands, vision
+from tests.support.http import auth, tenant_of
 from tests.support.split_worker import split_client_for
-from tests.unit.test_blobs import FakeS3
 
 from apipi.common.objects import NS_FILES
 from apipi.config import Settings
-from apipi.gateway.tokens import hash_token
 from apipi.protocol import dumps_wire, parse_turn_context, wire_bytes
 from apipi.store.blobs import S3Blobs, S3Store, file_object_id
 from apipi.store.engine import Store
 from apipi.worker.fake_harness import FakeHarness
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _tenant(token: str) -> uuid.UUID:
-    return uuid5(NAMESPACE_URL, hash_token(token))
 
 
 def _png(size: int) -> bytes:
@@ -39,12 +29,12 @@ def _data_url(data: bytes) -> str:
 
 async def _session(client: AsyncClient, token: str) -> str:
     agent = await client.post(
-        "/v1/agents", headers=_auth(token), json={"name": "bot", "model": "test"}
+        "/v1/agents", headers=auth(token), json={"name": "bot", "model": "test"}
     )
     assert agent.status_code == 200
     created = await client.post(
         "/v1/agents/sessions",
-        headers=_auth(token),
+        headers=auth(token),
         json={"agent_id": agent.json()["id"], "environment": {"type": "none"}},
     )
     assert created.status_code == 200
@@ -56,7 +46,7 @@ async def _upload(
 ) -> str:
     uploaded = await client.post(
         "/v1/files",
-        headers=_auth(token),
+        headers=auth(token),
         data={"purpose": "user_data"},
         files={"file": ("photo", data, content_type)},
     )
@@ -66,7 +56,7 @@ async def _upload(
 
 async def _user_content(client: AsyncClient, token: str, session_id: str) -> Any:
     items = await client.get(
-        f"/v1/agents/sessions/{session_id}/items", headers=_auth(token)
+        f"/v1/agents/sessions/{session_id}/items", headers=auth(token)
     )
     assert items.status_code == 200
     users = [item for item in items.json()["data"] if item["data"]["role"] == "user"]
@@ -87,7 +77,7 @@ async def test_image_over_the_command_limit_reaches_pi_as_a_reference(
         session_id = await _session(client, token)
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message(
                 {"type": "input_text", "text": "see"},
                 {"type": "input_image", "image_url": _data_url(image)},
@@ -96,7 +86,7 @@ async def test_image_over_the_command_limit_reaches_pi_as_a_reference(
         assert sent.status_code == 200, sent.json()
         content = await _user_content(client, token, session_id)
         file_id = content[1]["file_id"]
-        stored = await client.get(f"/v1/files/{file_id}/content", headers=_auth(token))
+        stored = await client.get(f"/v1/files/{file_id}/content", headers=auth(token))
     assert harness.images == [
         [{"type": "image", "data": encoded, "mimeType": "image/png"}]
     ]
@@ -117,7 +107,7 @@ async def test_image_over_the_command_limit_reaches_pi_as_a_reference(
     assert ref == {
         "type": "image",
         "file_id": file_id,
-        "object_id": file_object_id(_tenant(token), file_id),
+        "object_id": file_object_id(tenant_of(token), file_id),
         "local_path": ref["local_path"],
         "mime_type": "image/png",
         "size_bytes": len(image),
@@ -149,14 +139,14 @@ async def test_max_images_at_the_size_limit_start_one_turn(
         ]
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message({"type": "input_text", "text": "all"}, *parts),
         )
         assert sent.status_code == 200, sent.json()
         content = await _user_content(client, token, session_id)
         too_many = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message(*parts, parts[0]),
         )
     assert [part["type"] for part in content] == ["input_text"] + ["input_image"] * 8
@@ -186,7 +176,7 @@ async def test_input_image_by_file_id(
         path = f"/v1/agents/sessions/{session_id}/events"
         sent = await client.post(
             path,
-            headers=_auth(token),
+            headers=auth(token),
             json=message(
                 {"type": "input_image", "file_id": file_id, "detail": "high"},
                 {"type": "input_text", "text": "what is this"},
@@ -194,20 +184,20 @@ async def test_input_image_by_file_id(
         )
         assert sent.status_code == 200, sent.json()
         content = await _user_content(client, token, session_id)
-        listed = await client.get("/v1/files", headers=_auth(token))
+        listed = await client.get("/v1/files", headers=auth(token))
         missing = await client.post(
             path,
-            headers=_auth(token),
+            headers=auth(token),
             json=message({"type": "input_image", "file_id": foreign}),
         )
         not_image = await client.post(
             path,
-            headers=_auth(token),
+            headers=auth(token),
             json=message({"type": "input_image", "file_id": text_file}),
         )
         too_big = await client.post(
             path,
-            headers=_auth(token),
+            headers=auth(token),
             json=message({"type": "input_image", "file_id": big_file}),
         )
     assert content == [
@@ -251,7 +241,7 @@ async def test_placement_prefers_a_worker_with_image_refs(
         session_id = await _session(client, token)
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message({"type": "input_image", "image_url": _data_url(_png(64))}),
         )
         await old.close()
@@ -302,13 +292,13 @@ async def test_s3_store_sends_presigned_image_refs(
         session_id = await _session(client, token)
         sent = await client.post(
             f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
+            headers=auth(token),
             json=message({"type": "input_image", "image_url": _data_url(image)}),
         )
         assert sent.status_code == 200, sent.json()
         content = await _user_content(client, token, session_id)
     file_id = content[0]["file_id"]
-    object_id = file_object_id(_tenant(token), file_id)
+    object_id = file_object_id(tenant_of(token), file_id)
     stored = await S3Store(s3_settings, client=fake).get(NS_FILES, object_id)
     assert stored == image
     assert fetched[0]["object_id"] == object_id

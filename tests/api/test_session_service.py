@@ -3,6 +3,7 @@ import uuid
 
 from fastapi import FastAPI
 from tests.support.split_worker import api_settings_for, serve_split
+from tests.support.waits import until
 
 from apipi.config import Settings
 from apipi.env.spec import EnvironmentSpec
@@ -75,5 +76,6 @@ async def test_create_wait_turn_false_returns_before_turn(
                 timeout=2,
             )
             assert created["id"]
+            await until(lambda: harness.prompts == ["hello"])
     finally:
         await gateway.shutdown()

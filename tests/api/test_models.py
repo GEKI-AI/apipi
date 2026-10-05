@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tests.support.http import auth
 from tests.support.split_worker import api_settings_for
 
 from apipi.common.errors import ApiError
@@ -14,10 +15,6 @@ _PAYLOAD = {
     "object": "list",
     "data": [{"id": "gpt-4.1", "object": "model", "owned_by": "host"}],
 }
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
@@ -56,7 +53,7 @@ async def test_models_proxies_host(
         return _PAYLOAD
 
     monkeypatch.setattr("apipi.services.models.fetch_models_json", fake_fetch)
-    response = await model_client.get("/v1/models", headers=_auth("t"))
+    response = await model_client.get("/v1/models", headers=auth("t"))
     assert response.status_code == 200
     assert response.json() == _PAYLOAD
 
@@ -82,7 +79,7 @@ async def test_models_uses_overwrite_key(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        response = await client.get("/v1/models", headers=_auth("tenant-token"))
+        response = await client.get("/v1/models", headers=auth("tenant-token"))
     assert response.status_code == 200
     assert response.json() == _PAYLOAD
 
@@ -100,7 +97,7 @@ async def test_models_host_unauthorized(
         )
 
     monkeypatch.setattr("apipi.services.models.fetch_models_json", fake_fetch)
-    response = await model_client.get("/v1/models", headers=_auth("t"))
+    response = await model_client.get("/v1/models", headers=auth("t"))
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "model_host_unauthorized"
 
@@ -118,7 +115,7 @@ async def test_models_host_unreachable(
         )
 
     monkeypatch.setattr("apipi.services.models.fetch_models_json", boom)
-    response = await model_client.get("/v1/models", headers=_auth("t"))
+    response = await model_client.get("/v1/models", headers=auth("t"))
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "model_host_unreachable"
 
@@ -135,7 +132,7 @@ async def test_models_disabled(tmp_path: Path, store: Store) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        response = await client.get("/v1/models", headers=_auth("t"))
+        response = await client.get("/v1/models", headers=auth("t"))
     assert response.status_code == 400
     body = response.json()["error"]
     assert body["type"] == "not_implemented"

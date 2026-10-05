@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from tests.e2e.test_microvm_pi import _image_paths, _microvm_or_skip
-from tests.unit.test_egress_git import BACKEND, SECRET, GitServer, _bare_repo
+from tests.support.git_server import BACKEND, SECRET, GitServer, bare_repo
+from tests.support.microvm import image_paths, microvm_or_skip
 
 from apipi.config import Settings
 from apipi.env.setup import NetworkPolicy, write_network_policy
@@ -163,7 +163,7 @@ sys.stdin.read()
 
 
 def _settings(tmp_path: Path, **extra: Any) -> Settings:
-    kernel, rootfs = _image_paths()
+    kernel, rootfs = image_paths()
     settings = Settings(
         database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
         run_mode="microvm",
@@ -174,7 +174,7 @@ def _settings(tmp_path: Path, **extra: Any) -> Settings:
         microvm_rootfs=rootfs,
         **extra,
     )
-    _microvm_or_skip(settings)
+    microvm_or_skip(settings)
     return settings
 
 
@@ -391,7 +391,7 @@ async def test_enabled_guest_clones_from_a_private_credential_host(
         microvm_egress_private_hosts=PRIVATE,
         microvm_egress_upstream_ca=str(ca_file),
     )
-    _bare_repo(tmp_path)
+    bare_repo(tmp_path)
     server = _PrivateGit(tmp_path / "srv", upstream_ca)
     await server.start()
     (workspace / "egress_probe.py").write_text(ENABLED_PRIVATE_PROBE_SOURCE)

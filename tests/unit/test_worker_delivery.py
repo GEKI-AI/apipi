@@ -6,13 +6,13 @@ from typing import Any
 
 import pytest
 from tests.support.prom import metric_line
-from tests.unit.test_worker_robustness import (
-    _command,
-    _Execution,
-    _hello,
-    _Sock,
-    _start,
-    _wait_for,
+from tests.support.waits import until
+from tests.support.worker_connection import (
+    FakeExecution,
+    FakeSock,
+    command_frame,
+    hello_frame,
+    start_connection,
 )
 
 from apipi.common.metrics import Metrics
@@ -31,7 +31,7 @@ async def test_stop_is_acked_on_receipt_or_after_session_stopped_is_acked(
     settings: Settings, features: list[str] | None
 ) -> None:
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     release = asyncio.Event()
 
     async def slow_teardown(session_id: uuid.UUID) -> None:
@@ -41,19 +41,19 @@ async def test_stop_is_acked_on_receipt_or_after_session_stopped_is_acked(
 
     execution.on_teardown = slow_teardown
     session_id = uuid.uuid4()
-    command = _command(session_id, str(uuid.uuid4()), "session.stop")
-    hello = _hello() if features is None else _hello(features=features)
-    sock = _Sock([hello, command])
-    run = _start(settings, sock, execution=execution, outbox=outbox)
+    command = command_frame(session_id, str(uuid.uuid4()), "session.stop")
+    hello = hello_frame() if features is None else hello_frame(features=features)
+    sock = FakeSock([hello, command])
+    run = start_connection(settings, sock, execution=execution, outbox=outbox)
     try:
-        await _wait_for(lambda: execution.teardowns)
+        await until(lambda: execution.teardowns)
         if features is None:
             await asyncio.sleep(0.1)
             assert sock.of("lease.ack") == []
         else:
-            await _wait_for(lambda: sock.of("lease.ack"))
+            await until(lambda: sock.of("lease.ack"))
         release.set()
-        await _wait_for(lambda: sock.of("session.stopped"))
+        await until(lambda: sock.of("session.stopped"))
         stopped = sock.of("session.stopped")[0]
         assert [m["type"] for m in sock.sent if "seq" in m] == [
             "lifecycle.stop",
@@ -69,7 +69,7 @@ async def test_stop_is_acked_on_receipt_or_after_session_stopped_is_acked(
                 "last_seq": stopped["seq"],
             }
         )
-        await _wait_for(lambda: session_id not in run.leases and sock.of("lease.ack"))
+        await until(lambda: session_id not in run.leases and sock.of("lease.ack"))
         assert [ack["id"] for ack in sock.of("lease.ack")] == [command["id"]]
         assert sock.of("lease.release") == []
         kinds = [m.get("type") for m in sock.sent]
@@ -84,18 +84,18 @@ async def test_unknown_op_type_and_fields_are_counted_not_acked(
 ) -> None:
     metrics = Metrics()
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     execution.metrics = metrics
     session_id = uuid.uuid4()
     lease_id = str(uuid.uuid4())
-    unknown_op = _command(session_id, lease_id, "turn.teleport")
-    newer = _command(session_id, lease_id, "turn.start", shiny="new")
-    sock = _Sock([_hello(), unknown_op, {"type": "future.message"}, newer])
+    unknown_op = command_frame(session_id, lease_id, "turn.teleport")
+    newer = command_frame(session_id, lease_id, "turn.start", shiny="new")
+    sock = FakeSock([hello_frame(), unknown_op, {"type": "future.message"}, newer])
     with strict_parse(False):
-        run = _start(settings, sock, execution=execution, outbox=outbox)
+        run = start_connection(settings, sock, execution=execution, outbox=outbox)
         try:
-            await _wait_for(lambda: execution.turns)
-            await _wait_for(lambda: sock.of("lease.ack"))
+            await until(lambda: execution.turns)
+            await until(lambda: sock.of("lease.ack"))
         finally:
             await run.stop()
     assert [ack["id"] for ack in sock.of("lease.ack")] == [newer["id"]]
@@ -132,12 +132,12 @@ async def test_search_is_not_wired_when_the_api_does_not_advertise_it(
     settings: Settings,
 ) -> None:
     outbox = Outbox()
-    execution = _Execution(settings, outbox)
+    execution = FakeExecution(settings, outbox)
     execution.__dict__["search_sender"] = None
-    sock = _Sock([_hello(features=["presign"])])
-    run = _start(settings, sock, execution=execution, outbox=outbox)
+    sock = FakeSock([hello_frame(features=["presign"])])
+    run = start_connection(settings, sock, execution=execution, outbox=outbox)
     try:
-        await _wait_for(lambda: execution.socket_open)
+        await until(lambda: execution.socket_open)
         assert execution.__dict__["search_sender"] is None
         assert outbox.peer_features == frozenset({"presign"})
     finally:

@@ -1,17 +1,20 @@
 import asyncio
 import logging
 import uuid
-from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import OperationalError
-from tests.api.test_workers import _leased_session, _worker_settings
-from tests.support.fake_worker import FakeWorker
+from tests.support.fake_worker import (
+    FakeWorker,
+    acquire_lease,
+    socket_settings,
+    status_envelope,
+)
 from tests.support.prom import metric_line
-from tests.support.split_worker import api_settings_for
+from tests.support.waits import closed_on_cancel, until
 
 from apipi.config import Settings
 from apipi.gateway import create_app
@@ -21,16 +24,6 @@ from apipi.store.models import utc_now
 from apipi.store.repo import get_session, get_worker, upsert_worker
 from apipi.workerhub import serve as serve_module
 from apipi.workerhub.writer import ConnectionWriter
-
-
-def _settings(
-    settings: Settings, ttl: timedelta = timedelta(seconds=30), **kw: Any
-) -> Settings:
-    return api_settings_for(
-        _worker_settings(settings, worker_lease_ttl=ttl, **kw).model_copy(
-            update={"metrics": True}
-        )
-    )
 
 
 async def _lease_until(store: Store, tenant_id: uuid.UUID, session_id: uuid.UUID):
@@ -59,25 +52,6 @@ async def _extended(
             return True
         await asyncio.sleep(0.01)
     return False
-
-
-async def _until(check: Callable[[], bool], timeout: float = 5) -> bool:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not check():
-        if asyncio.get_running_loop().time() >= deadline:
-            return False
-        await asyncio.sleep(0.01)
-    return True
-
-
-def _status_envelope(session_id: uuid.UUID, seq: int) -> dict[str, Any]:
-    return {
-        "v": 2,
-        "session_id": str(session_id),
-        "seq": seq,
-        "type": "session.status",
-        "payload": {"status": "idle"},
-    }
 
 
 def _presign(session_id: uuid.UUID, seq: int) -> dict[str, Any]:
@@ -110,15 +84,15 @@ async def test_heartbeats_renew_leases_while_ingest_is_stuck(
         return await real(*args, **kwargs)
 
     monkeypatch.setattr(serve_module, "flush_batch", stuck)
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, _command = await _leased_session(
+        tenant_id, session_id, _command = await acquire_lease(
             app, client, store, worker
         )
-        await worker.send_json(_status_envelope(session_id, 1))
+        await worker.send_json(status_envelope(session_id, 1))
         await asyncio.sleep(0.05)
         before = await _soon(store, tenant_id, session_id)
         await worker.send_json({"type": "heartbeat"})
@@ -146,12 +120,12 @@ async def test_heartbeats_renew_leases_while_the_object_store_is_slow(
 ) -> None:
     release = asyncio.Event()
     slow = _SlowStore(release)
-    app = create_app(_settings(settings), store=store, objects=slow)
+    app = create_app(socket_settings(settings), store=store, objects=slow)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, _command = await _leased_session(
+        tenant_id, session_id, _command = await acquire_lease(
             app, client, store, worker
         )
         await worker.send_json(_presign(session_id, 1))
@@ -187,12 +161,12 @@ async def test_a_failed_message_does_not_close_the_socket(
         return result
 
     monkeypatch.setattr(serve_module, "heartbeat_worker", flaky)
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, _command = await _leased_session(
+        tenant_id, session_id, _command = await acquire_lease(
             app, client, store, worker
         )
         for frame in (
@@ -203,10 +177,10 @@ async def test_a_failed_message_does_not_close_the_socket(
             await worker.ws._incoming.put(frame)
         await worker.send_json({"type": "heartbeat"})
         await worker.send_json({"type": "heartbeat"})
-        assert await _until(lambda: handled == 1)
+        assert await until(lambda: handled == 1)
         before = await _soon(store, tenant_id, session_id)
         await worker.send_json({"type": "heartbeat"})
-        assert await _until(lambda: handled == 2)
+        assert await until(lambda: handled == 2)
         assert await _lease_until(store, tenant_id, session_id) > before
         assert calls == 3
         conn = app.state.workers.get(uuid.UUID(str(worker.worker_id)))
@@ -236,7 +210,7 @@ async def test_a_release_is_retried_after_a_transient_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(serve_module, "RETRY_DELAYS", (0.01, 0.01, 0.01))
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     real = app.state.workers.release
     calls = 0
 
@@ -252,9 +226,7 @@ async def test_a_release_is_retried_after_a_transient_error(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, command = await _leased_session(
-            app, client, store, worker
-        )
+        tenant_id, session_id, command = await acquire_lease(app, client, store, worker)
         await worker.send_json(
             {
                 "type": "lease.release",
@@ -280,7 +252,7 @@ async def test_a_connection_is_not_pickable_before_hello_is_queued(
     worker_secret: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     hub = app.state.workers
     seen: list[bool] = []
     real_submit = ConnectionWriter.submit
@@ -302,7 +274,7 @@ async def test_a_connection_is_not_pickable_before_hello_is_queued(
 async def test_reconnect_keeps_the_api_instance_id(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_settings(settings, instance_id="api-1"), store=store)
+    app = create_app(socket_settings(settings, instance_id="api-1"), store=store)
     first = FakeWorker(app, worker_secret)
     await first.connect()
     second = FakeWorker(app, worker_secret, worker_id=first.worker_id)
@@ -339,12 +311,12 @@ async def test_reconnect_keeps_the_api_instance_id(
 async def test_a_superseded_connection_cannot_renew_leases(
     settings: Settings, store: Store, worker_secret: str
 ) -> None:
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, _command = await _leased_session(
+        tenant_id, session_id, _command = await acquire_lease(
             app, client, store, worker
         )
         async with store.session() as db:
@@ -385,12 +357,12 @@ async def test_invalid_optional_heartbeat_fields_are_ignored_and_the_lease_exten
         return result
 
     monkeypatch.setattr(serve_module, "heartbeat_worker", counted)
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, _command = await _leased_session(
+        tenant_id, session_id, _command = await acquire_lease(
             app, client, store, worker
         )
         conn = app.state.workers.get(uuid.UUID(str(worker.worker_id)))
@@ -407,7 +379,7 @@ async def test_invalid_optional_heartbeat_fields_are_ignored_and_the_lease_exten
         ):
             before = await _soon(store, tenant_id, session_id)
             await worker.send_json({"type": "heartbeat", **bad})
-            assert await _until(lambda count=count: handled == count), bad
+            assert await until(lambda count=count: handled == count), bad
             assert await _lease_until(store, tenant_id, session_id) > before, bad
         assert conn.capacity == capacity
         assert conn.run_mode == "none"
@@ -428,14 +400,12 @@ async def test_expire_sends_revokes_after_commit_and_survives_a_stuck_socket(
     from apipi.workerhub import hub as hub_module
 
     monkeypatch.setattr(hub_module, "REVOKE_TIMEOUT", 0.1)
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, command = await _leased_session(
-            app, client, store, worker
-        )
+        tenant_id, session_id, command = await acquire_lease(app, client, store, worker)
         hub = app.state.workers
         conn = hub.get(uuid.UUID(str(worker.worker_id)))
         assert conn is not None
@@ -479,14 +449,12 @@ async def test_expire_changes_nothing_in_memory_when_the_commit_fails(
 ) -> None:
     from apipi.workerhub import hub as hub_module
 
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         worker = FakeWorker(app, worker_secret)
-        tenant_id, session_id, command = await _leased_session(
-            app, client, store, worker
-        )
+        tenant_id, session_id, command = await acquire_lease(app, client, store, worker)
         hub = app.state.workers
         conn = hub.get(uuid.UUID(str(worker.worker_id)))
         assert conn is not None
@@ -510,14 +478,6 @@ async def test_expire_changes_nothing_in_memory_when_the_commit_fails(
         await worker.close()
 
 
-async def _closed_on_cancel(entered: asyncio.Event) -> None:
-    entered.set()
-    try:
-        await asyncio.Event().wait()
-    except asyncio.CancelledError:
-        raise ValueError("Connection closed") from None
-
-
 @pytest.mark.parametrize("swallowed", [False, True])
 async def test_a_cancel_ends_the_socket_when_a_handler_turns_it_into_an_error(
     settings: Settings,
@@ -530,14 +490,14 @@ async def test_a_cancel_ends_the_socket_when_a_handler_turns_it_into_an_error(
 
     async def heartbeat(*_args: Any, **_kwargs: Any) -> bool:
         try:
-            await _closed_on_cancel(entered)
+            await closed_on_cancel(entered)
         except ValueError:
             if not swallowed:
                 raise
         return True
 
     monkeypatch.setattr(serve_module, "heartbeat_worker", heartbeat)
-    app = create_app(_settings(settings), store=store)
+    app = create_app(socket_settings(settings), store=store)
     worker = FakeWorker(app, worker_secret)
     await worker.connect()
     await worker.send_json({"type": "heartbeat"})

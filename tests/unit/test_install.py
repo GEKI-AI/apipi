@@ -5,10 +5,11 @@ from io import BytesIO, StringIO
 from pathlib import Path
 
 import pytest
+from tests.support.config import none_settings
 
 from apipi.cli import main
 from apipi.common.image_recipes import read_image_env, recipe_ids
-from apipi.config import ConfigError, Settings
+from apipi.config import ConfigError
 from apipi.worker.pi import install as pi_install
 from apipi.worker.pi.install import (
     _extract_release_bin,
@@ -27,13 +28,6 @@ from apipi.worker.pi.install import (
 from apipi.worker.pi.version import PI_NPM_PACKAGE, PINNED_FIRECRACKER, PINNED_PI
 
 
-def _settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://apipi:apipi@localhost:5432/apipi",
-        run_mode="none",
-    )
-
-
 def test_npm_install_args_pin_package() -> None:
     prefix = Path("/tmp/apipi-pi")
     args = npm_install_args(prefix, force=False)
@@ -50,7 +44,7 @@ def test_install_dry_run_prints_npm(
     monkeypatch.setattr(pi_install, "installed_pi_version", lambda _s: None)
     monkeypatch.setattr(pi_install.shutil, "which", lambda _name: "/usr/bin/npm")
     out = StringIO()
-    assert install_pi(_settings(), dry_run=True, out=out) == 0
+    assert install_pi(none_settings(), dry_run=True, out=out) == 0
     text = out.getvalue()
     assert "npm install" in text
     assert PINNED_PI in text
@@ -64,7 +58,7 @@ def test_install_skips_when_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
         "apipi.worker.pi.install.subprocess.run", lambda *_a, **_k: ran.append(1)
     )
     out = StringIO()
-    assert install_pi(_settings(), out=out) == 0
+    assert install_pi(none_settings(), out=out) == 0
     assert ran == []
     assert f"Pi {PINNED_PI} is already installed" in out.getvalue()
 
@@ -83,7 +77,7 @@ def test_install_force_reruns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
     monkeypatch.setattr("apipi.worker.pi.install.subprocess.run", fake_run)
     out = StringIO()
-    assert install_pi(_settings(), force=True, out=out) == 0
+    assert install_pi(none_settings(), force=True, out=out) == 0
     assert f"Installed Pi {PINNED_PI}" in out.getvalue()
     assert "APIPI_PI_COMMAND" in out.getvalue()
 
@@ -92,7 +86,7 @@ def test_install_requires_npm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pi_install, "installed_pi_version", lambda _s: None)
     monkeypatch.setattr(pi_install.shutil, "which", lambda _name: None)
     with pytest.raises(ConfigError, match="npm is not on PATH"):
-        install_pi(_settings())
+        install_pi(none_settings())
 
 
 def test_cli_install_dry_run(
@@ -344,7 +338,7 @@ def test_run_install_microvm_dry_run(
     out = StringIO()
     assert (
         run_install(
-            _settings(),
+            none_settings(),
             pi=False,
             microvm=True,
             dry_run=True,

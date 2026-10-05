@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from tests.support.split_worker import block_storage
 
 from apipi.worker.execution import LocalExecution
 from apipi.worker.inventory import _seed_reaper_ttl
@@ -137,22 +138,6 @@ async def test_reaper_wipes_with_inventory_ttl(settings) -> None:
     assert not path.exists()
 
 
-def _block_storage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail the test if the worker constructs storage clients."""
-
-    def _boom(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("split worker must not construct storage clients")
-
-    import apipi.store.blobs as blobs
-    import apipi.store.engine as engine
-
-    monkeypatch.setattr(engine, "create_engine", _boom)
-    monkeypatch.setattr(engine, "Store", _boom)
-    monkeypatch.setattr(blobs, "object_store", _boom)
-    monkeypatch.setattr(blobs, "blob_store", _boom)
-    monkeypatch.setattr(blobs, "S3Store", _boom)
-
-
 def test_prepare_worker_refuses_database_url(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, settings: Any
 ) -> None:
@@ -222,7 +207,7 @@ async def test_split_turn_needs_no_store_or_object_credentials(
         )
     tenant_id, session_id = tenant.id, row.id
     context = await build_turn_context(store, settings, tenant_id, session_id)
-    _block_storage(monkeypatch)
+    block_storage(monkeypatch)
     outbox = Outbox()
     harness = FakeHarness()
     harness.mcp_calls = [{"call_id": "c1", "name": "mcp_tool"}]
@@ -274,7 +259,7 @@ async def test_split_boot_hosted_needs_no_store(
             environment={"type": "openai_hosted", "directory": str(workspace)},
         )
     context = await build_turn_context(store, settings, tenant.id, row.id)
-    _block_storage(monkeypatch)
+    block_storage(monkeypatch)
     execution = LocalExecution(
         settings,
         pool=PiPool(settings),
