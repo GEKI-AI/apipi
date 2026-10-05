@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
@@ -52,12 +53,22 @@ async def _soon(store: Store, tenant_id: uuid.UUID, session_id: uuid.UUID):
 async def _extended(
     store: Store, tenant_id: uuid.UUID, session_id: uuid.UUID, before: Any
 ) -> bool:
-    for _ in range(100):
+    deadline = asyncio.get_running_loop().time() + 5
+    while asyncio.get_running_loop().time() < deadline:
         after = await _lease_until(store, tenant_id, session_id)
         if after is not None and after > before:
             return True
         await asyncio.sleep(0.01)
     return False
+
+
+async def _until(check: Callable[[], bool], timeout: float = 5) -> bool:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not check():
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(0.01)
+    return True
 
 
 def _status_envelope(session_id: uuid.UUID, seq: int) -> dict[str, Any]:
@@ -164,14 +175,17 @@ async def test_a_failed_message_does_not_close_the_socket(
 ) -> None:
     caplog.set_level(logging.WARNING, logger="apipi.worker")
     calls = 0
+    handled = 0
     real = serve_module.heartbeat_worker
 
     async def flaky(*args: Any, **kwargs: Any) -> Any:
-        nonlocal calls
+        nonlocal calls, handled
         calls += 1
         if calls == 1:
             raise OperationalError("select", {}, Exception("connection reset"))
-        return await real(*args, **kwargs)
+        result = await real(*args, **kwargs)
+        handled += 1
+        return result
 
     monkeypatch.setattr(serve_module, "heartbeat_worker", flaky)
     app = create_app(_settings(settings), store=store)
@@ -190,9 +204,11 @@ async def test_a_failed_message_does_not_close_the_socket(
             await worker.ws._incoming.put(frame)
         await worker.send_json({"type": "heartbeat"})
         await worker.send_json({"type": "heartbeat"})
+        assert await _until(lambda: handled == 1)
         before = await _soon(store, tenant_id, session_id)
         await worker.send_json({"type": "heartbeat"})
-        assert await _extended(store, tenant_id, session_id, before)
+        assert await _until(lambda: handled == 2)
+        assert await _lease_until(store, tenant_id, session_id) > before
         assert calls == 3
         conn = app.state.workers.get(uuid.UUID(str(worker.worker_id)))
         assert conn is not None
@@ -356,9 +372,20 @@ async def test_invalid_optional_heartbeat_fields_are_ignored_and_the_lease_exten
     settings: Settings,
     store: Store,
     worker_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.WARNING, logger="apipi.worker")
+    handled = 0
+    real = serve_module.heartbeat_worker
+
+    async def counted(*args: Any, **kwargs: Any) -> Any:
+        nonlocal handled
+        result = await real(*args, **kwargs)
+        handled += 1
+        return result
+
+    monkeypatch.setattr(serve_module, "heartbeat_worker", counted)
     app = create_app(_settings(settings), store=store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -370,15 +397,19 @@ async def test_invalid_optional_heartbeat_fields_are_ignored_and_the_lease_exten
         conn = app.state.workers.get(uuid.UUID(str(worker.worker_id)))
         assert conn is not None
         capacity = conn.capacity
-        for bad in (
-            {"capacity": 0},
-            {"memory_mb": "lots"},
-            {"run_mode": "  "},
-            {"capacity": -3, "run_mode": 7, "drain": True},
+        for count, bad in enumerate(
+            (
+                {"capacity": 0},
+                {"memory_mb": "lots"},
+                {"run_mode": "  "},
+                {"capacity": -3, "run_mode": 7, "drain": True},
+            ),
+            start=1,
         ):
             before = await _soon(store, tenant_id, session_id)
             await worker.send_json({"type": "heartbeat", **bad})
-            assert await _extended(store, tenant_id, session_id, before), bad
+            assert await _until(lambda count=count: handled == count), bad
+            assert await _lease_until(store, tenant_id, session_id) > before, bad
         assert conn.capacity == capacity
         assert conn.run_mode == "none"
         assert conn.draining is True
@@ -510,3 +541,59 @@ async def test_the_lease_reaper_loop_survives_a_failed_round(
     assert metric_line(
         body, "apipi_background_loop_errors_total", loop="lease_reaper_test"
     ).endswith(" 1.0")
+
+
+async def _closed_on_cancel(entered: asyncio.Event) -> None:
+    entered.set()
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        raise ValueError("Connection closed") from None
+
+
+@pytest.mark.parametrize("swallowed", [False, True])
+async def test_a_cancel_ends_the_socket_when_a_handler_turns_it_into_an_error(
+    settings: Settings,
+    store: Store,
+    worker_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
+    swallowed: bool,
+) -> None:
+    entered = asyncio.Event()
+
+    async def heartbeat(*_args: Any, **_kwargs: Any) -> bool:
+        try:
+            await _closed_on_cancel(entered)
+        except ValueError:
+            if not swallowed:
+                raise
+        return True
+
+    monkeypatch.setattr(serve_module, "heartbeat_worker", heartbeat)
+    app = create_app(_settings(settings), store=store)
+    worker = FakeWorker(app, worker_secret)
+    await worker.connect()
+    await worker.send_json({"type": "heartbeat"})
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    task = worker.ws._task
+    assert task is not None
+    task.cancel()
+    done, _pending = await asyncio.wait({task}, timeout=5)
+    assert task in done
+    assert app.state.workers.get(uuid.UUID(str(worker.worker_id))) is None
+
+
+async def test_a_background_loop_ends_when_a_round_turns_a_cancel_into_an_error() -> (
+    None
+):
+    from apipi.common.background import run_loop
+
+    entered = asyncio.Event()
+    task = asyncio.create_task(
+        run_loop("cancel_test", lambda: _closed_on_cancel(entered), interval=0)
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    task.cancel()
+    done, _pending = await asyncio.wait({task}, timeout=5)
+    assert task in done
+    assert task.cancelled()

@@ -5,9 +5,10 @@ counted in `apipi_background_loop_errors_total{loop}`, logged as
 `background.loop.error` (rate limited), and the loop goes on. Every
 finished round sets `apipi_background_loop_last_run_timestamp{loop}`, so
 an alert on a stale timestamp catches a loop that stopped or hangs.
-`watch_task` logs a task that ended with an exception, for tasks that
-are not loops. `sample_event_loop_lag` records how late the event loop
-wakes a one second sleep.
+A round that raises after the task was cancelled ends the loop with
+`CancelledError` instead. `watch_task` logs a task that ended with an
+exception, for tasks that are not loops. `sample_event_loop_lag`
+records how late the event loop wakes a one second sleep.
 """
 
 import asyncio
@@ -23,6 +24,18 @@ log = logging.getLogger("apipi.background")
 LOOP_LAG_INTERVAL = 1.0
 
 _loop_warnings = RateLimitedLog(log)
+
+
+def cancelling() -> bool:
+    """Whether the current task was asked to cancel.
+
+    Cleanup that runs on a cancel, such as a database driver closing its
+    connection, can raise another exception in place of the
+    `CancelledError`. A loop that catches `Exception` checks this, so it
+    stops instead of running on after the cancel.
+    """
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
 
 
 def note_loop_error(metrics: Any | None, loop: str, exc: BaseException) -> None:
@@ -70,6 +83,8 @@ async def run_loop(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if cancelling():
+                raise asyncio.CancelledError from exc
             note_loop_error(metrics, loop, exc)
         note_loop_run(metrics, loop)
         done += 1
