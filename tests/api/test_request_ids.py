@@ -1,6 +1,7 @@
 import uuid
 from pathlib import Path
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.support.split_worker import api_settings_for
 
@@ -28,25 +29,29 @@ async def test_generates_request_id(client: AsyncClient) -> None:
     assert other.headers["x-request-id"] != request_id
 
 
-async def test_echoes_request_id(client: AsyncClient) -> None:
-    response = await client.get(
-        "/v1/agents", headers={**_auth("t"), "x-request-id": "echo-me"}
-    )
-    assert response.status_code == 200
-    assert response.headers["x-request-id"] == "echo-me"
-
-
-async def test_honors_client_request_id(client: AsyncClient) -> None:
-    response = await client.get(
-        "/v1/agents",
-        headers={
-            **_auth("t"),
-            "x-request-id": "echo-me",
-            "X-Client-Request-Id": "client-me",
-        },
-    )
-    assert response.status_code == 200
-    assert response.headers["x-request-id"] == "client-me"
+@pytest.mark.parametrize(
+    ("headers", "status", "request_id"),
+    [
+        ({**_auth("t"), "x-request-id": "echo-me"}, 200, "echo-me"),
+        (
+            {
+                **_auth("t"),
+                "x-request-id": "echo-me",
+                "X-Client-Request-Id": "client-me",
+            },
+            200,
+            "client-me",
+        ),
+        ({"x-request-id": "err-1"}, 401, "err-1"),
+    ],
+    ids=["request_id", "client_request_id", "error"],
+)
+async def test_echoes_request_id(
+    client: AsyncClient, headers: dict[str, str], status: int, request_id: str
+) -> None:
+    response = await client.get("/v1/agents", headers=headers)
+    assert response.status_code == status
+    assert response.headers["x-request-id"] == request_id
 
 
 async def test_turn_log_stores_request_id(client: AsyncClient, store: Store) -> None:
@@ -141,9 +146,3 @@ async def test_health_has_no_request_id(client: AsyncClient) -> None:
     response = await client.get("/health")
     assert response.status_code == 200
     assert "x-request-id" not in response.headers
-
-
-async def test_error_echoes_request_id(client: AsyncClient) -> None:
-    response = await client.get("/v1/agents", headers={"x-request-id": "err-1"})
-    assert response.status_code == 401
-    assert response.headers["x-request-id"] == "err-1"

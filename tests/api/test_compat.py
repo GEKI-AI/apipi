@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import pytest
 from httpx import AsyncClient, Response
 from sqlalchemy import select
 from tests.support.split_worker import split_client_for
@@ -12,9 +13,11 @@ from tests.support.workspace import hosted_dir
 from apipi.api.sessions import _event_stream
 from apipi.common.event_bus import EventHub
 from apipi.config import Settings
+from apipi.gateway.tokens import hash_token
 from apipi.protocol import PUBLIC_EVENT_TYPES
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow
+from apipi.store.repo import get_session_turn
 from apipi.worker.fake_harness import FAKE_USAGE, FakeHarness
 
 _TOOLS = [
@@ -231,6 +234,8 @@ async def test_compat_environment_hosted_alias(
     )
     assert created["environment"]["type"] == "openai_hosted"
     assert hosted_dir(settings, token, created["id"]).is_dir()
+    got = await client.get(f"/v1/agents/sessions/{created['id']}", headers=_auth(token))
+    assert got.json()["environment"]["type"] == "openai_hosted"
 
 
 async def test_compat_environment_none(client: AsyncClient) -> None:
@@ -389,7 +394,7 @@ async def test_compat_artifacts(
     assert content.content == b"hello"
 
 
-async def test_compat_usage_on_turns(client: AsyncClient) -> None:
+async def test_compat_usage_on_turns(client: AsyncClient, store: Store) -> None:
     token = "compat-usage"
     agent_id = await _agent(client, token)
     created = await _session(
@@ -408,14 +413,24 @@ async def test_compat_usage_on_turns(client: AsyncClient) -> None:
         for event in events.json()["data"]
         if event["type"] == "agent.session.turn.completed"
     ]
-    assert completed[0]["data"]["usage"] == FAKE_USAGE
-    assert "cost" not in completed[0]["data"]["usage"]
+    assert len(completed) == 1
+    usage = completed[0]["data"]["usage"]
+    assert usage == FAKE_USAGE
+    assert "cost" not in usage
+    assert "hello" not in json.dumps(usage)
     turn_id = completed[0]["data"]["turn_id"]
     one = await client.get(
         f"/v1/agents/sessions/{session_id}/turns/{turn_id}",
         headers=_auth(token),
     )
     assert one.json()["usage"] == FAKE_USAGE
+    tenant_id = uuid.uuid5(uuid.NAMESPACE_URL, hash_token(token))
+    async with store.session() as db:
+        row = await get_session_turn(
+            db, tenant_id, uuid.UUID(session_id), uuid.UUID(turn_id)
+        )
+    assert row is not None
+    assert row.usage == FAKE_USAGE
 
 
 async def test_compat_session_export(client: AsyncClient) -> None:
@@ -485,27 +500,123 @@ async def test_compat_error_envelope(client: AsyncClient) -> None:
     assert _error(missing)["code"] == "not_found"
 
 
-async def test_compat_tenant_404(client: AsyncClient) -> None:
+_CANCEL = {"type": "agent.session.input.cancel"}
+_TOOL_RESULT = {
+    "type": "agent.session.input.tool_result",
+    "turn_id": "00000000-0000-0000-0000-000000000002",
+    "call_id": "call_1",
+    "success": True,
+    "output": "pong",
+}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("GET", "/v1/agents/{agent_id}", None),
+        ("GET", "/v1/agents/sessions/{session_id}", None),
+        ("GET", "/v1/agents/sessions/{session_id}/events", None),
+        ("POST", "/v1/agents/sessions/{session_id}/events", _CANCEL),
+        ("GET", "/v1/agents/sessions/{session_id}/turns", None),
+        ("GET", "/v1/agents/sessions/{session_id}/items", None),
+        ("GET", "/v1/apipi/sessions/{session_id}/export", None),
+    ],
+    ids=["agent", "session", "events", "cancel", "turns", "items", "export"],
+)
+async def test_compat_tenant_404(
+    client: AsyncClient, method: str, path: str, body: dict[str, Any] | None
+) -> None:
     token_a = "compat-a"
     token_b = "compat-b"
     agent_id = await _agent(client, token_a)
     created = await _session(
-        client, token_a, agent_id=agent_id, environment={"type": "none"}
+        client, token_a, agent_id=agent_id, environment={"type": "none"}, input="hello"
     )
-    session_id = created["id"]
-    agent = await client.get(f"/v1/agents/{agent_id}", headers=_auth(token_b))
-    session = await client.get(
-        f"/v1/agents/sessions/{session_id}", headers=_auth(token_b)
+    other = await client.request(
+        method,
+        path.format(agent_id=agent_id, session_id=created["id"]),
+        headers=_auth(token_b),
+        json=body,
     )
-    events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token_b)
+    assert other.status_code == 404
+    assert _error(other)["code"] == "not_found"
+    listed = await client.get("/v1/agents/sessions", headers=_auth(token_b))
+    assert listed.json() == {"data": []}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("GET", "/v1/agents/sessions/{id}/turns", None),
+        ("GET", "/v1/agents/sessions/{id}/items", None),
+        ("GET", "/v1/apipi/sessions/{id}/export", None),
+        ("GET", "/v1/agents/sessions/{id}/artifacts", None),
+        ("GET", "/v1/agents/sessions/{id}/artifacts/{id}/content", None),
+        ("DELETE", "/v1/agents/sessions/{id}/artifacts/{id}", None),
+        ("POST", "/v1/agents/sessions/{id}/events", _CANCEL),
+        ("POST", "/v1/agents/sessions/{id}/events", _TOOL_RESULT),
+    ],
+    ids=[
+        "turns",
+        "items",
+        "export",
+        "artifacts",
+        "artifact_content",
+        "artifact_delete",
+        "cancel",
+        "tool_result",
+    ],
+)
+async def test_unknown_session_is_404(
+    client: AsyncClient, method: str, path: str, body: dict[str, Any] | None
+) -> None:
+    missing = await client.request(
+        method,
+        path.format(id=uuid.uuid4()),
+        headers=_auth("compat-missing"),
+        json=body,
     )
-    assert agent.status_code == 404
-    assert session.status_code == 404
-    assert events.status_code == 404
-    assert _error(agent)["code"] == "not_found"
-    assert _error(session)["code"] == "not_found"
-    assert _error(events)["code"] == "not_found"
+    assert missing.status_code == 404
+    assert _error(missing)["code"] == "not_found"
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/v1/agents", {"name": "one"}),
+        (
+            "/v1/agents/sessions",
+            {
+                "agent": {"name": "bot", "model": "test"},
+                "environment": {"type": "none"},
+            },
+        ),
+        ("/v1/agents/sessions/{session_id}/events", _CANCEL),
+        ("/v1/agents/sessions/{session_id}/events", _TOOL_RESULT),
+    ],
+    ids=["agent", "session", "cancel", "tool_result"],
+)
+async def test_unknown_field_is_rejected(
+    client: AsyncClient, path: str, body: dict[str, Any]
+) -> None:
+    token = "compat-unknown-field"
+    agent_id = await _agent(client, token)
+    created = await _session(
+        client, token, agent_id=agent_id, environment={"type": "none"}
+    )
+    response = await client.post(
+        path.format(session_id=created["id"]),
+        headers=_auth(token),
+        json={**body, "foo": 1},
+    )
+    assert response.status_code == 400
+    error = _error(response)
+    assert error["type"] == "invalid_request"
+    assert error["code"] == "unknown_field"
+    agents = await client.get("/v1/agents", headers=_auth(token))
+    assert [row["id"] for row in agents.json()["data"]] == [agent_id]
+    sessions = await client.get("/v1/agents/sessions", headers=_auth(token))
+    assert [row["id"] for row in sessions.json()["data"]] == [created["id"]]
 
 
 def _nested_message(text: str) -> dict[str, Any]:

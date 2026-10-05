@@ -4,7 +4,6 @@ from collections.abc import AsyncIterator
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from pydantic import ValidationError
 
 from apipi.common.errors import ApiError
 from apipi.gateway.errors import register_exception_handlers
@@ -85,8 +84,3 @@ async def test_unexpected_is_internal(
     ]
     assert errors
     assert errors[-1].__dict__["error_code"] == "internal"
-
-
-def test_strict_model_rejects_extra() -> None:
-    with pytest.raises(ValidationError):
-        Probe.model_validate({"name": "a", "nope": 1})

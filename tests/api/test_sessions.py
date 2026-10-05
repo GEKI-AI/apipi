@@ -9,14 +9,12 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
-from tests.support.workspace import hosted_dir
 
 from apipi.api.sessions import _event_stream
 from apipi.common.errors import ApiError
 from apipi.common.event_bus import EventHub
 from apipi.config import Settings
 from apipi.gateway.tokens import hash_token
-from apipi.protocol import PUBLIC_EVENT_TYPES
 from apipi.services.session_events import persist_event
 from apipi.store.engine import Store
 from apipi.store.events import list_events
@@ -218,90 +216,6 @@ async def test_unknown_environment_type(client: AsyncClient) -> None:
     assert response.json()["error"]["code"] == "foo"
 
 
-async def test_hosted_alias_is_openai_hosted(
-    client: AsyncClient, settings: Settings
-) -> None:
-    token = _token()
-    agent_id = await _create_agent(client, token)
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={"agent_id": agent_id, "environment": {"type": "hosted"}},
-    )
-    assert created.status_code == 200
-    env = created.json()["environment"]
-    assert env["type"] == "openai_hosted"
-    assert hosted_dir(settings, token, created.json()["id"]).is_dir()
-    got = await client.get(
-        f"/v1/agents/sessions/{created.json()['id']}", headers=_auth(token)
-    )
-    assert got.json()["environment"]["type"] == "openai_hosted"
-
-
-async def test_default_environment_is_openai_hosted(
-    client: AsyncClient, settings: Settings
-) -> None:
-    token = _token()
-    agent_id = await _create_agent(client, token)
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={"agent_id": agent_id},
-    )
-    assert created.status_code == 200
-    env = created.json()["environment"]
-    assert env["type"] == "openai_hosted"
-    assert hosted_dir(settings, token, created.json()["id"]).is_dir()
-
-
-async def test_fake_harness_determined_events(client: AsyncClient) -> None:
-    token = _token()
-    agent_id = await _create_agent(client, token)
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent_id,
-            "environment": {"type": "none"},
-            "input": "hello",
-        },
-    )
-    assert created.status_code == 200
-    session_id = created.json()["id"]
-    events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
-    )
-    assert events.status_code == 200
-    types = [event["type"] for event in events.json()["data"]]
-    assert types[0] == "agent.session.created"
-    assert types[-1] == "agent.session.idle"
-    assert set(types) <= PUBLIC_EVENT_TYPES
-    assert "agent.session.turn.output_text.delta" not in types
-    done = [
-        event
-        for event in events.json()["data"]
-        if event["type"] == "agent.session.turn.output_text.done"
-    ]
-    assert done[0]["data"]["text"] == "hello"
-
-    posted = await client.post(
-        f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth(token),
-        json={"type": "agent.session.input.message", "content": "again"},
-    )
-    assert posted.status_code == 200
-    assert posted.json()["status"] == "idle"
-    events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
-    )
-    texts = [
-        event["data"]["text"]
-        for event in events.json()["data"]
-        if event["type"] == "agent.session.turn.output_text.done"
-    ]
-    assert texts == ["hello", "again"]
-
-
 async def test_sse_replays_persisted_events(store: Store, client: AsyncClient) -> None:
     token = _token()
     agent_id = await _create_agent(client, token)
@@ -470,100 +384,6 @@ async def test_thinking_events_are_stored_and_replayed(store: Store) -> None:
     assert isinstance(data, dict)
     assert data.get("preview") == "plan"
     assert "full secret thinking" not in json.dumps(streamed)
-
-
-async def test_turn_publishes_live_delta(
-    settings: Settings, store: Store, worker_secret: str
-) -> None:
-    from tests.support.split_worker import split_client_for
-
-    from apipi.common.usage import usage_from as _usage_from
-    from apipi.worker.fake_harness import FakeHarness as _FakeHarness
-
-    class _StreamingHarness(_FakeHarness):
-        """Yield the reply in spaced chunks so live deltas beat `done`.
-
-        In split mode the API drops a delta that arrives after the
-        turn committed its final text; a single-delta turn always loses
-        that race (relay flush vs outbox pump), so live-delta coverage
-        needs spaced chunks like a real streaming model.
-        """
-
-        async def generate(self, text: str, **kwargs: object):  # type: ignore[override]
-            reply = self.complete(text)
-            yield ("agent.session.turn.output_text.delta", {"delta": reply[:2]})
-            await asyncio.sleep(0.05)
-            yield ("agent.session.turn.output_text.delta", {"delta": reply[2:]})
-            yield ("agent.session.turn.output_text.done", {"text": reply})
-            yield ("usage", _usage_from(self.usage))
-
-    async with split_client_for(
-        settings, store, harness=_StreamingHarness(), token=worker_secret
-    ) as (app, client, _worker):
-        hub: EventHub = app.state.event_hub
-        token = _token()
-        agent_id = await _create_agent(client, token)
-        created = await client.post(
-            "/v1/agents/sessions",
-            headers=_auth(token),
-            json={"agent_id": agent_id, "environment": {"type": "none"}},
-        )
-        session_id = uuid.UUID(created.json()["id"])
-        queue = hub.subscribe(session_id)
-        posted = await client.post(
-            f"/v1/agents/sessions/{session_id}/events",
-            headers=_auth(token),
-            json={"type": "agent.session.input.message", "content": "hello"},
-        )
-        assert posted.status_code == 200
-    live_types = []
-    while not queue.empty():
-        live_types.append(queue.get_nowait()["type"])
-    assert "agent.session.turn.output_text.delta" in live_types
-    async with store.session() as db:
-        row = await db.scalar(select(SessionRow).where(SessionRow.id == session_id))
-        assert row is not None
-        stored = await list_events(db, row.tenant_id, session_id)
-    assert "agent.session.turn.output_text.delta" not in [
-        event.type for event in stored
-    ]
-    assert "agent.session.turn.output_text.done" in [event.type for event in stored]
-
-
-async def test_cross_tenant_session_is_404(client: AsyncClient) -> None:
-    token_a = _token("a")
-    token_b = _token("b")
-    agent_id = await _create_agent(client, token_a)
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token_a),
-        json={"agent_id": agent_id, "environment": {"type": "none"}},
-    )
-    session_id = created.json()["id"]
-    listed = await client.get("/v1/agents/sessions", headers=_auth(token_b))
-    assert listed.json() == {"data": []}
-    got = await client.get(f"/v1/agents/sessions/{session_id}", headers=_auth(token_b))
-    assert got.status_code == 404
-    events = await client.get(
-        f"/v1/agents/sessions/{session_id}/events", headers=_auth(token_b)
-    )
-    assert events.status_code == 404
-
-
-async def test_unknown_session_field(client: AsyncClient) -> None:
-    token = _token()
-    agent_id = await _create_agent(client, token)
-    response = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={
-            "agent_id": agent_id,
-            "environment": {"type": "none"},
-            "foo": 1,
-        },
-    )
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "unknown_field"
 
 
 async def test_failed_turn_logs_event_and_code(
@@ -770,7 +590,7 @@ async def test_follow_up_on_live_lease_without_running_turn_is_bounded(
     """
     from tests.support.split_worker import split_client_for
 
-    from apipi.worker import execution as execution_module
+    from apipi.workerhub import execution as execution_module
 
     monkeypatch.setattr(execution_module, "CANCEL_GRACE", timedelta(seconds=0.3))
     async with split_client_for(settings, store, token=worker_secret) as (

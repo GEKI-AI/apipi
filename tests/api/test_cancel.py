@@ -117,17 +117,6 @@ async def test_cancel_in_progress_turn(
     assert "go" not in str(row.tool_names) + str(row.mcp_names) + str(row.model)
 
 
-async def test_cancel_wrong_tenant_is_404(cancel_client: AsyncClient) -> None:
-    session_id = await _create_idle_session(cancel_client, "a")
-    other = await cancel_client.post(
-        f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth("b"),
-        json={"type": "agent.session.input.cancel"},
-    )
-    assert other.status_code == 404
-    assert other.json()["error"]["code"] == "not_found"
-
-
 async def test_cancel_idle_is_invalid(cancel_client: AsyncClient) -> None:
     session_id = await _create_idle_session(cancel_client, "c")
     response = await cancel_client.post(
@@ -137,26 +126,6 @@ async def test_cancel_idle_is_invalid(cancel_client: AsyncClient) -> None:
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_request"
-
-
-async def test_cancel_missing_session_is_404(cancel_client: AsyncClient) -> None:
-    response = await cancel_client.post(
-        f"/v1/agents/sessions/{uuid.uuid4()}/events",
-        headers=_auth("c"),
-        json={"type": "agent.session.input.cancel"},
-    )
-    assert response.status_code == 404
-
-
-async def test_cancel_unknown_field(cancel_client: AsyncClient) -> None:
-    session_id = await _create_idle_session(cancel_client, "c")
-    response = await cancel_client.post(
-        f"/v1/agents/sessions/{session_id}/events",
-        headers=_auth("c"),
-        json={"type": "agent.session.input.cancel", "foo": 1},
-    )
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "unknown_field"
 
 
 async def test_message_cancels_live_in_progress(

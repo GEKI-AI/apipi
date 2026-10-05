@@ -1,5 +1,3 @@
-import uuid
-
 from httpx import AsyncClient
 
 from apipi.protocol import PUBLIC_EVENT_TYPES
@@ -68,22 +66,3 @@ async def test_export_after_a_turn(client: AsyncClient) -> None:
     assert body["events"] == events.json()["data"]
     assert body["turns"] == turns.json()["data"]
     assert body["items"] == items.json()["data"]
-
-
-async def test_export_unknown_session_is_404(client: AsyncClient) -> None:
-    token = _token()
-    missing = await client.get(
-        f"/v1/agents/sessions/{uuid.uuid4()}/export", headers=_auth(token)
-    )
-    assert missing.status_code == 404
-
-
-async def test_export_cross_tenant_is_404(client: AsyncClient) -> None:
-    token_a = _token("a")
-    token_b = _token("b")
-    session_id = await _session_with_turn(client, token_a)
-    other = await client.get(
-        f"/v1/apipi/sessions/{session_id}/export", headers=_auth(token_b)
-    )
-    assert other.status_code == 404
-    assert other.json()["error"]["code"] == "not_found"
