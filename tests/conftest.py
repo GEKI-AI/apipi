@@ -45,6 +45,8 @@ def _sqlite_engine(path: Path | None = None) -> AsyncEngine:
 def pytest_exception_interact(node: pytest.Item | pytest.Collector) -> None:
     if not isinstance(node, pytest.Item) or node.config.getvalue("usepdb"):
         return
+    if not node.config.pluginmanager.hasplugin("timeout"):
+        return
     settings = pytest_timeout._get_item_settings(node)
     if settings.timeout and not settings.func_only:
         node.config.pluginmanager.hook.pytest_timeout_set_timer(

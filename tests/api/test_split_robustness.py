@@ -551,16 +551,22 @@ async def _closed_on_cancel(entered: asyncio.Event) -> None:
         raise ValueError("Connection closed") from None
 
 
+@pytest.mark.parametrize("swallowed", [False, True])
 async def test_a_cancel_ends_the_socket_when_a_handler_turns_it_into_an_error(
     settings: Settings,
     store: Store,
     worker_secret: str,
     monkeypatch: pytest.MonkeyPatch,
+    swallowed: bool,
 ) -> None:
     entered = asyncio.Event()
 
     async def heartbeat(*_args: Any, **_kwargs: Any) -> bool:
-        await _closed_on_cancel(entered)
+        try:
+            await _closed_on_cancel(entered)
+        except ValueError:
+            if not swallowed:
+                raise
         return True
 
     monkeypatch.setattr(serve_module, "heartbeat_worker", heartbeat)

@@ -94,7 +94,9 @@ async def test_something_slow() -> None:
 A module sets it for all of its tests with
 `pytestmark = [pytest.mark.timeout(900)]`. For one run, pass
 `--timeout=600` to `uv run pytest`, or `--timeout=0` to turn the limit
-off, for example while you debug one test.
+off, for example while you debug one test. `-p no:timeout` turns off
+pytest-timeout completely; the restart after a failure is then skipped
+too.
 
 These tests have their own limit:
 

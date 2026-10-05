@@ -100,6 +100,11 @@ def _classify(
         return "garbage", None, 0
 
 
+def _stop_if_cancelled() -> None:
+    if cancelling():
+        raise asyncio.CancelledError
+
+
 def _uuid(value: object) -> uuid.UUID | None:
     if not isinstance(value, str) or not value:
         return None
@@ -467,6 +472,7 @@ class ConnectionServer:
 
     async def _run_control(self) -> None:
         while True:
+            _stop_if_cancelled()
             item = await self._control.get()
             await self._run_item(
                 item, lambda item=item: self._handle(item.parsed, item.turns, item)
@@ -611,6 +617,7 @@ class ConnectionServer:
 
     async def _run_deltas(self) -> None:
         while True:
+            _stop_if_cancelled()
             envelope = await self._deltas.get()
             await self._guarded(
                 envelope.type,
@@ -623,6 +630,7 @@ class ConnectionServer:
         batcher = IngestBatcher(max_messages=self.settings.worker_ingest_batch_size)
         window = self.settings.worker_ingest_batch_window.total_seconds()
         while True:
+            _stop_if_cancelled()
             timeout = batcher.poll_timeout(window)
             item: _Envelope | _Control | None = None
             try:

@@ -7,6 +7,7 @@ from datetime import timedelta
 from typing import Any
 
 from httpx import AsyncClient
+from sqlalchemy import select
 from tests.support.split_worker import split_client_for
 
 from apipi.common.objects import NS_FILES
@@ -21,7 +22,7 @@ from apipi.gateway.auth import (
 from apipi.gateway.tokens import hash_token
 from apipi.store.blobs import file_object_id
 from apipi.store.engine import Store
-from apipi.store.models import utc_now
+from apipi.store.models import FileRow, utc_now
 from apipi.store.repo import get_file
 from apipi.worker.fake_harness import FakeHarness
 
@@ -281,6 +282,16 @@ async def _send(
     return [part["file_id"] for part in content if part["type"] == "input_image"]
 
 
+async def _created_order(store: Store, ids: list[str]) -> list[str]:
+    async with store.session() as db:
+        rows = (
+            await db.execute(
+                select(FileRow.id, FileRow.created_at).where(FileRow.id.in_(ids))
+            )
+        ).all()
+    return [row.id for row in sorted(rows, key=lambda row: (row.created_at, row.id))]
+
+
 def _ids(response: Any) -> list[str]:
     assert response.status_code == 200, response.json()
     return [row["id"] for row in response.json()["data"]]
@@ -422,6 +433,7 @@ async def test_file_lists_paginate(
     async with _vision_client(settings, store, worker_secret) as (_app, client):
         headers = _as("pages")
         uploaded = [await _upload(client, headers, f"f{n}.csv") for n in range(5)]
+        created = await _created_order(store, uploaded)
         foreign = await _upload(client, _as("pages-other"), "x.csv")
         full = _ids(await client.get("/v1/files", headers=headers))
         pages: list[dict[str, Any]] = []
@@ -475,13 +487,13 @@ async def test_file_lists_paginate(
         session_unknown = await client.get(
             path, headers=headers, params={"after": uploaded[0]}
         )
-    assert full == list(reversed(uploaded))
+    assert full == list(reversed(created))
     assert [len(page["data"]) for page in pages] == [2, 2, 1]
     assert [page["has_more"] for page in pages] == [True, True, False]
     assert [row["id"] for page in pages for row in page["data"]] == full
     assert pages[0]["first_id"] == full[0]
     assert pages[0]["last_id"] == full[1]
-    assert ascending == uploaded[:3]
+    assert ascending == created[:3]
     assert _ids(apipi_page) == full[2:4]
     assert apipi_page.json()["has_more"] is True
     assert unknown.status_code == 400
