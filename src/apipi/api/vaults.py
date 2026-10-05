@@ -36,9 +36,9 @@ async def list_saved_vaults(
     )
     payload = await _vaults(request).list(tenant.id)
     if filt is not None and filt.ids is not None:
-        items = payload.get("vaults", [])
+        items = payload.get("data", [])
         payload = dict(payload)
-        payload["vaults"] = [v for v in items if str(v.get("id")) in filt.ids]
+        payload["data"] = [v for v in items if str(v.get("id")) in filt.ids]
     return payload
 
 
