@@ -52,6 +52,7 @@ def _serve(status: int) -> Iterator[tuple[str, dict[str, str]]]:
     yield f"http://127.0.0.1:{port}/mcp", seen
     server.shutdown()
     thread.join(timeout=2)
+    server.server_close()
 
 
 @pytest.fixture
