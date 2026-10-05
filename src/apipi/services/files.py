@@ -22,7 +22,7 @@ from apipi.gateway.content import (
     image_mimes,
 )
 from apipi.gateway.errors import not_implemented
-from apipi.store.blobs import ObjectStore, file_object_id
+from apipi.store.blobs import ObjectStore, file_object_id, get_sized
 from apipi.store.engine import Store
 from apipi.store.models import FileRow, SessionFileRow, utc_now
 from apipi.store.repo import (
@@ -439,7 +439,7 @@ class FileService:
                     status_code=413,
                 )
             if model_input == "text" and row.id not in checked:
-                await self._require_utf8(tenant_id, row.id, name)
+                await self._require_utf8(tenant_id, row, name)
                 checked.add(row.id)
             out.append(
                 InputFile(
@@ -518,12 +518,19 @@ class FileService:
         made.created.clear()
         made.placed.clear()
 
-    async def _require_utf8(
-        self, tenant_id: uuid.UUID, file_id: str, name: str
-    ) -> None:
-        data = await self.objects.get(NS_FILES, file_object_id(tenant_id, file_id))
+    async def _read(self, tenant_id: uuid.UUID, row: FileRow) -> bytes:
+        """The stored bytes of a file, read no further than its size."""
+        data = await get_sized(
+            self.objects, NS_FILES, file_object_id(tenant_id, row.id), row.size
+        )
         if data is None:
             not_found()
+        return data
+
+    async def _require_utf8(
+        self, tenant_id: uuid.UUID, row: FileRow, name: str
+    ) -> None:
+        data = await self._read(tenant_id, row)
         try:
             data.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -732,10 +739,7 @@ class FileService:
             row = await get_file(db, tenant_id, file_id, user_id=user_id)
         if row is None:
             not_found()
-        data = await self.objects.get(NS_FILES, file_object_id(tenant_id, file_id))
-        if data is None:
-            not_found()
-        return data, row.content_type, row.filename
+        return await self._read(tenant_id, row), row.content_type, row.filename
 
     async def delete(
         self, tenant_id: uuid.UUID, file_id: str, *, user_id: str | None = None
@@ -767,10 +771,5 @@ class FileService:
                 row = await get_file(db, tenant_id, file_id, user_id=user_id)
                 if row is None:
                     not_found()
-                data = await self.objects.get(
-                    NS_FILES, file_object_id(tenant_id, file_id)
-                )
-                if data is None:
-                    not_found()
-                files.append((path, data))
+                files.append((path, await self._read(tenant_id, row)))
         return files

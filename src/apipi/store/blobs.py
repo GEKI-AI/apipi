@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import hashlib
 import logging
 import os
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any, NoReturn, Protocol
 
 from apipi.common.dirs import blob_user, store_root
-from apipi.common.errors import ObjectStoreError
+from apipi.common.errors import ObjectStoreError, store_error
 from apipi.common.logutil import log_event
 from apipi.common.objects import (
     NS_ARTIFACTS,
@@ -49,6 +50,17 @@ def skill_object_id(tenant_id: uuid.UUID, skill_id: str) -> str:
 
 def template_object_id(tenant_id: uuid.UUID, template_id: str) -> str:
     return f"{tenant_id}/{check_object_id(template_id)}"
+
+
+def upload_object_id(tenant_id: uuid.UUID, upload_id: uuid.UUID) -> str:
+    return f"{tenant_id}/{upload_id}"
+
+
+@dataclasses.dataclass(frozen=True)
+class ObjectHead:
+    size: int
+    content_type: str | None
+    etag: str | None
 
 
 def s3_namespace_prefix(settings: Settings, namespace: Namespace) -> str:
@@ -160,6 +172,10 @@ class ObjectStore(Protocol):
 
     async def get(self, namespace: Namespace, object_id: str) -> bytes | None: ...
 
+    async def get_limited(
+        self, namespace: Namespace, object_id: str, limit: int
+    ) -> bytes | None: ...
+
     async def delete(self, namespace: Namespace, object_id: str) -> None: ...
 
     async def delete_prefix(self, namespace: Namespace, prefix: str) -> None: ...
@@ -210,6 +226,39 @@ def _read_file(path: Path) -> bytes | None:
     return path.read_bytes()
 
 
+def _read_file_limited(path: Path, limit: int) -> bytes | None:
+    if not path.is_file():
+        return None
+    with path.open("rb") as handle:
+        return handle.read(limit)
+
+
+async def get_sized(
+    store: ObjectStore, namespace: Namespace, object_id: str, size: int
+) -> bytes | None:
+    """The bytes of an object whose stored size is `size`, or None when missing.
+
+    Reads at most `size + 1` bytes. An object of another size raises
+    `ObjectStoreError`, so a larger object is never read in full.
+    """
+    data = await store.get_limited(namespace, object_id, size + 1)
+    if data is None or len(data) == size:
+        return data
+    log_event(
+        log,
+        logging.ERROR,
+        "stored object size does not match",
+        event="store.object.size_mismatch",
+        namespace=namespace,
+        key=object_id,
+        expected=size,
+        larger=len(data) > size,
+    )
+    raise store_error(
+        f"stored object is not {size} bytes", operation="get", key=object_id
+    )
+
+
 def _remove_path(path: Path) -> None:
     if path.is_dir():
         shutil.rmtree(path)
@@ -254,6 +303,12 @@ class LocalStore:
     async def get(self, namespace: Namespace, object_id: str) -> bytes | None:
         path = self._path(namespace, object_id)
         return await asyncio.to_thread(_read_file, path)
+
+    async def get_limited(
+        self, namespace: Namespace, object_id: str, limit: int
+    ) -> bytes | None:
+        path = self._path(namespace, object_id)
+        return await asyncio.to_thread(_read_file_limited, path, limit)
 
     async def digest(
         self, namespace: Namespace, object_id: str
@@ -300,6 +355,12 @@ class MemoryStore:
 
     async def get(self, namespace: Namespace, object_id: str) -> bytes | None:
         return self.objects.get(self._key(namespace, object_id))
+
+    async def get_limited(
+        self, namespace: Namespace, object_id: str, limit: int
+    ) -> bytes | None:
+        data = self.objects.get(self._key(namespace, object_id))
+        return None if data is None else data[:limit]
 
     async def digest(
         self, namespace: Namespace, object_id: str
@@ -360,6 +421,40 @@ class S3Store:
     async def get(self, namespace: Namespace, object_id: str) -> bytes | None:
         return await self.get_raw(self._bucket, self._key(namespace, object_id))
 
+    async def get_limited(
+        self, namespace: Namespace, object_id: str, limit: int
+    ) -> bytes | None:
+        """The first `limit` bytes of an object: a ranged GET, read with a cap."""
+        key = self._key(namespace, object_id)
+        if limit < 1:
+            return None if await self.head(namespace, object_id) is None else b""
+        try:
+            response = await asyncio.to_thread(
+                self._client.get_object,
+                Bucket=self._bucket,
+                Key=key,
+                Range=f"bytes=0-{limit - 1}",
+            )
+        except Exception as exc:
+            if _s3_missing(exc):
+                return None
+            if _s3_error_code(exc) == "InvalidRange":
+                return b""
+            self._fail(exc, operation="get", key=key)
+        body = response.get("Body")
+        read = getattr(body, "read", None)
+        if read is None:
+            return None
+        try:
+            data = await asyncio.to_thread(read, limit)
+        except Exception as exc:
+            self._fail(exc, operation="get", key=key)
+        finally:
+            close = getattr(body, "close", None)
+            if close is not None:
+                close()
+        return data if isinstance(data, bytes) else None
+
     async def get_raw(self, bucket: str, key: str) -> bytes | None:
         try:
             response = await asyncio.to_thread(
@@ -402,9 +497,7 @@ class S3Store:
         except Exception as exc:
             self._fail(exc, operation="get", key=key)
 
-    async def head(
-        self, namespace: Namespace, object_id: str
-    ) -> tuple[int, str | None] | None:
+    async def head(self, namespace: Namespace, object_id: str) -> ObjectHead | None:
         key = self._key(namespace, object_id)
         try:
             response = await asyncio.to_thread(
@@ -416,10 +509,43 @@ class S3Store:
             self._fail(exc, operation="head", key=key)
         size = response.get("ContentLength")
         content_type = response.get("ContentType")
+        etag = response.get("ETag")
         if not isinstance(size, int):
             return None
-        ctype = content_type if isinstance(content_type, str) else None
-        return size, ctype
+        return ObjectHead(
+            size=size,
+            content_type=content_type if isinstance(content_type, str) else None,
+            etag=etag if isinstance(etag, str) and etag else None,
+        )
+
+    async def copy(
+        self,
+        source_namespace: Namespace,
+        source_id: str,
+        namespace: Namespace,
+        object_id: str,
+        *,
+        etag: str | None = None,
+    ) -> None:
+        """Copy one object to another key inside the bucket (`CopyObject`).
+
+        With `etag`, the copy fails when the source changed since it was read.
+        """
+        key = self._key(namespace, object_id)
+        kwargs: dict[str, object] = {
+            "Bucket": self._bucket,
+            "Key": key,
+            "CopySource": {
+                "Bucket": self._bucket,
+                "Key": self._key(source_namespace, source_id),
+            },
+        }
+        if etag:
+            kwargs["CopySourceIfMatch"] = etag
+        try:
+            await asyncio.to_thread(self._client.copy_object, **kwargs)
+        except Exception as exc:
+            self._fail(exc, operation="copy", key=key)
 
     def presign(
         self,
@@ -430,8 +556,9 @@ class S3Store:
         expires: timedelta,
         content_type: str | None = None,
         filename: str | None = None,
+        size: int | None = None,
     ) -> tuple[str, dict[str, str]]:
-        params: dict[str, str] = {
+        params: dict[str, str | int] = {
             "Bucket": self._bucket,
             "Key": self._key(namespace, object_id),
         }
@@ -442,6 +569,8 @@ class S3Store:
             if content_type:
                 params["ContentType"] = content_type
                 headers["Content-Type"] = content_type
+            if size is not None:
+                params["ContentLength"] = size
         else:
             params["ResponseContentDisposition"] = content_disposition(
                 filename or "download"
@@ -457,7 +586,7 @@ class S3Store:
                 HttpMethod=method,
             )
         except Exception as exc:
-            self._fail(exc, operation="presign", key=params["Key"])
+            self._fail(exc, operation="presign", key=str(params["Key"]))
         if not isinstance(url, str) or not url:
             raise ConfigError("S3 presign returned no URL")
         return url, headers

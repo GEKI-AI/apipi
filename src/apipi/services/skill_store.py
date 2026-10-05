@@ -8,7 +8,7 @@ from apipi.common.skills import inspect_skill_zip, unpack_skill_zip
 from apipi.config import Settings
 from apipi.env.setup import SetupError, skill_refs_from
 from apipi.gateway.auth import not_found
-from apipi.store.blobs import ObjectStore, skill_object_id
+from apipi.store.blobs import ObjectStore, get_sized, skill_object_id
 from apipi.store.engine import Store
 from apipi.store.models import SkillRow
 from apipi.store.repo import create_skill, delete_skill, get_skill, list_skills
@@ -110,8 +110,11 @@ class SkillService:
                 row = await get_skill(db, tenant_id, skill_id)
                 if row is None:
                     not_found()
-                data = await self.objects.get(
-                    NS_SKILLS, skill_object_id(tenant_id, skill_id)
+                data = await get_sized(
+                    self.objects,
+                    NS_SKILLS,
+                    skill_object_id(tenant_id, skill_id),
+                    row.size,
                 )
                 if data is None:
                     not_found()

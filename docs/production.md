@@ -41,6 +41,9 @@ bytes add up to `APIPI_MAX_ARTIFACT_BYTES` (default 512 MiB) per
 session under the shared `APIPI_LOCAL_STORE_DIR` unless you set `APIPI_ARTIFACT_STORE=s3`.
 Production should use `s3`: the API issues presigned PUT and GET URLs,
 the worker uploads and downloads directly, and store credentials exist only on the API.
+The API credentials need `CopyObject`, and the bucket needs a lifecycle
+rule that expires the upload prefix after one day (see
+[configuration](config.md#gateway)).
 
 Keeping the store off the worker host leaves more RAM for guests when
 you use Postgres. Run one `apipi worker` per sandbox host; extra uvicorn workers leave the

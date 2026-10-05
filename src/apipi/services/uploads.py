@@ -1,9 +1,12 @@
+import contextlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from apipi.common.errors import ApiError
-from apipi.common.objects import NS_FILES, NS_SKILLS
+from apipi.common.objects import NS_FILES, NS_SKILLS, NS_UPLOADS
 from apipi.common.skills import inspect_skill_zip
 from apipi.config import Settings
 from apipi.env.setup import SetupError
@@ -15,9 +18,15 @@ from apipi.services.files import (
     new_file_id,
 )
 from apipi.services.skill_store import new_skill_id, skill_body
-from apipi.store.blobs import S3Store, file_object_id, skill_object_id
+from apipi.store.blobs import (
+    S3Store,
+    file_object_id,
+    get_sized,
+    skill_object_id,
+    upload_object_id,
+)
 from apipi.store.engine import Store
-from apipi.store.models import utc_now
+from apipi.store.models import UploadRow, utc_now
 from apipi.store.repo import (
     create_file,
     create_skill,
@@ -75,24 +84,21 @@ class UploadService:
         ctype = (content_type or "").strip() or "application/octet-stream"
         name = filename.strip() or "upload"
         object_id = new_file_id() if is_file else new_skill_id()
-        namespace = NS_FILES if is_file else NS_SKILLS
-        key = (
-            file_object_id(tenant_id, object_id)
-            if is_file
-            else skill_object_id(tenant_id, object_id)
-        )
+        upload_id = uuid.uuid4()
         expires = utc_now() + self.settings.presign_ttl
         url, headers = s3.presign(
             "PUT",
-            namespace,
-            key,
+            NS_UPLOADS,
+            upload_object_id(tenant_id, upload_id),
             expires=self.settings.presign_ttl,
             content_type=ctype,
+            size=size,
         )
         async with self.store.session() as db:
-            row = await create_upload(
+            await create_upload(
                 db,
                 tenant_id,
+                upload_id=upload_id,
                 purpose=kind,
                 object_id=object_id,
                 filename=name,
@@ -101,7 +107,6 @@ class UploadService:
                 expires_at=expires,
                 user_id=user_id,
             )
-            upload_id = row.id
         return {
             "upload_id": str(upload_id),
             "object_id": object_id,
@@ -145,71 +150,92 @@ class UploadService:
                     "Upload URL expired",
                     code="upload_expired",
                 )
-            namespace = NS_FILES if is_file else NS_SKILLS
-            key = (
-                file_object_id(tenant_id, row.object_id)
-                if is_file
-                else skill_object_id(tenant_id, row.object_id)
+            body = await self._finish(db, s3, tenant_id, row, purpose)
+        with contextlib.suppress(Exception):
+            await s3.delete(NS_UPLOADS, upload_object_id(tenant_id, upload_id))
+        return body
+
+    async def _finish(
+        self,
+        db: AsyncSession,
+        s3: S3Store,
+        tenant_id: uuid.UUID,
+        row: UploadRow,
+        purpose: str,
+    ) -> dict[str, Any]:
+        """Check the uploaded object, copy it to its final key, and store the row.
+
+        The final key never has a PUT URL, so the bytes of the file or
+        skill cannot change after complete.
+        """
+        is_file = row.purpose != "skill"
+        upload_key = upload_object_id(tenant_id, row.id)
+        meta = await s3.head(NS_UPLOADS, upload_key)
+        if meta is None:
+            raise ApiError(
+                "invalid_request",
+                "Object is missing; PUT the presigned URL first",
+                code="upload_incomplete",
             )
-            meta = await s3.head(namespace, key)
-            if meta is None:
-                raise ApiError(
-                    "invalid_request",
-                    "Object is missing; PUT the presigned URL first",
-                    code="upload_incomplete",
-                )
-            size, _ctype = meta
-            if size > int(self.settings.max_file_bytes):
-                await s3.delete(namespace, key)
-                raise ApiError(
-                    "invalid_request",
-                    "File too large",
-                    code="payload_too_large",
-                    status_code=413,
-                )
-            if row.purpose == "image":
-                try:
-                    check_image(self.settings, row.content_type, size)
-                except ApiError:
-                    await s3.delete(namespace, key)
-                    raise
-            if is_file:
-                created = await create_file(
-                    db,
-                    tenant_id,
-                    file_id=row.object_id,
-                    filename=row.filename,
-                    purpose=purpose,
-                    size=size,
-                    content_type=row.content_type,
-                    kind=row.purpose,
-                    user_id=row.user_id,
-                )
-                row.status = "complete"
-                return file_body(created)
-            data = await s3.get(namespace, key)
-            if data is None:
-                raise ApiError(
-                    "invalid_request",
-                    "Object is missing; PUT the presigned URL first",
-                    code="upload_incomplete",
-                )
+        if meta.size > min(int(self.settings.max_file_bytes), row.declared_bytes):
+            await s3.delete(NS_UPLOADS, upload_key)
+            raise ApiError(
+                "invalid_request",
+                "File too large",
+                code="payload_too_large",
+                status_code=413,
+            )
+        if row.purpose == "image":
             try:
-                name = inspect_skill_zip(data)
-            except SetupError as exc:
-                await s3.delete(namespace, key)
-                raise ApiError(
-                    "invalid_request", exc.message, code="invalid_request"
-                ) from exc
-            created_skill = await create_skill(
+                check_image(self.settings, row.content_type, meta.size)
+            except ApiError:
+                await s3.delete(NS_UPLOADS, upload_key)
+                raise
+        namespace = NS_FILES if is_file else NS_SKILLS
+        key = (
+            file_object_id(tenant_id, row.object_id)
+            if is_file
+            else skill_object_id(tenant_id, row.object_id)
+        )
+        await s3.copy(NS_UPLOADS, upload_key, namespace, key, etag=meta.etag)
+        if is_file:
+            created = await create_file(
                 db,
                 tenant_id,
-                skill_id=row.object_id,
-                name=name,
-                size=size,
+                file_id=row.object_id,
+                filename=row.filename,
+                purpose=purpose,
+                size=meta.size,
+                content_type=row.content_type,
+                kind=row.purpose,
+                user_id=row.user_id,
             )
             row.status = "complete"
-            return skill_body(created_skill)
+            return file_body(created)
+        data = await get_sized(s3, namespace, key, meta.size)
+        if data is None:
+            raise ApiError(
+                "invalid_request",
+                "Object is missing; PUT the presigned URL first",
+                code="upload_incomplete",
+            )
+        try:
+            name = inspect_skill_zip(data)
+        except SetupError as exc:
+            await s3.delete(namespace, key)
+            await s3.delete(NS_UPLOADS, upload_key)
+            raise ApiError(
+                "invalid_request", exc.message, code="invalid_request"
+            ) from exc
+        created_skill = await create_skill(
+            db,
+            tenant_id,
+            skill_id=row.object_id,
+            name=name,
+            size=meta.size,
+        )
+        row.status = "complete"
+        return skill_body(created_skill)
 
     def download(
         self,

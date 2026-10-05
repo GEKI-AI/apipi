@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from apipi.common.dirs import store_root
-from apipi.common.errors import store_error
+from apipi.common.errors import ObjectStoreError, store_error
 from apipi.config import Settings
 from apipi.env.setup import workspace_file_missing
 from apipi.protocol.context import ContextEnvCredential, redact_url
@@ -26,40 +26,73 @@ def local_ref_path(settings: Settings, local_path: str) -> Path:
     return candidate
 
 
-async def fetch_ref_bytes(ref: Mapping[str, Any], settings: Settings) -> bytes:
-    """Fetch one context file/skill/blob reference without DB access."""
+async def fetch_ref_bytes(
+    ref: Mapping[str, Any], settings: Settings, *, limit: int | None = None
+) -> bytes:
+    """Fetch one context file/skill/blob reference without DB access.
+
+    The read stops after `limit` bytes, or after the `size_bytes` of the
+    reference when `limit` is None, and a larger object fails.
+    """
+    if limit is None:
+        size = ref.get("size_bytes")
+        limit = size if isinstance(size, int) else None
     url = ref.get("url")
     if isinstance(url, str) and url:
-        import httpx
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url)
-        except Exception as exc:
-            raise store_error(
-                f"cannot fetch turn context ref: {type(exc).__name__}",
-                operation="get",
-                key=redact_url(url),
-            ) from exc
-        if response.status_code != 200:
-            raise store_error(
-                f"cannot fetch turn context ref: HTTP {response.status_code}",
-                operation="get",
-                key=redact_url(url),
-            )
-        return response.content
+        return await _fetch_url(url, limit)
     local_path = ref.get("local_path")
     if isinstance(local_path, str) and local_path:
         path = local_ref_path(settings, local_path)
         try:
-            return path.read_bytes()
+            with path.open("rb") as handle:
+                data = handle.read() if limit is None else handle.read(limit + 1)
         except OSError as exc:
             raise store_error(
                 f"cannot read turn context ref: {exc}",
                 operation="get",
                 key=local_path,
             ) from exc
+        _check_limit(data, limit, local_path)
+        return data
     raise store_error("turn context ref has no url or local_path", operation="get")
+
+
+def _check_limit(data: bytes | bytearray, limit: int | None, key: str) -> None:
+    if limit is not None and len(data) > limit:
+        raise store_error(
+            f"turn context ref is larger than {limit} bytes",
+            operation="get",
+            key=key,
+        )
+
+
+async def _fetch_url(url: str, limit: int | None) -> bytes:
+    import httpx
+
+    try:
+        async with (
+            httpx.AsyncClient(timeout=30.0) as client,
+            client.stream("GET", url) as response,
+        ):
+            if response.status_code != 200:
+                raise store_error(
+                    f"cannot fetch turn context ref: HTTP {response.status_code}",
+                    operation="get",
+                    key=redact_url(url),
+                )
+            data = bytearray()
+            async for chunk in response.aiter_bytes():
+                data.extend(chunk)
+                _check_limit(data, limit, redact_url(url))
+            return bytes(data)
+    except ObjectStoreError:
+        raise
+    except Exception as exc:
+        raise store_error(
+            f"cannot fetch turn context ref: {type(exc).__name__}",
+            operation="get",
+            key=redact_url(url),
+        ) from exc
 
 
 async def materialize_workspace_files(
@@ -91,7 +124,9 @@ async def materialize_skill_zips(
     for ref in skills:
         if not isinstance(ref, Mapping):
             continue
-        zips.append(await fetch_ref_bytes(ref, settings))
+        zips.append(
+            await fetch_ref_bytes(ref, settings, limit=int(settings.max_file_bytes))
+        )
     return zips
 
 

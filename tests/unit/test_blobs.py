@@ -1,17 +1,18 @@
+import hashlib
 import io
 import logging
 import os
 import uuid
 from datetime import timedelta
 from pathlib import Path
-from typing import Literal
-from urllib.parse import quote, urlencode
+from typing import Any, Literal
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 from apipi.common.errors import ObjectStoreError
-from apipi.common.objects import NS_ARTIFACTS, NS_FILES, NS_SKILLS
+from apipi.common.objects import NS_ARTIFACTS, NS_FILES, NS_SKILLS, NS_UPLOADS
 from apipi.common.s3 import s3_addressing, s3_client_kwargs
 from apipi.config import ConfigError, Settings, load_settings
 from apipi.store.blobs import (
@@ -27,6 +28,7 @@ from apipi.store.blobs import (
     blob_prefix,
     blob_store,
     file_object_id,
+    get_sized,
     object_store,
     s3_namespace_prefix,
     s3_object_key,
@@ -68,7 +70,8 @@ class FakeS3:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.types: dict[str, str] = {}
-        self.presigns: list[dict[str, str]] = []
+        self.presigns: list[dict[str, Any]] = []
+        self.ranges: list[str] = []
 
     def put_object(self, **kwargs: object) -> None:
         key = kwargs["Key"]
@@ -85,7 +88,13 @@ class FakeS3:
         assert isinstance(key, str)
         if key not in self.objects:
             raise FakeS3Error("NoSuchKey")
-        return {"Body": io.BytesIO(self.objects[key])}
+        data = self.objects[key]
+        ranged = kwargs.get("Range")
+        if isinstance(ranged, str):
+            self.ranges.append(ranged)
+            first, last = ranged.removeprefix("bytes=").split("-")
+            data = data[int(first) : int(last) + 1]
+        return {"Body": io.BytesIO(data)}
 
     def head_object(self, **kwargs: object) -> dict[str, object]:
         key = kwargs["Key"]
@@ -95,12 +104,46 @@ class FakeS3:
         return {
             "ContentLength": len(self.objects[key]),
             "ContentType": self.types.get(key, "application/octet-stream"),
+            "ETag": self._etag(key),
         }
+
+    def _etag(self, key: str) -> str:
+        return f'"{hashlib.md5(self.objects[key]).hexdigest()}"'
+
+    def copy_object(self, **kwargs: object) -> None:
+        key = kwargs["Key"]
+        source = kwargs["CopySource"]
+        assert isinstance(key, str)
+        assert isinstance(source, dict)
+        source_key = source["Key"]
+        if source_key not in self.objects:
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "CopyObject")
+        match = kwargs.get("CopySourceIfMatch")
+        if match is not None and match != self._etag(source_key):
+            raise ClientError({"Error": {"Code": "PreconditionFailed"}}, "CopyObject")
+        self.objects[key] = self.objects[source_key]
+        if source_key in self.types:
+            self.types[key] = self.types[source_key]
+
+    def put_url(self, url: str, body: bytes, content_type: str | None = None) -> int:
+        """A client PUT to a presigned URL: 403 when a signed header differs."""
+        key = urlsplit(url).path.lstrip("/")
+        signed = next(
+            params
+            for params in reversed(self.presigns)
+            if params["Key"] == key and "ContentLength" in params
+        )
+        if signed["ContentLength"] != len(body):
+            return 403
+        if signed.get("ContentType") not in (None, content_type):
+            return 403
+        self.put_object(Key=key, Body=body, ContentType=content_type)
+        return 200
 
     def generate_presigned_url(
         self,
         ClientMethod: str,
-        Params: dict[str, str],
+        Params: dict[str, Any],
         ExpiresIn: int = 900,
         HttpMethod: str | None = None,
     ) -> str:
@@ -507,3 +550,94 @@ async def test_s3_errors_become_store_error(
         await offline.used_bytes(NS_FILES, "tenant")
     assert list_exc.value.operation == "list"
     assert list_exc.value.code == "EndpointConnectionError"
+
+
+def test_presigned_put_signs_the_declared_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    settings = _settings(
+        tmp_path,
+        artifact_store="s3",
+        s3_bucket="bucket",
+        s3_endpoint="https://hel1.your-objectstorage.com",
+        s3_region="hel1",
+    )
+    url, headers = S3Store(settings).presign(
+        "PUT",
+        NS_UPLOADS,
+        "tenant/upload",
+        expires=timedelta(minutes=5),
+        content_type="text/plain",
+        size=5,
+    )
+    signed = parse_qs(urlsplit(url).query)["X-Amz-SignedHeaders"][0].split(";")
+    assert "content-length" in signed
+    assert "content-type" in signed
+    assert urlsplit(url).path == "/apipi/uploads/tenant/upload"
+    assert headers == {"Content-Type": "text/plain"}
+
+
+class _NoRangeS3(FakeS3):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads: list[int] = []
+
+    def get_object(self, **kwargs: object) -> dict[str, object]:
+        kwargs.pop("Range", None)
+        response = super().get_object(**kwargs)
+        body = response["Body"]
+        assert isinstance(body, io.BytesIO)
+        reads = self.reads
+
+        class _Body(io.BytesIO):
+            def read(self, size: int | None = -1) -> bytes:
+                reads.append(-1 if size is None else size)
+                return super().read(size)
+
+        return {"Body": _Body(body.getvalue())}
+
+
+@pytest.mark.parametrize("kind", ["local", "memory", "s3", "s3-no-range"])
+async def test_get_sized_reads_at_most_one_byte_more(tmp_path: Path, kind: str) -> None:
+    settings = _settings(tmp_path, artifact_store="s3", s3_bucket="bucket")
+    client = _NoRangeS3() if kind == "s3-no-range" else FakeS3()
+    store: LocalStore | MemoryStore | S3Store
+    if kind == "local":
+        store = LocalStore(_settings(tmp_path))
+    elif kind == "memory":
+        store = MemoryStore()
+    else:
+        store = S3Store(settings, client=client)
+    await store.put(NS_FILES, "tenant/file-1", b"x" * 100_000)
+    await store.put(NS_FILES, "tenant/file-2", b"hello")
+    with pytest.raises(ObjectStoreError):
+        await get_sized(store, NS_FILES, "tenant/file-1", 5)
+    with pytest.raises(ObjectStoreError):
+        await get_sized(store, NS_FILES, "tenant/file-2", 6)
+    assert await get_sized(store, NS_FILES, "tenant/file-2", 5) == b"hello"
+    assert await get_sized(store, NS_FILES, "tenant/missing", 5) is None
+    if kind == "s3":
+        assert client.ranges == ["bytes=0-5", "bytes=0-6", "bytes=0-5"]
+    if isinstance(client, _NoRangeS3):
+        assert client.reads == [6, 7, 6]
+
+
+async def test_s3_copy_needs_the_checked_etag(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, artifact_store="s3", s3_bucket="bucket")
+    store = S3Store(settings, client=FakeS3())
+    await store.put(NS_UPLOADS, "tenant/upload", b"hello", content_type="text/plain")
+    head = await store.head(NS_UPLOADS, "tenant/upload")
+    assert head is not None
+    assert (head.size, head.content_type) == (5, "text/plain")
+    await store.put(NS_UPLOADS, "tenant/upload", b"other")
+    with pytest.raises(ObjectStoreError):
+        await store.copy(
+            NS_UPLOADS, "tenant/upload", NS_FILES, "tenant/f", etag=head.etag
+        )
+    assert await store.get(NS_FILES, "tenant/f") is None
+    fresh = await store.head(NS_UPLOADS, "tenant/upload")
+    assert fresh is not None
+    await store.copy(NS_UPLOADS, "tenant/upload", NS_FILES, "tenant/f", etag=fresh.etag)
+    assert await store.get(NS_FILES, "tenant/f") == b"other"

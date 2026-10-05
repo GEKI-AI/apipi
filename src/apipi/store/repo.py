@@ -2082,8 +2082,10 @@ async def create_upload(
     declared_bytes: int,
     expires_at: datetime,
     user_id: str | None = None,
+    upload_id: uuid.UUID | None = None,
 ) -> UploadRow:
     row = UploadRow(
+        id=upload_id if upload_id is not None else uuid.uuid4(),
         tenant_id=tenant_id,
         purpose=purpose,
         object_id=object_id,

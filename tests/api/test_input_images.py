@@ -529,8 +529,10 @@ async def test_worker_checks_the_image_size_and_hides_the_url(
         "mime_type": "image/png",
         "size_bytes": 4,
     }
-    with pytest.raises(ObjectStoreError, match="expected 4"):
+    with pytest.raises(ObjectStoreError, match="larger than 4 bytes"):
         await fetch_input_images([ref], settings)
+    with pytest.raises(ObjectStoreError, match="expected 6"):
+        await fetch_input_images([{**ref, "size_bytes": 6}], settings)
     assert (await fetch_input_images([{**ref, "size_bytes": 5}], settings))[0][
         "data"
     ] == base64.b64encode(b"12345").decode()
@@ -545,7 +547,7 @@ async def test_worker_checks_the_image_size_and_hides_the_url(
         async def __aexit__(self, *args: Any) -> None:
             return None
 
-        async def get(self, url: str) -> Any:
+        def stream(self, method: str, url: str) -> Any:
             raise httpx.ConnectError(f"cannot reach {url}")
 
     monkeypatch.setattr(httpx, "AsyncClient", _Broken)

@@ -101,7 +101,7 @@ hosted files and skills).
 | `APIPI_S3_BUCKET` | `s3_bucket` | required if s3 | Bucket. |
 | `APIPI_S3_ENDPOINT` | `s3_endpoint` | unset | Base URL for S3-compatible APIs (Hetzner, MinIO, R2). Unset talks to AWS. |
 | `APIPI_S3_REGION` | `s3_region` | `us-east-1` | Region (`hel1`, `fsn1`, `nbg1` on Hetzner). |
-| `APIPI_S3_PREFIX` | `s3_prefix` | `apipi/artifacts` | Artifact key prefix. Artifact objects are `{prefix}/{tenant_id}/{key_id}/{session_id}/{artifact_id}`. When the prefix ends with `/artifacts` (the default), files and skills use sibling prefixes `…/files` and `…/skills`. Otherwise they are `{prefix}/files` and `{prefix}/skills`. |
+| `APIPI_S3_PREFIX` | `s3_prefix` | `apipi/artifacts` | Artifact key prefix. Artifact objects are `{prefix}/{tenant_id}/{key_id}/{session_id}/{artifact_id}`. When the prefix ends with `/artifacts` (the default), files, skills, and presigned uploads use sibling prefixes `…/files`, `…/skills`, and `…/uploads`. Otherwise they are `{prefix}/files`, `{prefix}/skills`, and `{prefix}/uploads`. |
 | `APIPI_S3_ADDRESSING` | `s3_addressing` | `auto` | `auto` \| `path` \| `virtual`. `auto` is virtual-hosted (`bucket.endpoint/key`). Set `path` for R2 or MinIO on an IP. Guest images fall back to this endpoint, region, and addressing when `APIPI_IMAGE_S3_*` is unset. The image bucket and prefix come from the image URI, not from `s3_bucket` or `s3_prefix`. Artifact credentials come from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` or the instance role, never from TOML. |
 | `APIPI_PRESIGN_TTL` | `presign_ttl` | `15m` | Lifetime of presigned PUT and GET URLs. Worker artifact uploads and turn-context reads use short-lived URLs bound to a key under the session prefix. |
 | `APIPI_ATTACHMENT_TTL` | `attachment_ttl` | `24h` | Files of kind `attachment` that no session uses are deleted, row and bytes, once they are older than this. The API checks once an hour. Bound attachments are deleted with the last session that uses them. Must be greater than zero; `0` or a negative value fails at startup. See [files](api.md#files). |
@@ -256,7 +256,23 @@ origin, including the `Content-Type` header. A presigned GET forces
 RFC 5987 `filename*` when that name is not ASCII. Active content such
 as HTML, SVG, XML, and JavaScript is never served inline: those objects
 are signed as `application/octet-stream`. Local `artifact_store`
-returns `400` with code `presign_unsupported`. An S3 or botocore
+returns `400` with code `presign_unsupported`.
+
+A presigned upload URL points at an upload key under the `uploads`
+prefix, `{uploads prefix}/{tenant_id}/{upload_id}`. Complete copies the
+object to its final key under `files` or `skills` with `CopyObject` and
+then deletes the upload key (see [uploads](api.md#uploads)). The S3
+credentials of the API therefore need `CopyObject` (on AWS, read on the
+source key and write on the target key) in addition to `GetObject`,
+`PutObject`, `HeadObject`, `DeleteObject`, and `ListObjectsV2`. A PUT to
+the URL after complete, or an upload that is never completed, leaves an
+object under the upload prefix that ApiPi does not delete. Add a bucket
+lifecycle rule that expires objects under the upload prefix after one
+day, for example the prefix `apipi/uploads/` with the default
+`APIPI_S3_PREFIX`. Complete is refused once the URL has expired
+(`APIPI_PRESIGN_TTL`), so with a TTL under one day the rule never
+removes an object that a complete still needs, and it never touches the
+bytes of a file or skill. An S3 or botocore
 failure while writing artifacts fails the turn with code
 `artifact_store`, the same code as a local `OSError`. A missing object
 is not that error. If a Pi session cache is already stored and the

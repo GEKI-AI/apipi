@@ -1,5 +1,7 @@
 import time
 import uuid
+from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -369,3 +371,45 @@ async def test_teardown_forgets_context(settings: Settings) -> None:
     assert str(session_id) in execution._context_ttl
     await execution.teardown(session_id)
     assert str(session_id) not in execution._context_ttl
+
+
+async def test_fetch_ref_bytes_stops_at_the_size(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    from apipi.worker.turn_context import fetch_ref_bytes, materialize_skill_zips
+
+    root = store_root(settings)
+    path = local_object_path(root, NS_FILES, file_object_id(uuid.uuid4(), "f"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x" * 100_000)
+    local = {"local_path": str(path.relative_to(root)), "size_bytes": 5}
+    with pytest.raises(ObjectStoreError, match="larger than 5 bytes"):
+        await fetch_ref_bytes(local, settings)
+    assert len(await fetch_ref_bytes({**local, "size_bytes": 100_000}, settings)) == (
+        100_000
+    )
+    sent: list[int] = []
+
+    async def _chunks() -> AsyncIterator[bytes]:
+        for _ in range(100):
+            sent.append(1)
+            yield b"y" * 1024
+
+    real = httpx.AsyncClient
+
+    def _client(**kwargs: Any) -> httpx.AsyncClient:
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(200, content=_chunks())
+        )
+        return real(transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client)
+    remote = {"url": "https://bucket.example/files/f?X-Amz-Signature=s"}
+    with pytest.raises(ObjectStoreError, match="larger than 2000 bytes"):
+        await fetch_ref_bytes({**remote, "size_bytes": 2000}, settings)
+    assert len(sent) == 2
+    small = settings.model_copy(update={"max_file_bytes": 4096})
+    with pytest.raises(ObjectStoreError, match="larger than 4096 bytes"):
+        await materialize_skill_zips([remote], small)
