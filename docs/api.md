@@ -600,7 +600,12 @@ field. See [reserved metadata](extending.md#reserved-metadata).
 `POST` accepts two bodies with the same meaning. The OpenAI Agents
 shape is `{"events":[{...}]}` with exactly one event (what official
 SDK helpers send). The flat shape is `{type, text|content, …}`. Send
-one shape or the other, not both.
+one shape or the other, not both. A body with an `events` key is the
+nested shape, so a flat field such as `type` next to `events` is `400`
+with code `unknown_field`. A body without `events` is the flat shape.
+An error names the field of the shape that was sent: an invalid input
+part in the nested shape gets the same code and message as in
+`input` on session create.
 
 A message event starts a turn. Nested form: `type`
 `agent.session.input.message` and `input` with a `user` message whose
@@ -618,9 +623,10 @@ as in the OpenAI Responses API. The file must belong to the tenant
 (`404` otherwise), its content type must be an allowed image type
 (`400` otherwise), and its size must be within `APIPI_MAX_IMAGE_BYTES`
 (`413` with code `payload_too_large` otherwise). A part with neither
-field, or with both, is `400`. `detail` is accepted and ignored. A
-message may carry up to `APIPI_MAX_IMAGES` images, and each may be up
-to `APIPI_MAX_IMAGE_BYTES`, in either form. A data URL counts against
+field, or with both, is `400` with code `invalid_request` and the
+message `input_image needs image_url or file_id`. `detail` is accepted
+and ignored. A message may carry up to `APIPI_MAX_IMAGES` images, and
+each may be up to `APIPI_MAX_IMAGE_BYTES`, in either form. A data URL counts against
 the request body limit (`APIPI_MAX_REQUEST_BYTES`, 1 MiB by default),
 so upload larger images as files and send `file_id`. Upload them with
 purpose `vision` (`POST /v1/files`) or as a presigned upload with
@@ -644,7 +650,8 @@ tenant that the caller can see (`404` otherwise, see
 [files](#files)), uploaded with `POST /v1/files` or a
 [presigned upload](#uploads), for example with `purpose: "attachment"`.
 `filename` replaces the stored file name in the prompt, in the item,
-and in the workspace path. A part without `file_id` is `400`;
+and in the workspace path. A part without `file_id` is `400` with
+code `invalid_request` and the message `input_file needs file_id`;
 `file_data` and `file_url` are not implemented. A message may carry up to `APIPI_MAX_FILES_PER_MESSAGE`
 (default 10) `input_file` parts, and a message with only `input_file`
 parts starts a turn too.

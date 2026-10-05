@@ -298,36 +298,54 @@ async def test_invalid_input_parts_fail_before_the_turn(
         png_id = await _upload(client, token, _PNG, "a.png", "image/png")
         image_url = f"data:image/png;base64,{base64.b64encode(_PNG).decode()}"
         image = {"type": "input_image", "file_id": png_id}
-        cases: list[tuple[list[dict[str, Any]], str | None]] = [
+        one_source = "input_image needs image_url or file_id"
+        cases: list[tuple[list[dict[str, Any]], str, str]] = [
             (
                 [{"type": "input_text", "text": "x", "file_id": file_id}],
                 "unknown_field",
+                "Unknown field: file_id",
             ),
-            ([{**image, "text": "x"}], "unknown_field"),
-            ([{"type": "input_audio", "data": "x"}], "input_audio"),
-            ([{"type": "input_image", "detail": "low"}], None),
-            ([{**image, "image_url": image_url}], None),
-            ([{"type": "input_file"}], None),
-            ([{"type": "input_file", "file_data": "data:text/plain,a"}], "file_data"),
-            ([input_file(file_id, file_url="https://example.com/a.txt")], "file_url"),
-            ([input_file(file_id, detail="high")], "unknown_field"),
-            ([input_file(file_id)] * 3, "invalid_request"),
+            ([{**image, "text": "x"}], "unknown_field", "Unknown field: text"),
+            (
+                [{"type": "input_audio", "data": "x"}],
+                "input_audio",
+                "input_audio is not implemented",
+            ),
+            ([{"type": "input_image", "detail": "low"}], "invalid_request", one_source),
+            ([{**image, "image_url": image_url}], "invalid_request", one_source),
+            ([{"type": "input_file"}], "invalid_request", "input_file needs file_id"),
+            (
+                [{"type": "input_file", "file_data": "data:text/plain,a"}],
+                "file_data",
+                "input_file file_data is not implemented",
+            ),
+            (
+                [input_file(file_id, file_url="https://example.com/a.txt")],
+                "file_url",
+                "input_file file_url is not implemented",
+            ),
+            (
+                [input_file(file_id, detail="high")],
+                "unknown_field",
+                "Unknown field: detail",
+            ),
+            ([input_file(file_id)] * 3, "invalid_request", "at most 2 input_file"),
         ]
         path = f"/v1/agents/sessions/{session_id}/events"
         failed = [
             await client.post(path, headers=_auth(token), json=message(*parts))
-            for parts, _code in cases
+            for parts, _code, _message in cases
         ]
         two = await client.post(
             path,
             headers=_auth(token),
             json=message(input_file(file_id), input_file(file_id)),
         )
-    for (parts, code), response in zip(cases, failed, strict=True):
+    for (parts, code, text), response in zip(cases, failed, strict=True):
         assert response.status_code == 400, (parts, response.json())
         error = response.json()["error"]
-        assert code is None or error["code"] == code, (parts, error)
-    assert "at most 2" in failed[-1].json()["error"]["message"]
+        assert error["code"] == code, (parts, error)
+        assert text in error["message"], (parts, error)
     assert two.status_code == 200, two.json()
     assert len(harness.prompts) == 1
 

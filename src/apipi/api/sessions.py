@@ -104,12 +104,6 @@ class OpenAIInputImage(StrictModel):
     file_id: str | None = None
     detail: str | None = None
 
-    @model_validator(mode="after")
-    def one_source(self) -> Self:
-        if bool(self.image_url) == bool(self.file_id):
-            raise ValueError("input_image needs image_url or file_id")
-        return self
-
 
 class OpenAIInputFile(StrictModel):
     type: Literal["input_file"]
@@ -117,20 +111,6 @@ class OpenAIInputFile(StrictModel):
     filename: str | None = None
     file_data: str | None = None
     file_url: str | None = None
-
-    @model_validator(mode="after")
-    def by_file_id(self) -> Self:
-        for field in ("file_data", "file_url"):
-            if getattr(self, field) is not None:
-                raise PydanticCustomError(
-                    "not_implemented",
-                    "input_file {field} is not implemented. Upload the file and "
-                    "send its file_id.",
-                    {"field": field},
-                )
-        if not self.file_id:
-            raise ValueError("input_file needs file_id")
-        return self
 
 
 class OpenAIInputOther(BaseModel):
@@ -220,7 +200,14 @@ def _message_text(messages: list[OpenAIMessageInput] | None) -> str:
     return "\n".join(texts)
 
 
-SessionEventBody = OpenAIEventsBody | SessionInput
+def _body_shape(value: Any) -> str:
+    return "nested" if isinstance(value, dict) and "events" in value else "flat"
+
+
+SessionEventBody = Annotated[
+    Annotated[OpenAIEventsBody, Tag("nested")] | Annotated[SessionInput, Tag("flat")],
+    Discriminator(_body_shape),
+]
 
 
 def _sse(event: dict[str, Any]) -> str:

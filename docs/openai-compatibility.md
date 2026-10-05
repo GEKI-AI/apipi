@@ -213,15 +213,17 @@ New extension fields are grouped. Older flat fields stay flat.
 | Model list unreachable on agent write | `invalid_request` | `model_host_unreachable` (`400`) or `model_host_unauthorized` (`401`) |
 | Host rejects the model during a turn | `api_error` | `model_host_error` on the `502` body in this release (`detail_code` is the specific code; session stays `idle`) |
 | Known image, no worker has it | `api_error` | `image_unavailable` (`503`) |
-| Nested `events` length not 1, or mixed flat+nested body | `invalid_request` | `validation_error` |
+| Nested `events` length not 1 | `invalid_request` | `validation_error` |
+| Flat field such as `type` next to `events` (mixed flat and nested body) | `invalid_request` | `unknown_field` |
 | `input_image` with an `http` or `https` URL | `invalid_request` | `invalid_request` |
-| `input_image` with neither `image_url` nor `file_id`, or with both | `invalid_request` | `validation_error` (nested body) or `invalid_request` |
+| `input_image` with neither `image_url` nor `file_id`, or with both | `invalid_request` | `invalid_request` |
 | `input_image.file_id` of another tenant or unknown | `invalid_request` | `not_found` (`404`) |
 | `input_image.file_id` that is not an allowed image type | `invalid_request` | `invalid_request` |
 | Image larger than `APIPI_MAX_IMAGE_BYTES` | `invalid_request` | `payload_too_large` (`413`) |
 | Image sent to a model that does not list `image` in its registry `input` | `invalid_request` | `unsupported_input` |
 | `input_file` with a type the model cannot read without a computer (pdf, xlsx, docx, zip, …), or a text file that is not UTF-8 | `invalid_request` | `unsupported_file_type` |
 | Text `input_file` larger than `APIPI_MAX_INLINE_FILE_BYTES` | `invalid_request` | `payload_too_large` (`413`) |
+| `input_file` without `file_id` | `invalid_request` | `invalid_request` |
 | `input_file` with `file_data` or `file_url` | `not_implemented` | `file_data` or `file_url` |
 | `input_file` larger than `APIPI_MAX_FILE_BYTES`, or attachments that with the agent inputs exceed `APIPI_MAX_WORKSPACE_BYTES`, in a session with a computer | `invalid_request` | `payload_too_large` (`413`) |
 | Other non-text input parts | `not_implemented` | The part type |
