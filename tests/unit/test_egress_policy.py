@@ -76,6 +76,7 @@ def test_private_hosts_only_for_named_hosts() -> None:
     assert enabled.with_intercept(["git.internal"]).private_allowed("git.internal")
 
 
+@pytest.mark.timeout(300)
 def test_each_private_name_gets_its_own_placeholder() -> None:
     policy = EgressPolicy.build(
         "restricted",

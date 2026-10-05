@@ -16,7 +16,7 @@ from apipi.store.engine import Store
 from apipi.worker.pi.microvm import microvm_images, require_microvm
 from apipi.worker.pi.probe import probe_run_mode
 
-pytestmark = [pytest.mark.e2e, pytest.mark.microvm]
+pytestmark = [pytest.mark.e2e, pytest.mark.microvm, pytest.mark.timeout(300)]
 
 _FAKE_PI = Path(__file__).resolve().parents[1] / "support" / "fake_pi.py"
 _GUEST_FAKE_PI = "/workspace/fake_pi.py"
