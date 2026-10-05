@@ -884,7 +884,9 @@ async def precheck_batch(
     sessions leased to this worker are looked at.
     """
     from apipi.services.worker_artifacts import (
+        artifact_name,
         precheck_presign,
+        presign_name,
         verify_upload_object,
     )
     from apipi.store.repo import get_artifact_upload, get_sessions_by_ids
@@ -895,6 +897,7 @@ async def precheck_batch(
         if item.envelope.type in {"artifact.presign", "artifact.completed"}
     ]
     results: dict[tuple[uuid.UUID, int], Precheck] = {}
+    completed: set[tuple[uuid.UUID, str]] = set()
     if not wanted:
         return results
     async with store.session() as db:
@@ -931,16 +934,19 @@ async def precheck_batch(
                 if not isinstance(raw_size, int) or raw_size < 1:
                     continue
                 kind = str(payload.get("kind") or "artifact")
-                filename = payload.get("filename")
+                raw_name = payload.get("filename")
+                filename = raw_name if isinstance(raw_name, str) else None
                 sha256 = payload.get("sha256")
                 used, unchanged = await precheck_presign(
                     store,
                     _blobs_for(settings, objects),
                     row,
                     kind=kind,
-                    filename=filename if isinstance(filename, str) else None,
+                    filename=filename,
                     sha256=sha256 if isinstance(sha256, str) else None,
                 )
+                if (envelope.session_id, presign_name(kind, filename)) in completed:
+                    unchanged = False
                 results[key] = Precheck(used_bytes=used, unchanged=unchanged)
                 continue
             try:
@@ -957,6 +963,7 @@ async def precheck_batch(
             raw_size = payload.get("size")
             raw_path = payload.get("path")
             sha256 = payload.get("sha256")
+            name = payload.get("name")
             results[key] = Precheck(
                 verified_size=await verify_upload_object(
                     settings,
@@ -968,6 +975,12 @@ async def precheck_batch(
                     path=raw_path if isinstance(raw_path, str) else None,
                     key_id=row.key_id,
                     objects=objects if objects is not None else _store_for(settings),
+                )
+            )
+            completed.add(
+                (
+                    envelope.session_id,
+                    artifact_name(upload, name if isinstance(name, str) else None),
                 )
             )
         except asyncio.CancelledError:

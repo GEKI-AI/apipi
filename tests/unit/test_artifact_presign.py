@@ -489,6 +489,86 @@ async def test_s3_presign_bound_to_session_prefix(store: Store, tmp_path: Path) 
         assert len(artifacts) == 1
 
 
+async def test_presign_after_completed_in_the_same_batch_is_not_unchanged(
+    store: Store, tmp_path: Path
+) -> None:
+    worker_id = uuid.uuid4()
+    tenant_id, session_id, _lease, _key = await _leased(store, worker_id)
+    settings = _settings(
+        tmp_path,
+        artifact_store="s3",
+        s3_bucket="bucket",
+        s3_endpoint="https://s3.example",
+        s3_region="us-east-1",
+    )
+    objects = S3Store(settings, client=_ListableFakeS3())
+    old, new = b"version-a", b"version-b"
+
+    def presign(seq: int, data: bytes):
+        return _envelope(
+            session_id,
+            seq,
+            "artifact.presign",
+            {
+                "request_id": str(uuid.uuid4()),
+                "kind": "artifact",
+                "filename": "out.txt",
+                "content_type": "text/plain",
+                "size": len(data),
+                "sha256": sha256_hex(data),
+            },
+        )
+
+    async def completed(seq: int, reply: dict, data: bytes):
+        await objects.put(NS_ARTIFACTS, reply["object_id"], data)
+        return _envelope(
+            session_id,
+            seq,
+            "artifact.completed",
+            {
+                "upload_id": reply["upload_id"],
+                "size": len(data),
+                "sha256": sha256_hex(data),
+                "name": "out.txt",
+            },
+        )
+
+    first = await _flush(store, worker_id, [presign(1, old)], settings, objects)
+    a = first.presign_replies[0]
+    second = await _flush(
+        store,
+        worker_id,
+        [await completed(2, a, old), presign(3, new)],
+        settings,
+        objects,
+    )
+    b = second.presign_replies[0]
+    third = await _flush(
+        store,
+        worker_id,
+        [await completed(4, b, new), presign(5, old)],
+        settings,
+        objects,
+    )
+    assert third.rejected == []
+    reverted = third.presign_replies[0]
+    assert reverted["ok"] is True
+    assert reverted.get("unchanged") is not True
+    assert reverted["upload_id"]
+    fourth = await _flush(
+        store, worker_id, [await completed(6, reverted, old)], settings, objects
+    )
+    assert fourth.rejected == []
+    async with store.session() as db:
+        artifacts = await list_artifacts(db, tenant_id, session_id)
+    assert artifacts is not None
+    assert [str(artifact.id) for artifact in artifacts] == [
+        a["artifact_id"],
+        b["artifact_id"],
+        reverted["artifact_id"],
+    ]
+
+
 async def test_s3_presign_ttl_short(store: Store, tmp_path: Path) -> None:
     worker_id = uuid.uuid4()
     _tenant, session_id, _lease, _key = await _leased(store, worker_id)

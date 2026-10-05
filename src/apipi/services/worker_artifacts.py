@@ -167,6 +167,10 @@ def presign_name(kind: str, filename: str | None) -> str:
     )
 
 
+def artifact_name(upload: ArtifactUploadRow, name: str | None) -> str:
+    return (name or upload.filename).strip() or upload.filename
+
+
 async def _digest_blob(
     blobs: ArtifactBlobs,
     tenant_id: uuid.UUID,
@@ -586,12 +590,11 @@ async def complete_artifact_upload(
         row.pi_session_bytes = actual_size
         await db.flush()
     else:
-        artifact_name = (name or upload.filename).strip() or upload.filename
         await create_artifact(
             db,
             tenant_id,
             session_id,
-            path=artifact_name,
+            path=artifact_name(upload, name),
             content_type=upload.content_type,
             turn_id=turn_id,
             key_id=key_id,

@@ -747,7 +747,13 @@ in a thread, so a large artifact or a slow store never blocks other
 sockets or holds a database connection. The same holds for the store
 reads of `artifact.presign` (the used bytes and the digest of the
 latest stored file), and for the filesystem store, whose reads run
-in a thread too.
+in a thread too. Because these reads happen before the batch is
+applied, they cannot see an artifact that an earlier
+`artifact.completed` of the same batch stores. A presign for the path
+of such an artifact is therefore never answered `unchanged`: the API
+reserves a new upload, so a file that went back to an earlier version
+is published again. If its bytes are the same as those of the
+completed upload, the same bytes are stored as a second artifact.
 
 A reconnect may go to any replica. The worker sends its running
 sessions with their `last_seq` in `register`; the API answers with
