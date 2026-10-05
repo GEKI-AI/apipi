@@ -29,12 +29,15 @@ from apipi.worker.egress import (
     RequestHead,
     ResponseHead,
     WorkerCA,
+    sockets,
     start_gateway,
 )
 from apipi.worker.egress import gateway as gateway_module
 from apipi.worker.egress import resolve as resolve_module
 from apipi.worker.egress.inject import Injection, SecretInjector
+from apipi.worker.egress.intercept import Interceptor, _Side
 from apipi.worker.egress.resolve import address_blocked
+from apipi.worker.egress.splice import ByteCount, splice
 
 HOST = "allowed.test"
 
@@ -959,6 +962,145 @@ async def test_close_cancels_open_connections(env: Env) -> None:
         socket.create_connection(("127.0.0.1", gateway.port), timeout=1).close()
 
 
+@contextlib.asynccontextmanager
+async def peer_stream(
+    sent: bytes = b"", *, unread: int = 0
+) -> AsyncIterator[tuple[asyncio.StreamReader, asyncio.StreamWriter, socket.socket]]:
+    ours, peer = socket.socketpair()
+    peer.sendall(sent)
+    peer.shutdown(socket.SHUT_WR)
+    reader, writer = await asyncio.open_connection(sock=ours)
+    writer.write(bytes(unread))
+    try:
+        yield reader, writer, ours
+    finally:
+        writer.transport.abort()
+        await asyncio.sleep(0)
+        peer.close()
+
+
+@contextlib.asynccontextmanager
+async def peer_socket(sent: bytes = b"") -> AsyncIterator[socket.socket]:
+    ours, peer = socket.socketpair()
+    peer.sendall(sent)
+    peer.shutdown(socket.SHUT_WR)
+    try:
+        yield ours
+    finally:
+        ours.close()
+        peer.close()
+
+
+def preset_interceptor(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> Interceptor:
+    count = ByteCount()
+    interceptor = Interceptor(
+        host=HOST,
+        port=80,
+        addresses=[],
+        hooks=EgressHooks(),
+        upstream=None,
+        count=count,
+    )
+    interceptor.server = _Side(
+        h11.Connection(h11.CLIENT), reader, writer, count, guest=False
+    )
+    return interceptor
+
+
+async def cancel_while_closing(
+    task: "asyncio.Task[Any]", upstream: asyncio.StreamWriter
+) -> None:
+    async with asyncio.timeout(5):
+        while not upstream.is_closing():
+            await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def wait_freed(*socks: socket.socket) -> None:
+    async with asyncio.timeout(5):
+        while any(sock.fileno() != -1 for sock in socks):
+            await asyncio.sleep(0.01)
+
+
+async def test_cancelled_splice_closes_both_sides_while_upstream_closes() -> None:
+    async with (
+        peer_stream() as (guest_reader, guest_writer, guest),
+        peer_stream(unread=4 << 20) as (upstream_reader, upstream_writer, upstream),
+    ):
+        task = asyncio.create_task(
+            splice(guest_reader, guest_writer, upstream_reader, upstream_writer)
+        )
+        await cancel_while_closing(task, upstream_writer)
+        assert guest_writer.is_closing()
+        await wait_freed(guest, upstream)
+
+
+async def test_cancelled_intercept_closes_both_sides_while_upstream_closes() -> None:
+    async with (
+        peer_socket() as guest,
+        peer_stream(unread=4 << 20) as (upstream_reader, upstream_writer, upstream),
+    ):
+        interceptor = preset_interceptor(upstream_reader, upstream_writer)
+        task = asyncio.create_task(interceptor.run(guest, None))
+        await cancel_while_closing(task, upstream_writer)
+        assert interceptor.guest is not None
+        assert interceptor.guest.writer.is_closing()
+        await wait_freed(guest, upstream)
+
+
+async def test_close_to_a_peer_that_never_reads_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sockets, "CLOSE_TIMEOUT", 0.2)
+    async with (
+        peer_stream() as (guest_reader, guest_writer, guest),
+        peer_stream(unread=4 << 20) as (upstream_reader, upstream_writer, upstream),
+    ):
+        started = time.monotonic()
+        async with asyncio.timeout(5):
+            await splice(guest_reader, guest_writer, upstream_reader, upstream_writer)
+        assert time.monotonic() - started < 2
+        await wait_freed(guest, upstream)
+
+
+async def test_cancel_while_stopping_the_request_body_is_not_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stopping = asyncio.Event()
+    server, upstream = socket.socketpair()
+
+    async def request_body(self: Interceptor) -> None:
+        server.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            stopping.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(Interceptor, "_request_body", request_body)
+    request = f"POST / HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: 4\r\n\r\n"
+    upstream_reader, upstream_writer = await asyncio.open_connection(sock=upstream)
+    try:
+        async with peer_socket(request.encode()) as guest:
+            interceptor = preset_interceptor(upstream_reader, upstream_writer)
+            task = asyncio.create_task(interceptor.run(guest, None))
+            async with asyncio.timeout(5):
+                await stopping.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                async with asyncio.timeout(5):
+                    await task
+            await wait_freed(guest, upstream)
+    finally:
+        upstream_writer.transport.abort()
+        await asyncio.sleep(0)
+        server.close()
+
+
 async def _throughput(reader: asyncio.StreamReader, total: int) -> tuple[float, float]:
     started = time.perf_counter()
     cpu = time.process_time()
@@ -1263,8 +1405,6 @@ async def test_lf_only_http_request_is_not_delayed(env: Env) -> None:
 async def test_open_upstream_has_an_overall_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from apipi.worker.egress import sockets
-
     tried: list[str] = []
 
     async def hang(address: str, *_args: Any, **_kwargs: Any) -> Any:

@@ -6,6 +6,7 @@ import ssl
 CHUNK = 65536
 CONNECT_TIMEOUT = 10.0
 CONNECT_DEADLINE = 15.0
+CLOSE_TIMEOUT = 5.0
 IP_FREEBIND = getattr(socket, "IP_FREEBIND", 15)
 SO_ORIGINAL_DST = 80
 
@@ -92,7 +93,15 @@ async def open_upstream(
     raise UpstreamError("upstream_unreachable")
 
 
-async def close_writer(writer: asyncio.StreamWriter) -> None:
-    writer.close()
-    with contextlib.suppress(Exception):
-        await writer.wait_closed()
+async def close_writer(*writers: asyncio.StreamWriter) -> None:
+    for writer in writers:
+        writer.close()
+    try:
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(CLOSE_TIMEOUT):
+                for writer in writers:
+                    with contextlib.suppress(Exception):
+                        await writer.wait_closed()
+    finally:
+        for writer in writers:
+            writer.transport.abort()

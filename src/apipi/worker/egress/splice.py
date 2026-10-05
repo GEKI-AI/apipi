@@ -82,6 +82,5 @@ async def splice(
         )
     finally:
         watch.cancel()
-        await close_writer(upstream_writer)
-        await close_writer(guest_writer)
+        await close_writer(upstream_writer, guest_writer)
     return counted
