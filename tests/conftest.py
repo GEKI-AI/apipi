@@ -1,4 +1,5 @@
 import os
+import shutil
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -6,9 +7,8 @@ from typing import Any
 import pytest
 import pytest_timeout
 from httpx import AsyncClient
-from sqlalchemy import event, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
-from sqlalchemy.pool import StaticPool
 
 from apipi.config import Settings
 from apipi.store.engine import Store
@@ -16,26 +16,19 @@ from apipi.store.models import Base
 from apipi.worker.fake_harness import FakeHarness
 
 
-def _sqlite_engine(path: Path | None = None) -> AsyncEngine:
-    if path is None:
-        engine = create_async_engine(
-            "sqlite+aiosqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-    else:
-        engine = create_async_engine(
-            f"sqlite+aiosqlite:///{path}",
-            connect_args={"check_same_thread": False, "timeout": 30},
-        )
+def _sqlite_engine(path: Path) -> AsyncEngine:
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{path}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
 
     @event.listens_for(engine.sync_engine, "connect")
     def _fk(dbapi_connection: Any, _connection_record: Any) -> None:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
-        if path is not None:
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=OFF")
+        cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
     return engine
@@ -54,8 +47,17 @@ def pytest_exception_interact(node: pytest.Item | pytest.Collector) -> None:
         )
 
 
+@pytest.fixture(scope="session")
+def _sqlite_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("sqlite") / "template.db"
+    engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    return path
+
+
 @pytest.fixture
-async def store(tmp_path: Path) -> AsyncIterator[Store]:
+async def store(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Store]:
     url = os.environ.get("APIPI_TEST_DATABASE_URL")
     if url:
         engine = create_async_engine(url, pool_pre_ping=True)
@@ -67,9 +69,9 @@ async def store(tmp_path: Path) -> AsyncIterator[Store]:
                 )
             )
     else:
-        engine = _sqlite_engine(tmp_path / "test.db")
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        path = tmp_path / "test.db"
+        shutil.copyfile(request.getfixturevalue("_sqlite_template"), path)
+        engine = _sqlite_engine(path)
     result = Store(engine)
     yield result
     await result.dispose()

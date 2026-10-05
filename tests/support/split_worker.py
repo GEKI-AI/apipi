@@ -1,4 +1,4 @@
-"""In-process split worker for API tests (issue #473 PR 1).
+"""In-process worker for API tests.
 
 The API and the worker live in the same test process but only talk over
 the `/internal/worker` websocket, the same as in production. The API side
@@ -8,7 +8,6 @@ is `create_app(...)`; the worker side is a real
 """
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -78,6 +77,21 @@ class _AsgiWorkerSocket:
             continue
 
 
+def _attached(hub: Any) -> asyncio.Event:
+    """Return an event that is set once `hub` attaches the next connection."""
+    event = asyncio.Event()
+    attach = hub.attach
+
+    async def attach_once(*args: Any, **kwargs: Any) -> Any:
+        hub.attach = attach
+        result = await attach(*args, **kwargs)
+        event.set()
+        return result
+
+    hub.attach = attach_once
+    return event
+
+
 class HeldRelease:
     """Hold the API's next `hub.release` until `gate` opens.
 
@@ -119,6 +133,7 @@ class SplitWorker:
         outbox: Any,
         ws: AsgiWebsocket,
         serve_task: asyncio.Task[Any],
+        attached: asyncio.Event,
         background: set[asyncio.Task[Any]],
         bus: Any,
         relay: Any | None = None,
@@ -133,25 +148,28 @@ class SplitWorker:
         self.outbox = outbox
         self._ws = ws
         self._serve_task = serve_task
+        self._attached = attached
         self._background = background
         self._bus = bus
         self._relay = relay
         self._images_patch = images_patch
 
     async def wait_ready(self, timeout: float = 10.0) -> None:
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while loop.time() < deadline:
-            try:
-                if self.app.state.workers.live() > 0:
-                    return
-            except Exception:
-                pass
-            if self._serve_task.done():
-                exc = self._serve_task.exception()
-                raise AssertionError(f"worker serve exited early: {exc!r}")
-            await asyncio.sleep(0.02)
-        raise AssertionError("split worker did not register in time")
+        attached = asyncio.create_task(self._attached.wait())
+        try:
+            await asyncio.wait(
+                {attached, self._serve_task},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            attached.cancel()
+        if self._attached.is_set():
+            return
+        if self._serve_task.done():
+            exc = self._serve_task.exception()
+            raise AssertionError(f"worker serve exited early: {exc!r}")
+        raise AssertionError("worker did not register in time")
 
     async def aclose(self) -> None:
         # Deterministic shutdown: close the worker first, then the
@@ -261,6 +279,7 @@ async def spawn_split_worker(
     if emitter is not None:
         emitter.start()
 
+    attached = _attached(app.state.workers)
     ws = AsgiWebsocket(
         app,
         "/internal/worker",
@@ -297,6 +316,7 @@ async def spawn_split_worker(
         outbox,
         ws,
         serve_task,
+        attached,
         background,
         bus,
         relay,
@@ -356,15 +376,12 @@ async def split_client_for(
 ) -> AsyncIterator[tuple[FastAPI, Any, SplitWorker]]:
     """Build an API app plus an in-process worker and an HTTP client.
 
-    This is the one-line migration vehicle for API tests: it replaces
-    `app = create_app(settings, store=store)` followed by an
-    inline `AsyncClient`, so the test body (which keeps using `app` and
-    `client`) runs against the split production path. `harness` lands on
-    the worker side. Extra `create_app` keyword arguments
-    (`authorize=`, `blobs=`, ...) go to the API side. `tracing=` is the
-    worker side and `api_tracing=` the API side; when only one is given
-    it is shared by both (single-exporter tests). `metrics=`/`pool=`
-    /`sent=` are worker-side only.
+    The API and the worker talk only over the worker socket, the same as
+    in production. `harness` lands on the worker side. Extra `create_app`
+    keyword arguments (`authorize=`, `blobs=`, ...) go to the API side.
+    `tracing=` is the worker side and `api_tracing=` the API side; when
+    only one is given it is shared by both (single-exporter tests).
+    `metrics=`/`pool=`/`sent=` are worker-side only.
     """
     from httpx import ASGITransport, AsyncClient
 
@@ -401,41 +418,6 @@ async def split_client_for(
             yield app, client, worker
     finally:
         await worker.aclose()
-
-
-def connect_for_websocket(ws: AsgiWebsocket) -> Any:
-    """Build a `run_worker(connect=...)` factory bound to one `AsgiWebsocket`.
-
-    The factory ignores the URL and headers (the socket is already
-    authorized) and yields a `send`/`recv` adapter over the ASGI pair.
-    """
-
-    @asynccontextmanager
-    async def _connect(url: str, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
-        del url, args, kwargs
-        yield _AsgiWorkerSocket(ws)
-
-    return _connect
-
-
-async def asgi_connect_factory(app: FastAPI, token: str) -> Any:
-    """Connect one `AsgiWebsocket` to `/internal/worker` and return a factory.
-
-    The websocket handshake runs now, so the factory returned here only
-    adapts the already-connected socket for `run_worker(connect=...)`.
-    The caller owns the socket and must close it after the worker exits.
-    """
-    ws = AsgiWebsocket(
-        app,
-        "/internal/worker",
-        headers=[(b"authorization", f"Bearer {token}".encode())],
-    )
-    await ws.connect()
-    return connect_for_websocket(ws), ws
-
-
-def _envelope_json(payload: dict[str, Any]) -> str:
-    return json.dumps(payload)
 
 
 async def wait_for_idle(
