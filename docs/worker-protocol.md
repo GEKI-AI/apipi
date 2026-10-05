@@ -308,7 +308,7 @@ waiter.
 | `expires_at` | time | S3 only. When the URL stops working. |
 | `path` | string | Filesystem only. The store-root relative path the worker MUST write. |
 | `object_id` | string | The object key of the upload. |
-| `file_id` | string | For kind `input_image`: the id of the file row, for the `input_image` item part. Only workers without the feature `image_refs` upload input images. |
+| `file_id` | string | Never set. It carried the file id for the removed kind `input_image`. The field stays because removing a field needs a new protocol version. |
 | `code`, `message` | string | The refusal. See [Errors and close codes](#errors-and-close-codes). |
 
 ## Command ops
@@ -686,7 +686,7 @@ turn is rejected as `turn_mismatch`.
 | `usage` | `turn_id`, `status`, `model`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `cache_read_tokens`, `cache_write_tokens` (integers, 0 or more), `latency_ms`, `request_id`, `user_id`, `error_code`, `artifact_bytes`, `tool_names`, `tool_counts`, `mcp_names`, `mcp_counts`, and `failure` (`{message, code, failure_source, retryable, upstream_status, legacy_code, upstream_attempts}`). One per turn. |
 | `session.status` | `status` (`idle`, `in_progress`, `requires_action`, `failed`), `required_actions` (list). At least one is set. |
 | `error` | `code`, `message`, `turn_id`. The API stores an `agent.session.error` event. |
-| `artifact.presign` | `request_id` (UUID), `kind` (`artifact`, `pi_session`, `input_image`), `filename`, `content_type`, `size` (integer, 1 or more), `sha256` (hex), `turn_id`. The kind `input_image` is sent only by workers without the feature `image_refs`. The API still accepts it from them. |
+| `artifact.presign` | `request_id` (UUID), `kind` (`artifact`, `pi_session`), `filename`, `content_type`, `size` (integer, 1 or more), `sha256` (hex), `turn_id`. The kind `input_image` was sent by workers older than 0.15.0. It still parses, so that such a worker gets an answer, but the API refuses it (see [Removed upload kind](#removed-upload-kind)). |
 | `artifact.completed` | `upload_id` (UUID from the reply), `path` (filesystem only), `name`, `size`, `sha256`, `turn_id`. |
 | `session.stopped` | `reason` (`stop`). Completes `session.stop`. The API deletes the session blobs when it applies it. |
 | `workspace.reaped` | `reason` (`idle`). A receipt that the idle reaper wiped a workspace. It changes nothing on the API. |
@@ -944,7 +944,7 @@ and counted. The reasons are `not_leased`, `turn_mismatch`, `unknown_turn`,
 
 | Message | Codes |
 | --- | --- |
-| `artifact.presign.reply` with `ok: false` | `artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large`, `invalid_envelope`, `ingest_error`. |
+| `artifact.presign.reply` with `ok: false` | `artifact_store`, `artifact_too_large`, `workspace_too_large`, `invalid_envelope`, `ingest_error`. |
 | `search.reply` with `ok: false` | `search_denied`, `search_unavailable`, `search_timeout`, `search_failed`, `invalid_request`. |
 
 ### Failure codes of a turn
@@ -996,7 +996,7 @@ names the receiver does not know: it ignores them.
 | `presign` | `artifact.presign`, `artifact.presign.reply`, and `artifact.completed`. | Yes |
 | `lease_cursor` | `payload.last_seq` in `turn.start`, `turn.continue`, and `sandbox.boot`. | Yes |
 | `session_stopped` | The worker acks `session.stop` on receipt. The durable `session.stopped` envelope completes it, and the API waits up to 15 seconds for it. | No |
-| `image_refs` | `turn.start` carries input images as [image references](#image-references) in `parts`, and the worker no longer uploads them with the kind `input_image`. | No |
+| `image_refs` | `turn.start` carries input images as [image references](#image-references) in `parts`, and the worker no longer uploads them with the kind `input_image`, which the API refuses (see [Removed upload kind](#removed-upload-kind)). | No |
 | `file_refs` | `turn.start` carries the `input_file` parts of a session without a computer as [file references](#input-file-references) in `parts`. | No |
 | `session_files` | `turn.start` carries the `input_file` parts of a session with a computer as [workspace files](#workspace-files), and the context carries `session_files`. | No |
 | `env_credentials` | The worker uses `context.env_credentials` when it starts a sandbox: placeholders in the guest environment, secret injection in the egress gateway, and the git credential helper. | No |
@@ -1033,6 +1033,29 @@ affected.
 the API. A worker with `image_refs` accepts only image references and
 rejects the old inline image parts of an older API, so an older API must not
 run with newer workers while users send images.
+
+### Removed upload kind
+
+Workers older than 0.15.0 did not list `image_refs` and uploaded each input
+image with an `artifact.presign` of kind `input_image`. The API presigned
+that upload to the final key of the file. The kind is removed. A worker
+that does not list `image_refs` never gets a turn with images, because the
+API fails such a turn with `501` `unsupported_op`, so it has no reason to
+send the kind. When an `artifact.presign` with the kind `input_image` still
+arrives, the API answers it with `ok: false`, code `artifact_store`, and a
+message that asks to upgrade the worker to 0.15.0 or later. It reserves no
+upload slot and presigns no URL. The envelope is rejected with
+`artifact_store` and acked past, and the worker fails the turn with that
+code. An `artifact.completed` for an `input_image` upload slot that an
+older API reserved is rejected with `artifact_store` too, and no file is
+created.
+
+This is not a new protocol version. The kind `input_image` stays in the
+schema of `artifact.presign` and `file_id` stays in
+`artifact.presign.reply`, so that an older worker's envelope still parses
+and the refusal reaches it as a normal `ok: false` reply. A refusal with
+`ok: false` was always a valid answer to a presign. The API never
+presigns a PUT to a `files` or `skills` key for a worker.
 
 ## Security rules for a worker
 

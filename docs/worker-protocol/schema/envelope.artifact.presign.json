@@ -3,7 +3,7 @@
   "description": "One worker to API envelope: `{v, session_id, turn_id, seq, type, payload}`.\n\nA frame with `v` is an envelope, a frame without it is a control\nmessage. `turn_id` is set for turn-scoped types and null otherwise.",
   "properties": {
     "payload": {
-      "description": "Worker asks the API for an artifact upload slot.\n\nThe socket carries only this metadata, never file bytes. The API\nchecks quotas before issuing a URL (S3) or reserving the write\n(shared filesystem), and the key is bound under the session prefix.",
+      "description": "Worker asks the API for an artifact upload slot.\n\nThe socket carries only this metadata, never file bytes. The API\nchecks quotas before issuing a URL (S3) or reserving the write\n(shared filesystem), and the key is bound under the session prefix.\nThe kind `input_image` was sent by workers before 0.15.0. It still\nparses, and the API refuses it with `ok: False` and `artifact_store`.",
       "properties": {
         "content_type": {
           "anyOf": [

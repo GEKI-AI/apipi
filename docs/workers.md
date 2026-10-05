@@ -203,7 +203,7 @@ API to worker:
 | --- | --- | --- |
 | `hello` | `ok`, `protocol`, `worker_id`, `generation`, `connection_id`, `lease_ttl_seconds`, `heartbeat_seconds`, `sessions`, `store_check`, `revoke`, `ttl`, `features` | Register succeeded. `store_check` is present only for the filesystem store. |
 | `command` | `id`, `session_id`, `lease_id`, `op`, `payload` | `op` is `turn.start`, `turn.continue`, `turn.cancel`, `session.stop`, or `sandbox.boot`. The `id` is the idempotency key: the worker acks a retransmit but never dispatches it twice, so a duplicate `turn.start` cannot start a second turn. `turn.start`, `turn.continue`, and `sandbox.boot` carry `payload.last_seq`, the session sequence cursor (see [Sequence on a new lease](#sequence-on-a-new-lease)). `turn.start` carries input images in `payload.parts` as store references (`file_id`, `object_id`, `url` or `local_path`, `mime_type`, `size_bytes`), never as bytes, and only to a worker that listed the feature `image_refs`. In a session without a computer it carries `input_file` parts the same way (`type: "file"`, plus `filename` and `model_input` `text` or `image`), only to a worker that listed the feature `file_refs`. In a session with a computer an `input_file` part has `model_input` `workspace` and a `path`, and the context lists every attachment of the session in `session_files`; the API sends both only to a worker that listed the feature `session_files`. |
-| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix (artifacts and Pi sessions) or under the files prefix (`input_image`, with `file_id` for the item part; only workers without the feature `image_refs` send it); the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. `expires_at` is an RFC 3339 UTC time with `Z` and milliseconds, for example `2026-01-02T03:04:05.678Z`. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`, `payload_too_large` for oversize input images). |
+| `artifact.presign.reply` | `session_id`, `request_id`, `ok`, `unchanged`, `upload_id`, `artifact_id`, `url`, `headers`, `expires_at`, `path`, `object_id`, `file_id`, `code`, `message` | Answer to one durable `artifact.presign` envelope. S3 carries a short-lived presigned PUT URL bound to a key under the session prefix; the filesystem store carries `path`, the store-root relative path the worker must write, and no URL. When the latest stored bytes already match the presigned digest the reply carries `unchanged` instead (no URL, no path, no `upload_id`) and the worker skips the upload. `expires_at` is an RFC 3339 UTC time with `Z` and milliseconds, for example `2026-01-02T03:04:05.678Z`. Quota failures arrive as `ok: false` with today's store codes (`artifact_store`, `artifact_too_large`, `workspace_too_large`). `file_id` is never set: it belonged to the removed `input_image` kind, which the API refuses with `ok: false` and `artifact_store`. |
 | `search.reply` | `session_id`, `request_id`, `ok`, `results`, `code`, `message` | Answer to one `search.request`. `results` is a list of `title`, `url`, `snippet`, and `published_date` (nullable), the same for every provider. On failure `ok` is false, `code` is one of `search_denied`, `search_unavailable`, `search_timeout`, `search_failed`, or `invalid_request`, and `message` is a short text that is safe to show the model. |
 | `lease.revoke` | `session_id`, `lease_id` | Lease is no longer valid. |
 | `inventory.reply` | `revoke: [lease.revoke]`, `ttl: {session_id: {...}}` | Answer to `inventory` (and part of `hello`): sessions to tear down plus reaper TTLs. A revoke entry for an on-disk workspace the worker holds no lease for has no `lease_id`. |
@@ -232,11 +232,11 @@ for the filesystem store) and verifies the object (S3 `HEAD` size and
 checksum, or the shared-root file size and checksum) before writing
 rows. Artifacts are stored with the presigned `artifact_id`, so the
 object and the row stay bound; Pi sessions update the session pointer
-the turn context uses for cold restore; input images from workers
-without the feature `image_refs` create file rows with the returned
-`file_id`. A `completed` with a foreign `upload_id`,
-a path outside the expected key, or a checksum or size mismatch is
-rejected.
+the turn context uses for cold restore. A presign of the removed kind
+`input_image` is refused with `ok: false` and `artifact_store`. A
+`completed` with a foreign `upload_id`, a path outside the expected
+key, a checksum or size mismatch, or an `input_image` upload slot of an
+older API is rejected.
 `sandbox.status` carries a sandbox phase (`starting`, `ready`,
 `stopped`) with the same fields the pool used to pass to
 `record_transition`; the API applies that transition, so the
@@ -527,7 +527,7 @@ protocol as it was before features existed, so old peers keep working.
 | `presign` | `artifact.presign`, `artifact.completed`, and `artifact.presign.reply` | Yes |
 | `lease_cursor` | `payload.last_seq` in `turn.start`, `turn.continue`, and `sandbox.boot` | Yes |
 | `session_stopped` | The worker acks `session.stop` on receipt, and the durable `session.stopped` envelope is the completion that the API waits for | No |
-| `image_refs` | `turn.start` carries input images as store references in `parts`, and the worker no longer uploads them as `input_image` | No |
+| `image_refs` | `turn.start` carries input images as store references in `parts`, and the worker no longer uploads them as `input_image`. The API refuses that upload kind since it was removed, so a worker older than 0.15.0 must be upgraded | No |
 | `file_refs` | `turn.start` carries the `input_file` parts of a session without a computer as store references in `parts` | No |
 | `session_files` | `turn.start` carries the `input_file` parts of a session with a computer as workspace files, and the context carries `session_files` | No |
 
@@ -688,8 +688,11 @@ with no blobs or objects, and `OutboxSink` uploads through
 `artifact.presign` (outbox) -> reply -> PUT (S3, plain HTTPS with no
 credentials) or shared-root write (filesystem, to the reply `path`) ->
 `artifact.completed` (outbox) for the `artifact` and `pi_session`
-kinds, including the killed-process harvest. The API still accepts the
-`input_image` kind from workers without the feature `image_refs`. Quota
+kinds, including the killed-process harvest. Workers older than 0.15.0
+uploaded input images with the kind `input_image`. The API no longer
+accepts it: it answers that `artifact.presign` with `ok: false`, code
+`artifact_store`, and a message that asks to upgrade the worker, and it
+never presigns a PUT to a `files` or `skills` key for a worker. Quota
 failures raise the usual codes so the turn fails
 (`artifact_store` fails the turn, other quota codes emit the session
 error event). The worker uploads every changed file; the API keeps the latest
@@ -704,15 +707,13 @@ the same codes.
 
 With `APIPI_ARTIFACT_STORE=s3` (the recommended production setup)
 the worker sends durable `artifact.presign` with the session id, kind
-(`artifact`, `pi_session`, or `input_image`), filename, content type,
-size, and checksum; the API checks quotas (`max_workspace_bytes` and
-`max_artifact_bytes`, or `max_file_bytes` for input images) before
-issuing a short-lived presigned PUT URL bound to a key under the
-session prefix (or the files prefix with a `file_id` for input
-images); the worker uploads with a plain PUT; then it sends durable
-`artifact.completed` with the `upload_id`, size, and checksum. The API
+(`artifact` or `pi_session`), filename, content type, size, and
+checksum; the API checks quotas (`max_workspace_bytes` and
+`max_artifact_bytes`) before issuing a short-lived presigned PUT URL
+bound to a key under the session prefix; the worker uploads with a
+plain PUT; then it sends durable `artifact.completed` with the `upload_id`, size, and checksum. The API
 verifies the object (`HEAD` size and checksum where available),
-writes the artifact, file, or Pi session pointer rows, and emits the
+writes the artifact or Pi session pointer rows, and emits the
 existing public events. Reads use the presigned GET references in the
 command context, and downloads go through the existing routes. With
 the filesystem store the API returns the exact store-root relative

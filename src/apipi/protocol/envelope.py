@@ -128,6 +128,8 @@ class ArtifactPresignPayload(EnvelopePayload):
     The socket carries only this metadata, never file bytes. The API
     checks quotas before issuing a URL (S3) or reserving the write
     (shared filesystem), and the key is bound under the session prefix.
+    The kind `input_image` was sent by workers before 0.15.0. It still
+    parses, and the API refuses it with `ok: False` and `artifact_store`.
     """
 
     request_id: uuid.UUID

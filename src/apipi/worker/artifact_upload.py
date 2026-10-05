@@ -21,7 +21,7 @@ from pydantic import ValidationError
 
 from apipi.common.dirs import store_root
 from apipi.common.logutil import RateLimitedLog
-from apipi.common.objects import NS_ARTIFACTS, NS_FILES, local_object_path
+from apipi.common.objects import NS_ARTIFACTS, local_object_path
 from apipi.common.store_check import SHARED_STORE_ERROR
 from apipi.config import ConfigError, Settings
 from apipi.protocol import (
@@ -124,12 +124,7 @@ def write_shared_object(settings: Settings, object_id: str, data: bytes) -> str:
 
     _check_id(object_id)
     root = store_root(settings)
-    # File ids are `tenant/file-...` (two parts); session blob keys are
-    # `tenant/key/session/blob`. The presign reply carries the exact
-    # relative path, so this helper stays for tests and direct callers.
-    parts = object_id.strip().strip("/").split("/")
-    namespace = NS_FILES if len(parts) == 2 else NS_ARTIFACTS
-    path = local_object_path(root, namespace, object_id)
+    path = local_object_path(root, NS_ARTIFACTS, object_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return str(path.relative_to(root))
@@ -200,10 +195,9 @@ async def upload_via_presign(
     Appends `artifact.presign` to the outbox, waits for the API reply,
     PUTs (S3) or writes (shared filesystem), then appends
     `artifact.completed`. Quota failures raise today's store errors
-    (`artifact_store`, `artifact_too_large`, `workspace_too_large`,
-    `payload_too_large`) so the turn fails the way direct writes do.
+    (`artifact_store`, `artifact_too_large`, `workspace_too_large`) so
+    the turn fails the way direct writes do.
     """
-    from apipi.common.errors import ApiError
     from apipi.config import DiskLimitError
 
     request_id, presign_payload = presign_envelope(
@@ -249,8 +243,6 @@ async def upload_via_presign(
         if not reply.ok:
             code = reply.code or "artifact_store"
             message = reply.message or "Cannot write artifacts"
-            if code == "payload_too_large":
-                raise ApiError("invalid_request", message, code=code, status_code=413)
             raise DiskLimitError(message, code=code)
         if reply.unchanged:
             # The API already holds these bytes; skip the PUT and the
@@ -289,9 +281,6 @@ async def upload_via_presign(
             "size": len(data),
             "sha256": sha256_hex(data),
         }
-        if reply.file_id:
-            result["file_id"] = reply.file_id
-            result["id"] = reply.file_id
         if reply.artifact_id is not None:
             result["artifact_id"] = str(reply.artifact_id)
         return result

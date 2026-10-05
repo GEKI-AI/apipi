@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The legacy worker upload kind `input_image` (#540). Since 0.15.0 the API sends input images to workers as references (`image_refs`) and gives a worker without that feature no turn with images, so only workers older than 0.15.0 used the kind. The API now answers an `artifact.presign` with the kind `input_image` with `ok: false`, code `artifact_store`, and a message that asks to upgrade the worker. It reserves no upload slot and presigns no URL, so no presigned PUT URL points at a `files` or `skills` key anymore. An `artifact.completed` for an `input_image` upload slot reserved before the upgrade is rejected with `artifact_store` and creates no file. The worker protocol stays version 2: the kind stays in the schema so that the refusal reaches an older worker, and `file_id` in `artifact.presign.reply` is never set. Upgrade note: workers older than 0.15.0 must be upgraded. Since 0.15.0 they get no turns with images, and with this version the API also refuses their input image uploads.
+
 ## [0.15.0] - 2026-10-05
 
 ### Added

@@ -730,7 +730,6 @@ async def _apply(
                 expires_at=issued.get("expires_at"),
                 path=issued.get("path"),
                 object_id=issued.get("object_id"),
-                file_id=issued.get("file_id"),
             ).to_wire()
         )
         return
