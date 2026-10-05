@@ -339,6 +339,21 @@ async def delete_session(
     return True
 
 
+async def _stamp_after_newest(db: AsyncSession, column: Any, *where: Any) -> datetime:
+    """A creation stamp later than every row of the session.
+
+    The wall clock can step back, or differ between API replicas. Callers
+    hold the session row lock, so stamps of one session never tie."""
+    created_at = utc_now()
+    newest = await db.scalar(select(func.max(column)).where(*where))
+    if newest is not None:
+        if newest.tzinfo is None:
+            newest = newest.replace(tzinfo=UTC)
+        if created_at <= newest:
+            created_at = newest + timedelta(microseconds=1)
+    return created_at
+
+
 async def create_turn(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -348,21 +363,9 @@ async def create_turn(
     usage: dict[str, Any] | None = None,
     turn_id: uuid.UUID | None = None,
 ) -> Turn:
-    # Turns are ordered by `created_at` (newest turn, turn list). The wall
-    # clock can step back between two turns, or differ between API
-    # replicas, so a new turn never gets a stamp at or before the turn
-    # created before it. Creation is serialized by the session row lock.
-    created_at = utc_now()
-    newest = await db.scalar(
-        select(func.max(Turn.created_at)).where(
-            Turn.tenant_id == tenant_id, Turn.session_id == session_id
-        )
+    created_at = await _stamp_after_newest(
+        db, Turn.created_at, Turn.tenant_id == tenant_id, Turn.session_id == session_id
     )
-    if newest is not None:
-        if newest.tzinfo is None:
-            newest = newest.replace(tzinfo=UTC)
-        if created_at <= newest:
-            created_at = newest + timedelta(microseconds=1)
     turn = Turn(
         id=turn_id if turn_id is not None else uuid.uuid4(),
         tenant_id=tenant_id,
@@ -396,7 +399,7 @@ async def get_running_turn(
             Turn.session_id == session_id,
             Turn.status == "in_progress",
         )
-        .order_by(Turn.created_at.desc())
+        .order_by(Turn.created_at.desc(), Turn.id.desc())
         .limit(1)
     )
 
@@ -408,7 +411,7 @@ async def get_latest_turn(
     return await db.scalar(
         select(Turn)
         .where(Turn.tenant_id == tenant_id, Turn.session_id == session_id)
-        .order_by(Turn.created_at.desc())
+        .order_by(Turn.created_at.desc(), Turn.id.desc())
         .limit(1)
     )
 
@@ -431,6 +434,9 @@ async def create_item(
     turn_id: uuid.UUID | None = None,
     item_id: uuid.UUID | None = None,
 ) -> Item:
+    created_at = await _stamp_after_newest(
+        db, Item.created_at, Item.tenant_id == tenant_id, Item.session_id == session_id
+    )
     item = Item(
         id=item_id if item_id is not None else uuid.uuid4(),
         tenant_id=tenant_id,
@@ -438,6 +444,7 @@ async def create_item(
         turn_id=turn_id,
         type=type,
         data=data if data is not None else {},
+        created_at=created_at,
     )
     db.add(item)
     await db.flush()
@@ -452,7 +459,7 @@ async def list_turns(
     result = await db.scalars(
         select(Turn)
         .where(Turn.tenant_id == tenant_id, Turn.session_id == session_id)
-        .order_by(Turn.created_at)
+        .order_by(Turn.created_at, Turn.id)
     )
     return list(result)
 
@@ -477,7 +484,7 @@ async def list_items(
     result = await db.scalars(
         select(Item)
         .where(Item.tenant_id == tenant_id, Item.session_id == session_id)
-        .order_by(Item.created_at)
+        .order_by(Item.created_at, Item.id)
     )
     return list(result)
 
@@ -494,6 +501,12 @@ async def create_artifact(
     byte_size: int = 0,
     artifact_id: uuid.UUID | None = None,
 ) -> Artifact:
+    created_at = await _stamp_after_newest(
+        db,
+        Artifact.created_at,
+        Artifact.tenant_id == tenant_id,
+        Artifact.session_id == session_id,
+    )
     artifact = Artifact(
         id=artifact_id if artifact_id is not None else uuid.uuid4(),
         tenant_id=tenant_id,
@@ -503,6 +516,7 @@ async def create_artifact(
         turn_id=turn_id,
         key_id=key_id,
         byte_size=byte_size,
+        created_at=created_at,
     )
     db.add(artifact)
     await db.flush()
@@ -539,7 +553,7 @@ async def list_artifacts(
     result = await db.scalars(
         select(Artifact)
         .where(Artifact.tenant_id == tenant_id, Artifact.session_id == session_id)
-        .order_by(Artifact.created_at)
+        .order_by(Artifact.created_at, Artifact.id)
     )
     return list(result)
 

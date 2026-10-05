@@ -638,6 +638,62 @@ async def test_split_artifact_presign_skips_unchanged(
 
 
 @pytest.mark.anyio
+async def test_unchanged_compares_the_newest_artifact_after_a_clock_step_back(
+    store: Store, tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A clock step back between two versions keeps the list in creation order."""
+    from datetime import datetime, timedelta
+
+    class SteppedBack(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(hours=1)
+
+    bed = await _s3_testbed(store, tmp_path, monkeypatch)
+    tenant_id, session_id, worker_id, _key_id = await _make_session(store)
+    outbox = Outbox()
+    waiters: dict[uuid.UUID, asyncio.Future[dict[str, Any]]] = {}
+    kwargs: dict[str, Any] = {
+        "store": store,
+        "outbox": outbox,
+        "waiters": waiters,
+        "worker_settings": bed["worker_settings"],
+        "api_settings": bed["api_settings"],
+        "worker_id": worker_id,
+        "session_id": session_id,
+        "kind": "artifact",
+        "filename": "outputs/out.bin",
+        "content_type": "application/octet-stream",
+        "api_objects": bed["api_objects"],
+    }
+    first = await _upload_roundtrip(**kwargs, data=b"old-bytes")
+    monkeypatch.setattr("apipi.store.models.datetime", SteppedBack)
+    second = await _upload_roundtrip(**kwargs, data=b"new-bytes")
+    assert len(bed["puts"]) == 2
+    async with store.session() as db:
+        artifacts = await list_artifacts(db, tenant_id, session_id)
+        assert artifacts is not None
+        assert [str(a.id) for a in artifacts] == [
+            first["artifact_id"],
+            second["artifact_id"],
+        ]
+    again = await _upload_roundtrip(**kwargs, data=b"old-bytes")
+    assert again.get("unchanged") is not True
+    assert len(bed["puts"]) == 3
+    same = await _upload_roundtrip(**kwargs, data=b"old-bytes")
+    assert same.get("unchanged") is True
+    assert len(bed["puts"]) == 3
+    async with store.session() as db:
+        artifacts = await list_artifacts(db, tenant_id, session_id)
+        assert artifacts is not None
+        assert [str(a.id) for a in artifacts] == [
+            first["artifact_id"],
+            second["artifact_id"],
+            again["artifact_id"],
+        ]
+
+
+@pytest.mark.anyio
 async def test_split_pi_session_reuses_blob_id(
     store: Store, tmp_path: Path, monkeypatch: Any
 ) -> None:

@@ -279,6 +279,7 @@ class Turn(Base):
     __tablename__ = "turns"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
+        Index("ix_turns_session_created", "tenant_id", "session_id", "created_at"),
         ForeignKeyConstraint(
             ["tenant_id", "session_id"],
             ["sessions.tenant_id", "sessions.id"],
@@ -441,6 +442,7 @@ class Item(Base):
     __tablename__ = "items"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
+        Index("ix_items_session_created", "tenant_id", "session_id", "created_at"),
         ForeignKeyConstraint(
             ["tenant_id", "session_id"],
             ["sessions.tenant_id", "sessions.id"],
@@ -544,6 +546,7 @@ class Artifact(Base):
     __tablename__ = "artifacts"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
+        Index("ix_artifacts_session_created", "tenant_id", "session_id", "created_at"),
         ForeignKeyConstraint(
             ["tenant_id", "session_id"],
             ["sessions.tenant_id", "sessions.id"],
