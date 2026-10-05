@@ -613,7 +613,7 @@ async def test_follow_up_on_live_lease_without_running_turn_is_bounded(
         posted = await _follow_up(client, token, sid)
         assert posted.status_code == 200
         assert posted.json()["status"] == "idle"
-        assert time.monotonic() - start < 30
+        assert time.monotonic() - start < 4
         assert lease_id not in conn.leases
         by_id = await _turn_statuses(client, token, sid)
         assert by_id[str(stale)] == "failed"
