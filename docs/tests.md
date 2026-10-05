@@ -94,7 +94,6 @@ These tests have their own limit:
 | --- | --- | --- |
 | `tests/e2e/test_microvm_pi.py` | 300 s | Boots Firecracker guests and waits up to 90 s for the API and the worker to start |
 | `tests/e2e/test_microvm_egress.py` | 900 s | Waits up to 10 minutes for the probe inside the guest, which reaches hosts on the internet |
-| `tests/unit/test_egress_policy.py::test_each_private_name_gets_its_own_placeholder` | 300 s | Looks up placeholders for 300 private hosts, which takes about a minute |
 
 ## None e2e
 
