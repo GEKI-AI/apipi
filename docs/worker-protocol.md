@@ -238,14 +238,19 @@ had not acked before the release, in the order of the socket, or when
 it sends such a command before it has handled the release. The worker
 takes the lease back when that command arrives. Otherwise the API
 clears the lease, and when the session still has a turn `in_progress`,
-it ends that turn as `failed` with `turn_interrupted`: the release
-comes after the envelopes of the session, so that turn can never
-finish. A command for the session that the API wants to send while it
-handles the release waits until the release has finished (up to 5
-seconds), so the worker never gets a command for the lease it has just
-released. A message or a `sandbox.boot` then goes out with a new
-`lease_id`; a cancel, a stop, or a function result is answered as for a
-session without a lease.
+or a turn that waits for tool results in `requires_action`, it ends that
+turn as `failed` with `turn_interrupted`: the release comes after the
+envelopes of the session, and a `turn.continue` goes only to the lease
+that holds the turn, so that turn can never finish. A command for the
+session that the API wants to send while it handles the release waits
+until the release has finished (up to 5 seconds), so the worker never
+gets a command for the lease it has just released. A message or a
+`sandbox.boot` then goes out with a new `lease_id`; a cancel or a stop
+is answered as for a session without a lease. A function result that
+the API had already checked against the waiting turn gets `429`
+`capacity`, because the release ended that turn; a function result that
+arrives after the release gets `400` `invalid_request`, because the
+session is no longer `requires_action`.
 
 #### `lease.revoke` (API to worker)
 
@@ -493,7 +498,11 @@ as `{type: "input_file", file_id, filename, path}`.
 
 A worker MUST NOT continue the turn while other function calls of the same
 turn are open. It removes the answered call from the open list, reports the
-rest with a `session.status` envelope, and continues only when none is open.
+rest with a `session.status` envelope, then sends the event
+`agent.session.requires_action` again with the same `turn_id` and the open
+calls in `required_actions`, and continues only when none is open. The API
+waits for that event to answer the client, so a worker that leaves it out
+keeps the request open until the turn timeout.
 
 ### `turn.cancel`, `session.stop`
 
@@ -734,8 +743,8 @@ A lease is owned by the API. It is stored on the session row.
 | --- | --- | --- |
 | Granted | The API places a session and sends `turn.start` or `sandbox.boot` with a new `lease_id`. | The command is not acked yet. |
 | Active | The worker acks the command. | Every heartbeat, command ack, and committed batch renews it to now plus the lease TTL. |
-| Released | The worker sends `lease.release` that crosses no `turn.start`, `turn.continue`, or `sandbox.boot` on the lease, or a `session.stop` completes. | The API cleared the lease and ended a turn that was still `in_progress` with `turn_interrupted`. |
-| Expired | The lease TTL passes without a renewal. | The API clears the lease, stores `agent.session.error` with `worker_lease_expired`, fails the turn, and sends `lease.revoke`. The turn is not moved to another worker. |
+| Released | The worker sends `lease.release` that crosses no `turn.start`, `turn.continue`, or `sandbox.boot` on the lease, or a `session.stop` completes. | The API cleared the lease and ended a turn that was still `in_progress` or waiting in `requires_action` with `turn_interrupted`. |
+| Expired | The lease TTL passes without a renewal. | The API clears the lease, stores `agent.session.error` with `worker_lease_expired`, sends `lease.revoke`, and then ends a turn that was still `in_progress` or waiting in `requires_action` with `turn_interrupted`. The turn is not moved to another worker. |
 | Orphaned | An inventory does not list a leased session and no command for it is unacked. | The API stores `agent.session.error` with `worker_orphaned` and clears the lease. |
 | Revoked | `lease.revoke`, or a `revoke` entry in `hello` or `inventory.reply`. | The worker drops the session. |
 
@@ -875,7 +884,7 @@ need exactly that value, but the text says what breaks when a worker differs.
 
 | Name | Value | Set by | When it runs out |
 | --- | --- | --- | --- |
-| Lease TTL | 30 s by default | API, sent in `hello.lease_ttl_seconds` | The lease is expired: the turn fails with `worker_lease_expired` and the API sends `lease.revoke`. |
+| Lease TTL | 30 s by default | API, sent in `hello.lease_ttl_seconds` | The lease is expired: the session gets `agent.session.error` with `worker_lease_expired`, an open turn fails with `turn_interrupted`, and the API sends `lease.revoke`. |
 | Heartbeat interval | Lease TTL divided by 3, at least 0.05 s and at most 10 s | API, sent in `hello.heartbeat_seconds` | A worker that sends later risks an expired lease. The worker sends it from a timer of its own, not when the socket is quiet. |
 | WebSocket ping | Every 5 s, timeout 10 s | Worker | The worker closes the socket (`ping_timeout`) and reconnects. |
 | Register timeout | 15 s | API | The API sends `error` with `register_timeout` and closes with `1008`. |

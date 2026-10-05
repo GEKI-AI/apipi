@@ -1200,6 +1200,13 @@ async def continue_turn(
             session_id,
             changes={"required_actions": remaining},
         )
+        await sink.append_event(
+            hub,
+            tenant_id,
+            session_id,
+            type="agent.session.requires_action",
+            data={"turn_id": str(turn_id), "required_actions": remaining},
+        )
         return
     ended = False
     try:

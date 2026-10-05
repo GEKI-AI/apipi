@@ -1265,6 +1265,7 @@ async def list_expired_leases(db: AsyncSession, now: datetime) -> list[SessionRo
     result = await db.scalars(
         select(SessionRow)
         .where(SessionRow.lease_id.is_not(None), SessionRow.lease_until <= now)
+        .order_by(SessionRow.tenant_id, SessionRow.id)
         .with_for_update(skip_locked=True)
     )
     return list(result)
@@ -1735,6 +1736,7 @@ async def lock_session(
         select(SessionRow)
         .where(SessionRow.tenant_id == tenant_id, SessionRow.id == session_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
 
 
