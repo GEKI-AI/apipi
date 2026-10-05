@@ -288,23 +288,34 @@ path, or an agent input uses it, the file gets a free name like
 `report (2).xlsx`. The name is chosen on the API in one transaction
 with the binding, so two messages that arrive at the same time get two
 names. A file that is already bound to the session with a path keeps
-that path when it is attached again, so sending the same `file_id` twice
-does not copy it twice. The user item and the prompt carry the final
-path.
+that path when it is attached again. The user item and the prompt carry
+the final path.
 
 The turn context lists every session file of the session, not only the
-new ones. Before Pi starts the turn, the worker writes each session file
-whose path is missing in the session directory, with the same "write
-only when missing" rule as `environment.files`. A file the agent changed
-stays changed until the sandbox is wiped, and after a TTL wipe or a
-restart the next turn writes every session file again under the same
-path. A file deleted from the Files API is no longer bound to the
-session, so it is not restored, and the turn does not fail. In
-`microvm` a guest that is already running does not see new files in the
-session directory, so the worker also copies the files it wrote into the
-running guest over a vsock port before the turn. If that copy fails, the
-worker stops the guest, and the turn boots a new guest from the session
-directory, which has the files.
+new ones. Before Pi starts the turn, the worker writes the files of the
+current message at their paths, and replaces whatever is there: a file
+the agent created or changed at that path, or an older attachment whose
+file was deleted from the Files API, so its path was free again. The
+agent always sees the file the user attached with this message. This
+also means that attaching the same `file_id` again resets the file to
+its original content. The other session files of earlier messages are
+restored with the same "write only when missing" rule as
+`environment.files`: a file the agent changed stays changed until the
+sandbox is wiped, and after a TTL wipe or a restart the next turn writes
+every session file again under the same path. A file deleted from the
+Files API is no longer bound to the session, so it is not restored, and
+the turn does not fail.
+
+In `microvm` a guest that is already running does not see new files in
+the session directory, so the worker also copies the files of the
+current message into the running guest over a vsock port before the
+turn, and the guest replaces a file at the same path. If that copy
+fails, the turn does not start: the session gets
+`agent.session.environment.failed` and `agent.session.error` with code
+`attachment_push_failed`, which is retryable, and the worker stops the
+guest (stop reason `push_failed`). Send the message again. The next turn
+boots a new guest from the session directory, which already has the
+files.
 
 Pi learns about the new files of a turn from one line per file in the
 user message, at the place of the part, for example

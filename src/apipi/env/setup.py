@@ -574,6 +574,19 @@ def write_inline_files(
         dest.write_bytes(data)
 
 
+def replace_workspace_files(workspace: Path, files: list[tuple[str, bytes]]) -> None:
+    """Write files over what the workspace has, through a temp file and a rename."""
+    for raw_path, data in files:
+        dest = workspace_file_path(workspace, raw_path)
+        temp = dest.with_name(f".{dest.name}.apipi-tmp")
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            temp.write_bytes(data)
+            os.replace(temp, dest)
+        except OSError as exc:
+            raise SetupError(f"cannot write {raw_path}: {exc.strerror}") from exc
+
+
 def prepare_workspace(
     workspace: Path,
     environment: dict[str, Any],

@@ -85,7 +85,7 @@ from apipi.services.env_none import (
     reject_builtin_tools_for_env_none,
     validate_env_none,
 )
-from apipi.services.files import FileService, attach_session_files
+from apipi.services.files import Bindings, FileService, attach_session_files
 from apipi.services.model_credentials import ModelCredentials
 from apipi.services.search import SearchResolver, require_search
 from apipi.services.session_defaults import (
@@ -449,7 +449,7 @@ class SessionService:
         files: list[InputFile] | None = None,
         environment: dict[str, Any] | None = None,
         caller_id: str | None = None,
-    ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    ) -> tuple[list[dict[str, Any]], list[str], Bindings]:
         """The `turn.start` parts, the new file ids, and the new bindings.
 
         Data URL images are stored as files of kind `image` owned by the
@@ -476,11 +476,9 @@ class SessionService:
         bound = [image[0] for image in images] + [
             item.file_id for item in items if item.model_input != "workspace"
         ]
-        attached: list[str] = []
+        attached = Bindings()
         if session_id is not None:
             try:
-                if bound:
-                    await self.files.bind_session(tenant_id, session_id, bound)
                 if workspace:
                     paths, attached = await self.files.attach(
                         tenant_id,
@@ -494,7 +492,10 @@ class SessionService:
                         next(placed) if item.model_input == "workspace" else item
                         for item in items
                     ]
+                if bound:
+                    await self.files.bind_session(tenant_id, session_id, bound)
             except BaseException:
+                await self.files.unbind(tenant_id, session_id, attached)
                 await self._drop_files(tenant_id, created)
                 raise
         file_refs = [self._file_ref(tenant_id, item) for item in items]
@@ -1506,8 +1507,6 @@ class SessionService:
                     ),
                 )
         else:
-            if stale:
-                await self.execution.prepare_for_new_turn(tenant_id, session_id)
             with start_span(
                 self.tracing,
                 "session",
@@ -1530,6 +1529,8 @@ class SessionService:
                     caller_id=user_id,
                 )
                 try:
+                    if stale:
+                        await self.execution.prepare_for_new_turn(tenant_id, session_id)
                     await self.execution.run_turn(
                         tenant_id,
                         session_id,

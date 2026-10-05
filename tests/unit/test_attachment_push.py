@@ -12,7 +12,7 @@ import pytest
 from apipi.config import ConfigError, Settings
 from apipi.protocol import TurnStartCommandPayload
 from apipi.services.files import attachment_name, free_attachment_path
-from apipi.worker.pi.guest import handle_push, unpack_push_tar
+from apipi.worker.pi.guest import handle_push, unpack_push_stream
 from apipi.worker.pi.microvm import (
     VSOCK_PUSH_PORT,
     push_tar_bytes,
@@ -132,21 +132,25 @@ def test_session_files_need_the_feature() -> None:
     )
 
 
-def test_guest_writes_only_missing_files(tmp_path: Path) -> None:
+def test_guest_replaces_pushed_files(tmp_path: Path) -> None:
     (tmp_path / "attachments").mkdir()
-    (tmp_path / "attachments" / "kept.txt").write_bytes(b"agent edit")
+    (tmp_path / "attachments" / "data.csv").write_bytes(b"agent content")
     data = _tar(
         {
             "attachments/new.txt": b"new",
-            "attachments/kept.txt": b"original",
+            "attachments/data.csv": b"user content",
             "../escape.txt": b"x",
             "/abs.txt": b"x",
             ".apipi/env": b"x",
         }
     )
-    assert unpack_push_tar(data, tmp_path) == 1
+    assert unpack_push_stream(io.BytesIO(data), tmp_path) == 2
     assert (tmp_path / "attachments" / "new.txt").read_bytes() == b"new"
-    assert (tmp_path / "attachments" / "kept.txt").read_bytes() == b"agent edit"
+    assert (tmp_path / "attachments" / "data.csv").read_bytes() == b"user content"
+    assert sorted(path.name for path in (tmp_path / "attachments").iterdir()) == [
+        "data.csv",
+        "new.txt",
+    ]
     assert not (tmp_path.parent / "escape.txt").exists()
     assert not (tmp_path / ".apipi").exists()
 
@@ -158,10 +162,16 @@ def test_guest_push_answers_ok_or_err(tmp_path: Path) -> None:
         host.sendall(f"{len(data)}\n".encode() + data)
         handle_push(guest, tmp_path)
         assert host.recv(16) == b"OK\n"
-        host.sendall(b"nonsense\n")
+        host.sendall(f"{len(data)}\n".encode() + data[:100])
+        host.shutdown(socket.SHUT_WR)
         handle_push(guest, tmp_path)
         assert host.recv(32).startswith(b"ERR")
     assert (tmp_path / "attachments" / "a.txt").read_bytes() == b"a"
+    bad_host, bad_guest = socket.socketpair()
+    with bad_host, bad_guest:
+        bad_host.sendall(b"nonsense\n")
+        handle_push(bad_guest, tmp_path)
+        assert bad_host.recv(32).startswith(b"ERR")
 
 
 async def test_host_pushes_files_over_the_vsock_port(tmp_path: Path) -> None:
@@ -245,17 +255,15 @@ async def test_new_attachments_are_pushed_into_a_running_guest() -> None:
     files = [("attachments/a.txt", b"a")]
     proc = _Proc()
     pool = cast(Any, _Pool(proc))
-    await _push_attachments(pool, session_id, files)
-    await _push_attachments(pool, session_id, [])
-    await _push_attachments(None, session_id, files)
+    assert await _push_attachments(pool, session_id, files)
+    assert await _push_attachments(pool, session_id, [])
+    assert await _push_attachments(None, session_id, files)
     assert proc.pushed == [files]
-    assert pool.killed == []
     failing = cast(Any, _Pool(_Proc(fail=True)))
-    await _push_attachments(failing, session_id, files)
-    assert failing.killed == [(session_id, "respawn")]
+    assert not await _push_attachments(failing, session_id, files)
+    assert failing.killed == []
     idle = cast(Any, _Pool(None))
-    await _push_attachments(idle, session_id, files)
-    assert idle.killed == []
+    assert await _push_attachments(idle, session_id, files)
 
 
 async def test_settled_waits_for_a_boot_in_flight(settings: Settings) -> None:
@@ -269,3 +277,33 @@ async def test_settled_waits_for_a_boot_in_flight(settings: Settings) -> None:
     future.set_exception(RuntimeError("boot failed"))
     pool._inflight.pop(session_id)
     assert await waiter is None
+
+
+async def test_host_push_times_out_when_the_guest_hangs(tmp_path: Path) -> None:
+    path = tmp_path / "vsock.sock"
+
+    async def handler(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        await reader.readline()
+        writer.write(f"OK {VSOCK_PUSH_PORT}\n".encode())
+        await writer.drain()
+        await asyncio.sleep(5)
+
+    server = await asyncio.start_unix_server(handler, path=str(path))
+    async with server:
+        with pytest.raises(TimeoutError):
+            await push_workspace_files(path, [("attachments/a", b"a")], timeout=0.3)
+
+
+async def test_kill_without_the_hook_keeps_the_lease(settings: Settings) -> None:
+    hooked: list[uuid.UUID] = []
+
+    async def on_kill(session_id: uuid.UUID, _proc: Any) -> None:
+        hooked.append(session_id)
+
+    pool = PiPool(settings, on_kill=on_kill)
+    first, second = uuid.uuid4(), uuid.uuid4()
+    await pool.kill(first, reason="push_failed", hook=False)
+    await pool.kill(second, reason="push_failed")
+    assert hooked == [second]

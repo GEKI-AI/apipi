@@ -1752,6 +1752,26 @@ async def unbind_files(
     )
 
 
+async def clear_paths(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    file_ids: Collection[str],
+) -> None:
+    """Clear the workspace path of these files' bindings to one session."""
+    if not file_ids:
+        return
+    await db.execute(
+        update(SessionFileRow)
+        .where(
+            SessionFileRow.tenant_id == tenant_id,
+            SessionFileRow.session_id == session_id,
+            SessionFileRow.file_id.in_(list(file_ids)),
+        )
+        .values(path=None)
+    )
+
+
 async def link_session_file_item(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1914,7 +1934,7 @@ async def delete_unbound_attachments(
         )
     ).all()
     deleted: list[tuple[uuid.UUID, str]] = []
-    for tenant_id, file_id in found:
+    for tenant_id, file_id in sorted(found, key=lambda row: (str(row[0]), row[1])):
         await db.execute(
             select(FileRow.id)
             .where(FileRow.tenant_id == tenant_id, FileRow.id == file_id)

@@ -41,6 +41,7 @@ from apipi.env.setup import (
     SetupError,
     hosted_workspace,
     provision_hosted_async,
+    replace_workspace_files,
     session_env_from,
 )
 from apipi.protocol import (
@@ -64,6 +65,7 @@ from apipi.worker.turn_context import (
     fetch_input_files,
     fetch_input_images,
     fetch_pi_session_bytes,
+    fetch_ref_bytes,
     materialize_skill_zips,
     materialize_workspace_files,
     mcp_servers_from_context,
@@ -534,28 +536,47 @@ def _prompt_text(text: str, parts: list[dict[str, Any]], blocks: list[str]) -> s
     return "\n".join(out)
 
 
+ATTACHMENT_PUSH_FAILED = (
+    "Cannot copy the attached files into the sandbox. Send the message again."
+)
+
+
+def _turn_attachments(
+    parts: list[dict[str, Any]], session_files: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The `session_files` references of the workspace parts of this turn."""
+    wanted = {
+        str(part.get("path"))
+        for part in parts
+        if part.get("type") == "file" and part.get("model_input") == "workspace"
+    }
+    return [ref for ref in session_files if ref.get("path") in wanted]
+
+
 async def _push_attachments(
     pool: PiPool | None, session_id: uuid.UUID, files: list[tuple[str, bytes]]
-) -> None:
-    """Copy new session files into a running guest.
+) -> bool:
+    """Copy the attachments of this turn into a running guest.
 
-    A microvm guest sees the session directory only at boot. When the
-    push fails, the guest is stopped, and the turn boots a new one from
-    the session directory, which has the files.
+    A microvm guest sees the session directory only at boot. The guest
+    replaces a file at the same path. Returns False when the guest did not
+    take the files.
     """
     if pool is None or not files:
-        return
+        return True
     proc = await pool.settled(session_id)
     if proc is None or proc.push_files is None:
-        return
+        return True
     try:
         await proc.push_files(files)
-    except (OSError, TimeoutError, ConfigError):
+    except (OSError, EOFError, TimeoutError, ValueError, ConfigError):
         log.warning(
-            "attachment push failed, restarting the sandbox",
+            "attachment push failed",
             extra={"session_id": str(session_id)},
+            exc_info=True,
         )
-        await pool.kill(session_id, reason="respawn")
+        return False
+    return True
 
 
 def _spawn_identity_empty(user_id: str | None, org_id: str | None) -> dict[str, Any]:
@@ -665,22 +686,33 @@ async def run_turn(
             gateway_allowlist = False
             gateway_hosts: tuple[str, ...] = ()
             extra_files: list[tuple[str, bytes]] = []
+            restored: list[tuple[str, bytes]] = []
             attachments: list[tuple[str, bytes]] = []
+            workspace_dir = hosted_workspace(row.environment)
             if settings is not None:
                 gateway_allowlist = settings.microvm_egress_allowlist
                 if settings.run_mode == "microvm":
                     from apipi.worker.pi.microvm import microvm_egress_hosts
 
                     gateway_hosts = tuple(microvm_egress_hosts(settings))
-                workspace_dir = hosted_workspace(row.environment)
                 extra_files = await materialize_workspace_files(
                     [ref.model_dump() for ref in ctx.files], settings, workspace_dir
                 )
-                attachments = await materialize_workspace_files(
-                    [ref.model_dump() for ref in ctx.session_files],
+                session_files = [ref.model_dump() for ref in ctx.session_files]
+                current = (
+                    _turn_attachments(ordered, session_files)
+                    if workspace_dir is not None
+                    else []
+                )
+                restored = await materialize_workspace_files(
+                    [ref for ref in session_files if ref not in current],
                     settings,
                     workspace_dir,
                 )
+                attachments = [
+                    (str(ref["path"]), await fetch_ref_bytes(ref, settings))
+                    for ref in current
+                ]
             await provision_hosted_async(
                 row.environment,
                 run_mode=settings.run_mode if settings is not None else "none",
@@ -689,14 +721,27 @@ async def run_turn(
                 ),
                 gateway_allowlist=gateway_allowlist,
                 gateway_hosts=gateway_hosts,
-                extra_files=[*extra_files, *attachments],
+                extra_files=[*extra_files, *restored],
                 timeout=(
                     settings.turn_timeout.total_seconds()
                     if settings is not None
                     else None
                 ),
             )
-            await _push_attachments(pool, session_id, attachments)
+            if workspace_dir is not None and attachments:
+                replace_workspace_files(workspace_dir, attachments)
+            if not await _push_attachments(pool, session_id, attachments):
+                if pool is not None:
+                    await pool.kill(session_id, reason="push_failed", hook=False)
+                await report_environment_failed(
+                    sink,
+                    hub,
+                    tenant_id,
+                    session_id,
+                    ATTACHMENT_PUSH_FAILED,
+                    code="attachment_push_failed",
+                )
+                return
             if settings is not None:
                 directory = row.environment.get("directory")
                 if isinstance(directory, str) and directory:

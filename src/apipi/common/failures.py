@@ -104,6 +104,7 @@ _KNOWN: dict[str, tuple[str, bool]] = {
     "pi_memory": ("internal", False),
     "spawn_failed": ("internal", True),
     "sandbox_boot_failed": ("internal", True),
+    "attachment_push_failed": ("internal", True),
     "artifact_store": ("internal", True),
     "worker_lease_expired": ("internal", True),
     "worker_command_timeout": ("internal", True),

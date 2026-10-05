@@ -11,7 +11,7 @@ from tests.support.split_worker import api_settings_for, split_client_for
 from tests.support.workspace import hosted_dir
 
 from apipi.common.errors import ApiError
-from apipi.config import Settings
+from apipi.config import ConfigError, Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import AuthRequest, tenant_from_key
 from apipi.gateway.content import InputFile
@@ -568,3 +568,165 @@ async def test_new_attachments_reach_a_running_guest(
             await _send(client, token, session_id, _text("next"))
         ).status_code == 200
     assert pushed == [[("attachments/two.csv", b"two")]]
+
+
+async def test_a_new_attachment_replaces_an_old_file_at_its_path(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    harness = FakeHarness()
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, _worker):
+        token = "attach-replace"
+        session_id = await _session(client, token)
+        directory = hosted_dir(settings, token, session_id)
+        old = await _upload(client, token, b"old", "report.csv", "text/csv")
+        assert (await _send(client, token, session_id, _file(old))).status_code == 200
+        deleted = await client.delete(f"/v1/files/{old}", headers=_auth(token))
+        assert deleted.status_code == 200
+        new = await _upload(client, token, b"new", "report.csv", "text/csv")
+        assert (await _send(client, token, session_id, _file(new))).status_code == 200
+        replaced = (directory / "attachments" / "report.csv").read_bytes()
+        (directory / "attachments" / "data.csv").write_bytes(b"agent content")
+        user = await _upload(client, token, b"user content", "data.csv", "text/csv")
+        assert (await _send(client, token, session_id, _file(user))).status_code == 200
+        seen = harness.workspaces[-1]["attachments/data.csv"]
+        (directory / "attachments" / "data.csv").write_bytes(b"agent edit")
+        assert (await _send(client, token, session_id, _text("go"))).status_code == 200
+        kept = (directory / "attachments" / "data.csv").read_bytes()
+        again = await _send(client, token, session_id, _file(user))
+        assert again.status_code == 200
+        reset = (directory / "attachments" / "data.csv").read_bytes()
+    assert replaced == b"new"
+    assert harness.workspaces[1]["attachments/report.csv"] == b"new"
+    assert seen == b"user content"
+    assert kept == b"agent edit"
+    assert reset == b"user content"
+    assert harness.prompts[1] == "Attached: attachments/report.csv (csv, 3 B)"
+    assert harness.prompts[2] == "Attached: attachments/data.csv (csv, 12 B)"
+
+
+async def test_a_failed_push_ends_the_turn_and_the_retry_works(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    harness = FakeHarness()
+    killed: list[str] = []
+
+    class _Guest:
+        async def push_files(self, files: list[tuple[str, bytes]]) -> None:
+            raise ConfigError("microvm guest did not take the files")
+
+    async with split_client_for(
+        settings, store, harness=harness, token=worker_secret
+    ) as (_app, client, worker):
+        token = "attach-push-fail"
+        session_id = await _session(client, token)
+        file_id = await _upload(client, token, b"rows", "rows.csv", "text/csv")
+        pool = worker.execution.pool
+        real_kill = pool.kill
+
+        async def settled(_session_id: Any) -> Any:
+            return _Guest()
+
+        async def kill(
+            session: Any, *, reason: str = "session", hook: bool = True
+        ) -> None:
+            killed.append(f"{reason}:{hook}")
+            await real_kill(session, reason=reason, hook=hook)
+
+        pool.settled = settled
+        pool.kill = kill
+        failed = await asyncio.wait_for(
+            _send(client, token, session_id, _file(file_id)), timeout=15
+        )
+        events = await client.get(
+            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        )
+        del pool.settled
+        retry = await asyncio.wait_for(
+            _send(client, token, session_id, _file(file_id)), timeout=15
+        )
+    assert failed.status_code == 200, failed.json()
+    assert failed.json()["status"] == "failed"
+    data = events.json()["data"]
+    env_failed = next(
+        event for event in data if event["type"] == "agent.session.environment.failed"
+    )
+    assert env_failed["data"]["code"] == "attachment_push_failed"
+    error = next(event for event in data if event["type"] == "agent.session.error")
+    assert error["data"]["retryable"] is True
+    assert "agent.session.turn.created" not in [event["type"] for event in data]
+    assert killed == ["push_failed:False"]
+    assert retry.status_code == 200, retry.json()
+    assert retry.json()["status"] == "idle"
+    assert harness.prompts == ["Attached: attachments/rows.csv (csv, 4 B)"]
+
+
+async def test_an_over_limit_attachment_does_not_cancel_a_running_turn(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    harness = FakeHarness()
+    harness.hold = True
+    async with split_client_for(
+        settings.model_copy(update={"max_workspace_bytes": 10}),
+        store,
+        harness=harness,
+        token=worker_secret,
+    ) as (app, client, _worker):
+        token = "attach-running"
+        session_id = await _session(client, token)
+        big = await _upload(client, token, b"b" * 20, "big.txt", "text/plain")
+        queue = app.state.event_hub.subscribe(uuid.UUID(session_id))
+        running = asyncio.create_task(_send(client, token, session_id, _text("go")))
+        while True:
+            event = await asyncio.wait_for(queue.get(), timeout=5)
+            if event["type"] == "agent.session.turn.in_progress":
+                break
+        over = await _send(client, token, session_id, _file(big))
+        events = await client.get(
+            f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
+        )
+        cancelled = await client.post(
+            f"/v1/agents/sessions/{session_id}/events",
+            headers=_auth(token),
+            json={"type": "agent.session.input.cancel"},
+        )
+        await asyncio.wait_for(running, timeout=10)
+    assert over.status_code == 413
+    types = [event["type"] for event in events.json()["data"]]
+    assert "agent.session.turn.cancelled" not in types
+    assert "agent.session.turn.failed" not in types
+    assert cancelled.status_code == 200
+    assert harness.prompts == ["go"]
+
+
+async def test_an_image_and_a_file_with_one_id_leave_no_binding_when_unsent(
+    settings: Settings, store: Store, worker_secret: str
+) -> None:
+    vision = settings.model_copy(
+        update={"model_registry": {"test": {"input": ["text", "image"]}}}
+    )
+    async with split_client_for(
+        vision, store, harness=FakeHarness(), token=worker_secret
+    ) as (app, client, _worker):
+        token = "attach-image-file"
+        session_id = await _session(client, token)
+        png = await _upload(client, token, b"\x89PNG\r\n\x1a\n", "a.png", "image/png")
+        execution = app.state.gateway.sessions.execution
+
+        async def refuse(*_args: Any, **_kwargs: Any) -> None:
+            raise ApiError("invalid_request", "busy", code="capacity", status_code=429)
+
+        real = execution.run_turn
+        execution.run_turn = refuse
+        failed = await _send(
+            client,
+            token,
+            session_id,
+            {"type": "input_image", "file_id": png},
+            _file(png),
+        )
+        execution.run_turn = real
+        bound = await _bound(client, token, session_id)
+    assert failed.status_code == 429
+    assert bound == []

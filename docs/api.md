@@ -584,8 +584,12 @@ binds it to the session with the path `attachments/<filename>`, or a
 free name like `attachments/report (2).xlsx` when the session already
 has a file at that path. A `file_id` that is already bound to the
 session with a path keeps it. Before Pi starts the turn, the worker
-writes the file into the workspace, and the prompt gets one line per
-file at the place of the part:
+writes the file into the workspace and replaces what is at that path,
+so attaching the same `file_id` again resets the file to its original
+content. If the file cannot be copied into a running sandbox, the turn
+does not start and the session gets an error with code
+`attachment_push_failed`; send the message again. The prompt gets one
+line per file at the place of the part:
 
 ```
 Attached: attachments/report.xlsx (xlsx, 240 KB)
@@ -606,7 +610,10 @@ See [environments](environments.md#attachments).
 Follow-up messages work the same way after the session is idle. A message while
 the session is `in_progress` cancels that turn (or fails it if the
 process no longer owns it) and starts a new turn, so a hung Pi cannot
-block the next command. `GET` of a session that is `in_progress` with
+block the next command. The message is checked first: its images and
+files are stored and bound, and the limits are checked, before the
+running turn is cancelled, so a message that fails with `4xx` leaves
+that turn running. `GET` of a session that is `in_progress` with
 no live turn on this process does the same fail-and-idle recovery.
 A message while the session is `requires_action` is rejected; send a
 tool result instead.

@@ -3,6 +3,7 @@ import fcntl
 import io
 import json
 import os
+import shutil
 import socket
 import struct
 import subprocess
@@ -11,6 +12,7 @@ import tarfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 ARTIFACT_PORT = 53
 WORKSPACE_PORT = 54
@@ -100,54 +102,78 @@ def workspace_tar_bytes(root: Path) -> bytes:
     return buf.getvalue()
 
 
-def unpack_push_tar(data: bytes, root: Path) -> int:
-    """Write each file of a pushed tar that is missing under `root`.
+class _Limited(io.RawIOBase):
+    """A reader that returns at most `size` bytes of `source`."""
 
-    A file that exists stays as it is. Names outside `root` and names
-    under `.apipi/` are skipped. Returns the number of written files.
+    def __init__(self, source: io.BufferedIOBase, size: int) -> None:
+        self.source = source
+        self.left = size
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        if self.left <= 0:
+            return 0
+        view = memoryview(buffer)[: min(len(buffer), self.left)]
+        count = self.source.readinto(view)
+        if not count:
+            raise OSError("push ended early")
+        self.left -= count
+        return count
+
+
+def _push_target(root: Path, info: tarfile.TarInfo) -> Path | None:
+    if not info.isfile() or info.name.startswith("/"):
+        return None
+    parts = Path(info.name).parts
+    if not parts or ".." in parts or parts[0] == ".apipi":
+        return None
+    return root / info.name
+
+
+def unpack_push_stream(source: io.BufferedIOBase, root: Path) -> int:
+    """Write each file of a pushed tar stream under `root`.
+
+    A file at the same path is replaced through a temp file and a rename.
+    Names outside `root` and names under `.apipi/` are skipped. Returns
+    the number of written files.
     """
     written = 0
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r") as tar:
-        for info in tar.getmembers():
-            if not info.isfile() or info.name.startswith("/"):
-                continue
-            parts = Path(info.name).parts
-            if not parts or ".." in parts or parts[0] == ".apipi":
-                continue
-            target = root / info.name
-            if target.exists():
+    with tarfile.open(fileobj=source, mode="r|") as tar:
+        for info in tar:
+            target = _push_target(root, info)
+            if target is None:
                 continue
             handle = tar.extractfile(info)
             if handle is None:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(handle.read())
+            temp = target.with_name(f".{target.name}.apipi-tmp")
+            with temp.open("wb") as out:
+                shutil.copyfileobj(handle, out)
+            os.replace(temp, target)
             written += 1
     return written
 
 
-def read_push(conn: socket.socket) -> bytes:
-    """Read one push: a line with the size and then that many tar bytes."""
-    header = b""
-    while not header.endswith(b"\n"):
-        chunk = conn.recv(1)
-        if not chunk or len(header) >= MAX_PUSH_HEADER:
-            raise OSError("bad push header")
-        header += chunk
-    size = int(header)
-    data = bytearray()
-    while len(data) < size:
-        chunk = conn.recv(min(65536, size - len(data)))
-        if not chunk:
-            raise OSError("push ended early")
-        data.extend(chunk)
-    return bytes(data)
+def _read_header(source: io.BufferedIOBase) -> int:
+    header = source.readline(MAX_PUSH_HEADER)
+    if not header.endswith(b"\n"):
+        raise OSError("bad push header")
+    return int(header)
 
 
 def handle_push(conn: socket.socket, root: Path) -> None:
+    """Take one push: a line with the size, then a tar of that size."""
     try:
-        unpack_push_tar(read_push(conn), root)
-    except (OSError, ValueError, tarfile.TarError) as exc:
+        with conn.makefile("rb") as source:
+            limited = _Limited(source, _read_header(source))
+            reader = io.BufferedReader(limited)
+            unpack_push_stream(reader, root)
+            while reader.read(65536):
+                pass
+    except Exception as exc:
         conn.sendall(f"ERR {type(exc).__name__}\n".encode())
         return
     conn.sendall(b"OK\n")
@@ -160,10 +186,11 @@ def _serve_push(port: int) -> None:
     sock.listen(8)
     root = Path(os.environ.get("HOME", "/workspace"))
     while True:
-        conn, _ = sock.accept()
+        conn, peer = sock.accept()
         try:
-            handle_push(conn, root)
-        except OSError:
+            if peer[0] == socket.VMADDR_CID_HOST:
+                handle_push(conn, root)
+        except Exception:
             pass
         finally:
             conn.close()

@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses
+import unicodedata
 import uuid
 from collections.abc import Collection, Sequence
 from datetime import datetime
@@ -26,6 +27,7 @@ from apipi.store.engine import Store
 from apipi.store.models import FileRow, SessionFileRow, utc_now
 from apipi.store.repo import (
     bind_session_file,
+    clear_paths,
     create_file,
     delete_file,
     delete_unbound_attachments,
@@ -49,6 +51,15 @@ ATTACHMENTS_DIR = "attachments"
 MAX_NAME_BYTES = 200
 ATTACH_ATTEMPTS = 3
 _WORKSPACE_PREFIXES = ("/workspace/", "/tmp/workspace/", "./")
+_DROPPED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+@dataclasses.dataclass
+class Bindings:
+    """The session bindings one attach made: new ones, and paths it set."""
+
+    created: list[str] = dataclasses.field(default_factory=list)
+    placed: list[str] = dataclasses.field(default_factory=list)
 
 
 def new_file_id() -> str:
@@ -144,13 +155,17 @@ def page_body(data: list[dict[str, Any]], has_more: bool, key: str) -> dict[str,
 
 
 def attachment_name(filename: str) -> str:
-    """A safe file name for `attachments/`: the last path segment, no controls.
+    """A safe file name for `attachments/`: the last path segment.
 
+    Control, format, and line or paragraph separator characters are
+    dropped.
     An empty name, `.`, or `..` becomes `file`. A name longer than 200
     bytes is cut and keeps its extension.
     """
     name = filename.replace("\\", "/").rsplit("/", 1)[-1]
-    name = "".join(ch for ch in name if ch >= " " and ch != "\x7f").strip()
+    name = "".join(
+        ch for ch in name if unicodedata.category(ch) not in _DROPPED_CATEGORIES
+    ).strip()
     if name in ("", ".", ".."):
         name = "file"
     if len(name.encode()) <= MAX_NAME_BYTES:
@@ -186,13 +201,12 @@ def _workspace_relative(path: str) -> str:
 
 
 async def _agent_inputs(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    environment: dict[str, Any],
-    *,
-    user_id: str | None,
+    db: AsyncSession, tenant_id: uuid.UUID, environment: dict[str, Any]
 ) -> tuple[set[str], int]:
-    """The workspace paths and the total size of the agent input files."""
+    """The workspace paths and the total size of the agent input files.
+
+    The sizes are read tenant-wide: the session already uses these files.
+    """
     try:
         inline = inline_files_from(environment)
         refs = file_id_refs_from(environment)
@@ -202,7 +216,7 @@ async def _agent_inputs(
     total = sum(len(data) for _path, data in inline)
     for path, file_id in refs:
         paths.add(_workspace_relative(path))
-        row = await get_file(db, tenant_id, file_id, user_id=user_id)
+        row = await get_file(db, tenant_id, file_id)
         if row is not None:
             total += row.size
     return paths, total
@@ -217,37 +231,37 @@ async def attach_session_files(
     *,
     environment: dict[str, Any],
     user_id: str | None = None,
-) -> tuple[list[InputFile], list[str]]:
+) -> tuple[list[InputFile], Bindings]:
     """Bind the `input_file` parts of a session with a computer to their paths.
 
-    Runs in the caller's transaction. The session row and each file row
-    are locked (Postgres), so two messages of one session cannot take the
-    same path, and a file the sweep or a delete removed is `404`. A file
-    bound to the session with a path keeps that path. Any other file gets
-    `attachments/<name>`, or a free name like `report (2).xlsx` when the
-    session or an agent input already uses that path. Returns the files
-    with their paths, and the ids of the files bound by this call.
+    Runs in the caller's transaction. The session row and then each file
+    row, in `file_id` order, are locked (Postgres), so two messages of one
+    session cannot take the same path, and a file the sweep or a delete
+    removed is `404`. A file bound to the session with a path keeps that
+    path. Any other file gets `attachments/<name>`, or a free name like
+    `report (2).xlsx` when the session or an agent input already uses that
+    path. Returns the files with their paths, and the bindings this call
+    created or gave a path.
     """
+    made = Bindings()
     if not files:
-        return [], []
+        return [], made
     if await lock_session(db, tenant_id, session_id) is None:
         not_found()
+    for file_id in sorted({item.file_id for item in files}):
+        if await lock_file(db, tenant_id, file_id, user_id=user_id) is None:
+            not_found()
     rows, _more = await list_session_files(db, tenant_id, session_id)
     bindings = {binding.file_id: binding for binding, _row in rows}
     sizes = {
         binding.file_id: row.size for binding, row in rows if binding.path is not None
     }
-    taken, agent_bytes = await _agent_inputs(
-        db, tenant_id, environment, user_id=user_id
-    )
+    taken, agent_bytes = await _agent_inputs(db, tenant_id, environment)
     taken.update(binding.path for binding in bindings.values() if binding.path)
     paths: dict[str, str] = {}
-    bound: list[str] = []
     for item in files:
         if item.file_id in paths:
             continue
-        if await lock_file(db, tenant_id, item.file_id, user_id=user_id) is None:
-            not_found()
         binding = bindings.get(item.file_id)
         if binding is not None and binding.path:
             paths[item.file_id] = binding.path
@@ -256,10 +270,11 @@ async def attach_session_files(
         taken.add(path)
         if binding is None:
             await bind_session_file(db, tenant_id, session_id, item.file_id, path=path)
-            bound.append(item.file_id)
+            made.created.append(item.file_id)
         else:
             binding.path = path
             await db.flush()
+            made.placed.append(item.file_id)
         paths[item.file_id] = path
         sizes[item.file_id] = item.size
     total = agent_bytes + sum(sizes.values())
@@ -273,7 +288,7 @@ async def attach_session_files(
             status_code=413,
         )
     attached = [dataclasses.replace(item, path=paths[item.file_id]) for item in files]
-    return attached, bound
+    return attached, made
 
 
 class FileService:
@@ -464,7 +479,7 @@ class FileService:
         *,
         environment: dict[str, Any],
         user_id: str | None = None,
-    ) -> tuple[list[InputFile], list[str]]:
+    ) -> tuple[list[InputFile], Bindings]:
         """Bind workspace files to a session in one transaction.
 
         See `attach_session_files`. A unique path conflict with another
@@ -485,17 +500,23 @@ class FileService:
             except IntegrityError:
                 if attempt + 1 == ATTACH_ATTEMPTS:
                     raise
-        return [], []
+        return [], Bindings()
 
     async def unbind(
-        self, tenant_id: uuid.UUID, session_id: uuid.UUID, file_ids: list[str]
+        self, tenant_id: uuid.UUID, session_id: uuid.UUID, made: Bindings
     ) -> None:
-        """Remove the bindings of a turn that did not start, best effort."""
-        if file_ids:
+        """Undo the bindings of a turn that did not start, best effort.
+
+        New bindings are deleted, and a path set on an older binding is
+        cleared again.
+        """
+        if made.created or made.placed:
             with contextlib.suppress(Exception):
                 async with self.store.session() as db:
-                    await unbind_files(db, tenant_id, session_id, file_ids)
-        file_ids.clear()
+                    await unbind_files(db, tenant_id, session_id, made.created)
+                    await clear_paths(db, tenant_id, session_id, made.placed)
+        made.created.clear()
+        made.placed.clear()
 
     async def _require_utf8(
         self, tenant_id: uuid.UUID, file_id: str, name: str
