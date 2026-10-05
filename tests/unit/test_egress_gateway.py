@@ -723,7 +723,7 @@ async def test_accept_backs_off_when_out_of_files(
 ) -> None:
     caplog.set_level(logging.INFO, logger="apipi.egress")
     monkeypatch.setattr(gateway_module, "ACCEPT_BACKOFF", 0.05)
-    monkeypatch.setattr(gateway_module, "_last_warning", 0.0)
+    monkeypatch.setattr(gateway_module, "_last_warning", float("-inf"))
     upstream = await env.upstream(mode="echo")
     gateway = await env.gateway("restricted", port=upstream.port)
     listener = gateway._listener

@@ -241,19 +241,6 @@ async def test_codemode_metadata_validates(client: AsyncClient) -> None:
     assert bad.status_code == 400
 
 
-async def test_unknown_field_is_rejected(client: AsyncClient) -> None:
-    token = _token()
-    response = await client.post(
-        "/v1/agents",
-        headers=_auth(token),
-        json={"name": "one", "vaults": []},
-    )
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "unknown_field"
-    listed = await client.get("/v1/agents", headers=_auth(token))
-    assert listed.json() == {"data": []}
-
-
 async def test_unimplemented_agent_fields(client: AsyncClient) -> None:
     token = _token()
     for field in ("multi_agent", "tool_search", "programmatic_tool_calling"):

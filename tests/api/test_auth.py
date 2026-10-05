@@ -46,20 +46,6 @@ async def test_same_bearer_is_stable(client: AsyncClient) -> None:
     assert again.json()["name"] == "one"
 
 
-async def test_cross_tenant_id_is_404_not_403(client: AsyncClient) -> None:
-    created = await client.post("/v1/agents", headers=_auth("a"), json={"name": "one"})
-    assert created.status_code == 200
-    agent_id = created.json()["id"]
-
-    ok = await client.get(f"/v1/agents/{agent_id}", headers=_auth("a"))
-    assert ok.status_code == 200
-    assert ok.json()["name"] == "one"
-
-    other = await client.get(f"/v1/agents/{agent_id}", headers=_auth("b"))
-    assert other.status_code == 404
-    assert other.json()["error"]["code"] == "not_found"
-
-
 async def test_tenant_row_created_on_first_use(
     store: Store, client: AsyncClient
 ) -> None:

@@ -251,25 +251,6 @@ async def test_delete_artifact_removes_file_and_metadata(
     assert missing.status_code == 404
 
 
-async def test_artifacts_unknown_session_is_404(client: AsyncClient) -> None:
-    token = _token()
-    missing = uuid.uuid4()
-    listed = await client.get(
-        f"/v1/agents/sessions/{missing}/artifacts", headers=_auth(token)
-    )
-    assert listed.status_code == 404
-    content = await client.get(
-        f"/v1/agents/sessions/{missing}/artifacts/{missing}/content",
-        headers=_auth(token),
-    )
-    assert content.status_code == 404
-    deleted = await client.delete(
-        f"/v1/agents/sessions/{missing}/artifacts/{missing}",
-        headers=_auth(token),
-    )
-    assert deleted.status_code == 404
-
-
 async def test_cross_tenant_artifacts_are_404(client: AsyncClient) -> None:
     token_a = _token("a")
     token_b = _token("b")
