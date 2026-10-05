@@ -1878,7 +1878,7 @@ async def spawn_microvm_pi(
             VSOCK_PORT,
             process=process,
         )
-    except (ConfigError, OSError) as exc:
+    except BaseException as exc:
         if process.returncode is None:
             process.kill()
             await process.wait()
@@ -1887,9 +1887,9 @@ async def spawn_microvm_pi(
         if extra is not None:
             await extra.stop()
         log_sandbox_boot_failed(exc, vm_id=started.chroot_dir.parent.name)
-        if isinstance(exc, ConfigError):
-            raise
-        raise ConfigError("microvm cannot start") from exc
+        if isinstance(exc, OSError):
+            raise ConfigError("microvm cannot start") from exc
+        raise
 
     async def _pull(port: int) -> bytes:
         art_reader, art_writer = await connect_vsock(

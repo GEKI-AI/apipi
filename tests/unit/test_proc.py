@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import os
 import signal
+import socket
 import sys
 from asyncio.subprocess import Process
 from typing import Any, cast
@@ -50,6 +51,22 @@ async def test_terminate_without_process_group_signals_pid() -> None:
     assert inner.terminated is True
     assert inner.killed is False
     assert not proc.alive
+
+
+async def test_terminate_closes_the_rpc_writer() -> None:
+    ours, peer = socket.socketpair()
+    _reader, writer = await asyncio.open_connection(sock=ours)
+    try:
+        proc = PiProc(cast(Process, _Process()), stdin=writer)
+        await proc.terminate()
+        assert writer.is_closing()
+        async with asyncio.timeout(5):
+            while ours.fileno() != -1:
+                await asyncio.sleep(0.01)
+    finally:
+        writer.transport.abort()
+        await asyncio.sleep(0)
+        peer.close()
 
 
 async def test_terminate_process_group_uses_killpg(
