@@ -295,8 +295,9 @@ async def test_invalid_input_parts_fail_before_the_turn(
         token = "file-parts"
         session_id = await _session(client, token)
         file_id = await _upload(client, token, b"a", "a.txt", "text/plain")
+        png_id = await _upload(client, token, _PNG, "a.png", "image/png")
         image_url = f"data:image/png;base64,{base64.b64encode(_PNG).decode()}"
-        image = {"type": "input_image", "file_id": file_id}
+        image = {"type": "input_image", "file_id": png_id}
         cases: list[tuple[list[dict[str, Any]], str | None]] = [
             (
                 [{"type": "input_text", "text": "x", "file_id": file_id}],
@@ -323,8 +324,8 @@ async def test_invalid_input_parts_fail_before_the_turn(
             json=message(input_file(file_id), input_file(file_id)),
         )
     for (parts, code), response in zip(cases, failed, strict=True):
+        assert response.status_code == 400, (parts, response.json())
         error = response.json()["error"]
-        assert response.status_code == 400, parts
         assert code is None or error["code"] == code, (parts, error)
     assert "at most 2" in failed[-1].json()["error"]["message"]
     assert two.status_code == 200, two.json()

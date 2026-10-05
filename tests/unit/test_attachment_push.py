@@ -274,6 +274,8 @@ async def test_host_push_times_out_when_the_guest_hangs(tmp_path: Path) -> None:
 
     server = await asyncio.start_unix_server(handler, path=str(path))
     async with server:
-        with pytest.raises(TimeoutError):
-            await push_workspace_files(path, [("attachments/a", b"a")], timeout=0.3)
-        release.set()
+        try:
+            with pytest.raises(TimeoutError):
+                await push_workspace_files(path, [("attachments/a", b"a")], timeout=0.3)
+        finally:
+            release.set()
