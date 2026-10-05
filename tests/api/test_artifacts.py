@@ -351,6 +351,14 @@ async def test_publish_on_turn_complete(client: AsyncClient) -> None:
     assert note.content == b"xyz"
 
 
+async def _turn_ids(client: AsyncClient, token: str, session_id: str) -> set[str]:
+    listed = await client.get(
+        f"/v1/agents/sessions/{session_id}/turns", headers=_auth(token)
+    )
+    assert listed.status_code == 200
+    return {item["id"] for item in listed.json()["data"]}
+
+
 async def test_later_turn_publishes_new_artifact_for_same_path(
     client: AsyncClient,
 ) -> None:
@@ -363,12 +371,14 @@ async def test_later_turn_publishes_new_artifact_for_same_path(
         headers=_auth(token),
         json={"type": "agent.session.input.message", "content": "first"},
     )
+    (first_turn,) = await _turn_ids(client, token, session_id)
     (directory / "outputs" / "note.txt").write_text("two", encoding="utf-8")
     await client.post(
         f"/v1/agents/sessions/{session_id}/events",
         headers=_auth(token),
         json={"type": "agent.session.input.message", "content": "second"},
     )
+    (second_turn,) = await _turn_ids(client, token, session_id) - {first_turn}
     listed = await client.get(
         f"/v1/agents/sessions/{session_id}/artifacts", headers=_auth(token)
     )
@@ -378,12 +388,14 @@ async def test_later_turn_publishes_new_artifact_for_same_path(
         "outputs/note.txt",
     ]
     assert data[0]["id"] != data[1]["id"]
+    by_turn = {item["turn_id"]: item["id"] for item in data}
+    assert set(by_turn) == {first_turn, second_turn}
     first = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts/{data[0]['id']}/content",
+        f"/v1/agents/sessions/{session_id}/artifacts/{by_turn[first_turn]}/content",
         headers=_auth(token),
     )
     second = await client.get(
-        f"/v1/agents/sessions/{session_id}/artifacts/{data[1]['id']}/content",
+        f"/v1/agents/sessions/{session_id}/artifacts/{by_turn[second_turn]}/content",
         headers=_auth(token),
     )
     assert first.content == b"one"
