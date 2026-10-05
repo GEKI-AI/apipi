@@ -953,6 +953,60 @@ under it with a new process. If the worker released the lease there,
 the API would reject every envelope of the turn as `not_leased`, and
 the turn would never finish.
 
+A process can also stop while a turn of its session is running: the
+memory limit (`APIPI_PI_MEM_MIB`), the check for crashed processes
+that runs every few seconds, or the idle reaper can stop it. The
+worker treats a session as busy from the moment a `turn.start`,
+`turn.continue`, or `sandbox.boot` arrives until that command has
+finished. When it stops the process of a busy session, the worker still
+harvests the files of the process and reports the stop with its
+reason, but it keeps the lease until the command has finished. The
+turn ends the usual way, for example as `failed` with `pi_memory` or
+`pi_exited`, or it goes on with a new process. When the command has
+finished and the session has no live process, the worker releases the
+lease. When the session has a live process again, the worker keeps the
+lease, and the next stop of that process releases it. The same rule
+covers a guest that is stopped because the attachments of a message
+could not be copied into it (`push_failed`), so its files are
+harvested too.
+
+A command can also end without ever starting a process: the turn fails
+before Pi starts (for example `artifact_store`, a setup error, or an
+input file that is not UTF-8 text), `sandbox.boot` fails (for example
+`capacity` or `env_credentials_unsupported`) or finds no computer to
+start, or the command raises.
+When a turn or a boot does not end normally (completed, cancelled, or
+waiting for a function result) and the session has no live process at
+the end of the command, the worker releases the lease too. A lease
+therefore never stays with the worker without a process and without a
+later release, and the memory it holds in placement is given back.
+
+A `lease.release` can cross a command that the API already sent on the
+same lease: the worker stopped an idle process and released the lease
+just before a new `turn.start` reached it. The API ignores a
+`lease.release` when a `turn.start`, `turn.continue`, or
+`sandbox.boot` on that lease was not acked before the release arrived
+(acks and the release are compared in the order of the socket, even
+though they are handled on different lanes), or when it sends such a
+command before it has handled the release. It logs
+`worker.lease.release_crossed`. The worker takes the lease back when
+the command arrives, because every command carries its `lease_id`, so
+the new turn runs under the lease the API still holds.
+
+When the API handles a `lease.release` and the session still has a
+turn `in_progress`, it ends that turn as `failed` with
+`turn_interrupted`, the same way it ends a turn after an orphaned
+lease, a command timeout, or a cancel without a worker. The release
+comes after every envelope the worker buffered for the session, so a
+turn that is still `in_progress` at that point can never finish. When
+another live lease of the session exists by then, the API leaves the
+turn alone. The release handler is tried three times; a retry after
+the lease was already cleared still ends the turn. When every try
+fails, the error is logged as `worker.message.failed`, and the turn is
+ended as `turn_interrupted` later by the usual recovery for a turn
+without a lease, at the latest when the waiting request reaches the
+turn timeout.
+
 When `lease_until` passes, API processes expire rows with
 `FOR UPDATE SKIP LOCKED` so two reapers do not double-clear. The API
 clears ownership, emits `agent.session.error` with code

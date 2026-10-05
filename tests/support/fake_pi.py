@@ -76,6 +76,10 @@ def main() -> None:
         if isinstance(command.get("id"), str):
             response["id"] = command["id"]
         sys.stdout.write(json.dumps(response) + "\n")
+        if text == "hold":
+            sys.stdout.write(json.dumps({"type": "agent_start"}) + "\n")
+            sys.stdout.flush()
+            continue
         events = [
             {"type": "agent_start"},
             {"type": "turn_start"},

@@ -628,6 +628,7 @@ async def run_turn(
     sink: ResultSink,
 ) -> None:
     abort = hub.watch_turn(session_id)
+    ended = False
     if pool is not None:
         pool.hold(session_id)
     try:
@@ -741,7 +742,7 @@ async def run_turn(
                 replace_workspace_files(workspace_dir, attachments)
             if not await _push_attachments(pool, session_id, attachments):
                 if pool is not None:
-                    await pool.kill(session_id, reason="push_failed", hook=False)
+                    await pool.kill(session_id, reason="push_failed")
                 await report_environment_failed(
                     sink,
                     hub,
@@ -1056,6 +1057,7 @@ async def run_turn(
                         status="cancelled" if abort.is_set() else "completed",
                     ),
                 )
+            ended = True
             if abort.is_set():
                 await cancel_turn(
                     hub,
@@ -1107,7 +1109,11 @@ async def run_turn(
     finally:
         if pool is not None:
             pool.release(session_id)
+            if not ended:
+                pool.release_after_turn(session_id)
         hub.unwatch_turn(session_id)
+        if pool is not None:
+            await pool.after_turn(session_id)
 
 
 async def continue_turn(
@@ -1195,6 +1201,7 @@ async def continue_turn(
             changes={"required_actions": remaining},
         )
         return
+    ended = False
     try:
         if pool is not None:
             pool.hold(session_id)
@@ -1444,6 +1451,7 @@ async def continue_turn(
                         status="completed",
                     ),
                 )
+            ended = True
             if pending:
                 await sink.update_session(
                     tenant_id,
@@ -1480,3 +1488,6 @@ async def continue_turn(
     finally:
         if pool is not None:
             pool.release(session_id)
+            if not ended:
+                pool.release_after_turn(session_id)
+            await pool.after_turn(session_id)

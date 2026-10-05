@@ -30,6 +30,7 @@ _EVENT_REASON = {
 }
 
 OnKill = Callable[[uuid.UUID, PiProc | None, bool], Awaitable[None]]
+OnRelease = Callable[[uuid.UUID], Awaitable[None]]
 OnTransition = Callable[[uuid.UUID, str, dict[str, Any]], Awaitable[None]]
 log = logging.getLogger("apipi.worker.pi")
 
@@ -74,9 +75,12 @@ class PiPool:
         self._sizes: dict[uuid.UUID, str] = {}
         self._born: dict[uuid.UUID, float] = {}
         self._live: dict[uuid.UUID, dict[str, Any]] = {}
-        self._held: set[uuid.UUID] = set()
+        self._held: dict[uuid.UUID, int] = {}
+        self._killing: dict[uuid.UUID, int] = {}
+        self._release_after: set[uuid.UUID] = set()
         self.lifecycle: Any = None
         self.on_transition: OnTransition | None = None
+        self.on_release: OnRelease | None = None
         self._booting: set[uuid.UUID] = set()
         self._reserved: dict[uuid.UUID, tuple[uuid.UUID | None, int]] = {}
         self._inflight: dict[uuid.UUID, asyncio.Future[PiProc]] = {}
@@ -527,16 +531,26 @@ class PiPool:
         session_id: uuid.UUID,
         *,
         reason: str = "session",
-        hook: bool = True,
         release: bool = True,
     ) -> None:
         """Stop the process of a session.
 
         With `release` False the kill hook harvests the files of the
         process but the worker keeps the lease, because a turn of the
-        session goes on with a new process. With `hook` False the kill
-        hook does not run at all, so the worker keeps the lease too.
+        session goes on with a new process. While a turn holds the
+        session the kill hook keeps the lease too, and `after_turn`
+        releases it when the turn ended without a live process.
         """
+        self._killing[session_id] = self._killing.get(session_id, 0) + 1
+        try:
+            await self._kill(session_id, reason=reason, release=release)
+        finally:
+            count = self._killing.pop(session_id, 1) - 1
+            if count > 0:
+                self._killing[session_id] = count
+        await self.after_turn(session_id)
+
+    async def _kill(self, session_id: uuid.UUID, *, reason: str, release: bool) -> None:
         live = self._live.pop(session_id, None)
         env_type = self._env_types.get(session_id)
         tenant_id = self._tenants.get(session_id)
@@ -580,7 +594,10 @@ class PiPool:
             self.metrics.observe_sandbox_destroy(size=size, hold_seconds=hold)
             if proc.vm_id is None:
                 self.metrics.observe_pi_kill(reason)
-        if hook and self.on_kill is not None:
+        if self.on_kill is not None:
+            if release and self.held(session_id):
+                self._release_after.add(session_id)
+                release = False
             await self.on_kill(session_id, proc, release)
         if proc is not None:
             proc.stop_reason = reason
@@ -629,13 +646,29 @@ class PiPool:
         self.metrics.set_sandboxes_active(counts)
 
     def hold(self, session_id: uuid.UUID) -> None:
-        self._held.add(session_id)
+        self._held[session_id] = self._held.get(session_id, 0) + 1
 
     def release(self, session_id: uuid.UUID) -> None:
-        self._held.discard(session_id)
+        count = self._held.pop(session_id, 0) - 1
+        if count > 0:
+            self._held[session_id] = count
 
     def held(self, session_id: uuid.UUID) -> bool:
         return session_id in self._held
+
+    def release_after_turn(self, session_id: uuid.UUID) -> None:
+        self._release_after.add(session_id)
+
+    async def after_turn(self, session_id: uuid.UUID) -> None:
+        """Release a lease whose process stopped while a turn held it."""
+        if session_id not in self._release_after:
+            return
+        if self.held(session_id) or session_id in self._killing:
+            return
+        self._release_after.discard(session_id)
+        if self.alive(session_id) or self.on_release is None:
+            return
+        await self.on_release(session_id)
 
     def alive(self, session_id: uuid.UUID) -> bool:
         proc = self._procs.get(session_id)

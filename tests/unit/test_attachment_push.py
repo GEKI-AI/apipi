@@ -296,16 +296,3 @@ async def test_host_push_times_out_when_the_guest_hangs(tmp_path: Path) -> None:
     async with server:
         with pytest.raises(TimeoutError):
             await push_workspace_files(path, [("attachments/a", b"a")], timeout=0.3)
-
-
-async def test_kill_without_the_hook_keeps_the_lease(settings: Settings) -> None:
-    hooked: list[uuid.UUID] = []
-
-    async def on_kill(session_id: uuid.UUID, _proc: Any, _release: bool) -> None:
-        hooked.append(session_id)
-
-    pool = PiPool(settings, on_kill=on_kill)
-    first, second = uuid.uuid4(), uuid.uuid4()
-    await pool.kill(first, reason="push_failed", hook=False)
-    await pool.kill(second, reason="push_failed")
-    assert hooked == [second]

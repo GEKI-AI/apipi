@@ -20,6 +20,7 @@ def _execution(settings, **kwargs: Any) -> LocalExecution:
         lifecycle=None,
         on_kill=None,
         on_transition=None,
+        on_release=None,
     )
     return LocalExecution(
         settings,

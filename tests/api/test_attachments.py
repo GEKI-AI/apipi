@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import uuid
 from datetime import timedelta
 from typing import Any
@@ -19,6 +20,7 @@ from apipi.gateway.tokens import hash_token
 from apipi.protocol import dumps_wire
 from apipi.store.engine import Store
 from apipi.store.models import utc_now
+from apipi.store.repo import get_session_by_id
 from apipi.worker.fake_harness import FakeHarness
 from apipi.worker.pi.artifacts import reap_workspaces
 from apipi.workerhub.forward import forward_body
@@ -105,6 +107,12 @@ async def _send(
         headers=_auth(token),
         json=_message(*parts),
     )
+
+
+async def _lease_of(store: Store, session_id: uuid.UUID) -> uuid.UUID | None:
+    async with store.session() as db:
+        row = await get_session_by_id(db, session_id)
+    return row.lease_id if row is not None else None
 
 
 async def _user_items(client: AsyncClient, token: str, session_id: str) -> list[Any]:
@@ -611,16 +619,21 @@ async def test_a_failed_push_ends_the_turn_and_the_retry_works(
 ) -> None:
     harness = FakeHarness()
     killed: list[str] = []
+    sent: list[str] = []
+    outputs: list[Any] = []
 
     class _Guest:
         async def push_files(self, files: list[tuple[str, bytes]]) -> None:
+            outputs[0].mkdir(parents=True, exist_ok=True)
+            (outputs[0] / "report.txt").write_bytes(b"made by the agent")
             raise ConfigError("microvm guest did not take the files")
 
     async with split_client_for(
-        settings, store, harness=harness, token=worker_secret
+        settings, store, harness=harness, token=worker_secret, sent=sent
     ) as (_app, client, worker):
         token = "attach-push-fail"
         session_id = await _session(client, token)
+        outputs.append(hosted_dir(settings, token, session_id) / "outputs")
         file_id = await _upload(client, token, b"rows", "rows.csv", "text/csv")
         pool = worker.execution.pool
         real_kill = pool.kill
@@ -628,11 +641,9 @@ async def test_a_failed_push_ends_the_turn_and_the_retry_works(
         async def settled(_session_id: Any) -> Any:
             return _Guest()
 
-        async def kill(
-            session: Any, *, reason: str = "session", hook: bool = True
-        ) -> None:
-            killed.append(f"{reason}:{hook}")
-            await real_kill(session, reason=reason, hook=hook)
+        async def kill(session: Any, *, reason: str = "session", **kw: Any) -> None:
+            killed.append(reason)
+            await real_kill(session, reason=reason, **kw)
 
         pool.settled = settled
         pool.kill = kill
@@ -643,9 +654,20 @@ async def test_a_failed_push_ends_the_turn_and_the_retry_works(
             f"/v1/agents/sessions/{session_id}/events", headers=_auth(token)
         )
         del pool.settled
+        sid = uuid.UUID(session_id)
+        deadline = asyncio.get_running_loop().time() + 10
+        while sid in worker.session_leases or await _lease_of(store, sid):
+            assert asyncio.get_running_loop().time() < deadline
+            await asyncio.sleep(0.02)
+        harvested = [
+            json.loads(raw)["payload"].get("filename")
+            for raw in sent
+            if json.loads(raw).get("type") == "artifact.presign"
+        ]
         retry = await asyncio.wait_for(
             _send(client, token, session_id, _file(file_id)), timeout=15
         )
+        leased = sid in worker.session_leases
     assert failed.status_code == 200, failed.json()
     assert failed.json()["status"] == "failed"
     data = events.json()["data"]
@@ -656,7 +678,9 @@ async def test_a_failed_push_ends_the_turn_and_the_retry_works(
     error = next(event for event in data if event["type"] == "agent.session.error")
     assert error["data"]["retryable"] is True
     assert "agent.session.turn.created" not in [event["type"] for event in data]
-    assert killed == ["push_failed:False"]
+    assert killed == ["push_failed"]
+    assert "outputs/report.txt" in harvested, harvested
+    assert leased
     assert retry.status_code == 200, retry.json()
     assert retry.json()["status"] == "idle"
     assert harness.prompts == ["Attached: attachments/rows.csv (csv, 4 B)"]

@@ -17,6 +17,7 @@ from apipi.common.event_bus import EventBus
 from apipi.common.logutil import log_event
 from apipi.common.wirewatch import note_unknown_fields, note_unknown_type
 from apipi.protocol import (
+    CURSOR_OPS,
     REVOKED_REASON,
     SHARED_STORE_REASON,
     WORKER_CLOSE_CODE,
@@ -49,6 +50,7 @@ from apipi.services.ingest import (
     emit_lifecycle_intents,
     flush_batch,
 )
+from apipi.services.turn_state import fail_stale_in_progress
 from apipi.services.worker_tokens import token_revoked
 from apipi.store.engine import Store
 from apipi.store.repo import get_session_by_lease
@@ -76,6 +78,7 @@ KEEPALIVE_CLOSE_CODE = 1011
 class _Control:
     label: str
     parsed: BaseModel
+    turns: int | None = None
 
 
 @dataclass
@@ -166,6 +169,8 @@ class ConnectionServer:
         )
         self._deltas: asyncio.Queue[WorkerEnvelope] = asyncio.Queue(DELTA_QUEUE_LIMIT)
         self._unflushed: dict[uuid.UUID, int] = {}
+        self._acks_in: set[str] = set()
+        self._releasing: dict[uuid.UUID, uuid.UUID] = {}
         self._search_tasks: set[asyncio.Task[None]] = set()
 
     async def run(self) -> str:
@@ -328,11 +333,22 @@ class ConnectionServer:
         if msg_type == "search.request":
             await self._start_search(message)
             return
+        turns: int | None = None
+        if isinstance(parsed, LeaseAck):
+            self._acks_in.add(str(parsed.id))
+        if isinstance(parsed, LeaseRelease):
+            if any(
+                entry.op in CURSOR_OPS and entry.command_id not in self._acks_in
+                for entry in self.hub.commands.for_lease(parsed.lease_id)
+            ):
+                self._release_crossed(parsed)
+                return
+            turns = self.hub.commands.turns(parsed.lease_id)
         ordered = isinstance(parsed, LeaseRelease) and bool(
             self._unflushed.get(parsed.session_id)
         )
         if ordered:
-            await self._put(self._ingest, _Control(type_label, parsed))
+            await self._put(self._ingest, _Control(type_label, parsed, turns))
         elif isinstance(
             parsed,
             StoreProof
@@ -342,7 +358,18 @@ class ConnectionServer:
             | LeaseAck
             | LeaseRelease,
         ):
-            await self._put(self._control, _Control(type_label, parsed))
+            await self._put(self._control, _Control(type_label, parsed, turns))
+
+    def _release_crossed(self, parsed: LeaseRelease) -> None:
+        log_event(
+            log,
+            logging.INFO,
+            "worker lease release crossed a command",
+            event="worker.lease.release_crossed",
+            session_id=parsed.session_id,
+            worker_id=self.conn.worker_id,
+            lease_id=parsed.lease_id,
+        )
 
     def _parse_control(
         self, message: dict[str, Any], kind: str, type_label: str
@@ -439,13 +466,13 @@ class ConnectionServer:
             item = await self._control.get()
             await self._guarded(
                 item.label,
-                lambda item=item: self._handle(item.parsed),
+                lambda item=item: self._handle(item.parsed, item.turns),
                 attempts=RELEASE_ATTEMPTS
                 if isinstance(item.parsed, LeaseRelease)
                 else 1,
             )
 
-    async def _handle(self, parsed: BaseModel) -> None:
+    async def _handle(self, parsed: BaseModel, turns: int | None = None) -> None:
         conn = self.conn
         hub = self.hub
         store = self.store
@@ -506,19 +533,33 @@ class ConnectionServer:
                 conn.request_close("takeover")
             return
         if isinstance(parsed, LeaseAck):
+            self._acks_in.discard(str(parsed.id))
             if parsed.lease_id not in conn.leases:
                 return
             await hub.ack(parsed.lease_id, str(parsed.id))
             await hub.renew_on_activity(store, conn)
             return
         if isinstance(parsed, LeaseRelease):
-            if parsed.lease_id not in conn.leases:
-                return
+            tenant_id = self._releasing.get(parsed.lease_id)
+            if tenant_id is None:
+                if parsed.lease_id not in conn.leases:
+                    return
+                async with store.session() as db:
+                    row = await get_session_by_lease(db, parsed.lease_id)
+                if row is None:
+                    return
+                if turns is not None and hub.commands.turns(parsed.lease_id) != turns:
+                    self._release_crossed(parsed)
+                    return
+                tenant_id = row.tenant_id
+                self._releasing[parsed.lease_id] = tenant_id
+                conn.leases.discard(parsed.lease_id)
+            await hub.release(store, tenant_id, parsed.session_id, parsed.lease_id)
             async with store.session() as db:
-                row = await get_session_by_lease(db, parsed.lease_id)
-            if row is None:
-                return
-            await hub.release(store, row.tenant_id, parsed.session_id, parsed.lease_id)
+                await fail_stale_in_progress(
+                    db, self.event_hub, tenant_id, parsed.session_id
+                )
+            self._releasing.pop(parsed.lease_id, None)
             return
         if isinstance(parsed, InventoryMessage):
             reported: dict[uuid.UUID, uuid.UUID] = {}
@@ -576,7 +617,7 @@ class ConnectionServer:
                     await self._flush(batcher)
                 await self._guarded(
                     item.label,
-                    lambda item=item: self._handle_ordered(item.parsed),
+                    lambda item=item: self._handle_ordered(item.parsed, item.turns),
                     attempts=RELEASE_ATTEMPTS
                     if isinstance(item.parsed, LeaseRelease)
                     else 1,
@@ -587,9 +628,9 @@ class ConnectionServer:
             if len(batcher) and (item is None or batcher.should_flush(window)):
                 await self._flush(batcher)
 
-    async def _handle_ordered(self, parsed: BaseModel) -> None:
+    async def _handle_ordered(self, parsed: BaseModel, turns: int | None) -> None:
         if isinstance(parsed, LeaseRelease):
-            await self._handle(parsed)
+            await self._handle(parsed, turns)
 
     async def _flush(self, batcher: IngestBatcher) -> None:
         queued = batcher.take()

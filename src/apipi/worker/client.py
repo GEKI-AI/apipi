@@ -906,9 +906,19 @@ async def _serve_connection(
         lease_id = session_leases.get(session_id)
         if lease_id is None:
             return
-        await flush_outbox(session_id, lease_id, "lease.release")
-        if session_leases.get(session_id) != lease_id:
-            return
+        pool = getattr(execution, "pool", None)
+        while True:
+            target = outbox.high_water(session_id)
+            await flush_outbox(session_id, lease_id, "lease.release")
+            if session_leases.get(session_id) != lease_id:
+                return
+            if pool is not None and pool.alive(session_id):
+                return
+            if pool is not None and pool.held(session_id):
+                pool.release_after_turn(session_id)
+                return
+            if outbox.high_water(session_id) == target:
+                break
         session_leases.pop(session_id, None)
         await finish_release(session_id, lease_id)
 
@@ -1074,11 +1084,33 @@ async def _serve_connection(
         except Exception:
             log.exception("worker command failure report failed")
 
-    async def command_task(command: WorkerCommand, *, duplicate: bool) -> None:
-        await settled(command.session_id)
+    def hold_command(command: WorkerCommand) -> Any | None:
+        pool = getattr(execution, "pool", None)
+        if pool is None or command.op not in CURSOR_OPS:
+            return None
+        pool.hold(command.session_id)
+        return pool
+
+    async def command_task(
+        command: WorkerCommand, *, duplicate: bool, pool: Any | None = None
+    ) -> None:
         if duplicate:
+            await settled(command.session_id)
             await send_json(ack_command(command))
             return
+        try:
+            await run_command(command)
+        except Exception:
+            if pool is not None:
+                pool.release_after_turn(command.session_id)
+            raise
+        finally:
+            if pool is not None:
+                pool.release(command.session_id)
+                await pool.after_turn(command.session_id)
+
+    async def run_command(command: WorkerCommand) -> None:
+        await settled(command.session_id)
         _adopt_cursor(outbox, command)
         await send_json(ack_command(command))
         log_command(command)
@@ -1207,7 +1239,11 @@ async def _serve_connection(
                 stop_session_command(command, session_id), "worker_stop", command=True
             )
             return
-        spawn(command_task(command, duplicate=False), "worker_command", command=True)
+        spawn(
+            command_task(command, duplicate=False, pool=hold_command(command)),
+            "worker_command",
+            command=True,
+        )
 
     async def receive_loop() -> None:
         while True:

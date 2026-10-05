@@ -10,6 +10,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,6 +18,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, update
 from tests.support.notify_bus import NotifyNetwork
+from tests.support.procs import fake_pi_shim
 from tests.support.split_worker import (
     SplitWorker,
     api_settings_for,
@@ -29,6 +31,7 @@ from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import AuthIdentity
 from apipi.gateway.tokens import hash_token
+from apipi.services.turn_context import build_turn_context
 from apipi.services.worker_tokens import create_token
 from apipi.store.engine import Store
 from apipi.store.models import SessionRow, WorkerForward, WorkerRow, utc_now
@@ -113,6 +116,7 @@ async def replicas(
     store: Store,
     worker_secret: str,
     replica_harness: FakeHarness,
+    tmp_path: Path,
 ) -> AsyncIterator[Replicas]:
     network = NotifyNetwork()
     api_settings = api_settings_for(settings).model_copy(
@@ -136,7 +140,12 @@ async def replicas(
     calls: list[tuple[str, str]] = []
     _spy(app_b, calls)
     worker = await spawn_split_worker(
-        app_a, worker_settings_for(settings), replica_harness, worker_secret
+        app_a,
+        worker_settings_for(
+            settings.model_copy(update={"pi_command": str(fake_pi_shim(tmp_path))})
+        ),
+        replica_harness,
+        worker_secret,
     )
     async with (
         AsyncClient(
@@ -351,7 +360,12 @@ async def test_sandbox_boot_is_forwarded(replicas: Replicas) -> None:
     session_id = await _new_session(
         replicas.client_b, environment={"type": "openai_hosted"}
     )
-    await replicas.app_b.state.execution.boot_hosted(_tenant(), session_id)
+    context = await build_turn_context(
+        replicas.store, replicas.app_b.state.settings, _tenant(), session_id
+    )
+    await replicas.app_b.state.execution.boot_hosted(
+        _tenant(), session_id, turn_context=context
+    )
     assert replicas.calls == [("acquire", "sandbox.boot")]
     worker_id, lease_id = await _lease(replicas.store, session_id)
     assert worker_id is not None
@@ -361,6 +375,27 @@ async def test_sandbox_boot_is_forwarded(replicas: Replicas) -> None:
         return len(replicas.hub_a.commands) == 0
 
     await _until(acked)
+    assert (await _lease(replicas.store, session_id))[1] == lease_id
+
+
+async def test_a_forwarded_boot_that_fails_releases_its_lease(
+    replicas: Replicas,
+) -> None:
+    session_id = await _new_session(
+        replicas.client_b, environment={"type": "openai_hosted"}
+    )
+    await replicas.app_b.state.execution.boot_hosted(_tenant(), session_id)
+    assert replicas.calls == [("acquire", "sandbox.boot")]
+
+    async def released() -> bool:
+        _worker_id, lease_id = await _lease(replicas.store, session_id)
+        return (
+            lease_id is None
+            and session_id not in replicas.worker.session_leases
+            and not any(conn.lease_mem for conn in replicas.hub_a._conns.values())
+        )
+
+    await _until(released)
 
 
 async def test_lease_revoke_from_the_reaper_reaches_the_socket(

@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 from datetime import timedelta
@@ -180,6 +181,97 @@ def test_hold_and_release() -> None:
     pool.release(sid)
     assert not pool.held(sid)
     pool.release(sid)
+
+
+def test_hold_counts_nested_holds() -> None:
+    pool = PiPool(_settings())
+    sid = uuid.uuid4()
+    pool.hold(sid)
+    pool.hold(sid)
+    pool.release(sid)
+    assert pool.held(sid)
+    pool.release(sid)
+    assert not pool.held(sid)
+
+
+def _hooked_pool() -> tuple[PiPool, list[bool], list[uuid.UUID]]:
+    hooked: list[bool] = []
+    released: list[uuid.UUID] = []
+
+    async def on_kill(_session_id: uuid.UUID, _proc: Any, release: bool) -> None:
+        hooked.append(release)
+
+    async def on_release(session_id: uuid.UUID) -> None:
+        released.append(session_id)
+
+    pool = PiPool(_settings(), on_kill=on_kill)
+    pool.on_release = on_release
+    return pool, hooked, released
+
+
+async def test_a_kill_during_a_turn_releases_the_lease_after_the_turn() -> None:
+    pool, hooked, released = _hooked_pool()
+    sid = uuid.uuid4()
+    pool._procs[sid] = cast(PiProc, _Proc())
+    pool.hold(sid)
+    await pool.kill(sid, reason="memory")
+    assert hooked == [False]
+    assert released == []
+    pool.release(sid)
+    await pool.after_turn(sid)
+    await pool.after_turn(sid)
+    assert released == [sid]
+
+
+async def test_a_kill_without_a_turn_releases_at_once() -> None:
+    pool, hooked, released = _hooked_pool()
+    sid = uuid.uuid4()
+    pool._procs[sid] = cast(PiProc, _Proc())
+    await pool.kill(sid, reason="idle")
+    await pool.after_turn(sid)
+    assert hooked == [True]
+    assert released == []
+
+
+async def test_a_turn_with_a_new_process_keeps_the_lease() -> None:
+    pool, hooked, released = _hooked_pool()
+    sid = uuid.uuid4()
+    pool._procs[sid] = cast(PiProc, _Proc())
+    pool.hold(sid)
+    await pool.kill(sid, reason="crash")
+    pool._procs[sid] = cast(PiProc, _Proc())
+    pool.release(sid)
+    await pool.after_turn(sid)
+    assert hooked == [False]
+    assert released == []
+    del pool._procs[sid]
+    await pool.after_turn(sid)
+    assert released == []
+
+
+async def test_a_turn_that_ends_during_the_harvest_releases_after_it() -> None:
+    gate = asyncio.Event()
+    released: list[uuid.UUID] = []
+
+    async def on_kill(_session_id: uuid.UUID, _proc: Any, _release: bool) -> None:
+        await gate.wait()
+
+    async def on_release(session_id: uuid.UUID) -> None:
+        released.append(session_id)
+
+    pool = PiPool(_settings(), on_kill=on_kill)
+    pool.on_release = on_release
+    sid = uuid.uuid4()
+    pool._procs[sid] = cast(PiProc, _Proc())
+    pool.hold(sid)
+    kill = asyncio.create_task(pool.kill(sid, reason="crash"))
+    await asyncio.sleep(0)
+    pool.release(sid)
+    await pool.after_turn(sid)
+    assert released == []
+    gate.set()
+    await kill
+    assert released == [sid]
 
 
 async def test_get_emits_sandbox_attach_span() -> None:
