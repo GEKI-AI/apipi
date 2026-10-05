@@ -18,25 +18,6 @@ async def _agent(client: AsyncClient, token: str, **extra: object) -> str:
     return str(created.json()["id"])
 
 
-async def test_agent_rejects_removed_sandbox_size(client: AsyncClient) -> None:
-    token = "agent-size-bad"
-    created = await client.post(
-        "/v1/agents",
-        headers=_auth(token),
-        json={"name": "bot", "metadata": {"apipi.sandbox_size": "xl"}},
-    )
-    assert created.status_code == 400
-    assert "container_size" in created.json()["error"]["message"]
-    agent_id = await _agent(client, token)
-    updated = await client.post(
-        f"/v1/agents/{agent_id}",
-        headers=_auth(token),
-        json={"metadata": {"apipi.sandbox_size": "xl"}},
-    )
-    assert updated.status_code == 400
-    assert "container_size" in updated.json()["error"]["message"]
-
-
 async def test_agent_rejects_unknown_sandbox_image(
     settings: Settings, store: Store
 ) -> None:

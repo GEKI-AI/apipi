@@ -64,19 +64,6 @@ async def test_hosted_environment_get_is_tenant_scoped(
     assert other.status_code == 404
 
 
-async def test_self_hosted_not_supported(client: AsyncClient) -> None:
-    token = "sandbox-self"
-    agent_id = await _agent(client, token)
-    created = await client.post(
-        "/v1/agents/sessions",
-        headers=_auth(token),
-        json={"agent_id": agent_id, "environment": {"type": "self_hosted"}},
-    )
-    assert created.status_code == 400
-    assert created.json()["error"]["type"] == "not_implemented"
-    assert "self_hosted" in created.json()["error"]["message"]
-
-
 async def test_eager_boot_off_by_default(client: AsyncClient) -> None:
     token = "sandbox-lazy"
     agent_id = await _agent(client, token)

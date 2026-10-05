@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from tests.support.fake_isolation import FakeIsolation
 
-from apipi.config import ConfigError, Settings, require_run_mode
+from apipi.config import ConfigError, Settings
 from apipi.worker.pi.isolation import load_isolation
 from apipi.worker.pi.isolation.microvm import MicrovmIsolation
 from apipi.worker.pi.isolation.none import NoneIsolation
@@ -35,17 +35,6 @@ def test_microvm_isolation_contract() -> None:
     assert backend.name == "microvm"
     assert backend.needs_probe is True
     assert backend.warn_not_production is False
-
-
-def test_host_and_jail_are_not_valid() -> None:
-    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
-        load_isolation("host")
-    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
-        load_isolation("jail")
-    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
-        require_run_mode("host")
-    with pytest.raises(ConfigError, match=r"none, microvm, or package\.mod:Class"):
-        require_run_mode("jail")
 
 
 def test_unknown_mode_without_import_path() -> None:
@@ -126,9 +115,16 @@ async def test_spawn_pi_none_starts_child(
 
         class Process:
             returncode = None
+            pid = None
             stdin = None
             stdout = None
             stderr = None
+
+            def terminate(self) -> None:
+                self.returncode = 0
+
+            async def wait(self) -> int:
+                return 0
 
         return Process()
 
@@ -143,6 +139,7 @@ async def test_spawn_pi_none_starts_child(
     assert "--mode" in args
     assert created["cwd"] == "/tmp/session"
     assert created["start_new_session"] is True
+    await proc.terminate()
 
 
 async def test_spawn_pi_none_without_cwd_writes_broker_models(

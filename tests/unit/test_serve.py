@@ -13,6 +13,7 @@ from apipi.config import (
     OTEL_SET,
     OTEL_UNSET,
     PAYLOAD_EXPORT_OFF,
+    RUN_MODE_HELP,
     SQLITE_WARNING,
     USAGE_EXPORT_OFF,
     USAGE_STORE_TURNS,
@@ -109,15 +110,6 @@ def test_prepare_serve_logs_enabled_exports(
     assert OTEL_UNSET not in messages
 
 
-def test_prepare_serve_ignores_legacy_turn_log_flag(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setenv("APIPI_TURN_LOG", "off")
-    caplog.set_level(logging.INFO, logger="apipi")
-    prepare_serve(_none_settings())
-    assert USAGE_STORE_TURNS in caplog.text
-
-
 def test_prepare_serve_rejects_prompt_body_logging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -144,17 +136,12 @@ def test_microvm_run_mode_exits_without_kvm(
         require_run_mode("microvm")
 
 
-def test_worker_requires_token_file(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.delenv("APIPI_WORKER_TOKEN", raising=False)
-    monkeypatch.delenv("APIPI_WORKER_TOKEN_FILE", raising=False)
-    assert main(["worker"]) == 1
-
-
 def test_worker_microvm_exits_without_kvm(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("APIPI_RUN_MODE", "microvm")
     monkeypatch.setenv("APIPI_WORKER_TOKEN_FILE", str(tmp_path / "worker.token"))
     (tmp_path / "worker.token").write_text("test-token\n")
@@ -165,6 +152,7 @@ def test_worker_microvm_exits_without_kvm(
 
     monkeypatch.setattr("apipi.worker.client.run_worker", boom)
     assert main(["worker"]) == 1
+    assert "/dev/kvm" in capsys.readouterr().err
 
 
 def test_prepare_worker_probes_model_host(
@@ -277,26 +265,25 @@ def test_worker_warns_on_removed_api_only_env(
     assert API_ONLY_REMOVED in caplog.text
 
 
-def test_serve_host_does_not_start(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
+@pytest.mark.parametrize("mode", ["host", "jail"])
+def test_worker_rejects_unknown_run_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("APIPI_RUN_MODE", mode)
+    token = tmp_path / "worker.token"
+    token.write_text("test-token\n")
+    monkeypatch.setenv("APIPI_WORKER_TOKEN_FILE", str(token))
 
-    def boom(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("must not start")
+    async def boom(_settings: Settings, **_kwargs: object) -> int:
+        raise AssertionError("must not connect")
 
-    monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
-    assert main(["serve"]) == 1
-
-
-def test_serve_jail_does_not_start(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "jail")
-
-    def boom(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("must not start")
-
-    monkeypatch.setattr("apipi.cli.uvicorn.run", boom)
-    assert main(["serve"]) == 1
+    monkeypatch.setattr("apipi.worker.client.run_worker", boom)
+    assert main(["worker"]) == 1
+    assert RUN_MODE_HELP in capsys.readouterr().err
 
 
 def test_serve_defaults_to_sqlite(

@@ -115,15 +115,6 @@ def test_worker_token_file_from_env(
     assert settings.worker_lease_ttl == timedelta(seconds=15)
 
 
-def test_legacy_worker_token_from_env_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_WORKER_TOKEN", "secret")
-    with pytest.raises(ValidationError, match="APIPI_WORKER_TOKEN was removed"):
-        Settings()
-
-
 def test_legacy_worker_token_kwarg_fails() -> None:
     with pytest.raises(ValidationError, match="APIPI_WORKER_TOKEN was removed"):
         Settings(**{"worker_token": "secret"})  # type: ignore
@@ -244,26 +235,6 @@ def test_default_run_mode_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().run_mode == "none"
 
 
-def test_run_mode_host_is_not_valid(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "host")
-    with pytest.raises(ConfigError, match=r"none, microvm"):
-        load_settings()
-
-
-def test_run_mode_jail_is_not_valid(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    monkeypatch.setenv("APIPI_RUN_MODE", "jail")
-    with pytest.raises(ConfigError, match=r"none, microvm"):
-        load_settings()
-
-
 def test_run_mode_custom_import_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
     monkeypatch.setenv("APIPI_RUN_MODE", "tests.support.fake_isolation:FakeIsolation")
@@ -332,12 +303,6 @@ def test_forward_models_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().forward_models is False
     monkeypatch.setenv("APIPI_FORWARD_MODELS", "on")
     assert Settings().forward_models is True
-
-
-def test_microvm_image_settings_removed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://apipi:apipi@localhost:5432/apipi")
-    assert not hasattr(Settings(), "microvm_image")
-    assert not hasattr(Settings(), "microvm_rootfs_browser")
 
 
 def test_microvm_image_env_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:

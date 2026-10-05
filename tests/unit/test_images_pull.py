@@ -233,9 +233,7 @@ def test_list_remote_from_versioned_store(tmp_path: Path) -> None:
     assert [(row[0], row[3]) for row in rows] == [("default", "remote")]
 
 
-def test_images_dir_beats_legacy_cache(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_microvm_images_resolve_the_pulled_image(tmp_path: Path) -> None:
     store, payload = _published(tmp_path)
     settings = _settings(tmp_path, image_source=store.as_uri())
     pull_images(settings, ids=["default"])

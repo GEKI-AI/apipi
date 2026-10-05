@@ -1,19 +1,14 @@
-import asyncio
 import json
-import shutil
-import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
-import pytest
+from httpx import AsyncClient
 
 from apipi.config import Settings
 from apipi.mcp.http import McpHttpServer
 from apipi.worker.pi.broker import start_broker
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -67,16 +62,25 @@ class _Upstream(BaseHTTPRequestHandler):
         return
 
 
+async def _rpc(
+    client: AsyncClient, url: str, method: str, params: dict[str, Any]
+) -> dict[str, Any]:
+    response = await client.post(
+        url,
+        headers={"Accept": "application/json, text/event-stream"},
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
 async def test_http_client_calls_through_broker_without_bearer(
     tmp_path: Path,
 ) -> None:
-    node = shutil.which("node")
-    if node is None:
-        pytest.fail("node is required to test the HTTP MCP client")
     seen: dict[str, str] = {}
     handler = type("Handler", (_Upstream,), {"seen": seen})
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True)
     thread.start()
     port = server.server_address[1]
     secret = "Bearer vault-secret"
@@ -96,20 +100,33 @@ async def test_http_client_calls_through_broker_without_bearer(
         port=0,
     )
     try:
-        runner = ROOT / "tests" / "support" / "mcp_http_client_check.mjs"
-        proc = await asyncio.to_thread(
-            subprocess.run,
-            [node, str(runner), broker.mcp_url("0")],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert proc.returncode == 0, proc.stderr or proc.stdout
-        assert secret not in " ".join(proc.args)
+        url = broker.mcp_url("0")
+        async with AsyncClient() as client:
+            init = await _rpc(
+                client,
+                url,
+                "initialize",
+                {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "0"},
+                },
+            )
+            assert init["result"]["serverInfo"]["name"] == "fixture"
+            listed = await _rpc(client, url, "tools/list", {})
+            assert [tool["name"] for tool in listed["result"]["tools"]] == ["echo"]
+            called = await _rpc(
+                client,
+                url,
+                "tools/call",
+                {"name": "echo", "arguments": {"text": "hi"}},
+            )
+            assert called["result"]["content"] == [{"type": "text", "text": "hi"}]
+        assert "vault-secret" not in url
         assert seen["authorization"] == secret
         assert seen["method"] == "tools/call"
     finally:
         await broker.stop()
         server.shutdown()
+        server.server_close()
         thread.join(timeout=2)

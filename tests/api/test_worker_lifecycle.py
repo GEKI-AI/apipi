@@ -119,6 +119,7 @@ async def test_inventory_clears_orphaned_lease(
         assert row.lease_id is None
         events = await list_events(db, tenant_id, session_id)
     assert events[-1].type == "agent.session.error"
+    await worker.close()
 
 
 async def test_hello_carries_revoke_and_ttl(

@@ -94,6 +94,7 @@ import signal
 import time
 child = os.fork()
 if child == 0:
+    os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     while True:
         time.sleep(60)
