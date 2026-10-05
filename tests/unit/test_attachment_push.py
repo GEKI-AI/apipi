@@ -53,6 +53,8 @@ def _tar(entries: dict[str, bytes]) -> bytes:
         ("..", "file"),
         ("", "file"),
         ("a\x00b\nc.txt", "abc.txt"),
+        ("\ud800a.txt", "a.txt"),
+        ("a\u200bb\u202e.txt", "ab.txt"),
         (".env", ".env"),
     ],
 )

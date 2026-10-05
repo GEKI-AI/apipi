@@ -150,9 +150,13 @@ def unpack_push_stream(source: io.BufferedIOBase, root: Path) -> int:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             temp = target.with_name(f".{target.name}.apipi-tmp")
-            with temp.open("wb") as out:
-                shutil.copyfileobj(handle, out)
-            os.replace(temp, target)
+            try:
+                with temp.open("wb") as out:
+                    shutil.copyfileobj(handle, out)
+                os.replace(temp, target)
+            except BaseException:
+                temp.unlink(missing_ok=True)
+                raise
             written += 1
     return written
 

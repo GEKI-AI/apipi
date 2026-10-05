@@ -584,6 +584,7 @@ def replace_workspace_files(workspace: Path, files: list[tuple[str, bytes]]) -> 
             temp.write_bytes(data)
             os.replace(temp, dest)
         except OSError as exc:
+            temp.unlink(missing_ok=True)
             raise SetupError(f"cannot write {raw_path}: {exc.strerror}") from exc
 
 

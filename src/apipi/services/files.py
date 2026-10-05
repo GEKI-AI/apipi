@@ -51,7 +51,7 @@ ATTACHMENTS_DIR = "attachments"
 MAX_NAME_BYTES = 200
 ATTACH_ATTEMPTS = 3
 _WORKSPACE_PREFIXES = ("/workspace/", "/tmp/workspace/", "./")
-_DROPPED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+_DROPPED_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
 
 
 @dataclasses.dataclass
