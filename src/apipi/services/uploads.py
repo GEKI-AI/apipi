@@ -153,21 +153,31 @@ class UploadService:
                     s3, tenant_id, upload_id, file_purpose, user_id, copied
                 )
             except Exception:
-                if copied and await self._pending(tenant_id, upload_id):
-                    for namespace, key in copied:
-                        with contextlib.suppress(Exception):
-                            await s3.delete(namespace, key)
+                if copied:
+                    with contextlib.suppress(Exception):
+                        await self._drop_copies(s3, tenant_id, upload_id, copied)
                 raise
         return body
 
-    async def _pending(self, tenant_id: uuid.UUID, upload_id: uuid.UUID) -> bool:
-        """True only when the upload is known to be still pending."""
-        try:
-            async with self.store.session() as db:
-                row = await get_upload(db, tenant_id, upload_id)
-        except Exception:
-            return False
-        return row is not None and row.status == "pending"
+    async def _drop_copies(
+        self,
+        s3: S3Store,
+        tenant_id: uuid.UUID,
+        upload_id: uuid.UUID,
+        copied: list[tuple[Namespace, str]],
+    ) -> None:
+        """Delete the copies of a failed complete while the upload is pending.
+
+        The upload row stays locked while the copies are deleted, so a
+        complete in another process either copies again afterwards or has
+        already committed, and then nothing is deleted.
+        """
+        async with self.store.session() as db:
+            row = await get_upload(db, tenant_id, upload_id, for_update=True)
+            if row is None or row.status != "pending":
+                return
+            for namespace, key in copied:
+                await s3.delete(namespace, key)
 
     async def _complete(
         self,

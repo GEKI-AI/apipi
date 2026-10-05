@@ -14,13 +14,15 @@ from httpx import ASGITransport, AsyncClient
 from tests.support.split_worker import api_settings_for, split_client_for
 from tests.unit.test_blobs import FakeS3
 
+from apipi.common.objects import NS_FILES
 from apipi.config import Settings
 from apipi.gateway import create_app
 from apipi.gateway.auth import AuthRequest, tenant_from_key
 from apipi.gateway.tokens import hash_token
+from apipi.services.uploads import UploadService
 from apipi.store.blobs import S3Store, file_object_id, skill_object_id
 from apipi.store.engine import Store
-from apipi.store.repo import create_artifact
+from apipi.store.repo import create_artifact, create_tenant
 from apipi.worker.fake_harness import FakeHarness
 
 
@@ -877,3 +879,46 @@ async def test_a_failed_complete_after_the_copy_deletes_the_copy(
     assert bad_zip.status_code == 400
     assert failed.status_code == 500
     assert sorted(fake.objects) == [_key(upload["url"])]
+
+
+async def test_cleanup_keeps_the_copy_of_an_upload_another_complete_finished(
+    settings: Settings, store: Store
+) -> None:
+    fake = FakeS3()
+    s3_settings = _s3_settings(settings)
+    s3 = S3Store(s3_settings, client=fake)
+    service = UploadService(store, s3, s3_settings)
+    async with store.session() as db:
+        tenant_id = (await create_tenant(db, name="cleanup")).id
+
+    async def _upload() -> dict[str, Any]:
+        created = await service.create(
+            tenant_id,
+            purpose="file",
+            filename="a.txt",
+            content_type="text/plain",
+            size=5,
+        )
+        fake.put_url(created["url"], b"hello", "text/plain")
+        return created
+
+    finished = await _upload()
+    await service.complete(tenant_id, uuid.UUID(finished["upload_id"]))
+    finished_key = file_object_id(tenant_id, finished["object_id"])
+    await service._drop_copies(
+        s3,
+        tenant_id,
+        uuid.UUID(finished["upload_id"]),
+        [(NS_FILES, finished_key)],
+    )
+    pending = await _upload()
+    pending_key = file_object_id(tenant_id, pending["object_id"])
+    fake.objects[f"apipi/files/{pending_key}"] = b"hello"
+    await service._drop_copies(
+        s3,
+        tenant_id,
+        uuid.UUID(pending["upload_id"]),
+        [(NS_FILES, pending_key)],
+    )
+    assert fake.objects[f"apipi/files/{finished_key}"] == b"hello"
+    assert f"apipi/files/{pending_key}" not in fake.objects
