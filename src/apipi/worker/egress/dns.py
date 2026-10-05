@@ -175,12 +175,14 @@ class DnsFilter:
         allow: Callable[[str], bool],
         upstreams: tuple[Upstream, ...],
         placeholder: Callable[[str], str | None] | None = None,
+        passthrough: bool = False,
         timeout: float = DNS_TIMEOUT,
         freebind: bool = False,
     ) -> None:
         self.host = host
         self.allow = allow
         self.placeholder = placeholder
+        self.passthrough = passthrough
         self.upstreams = upstreams
         self.timeout = timeout
         self.freebind = freebind
@@ -241,18 +243,31 @@ class DnsFilter:
             question = parse_question(query)
         except DnsFormatError:
             return error_reply(query, RCODE_FORMERR)
+        if self.passthrough:
+            address = self._placeholder(question)
+            if address is not None:
+                return placeholder_reply(query, question, address)
+            return await self._forward(query, os.urandom(2) + query[2:], question, tcp)
         if question.qclass != CLASS_IN:
             return error_reply(query, RCODE_NOTIMP, question.end)
         if not question.name or not self.allow(question.name):
             return error_reply(query, RCODE_NXDOMAIN, question.end)
-        address = (
-            self.placeholder(question.name) if self.placeholder is not None else None
-        )
+        address = self._placeholder(question)
         if address is not None:
             return placeholder_reply(query, question, address)
         if question.qtype in NODATA_TYPES:
             return error_reply(query, 0, question.end)
         outgoing = build_query(question, os.urandom(2))
+        return await self._forward(query, outgoing, question, tcp)
+
+    def _placeholder(self, question: Question) -> str | None:
+        if self.placeholder is None or question.qclass != CLASS_IN or not question.name:
+            return None
+        return self.placeholder(question.name)
+
+    async def _forward(
+        self, query: bytes, outgoing: bytes, question: Question, tcp: bool
+    ) -> bytes:
         for upstream in self.upstreams:
             try:
                 if tcp:

@@ -82,7 +82,8 @@ through the egress gateway (`event=egress.connection`). It carries
 sent one), `port`, `decision` (`spliced`, `intercepted`, or
 `rejected`), `reason` when the connection was rejected or ended early
 (for example `not_allowed`, `ip_literal`, `no_host`, `bad_host`,
-`private_address`, `port`, `upstream_tls`, `host_mismatch`,
+`private_address`, `placeholder_mismatch`, `port`, `upstream_tls`,
+`host_mismatch`,
 `bad_target`, `connect_method`, or `ambiguous_length`), and `bytes_up`
 and `bytes_down`. It never carries header values, paths, or bodies.
 When the worker runs out of file descriptors, the gateway stops

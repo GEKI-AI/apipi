@@ -109,7 +109,8 @@ require a real microVM.
 
 `tests/e2e/test_microvm_egress.py` checks the egress gateway from inside
 a guest: allowed and other hosts, IP addresses, other ports, DNS,
-private hosts by name through the DNS placeholder, the CA bundle with `curl`, Python, Node, and `git`, and
+private hosts by name through the DNS placeholder, the CA bundle with `curl`, Python, Node, and `git`, a
+`git clone` from a private credential host in an `enabled` guest, and
 that a `disabled` guest reaches only the broker.
 It needs internet access from the worker host and root, because it
 also runs a private upstream on `127.0.0.1:443`. The hosts default to

@@ -21,7 +21,12 @@ from apipi.worker.egress.intercept import (
     intercept,
     upstream_context,
 )
-from apipi.worker.egress.policy import EgressPolicy, norm_host, split_host_port
+from apipi.worker.egress.policy import (
+    EgressPolicy,
+    is_placeholder,
+    norm_host,
+    split_host_port,
+)
 from apipi.worker.egress.resolve import (
     Blocked,
     EgressBlocked,
@@ -246,11 +251,12 @@ class EgressGateway:
         self._listener = listener
         self.port = int(listener.getsockname()[1])
         self._arm()
-        if self.policy.mode == "restricted":
+        if self.policy.needs_dns():
             self.dns = DnsFilter(
                 host=self.host,
                 allow=lambda name: self.policy.allows_name(name),
                 placeholder=lambda name: self.policy.placeholder(name),
+                passthrough=self.policy.mode == "enabled",
                 upstreams=self.dns_upstreams,
                 freebind=self.freebind,
             )
@@ -367,8 +373,15 @@ class EgressGateway:
             if decision.action == "intercept" and not tls:
                 conn.reason = "credential_host_plain_http"
                 return
+            placeholder = is_placeholder(dest)
+            if placeholder and (
+                conn.host is None
+                or self.policy.placeholder_name(dest) != norm_host(conn.host)
+            ):
+                conn.reason = "placeholder_mismatch"
+                return
             owns_name = conn.host is not None and (
-                restricted or decision.action == "intercept"
+                restricted or placeholder or decision.action == "intercept"
             )
             if owns_name and conn.host is not None:
                 private = (

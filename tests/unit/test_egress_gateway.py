@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import h11
 import pytest
+from tests.unit.test_egress_dns import FakeResolver, answered
 from tests.unit.test_egress_dns import query as dns_query
 from tests.unit.test_egress_sni import handmade_hello
 
@@ -31,6 +32,7 @@ from apipi.worker.egress import (
 )
 from apipi.worker.egress import gateway as gateway_module
 from apipi.worker.egress import resolve as resolve_module
+from apipi.worker.egress.inject import Injection, SecretInjector
 from apipi.worker.egress.resolve import address_blocked
 
 HOST = "allowed.test"
@@ -209,6 +211,7 @@ class Env:
         peek_timeout: float = 2.0,
         idle_timeout: float = 300.0,
         max_connections: int = 128,
+        dns_upstreams: tuple[tuple[str, int], ...] = (),
     ) -> EgressGateway:
         policy = EgressPolicy.build(
             cast(EgressMode, mode),
@@ -233,6 +236,7 @@ class Env:
             peek_timeout=peek_timeout,
             idle_timeout=idle_timeout,
             max_connections=max_connections,
+            dns_upstreams=dns_upstreams,
         )
         await gateway.start()
         self.gateways.append(gateway)
@@ -976,6 +980,19 @@ async def test_start_gateway_reads_settings(tmp_path: Path) -> None:
         assert enabled.dns_ports is None
     finally:
         await enabled.stop()
+    private = await start_gateway(
+        settings,
+        host="127.0.0.1",
+        mode="enabled",
+        intercept_hosts=("git.internal",),
+        dns_upstreams=(("127.0.0.1", 53),),
+        freebind=False,
+    )
+    try:
+        assert private.dns is not None and private.dns.passthrough
+        assert private.dns_ports is not None
+    finally:
+        await private.stop()
 
 
 async def test_close_cancels_open_connections(env: Env) -> None:
@@ -1169,6 +1186,116 @@ async def test_restricted_guest_reaches_private_host_through_placeholder(
     assert public.dns is not None
     other = await public.dns.answer(dns_query("other.internal"), tcp=False)
     assert other is not None and other[3] & 0x0F == 3
+
+
+async def test_enabled_dns_filter_only_with_private_credential_hosts(env: Env) -> None:
+    upstream = await env.upstream(mode="echo")
+    plain = await env.gateway("enabled", port=upstream.port, private=(HOST,))
+    assert plain.dns is None
+    public = await env.gateway(
+        "enabled", port=upstream.port, private=(HOST,), intercept=("github.com",)
+    )
+    assert public.dns is None
+    resolver = FakeResolver()
+    await resolver.start()
+    try:
+        gateway = await env.gateway(
+            "enabled",
+            port=upstream.port,
+            private=(HOST, "wiki.internal"),
+            intercept=(HOST,),
+            dns_upstreams=(("127.0.0.1", resolver.port),),
+        )
+        assert gateway.dns is not None and gateway.dns_ports is not None
+        reply = await gateway.dns.answer(dns_query(HOST), tcp=False)
+        assert reply is not None
+        assert reply.endswith(socket.inet_aton("198.18.0.1"))
+        assert resolver.udp == []
+        for name in ("example.com", "wiki.internal"):
+            packet = dns_query(name)
+            reply = await gateway.dns.answer(packet, tcp=False)
+            assert reply is not None and answered(reply, packet)
+        assert resolver.udp == ["example.com", "wiki.internal"]
+    finally:
+        resolver.close()
+
+
+async def test_enabled_placeholder_connection_is_resolved_by_name_and_injected(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.egress")
+    upstream = await env.upstream(bind="127.0.0.2")
+    placeholder = "apipi-secret-" + "c" * 32
+    injector = SecretInjector(
+        [Injection("cred_git", "GIT_TOKEN", placeholder, "real-git-token", (HOST,))],
+        ports=(upstream.port,),
+    )
+    gateway = await env.gateway(
+        "enabled",
+        port=upstream.port,
+        private=(HOST,),
+        intercept=(HOST,),
+        hooks=injector.hooks(),
+        dest=("198.18.0.1", upstream.port),
+        table={HOST: ["127.0.0.2"]},
+    )
+    reader, writer = await tls_connect(gateway, trust(env.worker_ca))
+    status, _, _ = await HttpClient(reader, writer).request(
+        "GET",
+        "/org/repo.git/info/refs",
+        headers=[("Authorization", f"Bearer {placeholder}")],
+    )
+    assert status == 200
+    await close(writer)
+    await wait_record(caplog, decision="intercepted", host=HOST)
+    assert ("Authorization", "Bearer real-git-token") in upstream.seen[0].headers
+
+
+async def test_placeholder_connection_must_name_its_host(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="apipi.egress")
+    upstream = await env.upstream(mode="echo", bind="127.0.0.2")
+    table = {HOST: ["127.0.0.2"], "other.test": ["127.0.0.2"]}
+    loose = ssl.create_default_context()
+    loose.check_hostname = False
+    loose.verify_mode = ssl.CERT_NONE
+    enabled = await env.gateway(
+        "enabled",
+        port=upstream.port,
+        private=(HOST, "other.test"),
+        intercept=(HOST,),
+        dest=("198.18.0.1", upstream.port),
+        table=table,
+    )
+    await assert_rejected(enabled, loose, "other.test")
+    await wait_record(caplog, decision="rejected", reason="placeholder_mismatch")
+    caplog.clear()
+    await assert_rejected(enabled, loose, None)
+    await wait_record(caplog, decision="rejected", reason="placeholder_mismatch")
+    caplog.clear()
+    unused = await env.gateway(
+        "enabled",
+        port=upstream.port,
+        private=(HOST,),
+        intercept=(HOST,),
+        dest=("198.18.0.2", upstream.port),
+        table=table,
+    )
+    await assert_rejected(unused, trust(env.worker_ca))
+    await wait_record(caplog, decision="rejected", reason="placeholder_mismatch")
+    caplog.clear()
+    restricted = await env.gateway(
+        "restricted",
+        port=upstream.port,
+        allowed=(HOST, "a.internal"),
+        private=(HOST, "a.internal"),
+        dest=("198.18.0.1", upstream.port),
+        table=table,
+    )
+    await assert_rejected(restricted, loose)
+    await wait_record(caplog, decision="rejected", reason="placeholder_mismatch")
+    assert upstream.connections == 0
 
 
 async def test_lf_only_http_request_is_not_delayed(env: Env) -> None:

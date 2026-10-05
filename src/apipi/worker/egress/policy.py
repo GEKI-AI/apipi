@@ -45,6 +45,14 @@ def split_host_port(value: str) -> tuple[str, int | None]:
     return host, int(rest[1:])
 
 
+def is_placeholder(address: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return ip.version == 4 and ip in PLACEHOLDER_NET
+
+
 @dataclass(frozen=True)
 class Decision:
     action: Action
@@ -93,18 +101,38 @@ class EgressPolicy:
             return False
         return norm_host(host) in allowed_names(self.private_hosts)
 
+    def private_names(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                name
+                for name in allowed_names(self.private_hosts)
+                if self.private_name(name)
+            )
+        )
+
     def placeholder(self, host: str) -> str | None:
         if not self.private_name(host):
             return None
-        names = sorted(
-            name
-            for name in allowed_names(self.private_hosts)
-            if self.private_name(name)
-        )
-        index = names.index(norm_host(host)) + 1
+        index = self.private_names().index(norm_host(host)) + 1
         if index >= PLACEHOLDER_NET.num_addresses - 1:
             return None
         return str(PLACEHOLDER_NET[index])
+
+    def placeholder_name(self, address: str) -> str | None:
+        if not is_placeholder(address):
+            return None
+        index = int(ipaddress.IPv4Address(address)) - int(
+            PLACEHOLDER_NET.network_address
+        )
+        names = self.private_names()
+        if not 1 <= index <= len(names) or index >= PLACEHOLDER_NET.num_addresses - 1:
+            return None
+        return names[index - 1]
+
+    def needs_dns(self) -> bool:
+        if self.mode == "restricted":
+            return True
+        return self.mode == "enabled" and bool(self.private_names())
 
     def private_allowed(self, host: str | None) -> bool:
         if not host:
