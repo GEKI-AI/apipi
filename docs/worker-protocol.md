@@ -546,8 +546,10 @@ two forms is used, depending on the store of the API.
 `object_id` names the object in the store and is the same in both forms.
 A worker stops reading a reference with `size_bytes` (files, session
 files, image and file parts) after `size_bytes` bytes, and a skill
-after `APIPI_MAX_FILE_BYTES`. A larger object fails the turn with code
-`artifact_store` and is never held in memory in full.
+after `APIPI_MAX_FILE_BYTES`. A larger object is never held in memory
+in full. An object larger than its limit, or a reference with
+`size_bytes` whose object has another size, fails the turn with code
+`artifact_store`.
 `path` of a file is the path in the workspace. At the start of the turn
 the worker fetches the bytes of a file of `files` or `session_files`
 only when `path` does not exist in the session directory, and writes it

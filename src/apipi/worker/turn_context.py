@@ -32,11 +32,25 @@ async def fetch_ref_bytes(
     """Fetch one context file/skill/blob reference without DB access.
 
     The read stops after `limit` bytes, or after the `size_bytes` of the
-    reference when `limit` is None, and a larger object fails.
+    reference when `limit` is None, and a larger object fails. A
+    reference with `size_bytes` must have exactly that size.
     """
-    if limit is None:
-        size = ref.get("size_bytes")
-        limit = size if isinstance(size, int) else None
+    size = ref.get("size_bytes")
+    if not isinstance(size, int):
+        size = None
+    data = await _read_ref(ref, settings, size if limit is None else limit)
+    if size is not None and len(data) != size:
+        raise store_error(
+            f"turn context ref is {len(data)} bytes, expected {size}",
+            operation="get",
+            key=str(ref.get("object_id") or ""),
+        )
+    return data
+
+
+async def _read_ref(
+    ref: Mapping[str, Any], settings: Settings, limit: int | None
+) -> bytes:
     url = ref.get("url")
     if isinstance(url, str) and url:
         return await _fetch_url(url, limit)
@@ -153,18 +167,6 @@ def _model_input(part: Any) -> str | None:
     return None
 
 
-async def _fetch_part(part: Mapping[str, Any], settings: Settings) -> bytes:
-    data = await fetch_ref_bytes(part, settings)
-    size = part.get("size_bytes")
-    if isinstance(size, int) and len(data) != size:
-        raise store_error(
-            f"input {part.get('type')} is {len(data)} bytes, expected {size}",
-            operation="get",
-            key=str(part.get("object_id") or ""),
-        )
-    return data
-
-
 async def fetch_input_images(
     parts: list[Any], settings: Settings
 ) -> list[dict[str, str]]:
@@ -173,7 +175,7 @@ async def fetch_input_images(
     for part in parts:
         if _model_input(part) != "image":
             continue
-        data = await _fetch_part(part, settings)
+        data = await fetch_ref_bytes(part, settings)
         images.append(
             {
                 "type": "image",
@@ -230,7 +232,7 @@ async def fetch_input_files(parts: list[Any], settings: Settings) -> list[str]:
     for part in parts:
         if _model_input(part) != "text":
             continue
-        data = await _fetch_part(part, settings)
+        data = await fetch_ref_bytes(part, settings)
         blocks.append(
             file_block(str(part.get("filename") or ""), data.decode("utf-8-sig"))
         )

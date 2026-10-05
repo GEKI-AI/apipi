@@ -2107,10 +2107,12 @@ async def get_upload(
     upload_id: uuid.UUID,
     *,
     user_id: str | None = None,
+    for_update: bool = False,
 ) -> UploadRow | None:
     """An upload of the tenant.
 
-    With `user_id`, only an upload of that user or of no user.
+    With `user_id`, only an upload of that user or of no user. With
+    `for_update`, the row is locked until the transaction ends (Postgres).
     """
     query = select(UploadRow).where(
         UploadRow.tenant_id == tenant_id, UploadRow.id == upload_id
@@ -2119,6 +2121,8 @@ async def get_upload(
         query = query.where(
             or_(UploadRow.user_id.is_(None), UploadRow.user_id == user_id)
         )
+    if for_update:
+        query = query.with_for_update()
     return await db.scalar(query)
 
 

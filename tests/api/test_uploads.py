@@ -1,5 +1,7 @@
+import asyncio
 import base64
 import io
+import threading
 import uuid
 import zipfile
 from typing import Any
@@ -758,3 +760,116 @@ async def test_reads_of_a_stored_object_stop_at_its_size(
         assert response.status_code == 503, response.json()
         assert response.json()["error"]["code"] == "artifact_store"
     assert set(fake.ranges) == {"bytes=0-5"}
+
+
+class _SlowCopy(FakeS3):
+    def __init__(self) -> None:
+        super().__init__()
+        self.copied = threading.Event()
+        self.release = threading.Event()
+
+    def copy_object(self, **kwargs: object) -> None:
+        super().copy_object(**kwargs)
+        self.copied.set()
+        assert self.release.wait(10)
+
+
+@pytest.mark.parametrize("purpose", ["file", "skill"])
+async def test_a_second_complete_waits_and_keeps_the_first_bytes(
+    settings: Settings, store: Store, purpose: str
+) -> None:
+    fake = _SlowCopy()
+    s3_settings = _s3_settings(settings)
+    app = create_app(
+        api_settings_for(s3_settings),
+        store=store,
+        objects=S3Store(s3_settings, client=fake),
+    )
+    token = "race"
+    tenant_id = uuid5(NAMESPACE_URL, hash_token(token))
+    data = _zip_skill() if purpose == "skill" else b"first"
+    content_type = "application/zip" if purpose == "skill" else "text/plain"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/apipi/uploads",
+            headers=_auth(token),
+            json={
+                "purpose": purpose,
+                "filename": "a.zip",
+                "bytes": len(data),
+                "content_type": content_type,
+            },
+        )
+        url = created.json()["url"]
+        fake.put_url(url, data, content_type)
+        path = f"/v1/apipi/uploads/{created.json()['upload_id']}/complete"
+        first = asyncio.create_task(client.post(path, headers=_auth(token), json={}))
+        assert await asyncio.to_thread(fake.copied.wait, 10)
+        assert fake.put_url(url, b"\xff" * len(data), content_type) == 200
+        second = asyncio.create_task(client.post(path, headers=_auth(token), json={}))
+        await asyncio.sleep(0.1)
+        fake.release.set()
+        done, again = await first, await second
+    object_id = created.json()["object_id"]
+    key = (
+        f"apipi/skills/{skill_object_id(tenant_id, object_id)}"
+        if purpose == "skill"
+        else f"apipi/files/{file_object_id(tenant_id, object_id)}"
+    )
+    assert done.status_code == 200, done.json()
+    assert again.status_code == 200, again.json()
+    assert again.json()["id"] == done.json()["id"] == object_id
+    assert fake.objects[key] == data
+
+
+async def test_a_failed_complete_after_the_copy_deletes_the_copy(
+    settings: Settings, store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeS3()
+    s3_settings = _s3_settings(settings)
+    app = create_app(
+        api_settings_for(s3_settings),
+        store=store,
+        objects=S3Store(s3_settings, client=fake),
+    )
+    token = "cleanup"
+
+    async def _create(client: AsyncClient, purpose: str, data: bytes) -> Any:
+        created = await client.post(
+            "/v1/apipi/uploads",
+            headers=_auth(token),
+            json={
+                "purpose": purpose,
+                "filename": "a.zip",
+                "bytes": len(data),
+                "content_type": "application/zip",
+            },
+        )
+        fake.put_url(created.json()["url"], data, "application/zip")
+        return created.json()
+
+    async def _broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("database down")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        skill = await _create(client, "skill", b"not a zip")
+        bad_zip = await client.post(
+            f"/v1/apipi/uploads/{skill['upload_id']}/complete",
+            headers=_auth(token),
+            json={},
+        )
+        upload = await _create(client, "file", b"hello")
+        monkeypatch.setattr("apipi.services.uploads.create_file", _broken)
+        failed = await client.post(
+            f"/v1/apipi/uploads/{upload['upload_id']}/complete",
+            headers=_auth(token),
+            json={},
+        )
+    assert bad_zip.status_code == 400
+    assert failed.status_code == 500
+    assert sorted(fake.objects) == [_key(upload["url"])]

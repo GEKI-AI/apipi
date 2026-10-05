@@ -459,11 +459,17 @@ until `expires_at`, only writes the upload key again. It does not
 change what `GET /v1/files/{file_id}/content`, `input_file`,
 `input_image`, `environment.files`, or `environment.skills` deliver.
 Complete of an upload that is already complete returns the existing
-file or skill. If the copy fails, complete returns `503` with code
+file or skill. Two completes of one upload at the same time do not
+both copy: the second waits for the first and then returns its file or
+skill. If the copy fails, complete returns `503` with code
 `artifact_store`, stores nothing, and the same complete can be sent
-again. The copy only takes the object that complete checked, so a PUT
-between the check and the copy also fails the copy, and complete can
-be sent again.
+again. When a later step fails after the copy, the copied object is
+deleted again. The copy only takes the object that complete checked
+(`CopySourceIfMatch` with the ETag of `HeadObject`), so a PUT between
+the check and the copy also fails the copy, and complete can be sent
+again. If object storage returns no ETag, the copy runs without that
+condition, and the signed `Content-Length` still keeps the object at the
+declared size.
 
 A presigned GET forces a download. The URL sets
 `Content-Disposition: attachment` to the original file name. A name that

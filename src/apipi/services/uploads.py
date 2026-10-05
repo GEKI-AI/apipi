@@ -1,12 +1,14 @@
+import asyncio
 import contextlib
 import uuid
+import weakref
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apipi.common.errors import ApiError
-from apipi.common.objects import NS_FILES, NS_SKILLS, NS_UPLOADS
+from apipi.common.objects import NS_FILES, NS_SKILLS, NS_UPLOADS, Namespace
 from apipi.common.skills import inspect_skill_zip
 from apipi.config import Settings
 from apipi.env.setup import SetupError
@@ -54,6 +56,16 @@ class UploadService:
         self.store = store
         self.objects = objects
         self.settings = settings
+        self._locks: weakref.WeakValueDictionary[uuid.UUID, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+
+    def _lock(self, upload_id: uuid.UUID) -> asyncio.Lock:
+        lock = self._locks.get(upload_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[upload_id] = lock
+        return lock
 
     async def create(
         self,
@@ -125,9 +137,51 @@ class UploadService:
         file_purpose: str | None = None,
         user_id: str | None = None,
     ) -> dict[str, Any]:
+        """Complete one upload, once.
+
+        The upload row is locked for the whole complete (`FOR UPDATE` on
+        Postgres, and a lock in this process), so a second complete waits
+        and then returns the file or skill of the first. When the copy
+        succeeded and a later step fails, the copied object is deleted
+        again, best effort, but only while the upload is still pending.
+        """
         s3 = _s3(self.objects)
+        copied: list[tuple[Namespace, str]] = []
+        async with self._lock(upload_id):
+            try:
+                body = await self._complete(
+                    s3, tenant_id, upload_id, file_purpose, user_id, copied
+                )
+            except Exception:
+                if copied and await self._pending(tenant_id, upload_id):
+                    for namespace, key in copied:
+                        with contextlib.suppress(Exception):
+                            await s3.delete(namespace, key)
+                raise
+        return body
+
+    async def _pending(self, tenant_id: uuid.UUID, upload_id: uuid.UUID) -> bool:
+        """True only when the upload is known to be still pending."""
+        try:
+            async with self.store.session() as db:
+                row = await get_upload(db, tenant_id, upload_id)
+        except Exception:
+            return False
+        return row is not None and row.status == "pending"
+
+    async def _complete(
+        self,
+        s3: S3Store,
+        tenant_id: uuid.UUID,
+        upload_id: uuid.UUID,
+        file_purpose: str | None,
+        user_id: str | None,
+        copied: list[tuple[Namespace, str]],
+    ) -> dict[str, Any]:
         async with self.store.session() as db:
-            row = await get_upload(db, tenant_id, upload_id, user_id=user_id)
+            row = await get_upload(
+                db, tenant_id, upload_id, user_id=user_id, for_update=True
+            )
             if row is None:
                 not_found()
             is_file = row.purpose != "skill"
@@ -150,7 +204,8 @@ class UploadService:
                     "Upload URL expired",
                     code="upload_expired",
                 )
-            body = await self._finish(db, s3, tenant_id, row, purpose)
+            body = await self._finish(db, s3, tenant_id, row, purpose, copied)
+        copied.clear()
         with contextlib.suppress(Exception):
             await s3.delete(NS_UPLOADS, upload_object_id(tenant_id, upload_id))
         return body
@@ -162,6 +217,7 @@ class UploadService:
         tenant_id: uuid.UUID,
         row: UploadRow,
         purpose: str,
+        copied: list[tuple[Namespace, str]],
     ) -> dict[str, Any]:
         """Check the uploaded object, copy it to its final key, and store the row.
 
@@ -198,6 +254,7 @@ class UploadService:
             else skill_object_id(tenant_id, row.object_id)
         )
         await s3.copy(NS_UPLOADS, upload_key, namespace, key, etag=meta.etag)
+        copied.append((namespace, key))
         if is_file:
             created = await create_file(
                 db,
@@ -222,7 +279,6 @@ class UploadService:
         try:
             name = inspect_skill_zip(data)
         except SetupError as exc:
-            await s3.delete(namespace, key)
             await s3.delete(NS_UPLOADS, upload_key)
             raise ApiError(
                 "invalid_request", exc.message, code="invalid_request"
