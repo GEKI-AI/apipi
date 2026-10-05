@@ -285,9 +285,11 @@ class Interceptor:
             return await self._serve()
         finally:
             watch.cancel()
-            if self.server is not None:
-                await close_writer(self.server.writer)
-            await close_writer(writer)
+            server = self.server
+            if server is None:
+                await close_writer(writer)
+            else:
+                await close_writer(server.writer, writer)
 
     def _abort(self) -> None:
         for side in (self.guest, self.server):

@@ -34,7 +34,9 @@ from apipi.worker.egress import (
 from apipi.worker.egress import gateway as gateway_module
 from apipi.worker.egress import resolve as resolve_module
 from apipi.worker.egress.inject import Injection, SecretInjector
+from apipi.worker.egress.intercept import Interceptor, _Side
 from apipi.worker.egress.resolve import address_blocked
+from apipi.worker.egress.splice import ByteCount, splice
 
 HOST = "allowed.test"
 
@@ -957,6 +959,85 @@ async def test_close_cancels_open_connections(env: Env) -> None:
     await close(writer)
     with pytest.raises(OSError):
         socket.create_connection(("127.0.0.1", gateway.port), timeout=1).close()
+
+
+@contextlib.asynccontextmanager
+async def slow_closing_upstream() -> AsyncIterator[
+    tuple[asyncio.StreamReader, asyncio.StreamWriter]
+]:
+    ours, peer = socket.socketpair()
+    peer.shutdown(socket.SHUT_WR)
+    reader, writer = await asyncio.open_connection(sock=ours)
+    writer.write(bytes(4 << 20))
+    try:
+        yield reader, writer
+    finally:
+        writer.transport.abort()
+        await asyncio.sleep(0)
+        peer.close()
+
+
+async def cancel_while_closing(
+    task: "asyncio.Task[Any]", upstream: asyncio.StreamWriter
+) -> None:
+    async with asyncio.timeout(5):
+        while not upstream.is_closing():
+            await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_cancelled_splice_closes_the_guest_while_upstream_closes() -> None:
+    guest, peer = socket.socketpair()
+    peer.shutdown(socket.SHUT_WR)
+    guest_reader, guest_writer = await asyncio.open_connection(sock=guest)
+    try:
+        async with slow_closing_upstream() as (upstream_reader, upstream_writer):
+            task = asyncio.create_task(
+                splice(guest_reader, guest_writer, upstream_reader, upstream_writer)
+            )
+            await cancel_while_closing(task, upstream_writer)
+            assert guest_writer.is_closing()
+            await asyncio.wait_for(guest_writer.wait_closed(), timeout=5)
+            assert guest.fileno() == -1
+    finally:
+        await close(guest_writer)
+        peer.close()
+
+
+async def test_cancelled_intercept_closes_the_guest_while_upstream_closes() -> None:
+    guest, peer = socket.socketpair()
+    peer.shutdown(socket.SHUT_WR)
+    count = ByteCount()
+    interceptor = Interceptor(
+        host=HOST,
+        port=80,
+        addresses=[],
+        hooks=EgressHooks(),
+        upstream=None,
+        count=count,
+    )
+    try:
+        async with slow_closing_upstream() as (upstream_reader, upstream_writer):
+            interceptor.server = _Side(
+                h11.Connection(h11.CLIENT),
+                upstream_reader,
+                upstream_writer,
+                count,
+                guest=False,
+            )
+            task = asyncio.create_task(interceptor.run(guest, None))
+            await cancel_while_closing(task, upstream_writer)
+            assert interceptor.guest is not None
+            assert interceptor.guest.writer.is_closing()
+            await asyncio.wait_for(interceptor.guest.writer.wait_closed(), timeout=5)
+            assert guest.fileno() == -1
+    finally:
+        if interceptor.guest is not None:
+            await close(interceptor.guest.writer)
+        guest.close()
+        peer.close()
 
 
 async def _throughput(reader: asyncio.StreamReader, total: int) -> tuple[float, float]:

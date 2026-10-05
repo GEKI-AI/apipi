@@ -92,7 +92,9 @@ async def open_upstream(
     raise UpstreamError("upstream_unreachable")
 
 
-async def close_writer(writer: asyncio.StreamWriter) -> None:
-    writer.close()
-    with contextlib.suppress(Exception):
-        await writer.wait_closed()
+async def close_writer(*writers: asyncio.StreamWriter) -> None:
+    for writer in writers:
+        writer.close()
+    for writer in writers:
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
