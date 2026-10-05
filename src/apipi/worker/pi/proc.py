@@ -132,6 +132,7 @@ class PiProc:
     ) -> None:
         self.process = process
         self._stdin = process.stdin if stdin is None else stdin
+        self._rpc_writer = stdin
         self._stdout = process.stdout if stdout is None else stdout
         self._on_stop = on_stop
         self.broker = broker
@@ -307,6 +308,11 @@ class PiProc:
             if self.scratch_dir is not None:
                 shutil.rmtree(self.scratch_dir, ignore_errors=True)
                 self.scratch_dir = None
+            if self._rpc_writer is not None:
+                from apipi.worker.egress.sockets import close_writer
+
+                await close_writer(self._rpc_writer)
+                self._rpc_writer = None
 
 
 def pi_env(

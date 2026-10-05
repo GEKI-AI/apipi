@@ -3,8 +3,10 @@ import errno
 import ipaddress
 import json
 import logging
+import socket
 import subprocess
 import tarfile
+import time
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -18,9 +20,10 @@ from apipi.config import (
 )
 from apipi.env.setup import NetworkPolicy, write_network_policy
 from apipi.mcp.http import McpConnectError, McpHttpServer
-from apipi.worker.egress import EgressHooks
+from apipi.worker.egress import EgressHooks, sockets
 from apipi.worker.egress.policy import PLACEHOLDER_NET
 from apipi.worker.pi.artifacts import unpack_workspace_tar
+from apipi.worker.pi.broker import SessionBroker
 from apipi.worker.pi.guest import (
     RNDADDENTROPY,
     _pi_args,
@@ -56,6 +59,7 @@ from apipi.worker.pi.microvm import (
     microvm_net_binaries,
     microvm_shell_needs_sudo,
     microvm_shell_sudo_argv,
+    push_workspace_files,
     require_microvm,
     run_microvm_shell,
     setup_tap,
@@ -992,9 +996,16 @@ def test_guest_env_drops_worker_secrets(
     assert "OPENAI_API_KEY=apipi" in forced
 
 
+class _Transport:
+    def abort(self) -> None:
+        return None
+
+
 class _Writer:
     def __init__(self) -> None:
         self.buf = bytearray()
+        self.transport = _Transport()
+        self.closed = False
 
     def write(self, data: bytes) -> None:
         self.buf.extend(data)
@@ -1003,6 +1014,9 @@ class _Writer:
         return None
 
     def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
         return None
 
 
@@ -1052,6 +1066,172 @@ async def test_connect_vsock_timeout(tmp_path: Path) -> None:
         await connect_vsock(tmp_path / "missing.sock", VSOCK_PORT, timeout=0.05)
 
 
+async def wait_opened(opened: list[asyncio.StreamWriter]) -> None:
+    async with asyncio.timeout(5):
+        while not opened:
+            await asyncio.sleep(0.01)
+
+
+async def wait_freed(*writers: asyncio.StreamWriter) -> None:
+    async with asyncio.timeout(5):
+        while any(w.get_extra_info("socket").fileno() != -1 for w in writers):
+            await asyncio.sleep(0.01)
+
+
+async def abort_all(writers: list[asyncio.StreamWriter]) -> None:
+    for writer in writers:
+        writer.transport.abort()
+    await asyncio.sleep(0)
+
+
+async def test_cancelled_vsock_handshake_closes_the_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "vsock.sock"
+    opened: list[asyncio.StreamWriter] = []
+    open_unix = asyncio.open_unix_connection
+
+    async def opening(target: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        reader, writer = await open_unix(target)
+        opened.append(writer)
+        return reader, writer
+
+    monkeypatch.setattr("apipi.worker.pi.microvm.asyncio.open_unix_connection", opening)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as guest:
+        guest.bind(str(path))
+        guest.listen(1)
+        task = asyncio.create_task(connect_vsock(path, VSOCK_PORT, timeout=5))
+        try:
+            await wait_opened(opened)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert opened[0].is_closing()
+            await wait_freed(*opened)
+        finally:
+            await abort_all(opened)
+
+
+async def test_cancelled_pull_closes_the_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+    ours, guest = socket.socketpair()
+    opened: list[asyncio.StreamWriter] = []
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        return _Process()
+
+    async def fake_connect(
+        _path: Path, port: int, **_kwargs: object
+    ) -> tuple[asyncio.StreamReader, object]:
+        if port == VSOCK_PORT:
+            reader = asyncio.StreamReader()
+            reader.feed_eof()
+            return reader, _Writer()
+        reader, writer = await asyncio.open_connection(sock=ours)
+        opened.append(writer)
+        return reader, writer
+
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", fake_connect)
+    proc = await spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
+    try:
+        assert proc.pull_workspace is not None
+        task = asyncio.ensure_future(proc.pull_workspace())
+        await wait_opened(opened)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert opened[0].is_closing()
+        await wait_freed(*opened)
+    finally:
+        await abort_all(opened)
+        ours.close()
+        guest.close()
+        await proc.terminate()
+
+
+async def test_cancelled_boot_handshake_stops_the_guest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    gateways: list[_FakeGateway],
+) -> None:
+    _microvm_spawn_ok(monkeypatch, tmp_path)
+    torn: list[object] = []
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.teardown_tap", lambda net, **_k: torn.append(net)
+    )
+    stopped: list[SessionBroker] = []
+    stop = SessionBroker.stop
+
+    async def recording_stop(self: SessionBroker) -> None:
+        stopped.append(self)
+        await stop(self)
+
+    monkeypatch.setattr(SessionBroker, "stop", recording_stop)
+    process = _Process()
+    connecting = asyncio.Event()
+
+    async def fake_exec(*_args: str, **_kwargs: Any) -> _Process:
+        return process
+
+    async def hanging_connect(*_args: object, **_kwargs: object) -> None:
+        connecting.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        "apipi.worker.pi.microvm.asyncio.create_subprocess_exec", fake_exec
+    )
+    monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", hanging_connect)
+    task = asyncio.create_task(
+        spawn_microvm_pi(_settings(tmp_path), cwd=None, tools=True)
+    )
+    async with asyncio.timeout(5):
+        await connecting.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert process.killed is True
+    assert gateways[0].closed is True
+    assert len(torn) == 1
+    assert len(stopped) == 1
+
+
+async def test_push_to_a_guest_that_stops_reading_ends(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(sockets, "CLOSE_TIMEOUT", 0.2)
+    ours, guest = socket.socketpair()
+    opened: list[asyncio.StreamWriter] = []
+
+    async def fake_connect(
+        *_args: object, **_kwargs: object
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        reader, writer = await asyncio.open_connection(sock=ours)
+        opened.append(writer)
+        return reader, writer
+
+    monkeypatch.setattr("apipi.worker.pi.microvm.connect_vsock", fake_connect)
+    started = time.monotonic()
+    try:
+        async with asyncio.timeout(5):
+            with pytest.raises(TimeoutError):
+                await push_workspace_files(
+                    tmp_path / "vsock.sock",
+                    [("attachments/big", bytes(8 << 20))],
+                    timeout=0.3,
+                )
+        assert time.monotonic() - started < 2
+        await wait_freed(*opened)
+    finally:
+        await abort_all(opened)
+        ours.close()
+        guest.close()
+
+
 async def test_spawn_pi_microvm_uses_jailer_and_vsock(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1097,6 +1277,7 @@ async def test_spawn_pi_microvm_uses_jailer_and_vsock(
     assert b'"type": "prompt"' in writer.buf
     assert proc._stdin is writer
     await proc.terminate()
+    assert writer.closed is True
 
 
 async def test_spawn_microvm_does_not_fallback_to_host(

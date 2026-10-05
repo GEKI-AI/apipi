@@ -460,8 +460,10 @@ is missing (see [file references](#file-references)). On a `microvm`
 guest that is already running, the worker also copies the files of the
 workspace parts into the guest, because the guest sees the session
 directory only at boot. The guest replaces a file at the same path. The
-copy, from connect to the guest's answer, must end within 60 seconds. If
-it fails, the worker reports `agent.session.environment.failed` and
+copy, from connect to the guest's answer, must end within 60 seconds.
+Closing the vsock connection afterwards takes at most 5 more seconds,
+also when the guest stopped reading. If the copy fails, the worker
+reports `agent.session.environment.failed` and
 `agent.session.error` with code `attachment_push_failed` (retryable)
 without starting the turn, and then stops the guest with the reason
 `push_failed`. The next turn boots a new guest from the session
