@@ -42,6 +42,7 @@ Replica = InMemoryEventBus | PostgresEventBus
 async def _stop(task: asyncio.Task[None]) -> None:
     task.cancel()
     await asyncio.wait({task}, timeout=5)
+    assert task.done()
 
 
 def test_event_hub_is_the_memory_bus() -> None:
