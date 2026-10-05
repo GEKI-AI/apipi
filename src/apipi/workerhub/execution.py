@@ -379,8 +379,12 @@ class RemoteExecution:
             # (expired, or the worker restarted without it): release it
             # and fail the stale turn instead of waiting for events that
             # will never arrive.
+            async with store.session() as db:
+                row = await get_session_by_id(db, session_id)
             if (
-                row.worker_id is not None
+                row is not None
+                and row.lease_id == lease_id
+                and row.worker_id is not None
                 and self.workers.get(row.worker_id) is None
                 and lease_live(row.lease_until)
             ):

@@ -424,6 +424,32 @@ async def test_a_forwarded_turn_during_a_lease_release_gets_a_new_lease(
     assert new_lease is not None and new_lease != lease_id
 
 
+async def test_a_message_to_a_busy_session_during_a_lease_release_gets_a_new_lease(
+    replicas: Replicas, replica_harness: FakeHarness
+) -> None:
+    replica_harness.hold = True
+    session_id = await _new_session(replicas.client_a)
+    first = asyncio.create_task(_message(replicas.client_a, session_id, "one"))
+    await _in_progress(replicas, session_id)
+    _worker_id, lease_id = await _lease(replicas.store, session_id)
+    assert lease_id is not None
+    held = HeldRelease(replicas.hub_a)
+    await replicas.worker._ws.send_json(
+        LeaseRelease(session_id=session_id, lease_id=lease_id).to_wire()
+    )
+    await asyncio.wait_for(held.entered.wait(), timeout=10)
+    replica_harness.hold = False
+    second = asyncio.create_task(_message(replicas.client_b, session_id, "two"))
+    await asyncio.wait_for(held.settling.wait(), timeout=10)
+    held.gate.set()
+    posted = await asyncio.wait_for(second, timeout=20)
+    await asyncio.wait_for(first, timeout=20)
+    _worker_id, new_lease = await _lease(replicas.store, session_id)
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["status"] == "idle"
+    assert new_lease is not None and new_lease != lease_id
+
+
 async def test_a_forward_that_finds_another_lease_is_sent_on_it(
     replicas: Replicas,
 ) -> None:
