@@ -20,7 +20,12 @@ from apipi.worker.egress.policy import PLACEHOLDER_NET
 from apipi.worker.pi.microvm import spawn_microvm_pi
 from apipi.worker.pi.proc import PiProc
 
-pytestmark = [pytest.mark.e2e, pytest.mark.microvm, pytest.mark.slow]
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.microvm,
+    pytest.mark.slow,
+    pytest.mark.timeout(900),
+]
 
 SPLICED = os.environ.get("APIPI_E2E_EGRESS_HOST", "example.com")
 OTHER = os.environ.get("APIPI_E2E_EGRESS_OTHER_HOST", "example.org")

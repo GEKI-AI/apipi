@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Every test has a limit of 120 seconds (pytest-timeout with the `thread` method), and the GitHub CI jobs have `timeout-minutes`, so a hanging test fails with its name instead of blocking the `Tests` job (#539). Tests that need longer set `@pytest.mark.timeout(...)`; see [Tests](docs/tests.md#timeouts).
+
 ### Removed
 
 - The legacy worker upload kind `input_image` (#540). Since 0.15.0 the API sends input images to workers as references (`image_refs`) and gives a worker without that feature no turn with images, so only workers older than 0.15.0 used the kind. The API now answers an `artifact.presign` with the kind `input_image` with `ok: false`, code `artifact_store`, and a message that asks to upgrade the worker. It reserves no upload slot and presigns no URL, so no presigned PUT URL points at a `files` or `skills` key anymore. An `artifact.completed` for an `input_image` upload slot reserved before the upgrade is rejected with `artifact_store` and creates no file. The worker protocol stays version 2: the kind stays in the schema so that the refusal reaches an older worker, and `file_id` in `artifact.presign.reply` is never set. Upgrade note: workers older than 0.15.0 must be upgraded. Since 0.15.0 they get no turns with images, and with this version the API also refuses their input image uploads.

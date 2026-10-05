@@ -53,6 +53,49 @@ start. GitHub CI stays without Firecracker.
 `./scripts/check` runs the slow tests too. They skip when `pi` or the
 OpenAI SDK is missing.
 
+## Timeouts
+
+Every test has a limit of 120 seconds. The limit comes from
+[pytest-timeout](https://github.com/pytest-dev/pytest-timeout) and is
+set as `timeout` in `[tool.pytest.ini_options]` in `pyproject.toml`. It
+counts the test together with the setup and teardown of its fixtures.
+The slowest normal tests take a few seconds, so the limit only trips on
+a test that hangs. The GitHub jobs also have `timeout-minutes` in
+`.github/workflows/ci.yml` (20 minutes for `Tests`, 10 for the others),
+in case the whole run hangs.
+
+The timeout method is `thread`. When a test runs past its limit,
+pytest-timeout prints the stack of every thread and ends the process.
+Under pytest-xdist (`-n`) that process is one worker. The log then
+says `worker 'gw2' crashed while running 'tests/...::test_name'`, the
+test counts as failed, xdist starts a new worker, and the other tests
+still run. The `signal` method is not used: it raises the failure
+inside the test, but when a fixture teardown then waits on the same
+stuck thing (for example an async server fixture), the run still
+hangs. Without `-n`, the first timeout ends the whole pytest run; add
+`-v` so the name of the running test is printed before the stacks.
+
+A test that needs longer sets its own limit in seconds with a mark:
+
+```python
+@pytest.mark.timeout(300)
+async def test_something_slow() -> None:
+    ...
+```
+
+A module sets it for all of its tests with
+`pytestmark = [pytest.mark.timeout(900)]`. For one run, pass
+`--timeout=600` to `uv run pytest`, or `--timeout=0` to turn the limit
+off, for example while you debug one test.
+
+These tests have their own limit:
+
+| Test | Limit | Why |
+| --- | --- | --- |
+| `tests/e2e/test_microvm_pi.py` | 300 s | Boots Firecracker guests and waits up to 90 s for the API and the worker to start |
+| `tests/e2e/test_microvm_egress.py` | 900 s | Waits up to 10 minutes for the probe inside the guest, which reaches hosts on the internet |
+| `tests/unit/test_egress_policy.py::test_each_private_name_gets_its_own_placeholder` | 300 s | Looks up placeholders for 300 private hosts, which takes about a minute |
+
 ## None e2e
 
 Needs Python 3.13. Uses `tests/support/fake_pi.py` as `APIPI_PI_COMMAND`.

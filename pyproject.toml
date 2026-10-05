@@ -59,6 +59,7 @@ dev = [
     "jsonschema>=4.26.0",
     "pytest>=9,<10",
     "pytest-asyncio>=1.0,<2",
+    "pytest-timeout>=2.4,<3",
     "pytest-xdist>=3.6,<4",
     "ruff>=0.16,<1",
     "ty>=0.0.80",
@@ -111,6 +112,8 @@ testpaths = ["tests"]
 addopts = ["-q"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+timeout = 120
+timeout_method = "thread"
 markers = [
     "e2e: fast end-to-end tests; run in GitHub CI",
     "slow: large local validation; not GitHub CI",
