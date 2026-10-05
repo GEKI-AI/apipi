@@ -583,15 +583,22 @@ async def test_a_cancel_ends_the_socket_when_a_handler_turns_it_into_an_error(
     assert app.state.workers.get(uuid.UUID(str(worker.worker_id))) is None
 
 
-async def test_a_background_loop_ends_when_a_round_turns_a_cancel_into_an_error() -> (
-    None
-):
+@pytest.mark.parametrize("swallowed", [False, True])
+async def test_a_background_loop_ends_when_a_round_turns_a_cancel_into_an_error(
+    swallowed: bool,
+) -> None:
     from apipi.common.background import run_loop
 
     entered = asyncio.Event()
-    task = asyncio.create_task(
-        run_loop("cancel_test", lambda: _closed_on_cancel(entered), interval=0)
-    )
+
+    async def round_() -> None:
+        try:
+            await _closed_on_cancel(entered)
+        except ValueError:
+            if not swallowed:
+                raise
+
+    task = asyncio.create_task(run_loop("cancel_test", round_, interval=0))
     await asyncio.wait_for(entered.wait(), timeout=5)
     task.cancel()
     done, _pending = await asyncio.wait({task}, timeout=5)

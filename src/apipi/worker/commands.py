@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from apipi.common.background import cancelling
 from apipi.common.errors import ApiError
 from apipi.common.failures import (
     failure_for,
@@ -337,6 +338,8 @@ async def _dispatch(execution: Any, message: WorkerCommand | dict[str, Any]) -> 
             turn_context=turn_context,
         )
     except ApiError as exc:
+        if cancelling():
+            raise asyncio.CancelledError from exc
         command_failure = failure_for(exc.code or "internal", exc.message)
         log_event(
             log,
@@ -354,6 +357,8 @@ async def _dispatch(execution: Any, message: WorkerCommand | dict[str, Any]) -> 
             return "failed"
         raise
     except Exception as exc:
+        if cancelling():
+            raise asyncio.CancelledError from exc
         internal = failure_for("internal", "Turn failed")
         log_event(
             log,

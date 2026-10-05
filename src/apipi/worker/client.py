@@ -16,7 +16,13 @@ import websockets
 from pydantic import ValidationError
 
 from apipi import __version__
-from apipi.common.background import spawn_loop, start_event_loop_lag, watch_task
+from apipi.common.background import (
+    cancelling,
+    spawn_loop,
+    start_event_loop_lag,
+    stop_if_cancelled,
+    watch_task,
+)
 from apipi.common.logutil import (
     RateLimitedLog,
     bind_log_context,
@@ -499,6 +505,8 @@ async def run_worker(
             except ConfigError:
                 raise
             except Exception as exc:
+                if cancelling():
+                    raise asyncio.CancelledError from exc
                 if metrics is not None:
                     metrics.set_worker_connected(False)
                 if (
@@ -521,7 +529,9 @@ async def run_worker(
                         drain_deadline = _start_drain(execution, metrics, wait)
                     try:
                         await execution.pool.kill_unheld(reason="drain")
-                    except Exception:
+                    except Exception as kill_exc:
+                        if cancelling():
+                            raise asyncio.CancelledError from kill_exc
                         log.exception("worker drain kill failed")
                     if (
                         drain_idle(execution.pool.live(), command_tasks)
@@ -593,6 +603,7 @@ async def _pump_outbox(outbox: "Outbox", send: Any) -> None:
     session cannot hold the others back.
     """
     while True:
+        stop_if_cancelled()
         await outbox.wait_dirty()
         for session_id in outbox.unsent_sessions():
             for _ in range(PUMP_BATCH):
@@ -889,8 +900,10 @@ async def _serve_connection(
             await send_message(
                 LeaseRelease(session_id=session_id, lease_id=uuid.UUID(lease_id))
             )
-        except Exception:
+        except Exception as exc:
             pending_releases[session_id] = lease_id
+            if cancelling():
+                raise asyncio.CancelledError from exc
             log.exception("lease release failed")
             return
         if pending_releases.get(session_id) == lease_id:
@@ -1000,6 +1013,7 @@ async def _serve_connection(
     async def heartbeat_loop() -> None:
         last = time.monotonic()
         while True:
+            stop_if_cancelled()
             await asyncio.sleep(heartbeat)
             now = time.monotonic()
             gap = now - last
@@ -1029,6 +1043,7 @@ async def _serve_connection(
             await asyncio.sleep(0.2)
         await send_inventory()
         while True:
+            stop_if_cancelled()
             await asyncio.sleep(INVENTORY_INTERVAL)
             await send_inventory()
 
@@ -1040,6 +1055,7 @@ async def _serve_connection(
         await send_heartbeat()
         waiting_logged = False
         while True:
+            stop_if_cancelled()
             await execution.pool.kill_unheld(reason="drain")
             if drain_idle(execution.pool.live(), command_tasks):
                 if not outbox.pending_sessions():
@@ -1066,7 +1082,9 @@ async def _serve_connection(
         """Kill what is left while the socket is open, so the harvest can upload."""
         try:
             await asyncio.wait_for(execution.pool.close(), SHUTDOWN_HARVEST_TIMEOUT)
-        except Exception:
+        except Exception as exc:
+            if cancelling():
+                raise asyncio.CancelledError from exc
             log.exception("worker shutdown harvest failed")
 
     def ack_command(command: WorkerCommand) -> dict[str, Any]:
@@ -1247,6 +1265,7 @@ async def _serve_connection(
 
     async def receive_loop() -> None:
         while True:
+            stop_if_cancelled()
             incoming = await sock.recv()
             try:
                 text = incoming if isinstance(incoming, str) else incoming.decode()

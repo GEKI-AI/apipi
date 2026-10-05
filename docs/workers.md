@@ -675,7 +675,24 @@ a lease the API still holds, and the API would orphan an idle session.
 Every background task of the worker has a done callback that logs an
 exception, and every loop catches an error per round and goes on (see
 `apipi_background_loop_errors_total`). A loop that was cancelled stops,
-even when the round raised another error in place of the cancel.
+even when the round raised another error in place of the cancel or
+caught the cancel itself.
+
+The loops of the worker socket follow the same rule. When the worker
+shuts down, drains, or loses its connection, it cancels the receive
+loop, the outbox sender, and the heartbeat, inventory, and drain timers
+of that connection, and waits for them to end before it dials again or
+exits. A socket or store call that is cancelled can raise another error
+in place of the cancel, such as `ValueError("Connection closed")`, or
+return as if nothing happened. Each of these loops checks whether it
+was cancelled before it waits for the next frame, envelope, or timer,
+and the reconnect loop checks it before it treats an error as a lost
+connection, so a cancel always ends them and a shutdown does not hang.
+A command (including `session.stop`) or a delta flush that is
+cancelled this way also ends as cancelled: the worker does not answer the command with
+an `error` envelope and does not count the delta as dropped. A
+`lease.release` that is cancelled while it is sent stays pending and
+goes out after the next `hello`.
 
 ## Artifacts
 
